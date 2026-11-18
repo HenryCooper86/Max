@@ -17,7 +17,9 @@ enum ClientEventTypes {
     static let navRequest = "nav.request"
     static let navPrompt = "nav.prompt"
     static let visionFrames = "vision.frames"
-    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame, crashAlert, crashCancel, navRequest, navPrompt, visionFrames]
+    static let toolResult = "tool.result"
+    static let textInput = "text.input"
+    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame, crashAlert, crashCancel, navRequest, navPrompt, visionFrames, toolResult, textInput]
 }
 
 enum ServerEventTypes {
@@ -41,7 +43,9 @@ enum ServerEventTypes {
     static let phoneLocationStatus = "phone.location.status"
     static let navRoute = "nav.route"
     static let navError = "nav.error"
-    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error, crashAck, crashSimulate, companionPairing, companionDiscovery, phoneLocation, phoneLocationStatus, navRoute, navError]
+    static let toolCall = "tool.call"
+    static let toolActivity = "tool.activity"
+    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error, crashAck, crashSimulate, companionPairing, companionDiscovery, phoneLocation, phoneLocationStatus, navRoute, navError, toolCall, toolActivity]
 }
 
 let serverEventRequiredFields: [String: Set<String>] = [
@@ -64,5 +68,7 @@ let serverEventRequiredFields: [String: Set<String>] = [
     "phone.location": ["type", "sequence", "lat", "lon", "horizontalAccuracyMeters", "timestamp"],
     "phone.location.status": ["type", "state"],
     "nav.route": ["type", "commandId", "destinationName", "destination", "distanceMeters", "etaSeconds", "polyline", "steps"],
-    "nav.error": ["type", "commandId", "code"]
+    "nav.error": ["type", "commandId", "code"],
+    "tool.call": ["type", "callId", "name", "arguments"],
+    "tool.activity": ["type", "callId", "name", "where", "state"]
 ]

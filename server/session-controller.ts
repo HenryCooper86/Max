@@ -1,4 +1,5 @@
-import { assistant } from "./assistant";
+import { assistant, wakeWordActive } from "./assistant";
+import { clientToolSpecsFrom } from "./tools/schema";
 import { sessionLanguage } from "./prompts";
 import { localizeOutgoing } from "./relay-speech";
 import { normalizeEqualizer } from "./audio-eq";
@@ -34,7 +35,15 @@ export type AgentSessionHooks = {
   onDeviceRegistered?(peer: HelmetPeer): () => void;
   onRiderUtterance?(deviceId: string, text: string): void;
   deviceRegistrationAuthorized: boolean;
+  /** What the session token this socket opened with says about the session
+   *  (server/session-tokens.ts). */
+  tokenGrant?: { userId?: string; context?: string };
 };
+
+const MAX_TEXT_INPUT_CHARS = 2_000;
+const MAX_APP_CONTEXT_CHARS = 2_000;
+const MAX_TOOL_CALL_ID = 128;
+const MAX_TOOL_RESULT_ERROR_CHARS = 1_000;
 
 // 256 KiB: every other client event fits comfortably under a few KB, but
 // camera.frame carries a base64 JPEG capped at 200_000 chars below. Without
@@ -497,6 +506,28 @@ export function parseClientEvent(data: RawData): ClientEvent {
     };
   }
 
+  if (value.type === "text.input") {
+    if (typeof value.text !== "string" || !value.text.trim() || value.text.length > MAX_TEXT_INPUT_CHARS) {
+      throw new Error("Invalid text.input text");
+    }
+    return { type: "text.input", text: value.text.trim() };
+  }
+
+  if (value.type === "tool.result") {
+    if (typeof value.callId !== "string" || !value.callId || value.callId.length > MAX_TOOL_CALL_ID) {
+      throw new Error("Invalid tool.result callId");
+    }
+    if (value.error !== undefined && typeof value.error !== "string") throw new Error("Invalid tool.result error");
+    return {
+      type: "tool.result",
+      callId: value.callId,
+      ...(value.output !== undefined ? { output: value.output } : {}),
+      ...(typeof value.error === "string" && value.error.trim()
+        ? { error: value.error.trim().slice(0, MAX_TOOL_RESULT_ERROR_CHARS) }
+        : {})
+    };
+  }
+
   if (value.type === "testing.metric") {
     const metric = (field: string, max: number) => {
       const candidate = value[field];
@@ -564,6 +595,14 @@ export function parseClientEvent(data: RawData): ClientEvent {
   assertOptionalCoordinate(value.lat, -90, 90, "lat");
   assertOptionalCoordinate(value.lon, -180, 180, "lon");
   assertOptionalMemory(value.memory);
+  if (value.tools !== undefined) value.tools = clientToolSpecsFrom(value.tools);
+  if (value.context !== undefined) {
+    if (typeof value.context !== "string" || value.context.length > MAX_APP_CONTEXT_CHARS) {
+      throw new Error("Invalid context");
+    }
+    if (value.context.trim()) value.context = value.context.trim();
+    else delete value.context;
+  }
 
   return value as ClientEvent;
 }
@@ -732,7 +771,13 @@ export class AgentSessionController {
         // disabled, retain the original client-echoed restart behaviour.
         const providerEvent =
           this.authenticatedUser && userMemoryEnabled() ? { ...event, memory: durableMemory?.session } : event;
+        const grant = this.hooks?.tokenGrant;
         const providerContext: ProviderSessionContext = {
+          sessionId: this.relaySessionId,
+          ...(this.authenticatedUser?.id || grant?.userId
+            ? { userId: this.authenticatedUser?.id ?? grant?.userId }
+            : {}),
+          ...(grant?.context ? { trustedContext: grant.context } : {}),
           // Live accessor, not a snapshot — see ProviderSessionContext's doc
           // comment. this.navHandler is already assigned by the time any
           // provider could actually call this (start() runs after the
@@ -768,7 +813,7 @@ export class AgentSessionController {
           networkType: event.networkType,
           platform: event.platform
         });
-        this.audioPlan = planAudio(event.audio, config.wakeWord);
+        this.audioPlan = planAudio(event.audio, wakeWordActive(config.wakeWord));
         if (event.audio) this.log?.info("device audio declared", { ...event.audio, ...this.audioPlan });
         if (this.audioPlan.silenceFill) {
           this.silenceFiller = new SilenceFiller((frame) => {
@@ -829,6 +874,13 @@ export class AgentSessionController {
       if (event.type === "turn.feedback") recordTesterTurnFeedback(this.relaySessionId, event);
       if (event.type === "testing.metric") recordTesterAudioQuality(this.relaySessionId, event);
       if (event.type === "device.result") await this.provider.deviceResult?.(event);
+      if (event.type === "tool.result") await this.provider.toolResult?.(event);
+      if (event.type === "text.input") {
+        const accepted = this.provider.textInput ? await this.provider.textInput(event.text) : false;
+        if (accepted === false) {
+          this.send({ type: "error", message: "This voice backend does not accept typed messages." });
+        }
+      }
       // The FIRST consumer of hazard.report (see parseClientEvent's "never
       // echo back" comment above): forwarded so the vision governor can gate
       // watching on a hazard the board already announced, never echoed to

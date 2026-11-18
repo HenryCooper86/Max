@@ -17,7 +17,9 @@ object ClientEventTypes {
     const val NAV_REQUEST = "nav.request"
     const val NAV_PROMPT = "nav.prompt"
     const val VISION_FRAMES = "vision.frames"
-    val all: Set<String> = setOf(SESSION_START, AUDIO_START, AUDIO_STOP, DEMO_GUIDED, LOCATION_UPDATE, TESTING_METRIC, TURN_FEEDBACK, DEVICE_RESULT, HAZARD_REPORT, CAMERA_FRAME, CRASH_ALERT, CRASH_CANCEL, NAV_REQUEST, NAV_PROMPT, VISION_FRAMES)
+    const val TOOL_RESULT = "tool.result"
+    const val TEXT_INPUT = "text.input"
+    val all: Set<String> = setOf(SESSION_START, AUDIO_START, AUDIO_STOP, DEMO_GUIDED, LOCATION_UPDATE, TESTING_METRIC, TURN_FEEDBACK, DEVICE_RESULT, HAZARD_REPORT, CAMERA_FRAME, CRASH_ALERT, CRASH_CANCEL, NAV_REQUEST, NAV_PROMPT, VISION_FRAMES, TOOL_RESULT, TEXT_INPUT)
 }
 
 object ServerEventTypes {
@@ -41,7 +43,9 @@ object ServerEventTypes {
     const val PHONE_LOCATION_STATUS = "phone.location.status"
     const val NAV_ROUTE = "nav.route"
     const val NAV_ERROR = "nav.error"
-    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR, CRASH_ACK, CRASH_SIMULATE, COMPANION_PAIRING, COMPANION_DISCOVERY, PHONE_LOCATION, PHONE_LOCATION_STATUS, NAV_ROUTE, NAV_ERROR)
+    const val TOOL_CALL = "tool.call"
+    const val TOOL_ACTIVITY = "tool.activity"
+    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR, CRASH_ACK, CRASH_SIMULATE, COMPANION_PAIRING, COMPANION_DISCOVERY, PHONE_LOCATION, PHONE_LOCATION_STATUS, NAV_ROUTE, NAV_ERROR, TOOL_CALL, TOOL_ACTIVITY)
 }
 
 val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
@@ -64,5 +68,7 @@ val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
         "phone.location" to setOf("type", "sequence", "lat", "lon", "horizontalAccuracyMeters", "timestamp"),
         "phone.location.status" to setOf("type", "state"),
         "nav.route" to setOf("type", "commandId", "destinationName", "destination", "distanceMeters", "etaSeconds", "polyline", "steps"),
-        "nav.error" to setOf("type", "commandId", "code")
+        "nav.error" to setOf("type", "commandId", "code"),
+        "tool.call" to setOf("type", "callId", "name", "arguments"),
+        "tool.activity" to setOf("type", "callId", "name", "where", "state")
 )

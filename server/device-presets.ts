@@ -27,6 +27,14 @@ export type DevicePreset = {
   template: string;
   /** How the live voice display is drawn by default. */
   visualizer: VoiceVisualizer;
+  /**
+   * A software assistant rather than a wearable: a website, an app, a kiosk,
+   * a phone line. Its prompt carries no riding context, it does not drive the
+   * built-in device actions (torch, calls, navigation…) or fetch weather, and
+   * it answers without a wake word unless the config turns one on. What it
+   * can do comes from the tools the owner gives it.
+   */
+  general?: boolean;
 };
 
 export const DEVICE_PRESETS: readonly DevicePreset[] = [
@@ -163,6 +171,24 @@ export const DEVICE_PRESETS: readonly DevicePreset[] = [
     equalizer: "flat",
     template: "visor",
     visualizer: "wave"
+  },
+  {
+    id: "app",
+    family: "other",
+    label: { zh: "应用", en: "app" },
+    wearer: { zh: "用户", en: "user" },
+    scope: {
+      zh: "帮助用户完成他们在这个产品里想做的事，回答问题，需要时使用你可用的工具。",
+      en: "Help the user get done what they came to this product to do, answer their questions, and use your tools when they help. "
+    },
+    conduct: {
+      zh: "对方是在和一个产品对话：先给答案，再补充必要细节；不知道或工具没有返回结果时如实说明，不要编造。",
+      en: "The user is talking to a product: lead with the answer, then only the detail that matters. When you do not know, or a tool returns nothing, say so plainly; never make things up. "
+    },
+    equalizer: "flat",
+    template: "daylight",
+    visualizer: "ring",
+    general: true
   }
 ];
 
@@ -174,6 +200,12 @@ const FAMILY_DEFAULT: Record<AssistantDevice, string> = {
 };
 
 const ALIASES: Record<string, string> = {
+  web: "app",
+  website: "app",
+  software: "app",
+  general: "app",
+  kiosk: "app",
+  phone: "app",
   motorcycle: "motorcycle-helmet",
   moto: "motorcycle-helmet",
   bicycle: "bicycle-helmet",

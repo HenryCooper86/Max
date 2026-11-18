@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Outdoor</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 32px 16px;
+        max-width: 760px;
+        margin-inline: auto;
+        line-height: 1.5;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 16px;
+      }
+      .card {
+        border: 1px solid #8884;
+        border-radius: 12px;
+        padding: 16px;
+      }
+      .card.highlight {
+        outline: 3px solid #0b6bff;
+      }
+      code {
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Acme Outdoor</h1>
+    <p>
+      Press the microphone button (bottom right) and try: “Where is my order A-1042?”, “Is the Summit 40 backpack in
+      stock?” or “Show me the jacket.” Or type, if the relay runs the keyless demo.
+    </p>
+    <div class="grid">
+      <div class="card" id="trail-runner-2">
+        <h3>Trail Runner 2</h3>
+        <p>$129</p>
+      </div>
+      <div class="card" id="summit-40-backpack">
+        <h3>Summit 40 Backpack</h3>
+        <p>$189</p>
+      </div>
+      <div class="card" id="storm-shell-jacket">
+        <h3>Storm Shell Jacket</h3>
+        <p>$249</p>
+      </div>
+    </div>
+
+    <!-- One script tag adds the agent. The relay serves the SDK. -->
+    <script src="__RELAY_URL__/sdk/voice-agent.iife.js"></script>
+    <voice-agent
+      relay="__RELAY_URL__"
+      token-url="/api/voice-token"
+      language="en"
+      label="Talk to Ava"
+      accent="#0b6bff"
+      text-input
+    ></voice-agent>
+
+    <script>
+      // A client tool: it runs here, in the page, because only the page can scroll itself.
+      const agent = document.querySelector("voice-agent");
+      agent.tools = [
+        {
+          name: "show_product",
+          description: "Scroll the shop page to a product and highlight it.",
+          parameters: {
+            type: "object",
+            properties: {
+              product: {
+                type: "string",
+                enum: ["trail-runner-2", "summit-40-backpack", "storm-shell-jacket"]
+              }
+            },
+            required: ["product"]
+          },
+          handler({ product }) {
+            const card = document.getElementById(product);
+            if (!card) return { shown: false };
+            document.querySelectorAll(".card").forEach((item) => item.classList.remove("highlight"));
+            card.classList.add("highlight");
+            card.scrollIntoView({ behavior: "smooth", block: "center" });
+            return { shown: true };
+          }
+        }
+      ];
+      agent.addEventListener("voice-agent:toolcall", (event) => console.log("tool call", event.detail));
+    </script>
+  </body>
+</html>

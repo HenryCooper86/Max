@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantSummary, VoiceEqualizerOptions, VoiceProviderSummary } from "../shared/agent";
-import { assistantProfileFrom, assistantSummary, installAssistantProfile, type AssistantProfile } from "./assistant";
+import {
+  assistantProfileFrom,
+  assistantSummary,
+  installAssistantProfile,
+  wakeWordActive,
+  type AssistantProfile
+} from "./assistant";
 import { equalizerOptions } from "./audio-eq";
 import { DEVICE_PRESETS } from "./device-presets";
 import { voiceProviderSummaries } from "./providers/catalog";
@@ -49,6 +55,9 @@ const EDITABLE_KEYS = [
   "strictLanguages",
   "wake",
   "persona",
+  "instructions",
+  "greeting",
+  "wakeWord",
   "template",
   "theme",
   "templateSwitching",
@@ -118,7 +127,7 @@ export function studioState(): StudioState {
   return {
     ok: true,
     config: visible,
-    assistant: assistantSummary(config.wakeWord),
+    assistant: assistantSummary(wakeWordActive(config.wakeWord)),
     customLogo: typeof logo === "string" && logo.length > 0,
     devices: DEVICE_PRESETS.map((preset) => ({
       id: preset.id,
@@ -146,9 +155,13 @@ export function saveStudioConfig(raw: unknown): StudioState {
   if (Buffer.byteLength(JSON.stringify(next)) > MAX_CONFIG_BYTES) {
     throw new Error("The assistant config is too large.");
   }
-  // The uploaded logo survives edits to everything else.
+  // The uploaded logo survives edits to everything else, and so do the
+  // tools: they are wired up by whoever deploys the relay (a module path is
+  // code on the server's disk), never typed into the app.
   const previous = readStored();
   if (typeof previous.logo === "string") next.logo = previous.logo;
+  if (previous.tools !== undefined) next.tools = previous.tools;
+  if (typeof previous.toolsModule === "string") next.toolsModule = previous.toolsModule;
 
   const before = readStored();
   writeStored(next);

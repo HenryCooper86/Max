@@ -4,7 +4,8 @@ import { accountsStorageHealthy, authActive, registrationOpen } from "./accounts
 import { metrics, metricsWindow, testingSnapshot } from "./metrics";
 import { userMemoryEnabled, userMemoryStorageHealthy } from "./user-memory";
 
-import { assistant, assistantLogoProblem, assistantSummary } from "./assistant";
+import { assistant, assistantLogoProblem, assistantSummary, wakeWordActive } from "./assistant";
+import { serverTools } from "./tools/registry";
 import { equalizerOptions } from "./audio-eq";
 import { resolveVoiceProviderId, voiceProvider, voiceProviderSummaries } from "./providers/catalog";
 import { config } from "./runtime-config";
@@ -37,7 +38,14 @@ export function describeConfig(): string[] {
     `Provider credentials: ${credentialStatus()}`,
     `Weather context: Open-Meteo best-effort + ${config.defaultWeatherLocation.source} fallback`,
     `Weather mid-ride refresh: ${config.weatherRefreshMs ? `every ${Math.round(config.weatherRefreshMs / 60000)} min` : "off"}`,
-    `Wake word ("${assistant().wake.label}"): ${config.wakeWord ? "on" : "off"}`,
+    `Wake word ("${assistant().wake.label}"): ${wakeWordActive(config.wakeWord) ? "on" : "off"}`,
+    `Server tools: ${
+      serverTools().length
+        ? serverTools()
+            .map((tool) => tool.name)
+            .join(", ")
+        : "none"
+    }`,
     `Relay auth token: ${config.relayAuthToken ? "required" : "open"}`,
     `User accounts: ${authActive() ? "active" : "none yet"} · registration ${config.authRegistration ? "open" : "closed"}`,
     `Per-user conversation memory: ${userMemoryEnabled() ? "on" : "off"}`,
@@ -136,7 +144,7 @@ export function buildHealth(uptimeSec: number, includeTesting = false): AgentHea
   return {
     ok: true,
     provider: config.voiceProvider,
-    assistant: assistantSummary(config.wakeWord),
+    assistant: assistantSummary(wakeWordActive(config.wakeWord)),
     voice: {
       active: config.voiceProvider,
       switching: config.voiceProviderSwitching,

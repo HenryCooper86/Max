@@ -41,6 +41,21 @@ export type RealtimeDialect = {
 
 const SAY_INSTRUCTION = "Say exactly the following line and nothing else, in the language it is written in: ";
 
+/** The `tools` part of a realtime `session` object. Every OpenAI-compatible
+ *  realtime server takes the same flat function shape. */
+export function realtimeTools(config: EngineConfig): Record<string, unknown> {
+  if (!config.tools.length) return {};
+  return {
+    tools: config.tools.map((tool) => ({
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters
+    })),
+    tool_choice: "auto"
+  };
+}
+
 export function openAiDialect(): RealtimeDialect {
   const model = env("OPENAI_REALTIME_MODEL") ?? "gpt-realtime";
   const base = (env("OPENAI_REALTIME_URL") ?? "wss://api.openai.com/v1/realtime").replace(/\/+$/, "");
@@ -73,7 +88,8 @@ export function openAiDialect(): RealtimeDialect {
           }
         },
         output: { format: { type: "audio/pcm", rate: CLIENT_OUTPUT_RATE }, voice }
-      }
+      },
+      ...realtimeTools(config)
     }),
     say: (text) => [
       // Out-of-band: the line is the relay's, not part of the model's own
@@ -114,7 +130,8 @@ export function grokDialect(): RealtimeDialect {
           }
         },
         output: { format: { type: "audio/pcm", rate: CLIENT_OUTPUT_RATE } }
-      }
+      },
+      ...realtimeTools(config)
     }),
     say: (text) => [
       {
@@ -156,7 +173,8 @@ export function localRealtimeDialect(): RealtimeDialect {
         model: env("LOCAL_REALTIME_TRANSCRIBE_MODEL") ?? "Systran/faster-whisper-small",
         ...(config.languages.length === 1 ? { language: config.languages[0] } : {})
       },
-      turn_detection: { type: "server_vad", create_response: !config.manualResponse }
+      turn_detection: { type: "server_vad", create_response: !config.manualResponse },
+      ...realtimeTools(config)
     }),
     say: (text) => [{ type: "response.create", response: { instructions: SAY_INSTRUCTION + text } }],
     contextRole: "system"
@@ -168,13 +186,19 @@ export function localRealtimeEnabled(): boolean {
   return Boolean(env("LOCAL_REALTIME_URL"));
 }
 
+type FunctionCallItem = { type?: string; call_id?: string; name?: string; arguments?: string };
+
 type UpstreamEvent = {
   type?: string;
   delta?: string;
   transcript?: string;
   item_id?: string;
   error?: { message?: string; code?: string };
-  response?: { status?: string };
+  response?: { status?: string; output?: FunctionCallItem[] };
+  item?: FunctionCallItem;
+  call_id?: string;
+  name?: string;
+  arguments?: string;
 };
 
 const AUDIO_DELTA = new Set(["response.output_audio.delta", "response.audio.delta"]);
@@ -207,9 +231,56 @@ export function createRealtimeEngine(
   let riderItem: string | undefined;
   let riderText = "";
   let riderPending = false;
+  // Tool calls of the current reply. The model continues only once every one
+  // has its output and the reply that asked for them has finished.
+  const announcedCalls = new Set<string>();
+  const awaitingCalls = new Set<string>();
+  let continueAfterTools = false;
+  /** A `response.create` that must wait for the active reply to finish. */
+  let respondWhenIdle = false;
 
   function sendEvent(event: Record<string, unknown>): void {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
+  }
+
+  /** Asks for a reply now, or as soon as the current one has finished:
+   *  realtime APIs reject a second concurrent response. */
+  function requestResponse(): void {
+    if (responseActive) respondWhenIdle = true;
+    else sendEvent({ type: "response.create" });
+  }
+
+  function functionCall(call: { call_id?: string; name?: string; arguments?: string }): void {
+    if (!call.call_id || !call.name || announcedCalls.has(call.call_id)) return;
+    announcedCalls.add(call.call_id);
+    awaitingCalls.add(call.call_id);
+    continueAfterTools = true;
+    if (events?.onToolCall) {
+      events.onToolCall({ callId: call.call_id, name: call.name, arguments: call.arguments ?? "" });
+    } else {
+      awaitingCalls.delete(call.call_id);
+      sendEvent({
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: JSON.stringify({ error: "tools are not available" })
+        }
+      });
+    }
+  }
+
+  function afterReply(): void {
+    if (continueAfterTools && awaitingCalls.size === 0) {
+      continueAfterTools = false;
+      respondWhenIdle = false;
+      sendEvent({ type: "response.create" });
+      return;
+    }
+    if (respondWhenIdle && !continueAfterTools) {
+      respondWhenIdle = false;
+      sendEvent({ type: "response.create" });
+    }
   }
 
   function riderTranscript(event: UpstreamEvent, kind: string): void {
@@ -273,9 +344,20 @@ export function createRealtimeEngine(
       if (event.delta) events?.onAgentText(event.delta);
       return;
     }
+    if (type === "response.output_item.done" && event.item?.type === "function_call") {
+      functionCall(event.item);
+      return;
+    }
+    if (type === "response.function_call_arguments.done") {
+      functionCall(event);
+      return;
+    }
     if (type === "response.done") {
+      // Some servers only list function calls in the finished response.
+      for (const item of event.response?.output ?? []) if (item.type === "function_call") functionCall(item);
       responseActive = false;
       events?.onResponseDone({ cancelled: event.response?.status === "cancelled" });
+      afterReply();
     }
   }
 
@@ -336,10 +418,31 @@ export function createRealtimeEngine(
       sendEvent({ type: "input_audio_buffer.append", audio: audio.toString("base64") });
     },
     respond() {
-      if (ready) sendEvent({ type: "response.create" });
+      if (ready) requestResponse();
     },
     cancel() {
+      // Tool calls in flight belong to the reply being cancelled: their
+      // results must not make the model resume it.
+      continueAfterTools = false;
+      awaitingCalls.clear();
+      respondWhenIdle = false;
       if (ready && responseActive) sendEvent({ type: "response.cancel" });
+    },
+    sendToolResult(callId, output) {
+      if (!ready || !announcedCalls.has(callId)) return;
+      sendEvent({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output } });
+      if (!awaitingCalls.delete(callId)) return;
+      if (!responseActive) afterReply();
+    },
+    sendText(text) {
+      if (!ready) return;
+      continueAfterTools = false;
+      awaitingCalls.clear();
+      sendEvent({
+        type: "conversation.item.create",
+        item: { type: "message", role: "user", content: [{ type: "input_text", text }] }
+      });
+      requestResponse();
     },
     say(text) {
       if (!ready) return;

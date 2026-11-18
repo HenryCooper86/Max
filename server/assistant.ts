@@ -5,6 +5,7 @@ import type { AssistantDevice, AssistantSummary, VoiceEqualizer, VoiceVisualizer
 import { normalizeEqualizer } from "./audio-eq";
 import { devicePreset, type DevicePreset } from "./device-presets";
 import { configureWakePhrase, DEFAULT_WAKE_NAMES, type WakeNames } from "../shared/wake";
+import type { ServerToolSource } from "./tools/registry";
 
 /**
  * The assistant's identity: who it is, what it is worn in, what it answers to.
@@ -55,6 +56,17 @@ export type AssistantProfile = {
   wake: WakeNames;
   /** Replaces the generated base persona prompt entirely. */
   persona?: string;
+  /** Extra instructions added after the generated persona: knowledge, house
+   *  rules, what to do and not do. Kept even when `persona` is set. */
+  instructions?: string;
+  /** Spoken once when the microphone first opens in a session. */
+  greeting?: string;
+  /** False → answer every turn without waiting for the assistant's name.
+   *  Defaults to off for software assistants (`general` presets), on otherwise.
+   *  AGENT_WAKE_WORD=off still turns it off everywhere. */
+  wakeWord: boolean;
+  /** Where the relay's own tools come from (server/tools/registry.ts). */
+  tools: ServerToolSource;
   /** True when nothing overrides the built-in Max profile. */
   isDefault: boolean;
 };
@@ -149,6 +161,8 @@ export const DEFAULT_ASSISTANT_PROFILE: AssistantProfile = {
   languages: ["zh", "en"],
   strictLanguages: true,
   wake: DEFAULT_WAKE_NAMES,
+  wakeWord: true,
+  tools: {},
   isDefault: true
 };
 
@@ -263,10 +277,21 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     identityNotes: text(raw.identityNotes, 400),
     tagline: text(raw.tagline, 80),
     accentColor: accent && /^#[0-9a-f]{6}$/i.test(accent) ? accent.toUpperCase() : undefined,
-    languages: textList(raw.languages, 8, 12)?.map((language) => language.toLowerCase()) ?? ["zh", "en"],
+    // A software assistant starts in English; the wearables keep the
+    // original Chinese-first default they were tuned with.
+    languages:
+      textList(raw.languages, 8, 12)?.map((language) => language.toLowerCase()) ??
+      (preset.general ? ["en"] : ["zh", "en"]),
     strictLanguages: typeof raw.strictLanguages === "boolean" ? raw.strictLanguages : !renamed && device === "helmet",
     wake: !renamed && raw.wake === undefined ? DEFAULT_WAKE_NAMES : wakeNamesFrom(name, raw.wake),
     persona: text(raw.persona, 6000),
+    instructions: text(raw.instructions, 8000),
+    greeting: text(raw.greeting, 300),
+    wakeWord: typeof raw.wakeWord === "boolean" ? raw.wakeWord : !preset.general,
+    tools: {
+      ...(raw.tools !== undefined ? { tools: raw.tools } : {}),
+      ...(text(raw.toolsModule, 400) ? { modulePath: path.resolve(baseDir, text(raw.toolsModule, 400)!) } : {})
+    },
     // Changing only the look, the logo or the sound leaves the assistant who
     // it was: it keeps the original Max prompts word for word.
     isDefault: !PERSONA_KEYS.some((key) => raw[key] !== undefined && raw[key] !== null)
@@ -352,6 +377,12 @@ export function assistantSummary(wakeWordEnabled: boolean): AssistantSummary {
   };
 }
 
+/** Whether sessions wait for the assistant's name before answering: the
+ *  relay-wide switch (AGENT_WAKE_WORD) and the assistant's own setting. */
+export function wakeWordActive(relayWide: boolean, profile: AssistantProfile = assistant()): boolean {
+  return relayWide && profile.wakeWord;
+}
+
 /** True when the assistant's first language is Chinese — prompts are then
  *  written in Chinese, otherwise in English. */
 export function promptsInChinese(profile: AssistantProfile = assistant()): boolean {
@@ -378,6 +409,7 @@ const LEGACY_MAX_PERSONA =
 export function basePersonaPrompt(profile: AssistantProfile = assistant()): string {
   if (profile.persona) return profile.persona;
   if (profile.isDefault) return LEGACY_MAX_PERSONA;
+  if (profile.preset.general) return generalPersonaPrompt(profile);
 
   const inChinese = promptsInChinese(profile);
   const languages = languageList(profile, inChinese);
@@ -411,6 +443,41 @@ export function basePersonaPrompt(profile: AssistantProfile = assistant()): stri
     `Taking photos, recording video, navigation, the torch, volume, music, calls and text messages are hands-free voice actions; when the ${profile.wearer.en} asks for one, just do it — never refuse because they are on the move. ` +
     "Only when a request is genuinely dangerous, needs long looks at a screen, or is beyond what you can do, protect safety first and offer a safer alternative. " +
     `The male and female voices are only a timbre; both are the same ${profile.name} with the same rules.`
+  );
+}
+
+/** The persona of a software assistant: a voice for a product, not a wearable. */
+function generalPersonaPrompt(profile: AssistantProfile): string {
+  const inChinese = promptsInChinese(profile);
+  const languages = languageList(profile, inChinese);
+  if (inChinese) {
+    const maker = profile.developer ? `，由 ${profile.developer} 开发` : "";
+    const languageRule = profile.strictLanguages
+      ? `只使用这些语言：${languages}，默认使用第一种；用户使用其他语言时，简短说明你只支持${languages}。`
+      : `优先使用${languages}，默认使用第一种；用户换用其他语言时跟随对方。`;
+    return (
+      `你是 ${profile.name}，一位友好、可靠的语音助手${maker}。你的名字保持 ${profile.name}。` +
+      languageRule +
+      profile.preset.scope.zh +
+      profile.preset.conduct.zh +
+      "你说的话会被朗读出来：使用自然口语，句子简短，不要使用 Markdown、列表符号、表格、网址或表情符号。" +
+      "需要时使用工具获取事实或完成操作；工具返回结果之前不要声称已完成，也不要编造工具没有提供的信息。" +
+      "请求含糊时，问一个简短的澄清问题。"
+    );
+  }
+  const maker = profile.developer ? `, built by ${profile.developer}` : "";
+  const single = profile.languages.length <= 1;
+  const languageRule = profile.strictLanguages
+    ? `Speak only ${languages}${single ? "" : ", defaulting to the first"}; if the user uses another language, briefly say you only support ${languages}. `
+    : `${single ? `Speak ${languages}` : `Prefer ${languages}, defaulting to the first`}; if the user switches language, follow them. `;
+  return (
+    `You are ${profile.name}, a friendly, reliable voice assistant${maker}. Your name stays ${profile.name}. ` +
+    languageRule +
+    profile.preset.scope.en +
+    profile.preset.conduct.en +
+    "Everything you say is spoken aloud: use natural spoken language and short sentences, and never use markdown, bullet points, tables, URLs or emoji. " +
+    "Use your tools to look things up or take actions when they help; never claim an action is done before its tool says so, and never invent facts a tool did not give you. " +
+    "If a request is ambiguous, ask one short clarifying question."
   );
 }
 

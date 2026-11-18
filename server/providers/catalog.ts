@@ -1,5 +1,5 @@
 import type { ProviderCapabilities, VoiceProviderKind, VoiceProviderSummary } from "../../shared/agent";
-import { LIVE_CAPABILITIES, MOCK_CAPABILITIES } from "../../shared/agent";
+import { DOUBAO_CAPABILITIES, LIVE_CAPABILITIES, MOCK_CAPABILITIES } from "../../shared/agent";
 import { env } from "./live/engine";
 import { geminiConfigured } from "./live/gemini-live";
 import { localRealtimeEnabled } from "./live/openai-realtime";
@@ -48,7 +48,7 @@ export const VOICE_PROVIDERS: readonly VoiceProviderEntry[] = [
     label: "Doubao Realtime",
     kind: "live",
     description: "ByteDance Doubao live voice. Strongest in Chinese.",
-    capabilities: LIVE_CAPABILITIES,
+    capabilities: DOUBAO_CAPABILITIES,
     configured: doubaoConfigured,
     requires: "DOUBAO_API_KEY"
   },

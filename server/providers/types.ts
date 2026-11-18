@@ -1,4 +1,10 @@
-import type { ClientEvent, DeviceResultEvent, SessionStartEvent, VisionFramesEvent } from "../../shared/agent";
+import type {
+  ClientEvent,
+  DeviceResultEvent,
+  SessionStartEvent,
+  ToolResultEvent,
+  VisionFramesEvent
+} from "../../shared/agent";
 import type { UserMemoryFact, UserMemoryTurn } from "../user-memory";
 import type { NavPromptSpeech } from "../routing";
 
@@ -17,6 +23,14 @@ export type ProviderTelemetry = {
 };
 
 export type ProviderSessionContext = {
+  /** The relay's id for this session (tools receive it). */
+  sessionId?: string;
+  /** Who the session belongs to: the signed-in account, or the `userId` the
+   *  owner's backend stamped on the session token. */
+  userId?: string;
+  /** Facts the owner's backend stamped on the session token. Unlike the
+   *  client's own `context`, the client cannot change these. */
+  trustedContext?: string;
   /** Bounded, server-owned history for the authenticated user. */
   previousConversation?: {
     updatedAt: number;
@@ -77,4 +91,9 @@ export type AgentProvider = {
   speakNavLine?(text: string): void;
   /** Speaks relay-validated, relay-composed RDK guidance. */
   speakNavPrompt?(speech: NavPromptSpeech): void;
+  /** A turn the user typed. Resolves `false` when the backend cannot take
+   *  typed turns. Providers without typed input omit this. */
+  textInput?(text: string): Promise<boolean | void>;
+  /** A client's answer to a `tool.call`. Providers without tools omit this. */
+  toolResult?(event: ToolResultEvent): Promise<void>;
 };

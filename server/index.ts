@@ -25,6 +25,7 @@ import {
   checkAuthRateLimit,
   clientAddress,
   clientRegionHint,
+  presentedTokens,
   relayTokenPresented,
   requestSession,
   requestUser,
@@ -32,6 +33,8 @@ import {
   testingClearAuthorized
 } from "./auth";
 import { buildHealth, config, describeConfig, readinessIssues, validateConfig } from "./config";
+import { sessionTokens } from "./session-tokens";
+import { installServerTools } from "./tools/registry";
 import { createLogger, shortSessionId } from "./logger";
 import {
   clearAllTesterData,
@@ -149,7 +152,7 @@ app.use((req, res, next) => {
   if (process.env.NODE_ENV === "production") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
-  if (/^\/(auth|testing)(\/|$)/.test(req.path) || req.path === "/health" || req.path === "/ready") {
+  if (/^\/(auth|testing|v1)(\/|$)/.test(req.path) || req.path === "/health" || req.path === "/ready") {
     res.setHeader("Cache-Control", "no-store");
   }
   next();
@@ -179,6 +182,51 @@ app.get(["/favicon.svg", "/favicon.ico"], (_req, res, next) => {
   }
   sendBrandLogo(res, logo, "no-cache, max-age=0, must-revalidate");
 });
+
+// Short-lived session tokens for browsers on other sites (server/session-tokens.ts).
+// Called by the owner's backend with the relay token; never by a browser, so
+// there is deliberately no CORS here. On a relay with no protection at all
+// (no relay token, no accounts) anyone may mint one, which grants nothing an
+// open relay does not already give, and keeps development and production code
+// paths identical.
+app.post("/v1/session-tokens", (req, res) => {
+  const open = !config.relayAuthToken && !authActive();
+  if (!open && !relayTokenPresented(req)) {
+    res.status(401).json({ ok: false, error: "Send the relay token: Authorization: Bearer <RELAY_AUTH_TOKEN>." });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const minted = sessionTokens.mint({ ttlSeconds: body.ttlSeconds, userId: body.userId, context: body.context });
+  if (!minted.ok) {
+    res.status(400).json({ ok: false, error: minted.error });
+    return;
+  }
+  res.status(201).json({ token: minted.token, expiresAt: minted.expiresAt });
+});
+
+// The browser SDK (built by vite.sdk.config.ts into dist/sdk). Loaded by other
+// sites with <script src>, so it must be readable cross-origin: the relay's
+// same-origin resource policy would otherwise block it.
+const sdkDir = fileURLToPath(new URL("../dist/sdk", import.meta.url));
+app.use(
+  "/sdk",
+  (_req, res, next) => {
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    next();
+  },
+  express.static(sdkDir, {
+    // Revalidated every time (ETag): a deploy must never leave a site on a stale SDK.
+    setHeaders: (res) => res.setHeader("Cache-Control", "no-cache")
+  }),
+  (_req, res) => {
+    // Checked per request, so `npm run build:sdk` works without a restart.
+    res
+      .status(404)
+      .type("text/plain")
+      .send(existsSync(sdkDir) ? "Not found." : "The SDK has not been built. Run: npm run build:sdk");
+  }
+);
 
 app.get("/health", (_req, res) => {
   // Liveness stays small and public. Evidence moved to scoped /testing APIs;
@@ -882,6 +930,9 @@ wss.on("connection", (client, request) => {
   const region = clientRegionHint(request);
   const authenticatedSession = requestSession(request) ?? undefined;
   const authenticatedUser = authenticatedSession?.user;
+  const tokenGrant = presentedTokens(request)
+    .map((token) => sessionTokens.grant(token))
+    .find((grant) => grant !== undefined);
   if (authenticatedSession) {
     registerAuthenticatedConnection(client, {
       userId: authenticatedSession.user.id,
@@ -900,6 +951,7 @@ wss.on("connection", (client, request) => {
     authenticatedUser,
     {
       deviceRegistrationAuthorized: relayTokenPresented(request) || (!config.relayAuthToken && !authActive()),
+      ...(tokenGrant ? { tokenGrant: { userId: tokenGrant.userId, context: tokenGrant.context } } : {}),
       onDeviceRegistered: (peer) => companionRegistry.attachHelmet(peer),
       onRiderUtterance: (deviceId, text) => companionRegistry.handleRiderUtterance(deviceId, text)
     }
@@ -973,6 +1025,10 @@ const authSessionSweepTimer = setInterval(() => {
   closeAuthenticatedConnections((connection) => !sessionUser(connection.token), 1008, "session expired");
 }, 60_000);
 authSessionSweepTimer.unref();
+
+// The relay's own tools (assistant.config.json → tools / toolsModule) load
+// before the first session can start.
+await installServerTools(assistant().tools);
 
 const warnings = validateConfig();
 server.on("error", (error) => {

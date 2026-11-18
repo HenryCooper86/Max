@@ -365,7 +365,24 @@ export function createVad(
 
 // ---- Engine -----------------------------------------------------------------
 
-type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+type ChatToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+
+type ChatMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: ChatToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+/** Tool rounds one reply may take before the model must answer in words. */
+const MAX_TOOL_ROUNDS = 4;
+
+type StreamedChunk = {
+  choices?: Array<{
+    delta?: {
+      content?: string;
+      tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
+    };
+  }>;
+};
 
 const MAX_HISTORY_MESSAGES = 16;
 // Sentence boundaries for both Latin and CJK punctuation.
@@ -393,6 +410,8 @@ export function createPipelineEngine(
   let closed = false;
   let history: ChatMessage[] = [];
   let pendingUser: string | undefined;
+  /** Tool calls waiting for `sendToolResult`, by call id. */
+  const toolWaiters = new Map<string, (output: string) => void>();
   /** Bumped whenever the current work must stop: barge-in, cancel, close. */
   let generation = 0;
   let abort: AbortController | undefined;
@@ -452,17 +471,32 @@ export function createPipelineEngine(
     return speechToPcm(Buffer.from(await response.arrayBuffer()), settings.tts.sampleRate);
   }
 
-  /** Streams chat-completion text, handing each finished sentence to `onSentence`. */
+  /** Streams chat-completion text, handing each finished sentence to
+   *  `onSentence`, and collects any tool calls the model makes. */
   async function streamChat(
     messages: ChatMessage[],
     signal: AbortSignal,
     onDelta: (delta: string) => void,
-    onSentence: (sentence: string) => void
-  ): Promise<string> {
+    onSentence: (sentence: string) => void,
+    offerTools: boolean
+  ): Promise<{ text: string; toolCalls: ChatToolCall[] }> {
+    const tools = offerTools ? (config?.tools ?? []) : [];
     const response = await request(`${settings.llm.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders(settings.llm) },
-      body: JSON.stringify({ model: settings.llm.model, messages, stream: true }),
+      body: JSON.stringify({
+        model: settings.llm.model,
+        messages,
+        stream: true,
+        ...(tools.length
+          ? {
+              tools: tools.map((tool) => ({
+                type: "function",
+                function: { name: tool.name, description: tool.description, parameters: tool.parameters }
+              }))
+            }
+          : {})
+      }),
       signal
     });
     if (!response.ok || !response.body) throw await failure("Chat model", response);
@@ -470,6 +504,7 @@ export function createPipelineEngine(
     let buffered = "";
     let sentence = "";
     let full = "";
+    const calls: Array<{ id: string; name: string; arguments: string }> = [];
     const consume = (delta: string) => {
       full += delta;
       onDelta(delta);
@@ -493,17 +528,59 @@ export function createPipelineEngine(
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (!data || data === "[DONE]") continue;
+        let chunk: StreamedChunk;
         try {
-          const delta = (JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> }).choices?.[0]?.delta
-            ?.content;
-          if (delta) consume(delta);
+          chunk = JSON.parse(data) as StreamedChunk;
         } catch {
-          /* a keep-alive or partial line */
+          continue; // a keep-alive or partial line
+        }
+        const delta = chunk.choices?.[0]?.delta;
+        if (delta?.content) consume(delta.content);
+        // Tool calls stream in pieces: the first piece of each carries its id
+        // and name, later pieces append to its arguments.
+        for (const piece of delta?.tool_calls ?? []) {
+          // Servers that omit `index` start a new call with each new id and
+          // send later pieces of the same call without one.
+          const last = calls.length - 1;
+          const index = piece.index ?? (last < 0 || (piece.id && piece.id !== calls[last]?.id) ? calls.length : last);
+          const call = (calls[index] ??= { id: "", name: "", arguments: "" });
+          if (piece.id) call.id = piece.id;
+          if (piece.function?.name) call.name += piece.function.name;
+          if (piece.function?.arguments) call.arguments += piece.function.arguments;
         }
       }
     }
     if (sentence.trim()) onSentence(sentence.trim());
-    return full;
+    const toolCalls = calls
+      .filter((call) => call.name)
+      .map((call, index) => ({
+        id: call.id || `call_${Date.now().toString(36)}_${index}`,
+        type: "function" as const,
+        function: { name: call.name, arguments: call.arguments }
+      }));
+    return { text: full, toolCalls };
+  }
+
+  /** Hands one call to the session and waits for its result. */
+  function awaitTool(call: ChatToolCall, signal: AbortSignal): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const onAbort = () => {
+        toolWaiters.delete(call.id);
+        reject(new Error("aborted"));
+      };
+      if (signal.aborted) return onAbort();
+      signal.addEventListener("abort", onAbort, { once: true });
+      toolWaiters.set(call.id, (output) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(output);
+      });
+      if (events?.onToolCall) {
+        events.onToolCall({ callId: call.id, name: call.function.name, arguments: call.function.arguments });
+      } else {
+        toolWaiters.delete(call.id);
+        resolve(JSON.stringify({ error: "tools are not available" }));
+      }
+    });
   }
 
   async function reply(userText: string | undefined, exactLine?: string): Promise<void> {
@@ -529,19 +606,30 @@ export function createPipelineEngine(
       if (exactLine) {
         speak(exactLine);
       } else {
-        const messages: ChatMessage[] = [
-          { role: "system", content: instructions },
-          ...history,
-          ...(userText ? [{ role: "user" as const, content: userText }] : [])
-        ];
-        const full = await streamChat(
-          messages,
-          controller.signal,
-          (delta) => {
-            if (!closed && mine === generation) events?.onAgentText(delta);
-          },
-          speak
-        );
+        const turn: ChatMessage[] = userText ? [{ role: "user", content: userText }] : [];
+        let full = "";
+        for (let round = 0; ; round += 1) {
+          // The last round offers no tools, so the model has to answer in words.
+          const offerTools = round < MAX_TOOL_ROUNDS;
+          const result = await streamChat(
+            [{ role: "system", content: instructions }, ...history, ...turn],
+            controller.signal,
+            (delta) => {
+              if (!closed && mine === generation) events?.onAgentText(delta);
+            },
+            speak,
+            offerTools
+          );
+          full += result.text;
+          if (!result.toolCalls.length || !offerTools) break;
+          turn.push({ role: "assistant", content: result.text || null, tool_calls: result.toolCalls });
+          for (const call of result.toolCalls) {
+            const output = await awaitTool(call, controller.signal);
+            if (closed || mine !== generation) return;
+            turn.push({ role: "tool", tool_call_id: call.id, content: output });
+          }
+        }
+        // History keeps what was said; tool chatter stays inside its turn.
         if (userText) history.push({ role: "user", content: userText });
         if (full.trim()) history.push({ role: "assistant", content: full.trim() });
         if (history.length > MAX_HISTORY_MESSAGES) history = history.slice(-MAX_HISTORY_MESSAGES);
@@ -618,6 +706,17 @@ export function createPipelineEngine(
     },
     addContext(text) {
       history.push({ role: "system", content: text });
+    },
+    sendToolResult(callId, output) {
+      const waiter = toolWaiters.get(callId);
+      if (!waiter) return;
+      toolWaiters.delete(callId);
+      waiter(output);
+    },
+    sendText(text) {
+      if (closed) return;
+      pendingUser = undefined;
+      void reply(text);
     },
     close() {
       closed = true;

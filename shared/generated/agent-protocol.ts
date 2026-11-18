@@ -15,7 +15,9 @@ export const CLIENT_EVENT_TYPES = [
   "crash.cancel",
   "nav.request",
   "nav.prompt",
-  "vision.frames"
+  "vision.frames",
+  "tool.result",
+  "text.input"
 ] as const;
 
 export const SERVER_EVENT_TYPES = [
@@ -38,7 +40,9 @@ export const SERVER_EVENT_TYPES = [
   "phone.location",
   "phone.location.status",
   "nav.route",
-  "nav.error"
+  "nav.error",
+  "tool.call",
+  "tool.activity"
 ] as const;
 
 export const SERVER_EVENT_REQUIRED_FIELDS = {
@@ -153,5 +157,18 @@ export const SERVER_EVENT_REQUIRED_FIELDS = {
     "type",
     "commandId",
     "code"
+  ],
+  "tool.call": [
+    "type",
+    "callId",
+    "name",
+    "arguments"
+  ],
+  "tool.activity": [
+    "type",
+    "callId",
+    "name",
+    "where",
+    "state"
   ]
 } as const;

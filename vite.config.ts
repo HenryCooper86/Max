@@ -80,6 +80,8 @@ export default defineConfig({
         target: "http://localhost:8787"
       },
       "/nav": { target: "http://localhost:8787" },
+      "/sdk": { target: "http://localhost:8787" },
+      "/v1": { target: "http://localhost:8787" },
       "/_AMapService": { target: "http://localhost:8787" },
       "/agent": {
         target: "ws://localhost:8787",

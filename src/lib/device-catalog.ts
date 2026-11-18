@@ -121,6 +121,18 @@ export const DEVICES: readonly DeviceInfo[] = [
       zh: "通用设置，适合以上都不是的设备。",
       en: "General defaults for anything not listed above."
     }
+  },
+  {
+    id: "app",
+    family: "other",
+    label: { zh: "网站或应用", en: "Website or app" },
+    template: "daylight",
+    visualizer: "ring",
+    equalizer: "flat",
+    note: {
+      zh: "放进你自己的产品：不需要唤醒词，能力来自你接入的工具。",
+      en: "A voice agent inside your own product: no wake word, and it can do what your tools let it do."
+    }
   }
 ];
 

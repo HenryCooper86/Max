@@ -32,7 +32,8 @@ describe("device presets", () => {
       "assistive-glasses",
       "ar-headset",
       "vr-headset",
-      "wearable"
+      "wearable",
+      "app"
     ]);
     // Every preset names a real equaliser preset and has both languages filled in.
     for (const preset of DEVICE_PRESETS) {
@@ -356,7 +357,7 @@ describe("local open-weight backends", () => {
     expect(dialect.apiKey).toBe("local");
     expect(dialect.sessionType).toBeUndefined();
     const session = dialect.session(
-      { instructions: "hi", voiceGender: "female", manualResponse: true, languages: ["en"], keyterms: [] },
+      { instructions: "hi", voiceGender: "female", manualResponse: true, languages: ["en"], keyterms: [], tools: [] },
       dialect.voice("female")
     );
     expect(session).toMatchObject({

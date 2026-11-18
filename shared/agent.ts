@@ -102,6 +102,11 @@ export type ProviderCapabilities = {
   weatherContext: boolean;
   sessionMemory: boolean;
   emergencyMode: boolean;
+  /** The backend can call tools (server tools and client tools). Absent on
+   *  relays older than tool support. */
+  tools?: boolean;
+  /** The session accepts typed turns (`text.input`). */
+  textInput?: boolean;
 };
 
 export type TesterStats = {
@@ -270,6 +275,54 @@ export type SessionStartEvent = {
   lat?: number;
   lon?: number;
   memory?: SessionMemorySnapshot;
+  /** Tools this client runs itself. The relay offers them to the model and
+   *  sends `tool.call` when the model uses one. */
+  tools?: ClientToolSpec[];
+  /** Facts from the host app the assistant should know this session
+   *  ("the user is on the pricing page"). Treated as untrusted context. */
+  context?: string;
+};
+
+/** A tool the client declares in `session.start` and executes itself. */
+type ClientToolSpec = {
+  /** /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/ */
+  name: string;
+  /** What it does and when to use it, for the model. */
+  description: string;
+  /** JSON Schema for the arguments (an object schema). Omitted → no arguments. */
+  parameters?: Record<string, unknown>;
+};
+
+/** Client → server: the answer to one `tool.call`. Exactly one per call. */
+export type ToolResultEvent = {
+  type: "tool.result";
+  callId: string;
+  /** Any JSON value or text. Ignored when `error` is set. */
+  output?: unknown;
+  /** Why the tool failed, for the model. */
+  error?: string;
+};
+
+/** Client → server: a turn the user typed instead of spoke. */
+type TextInputEvent = { type: "text.input"; text: string };
+
+/** Server → client: run one of the client's own tools and answer with `tool.result`. */
+export type ToolCallEvent = {
+  type: "tool.call";
+  callId: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
+/** Server → client: progress of any tool call, server or client, for UI. */
+export type ToolActivityEvent = {
+  type: "tool.activity";
+  callId: string;
+  name: string;
+  where: "server" | "client";
+  state: "started" | "succeeded" | "failed";
+  durationMs?: number;
+  error?: string;
 };
 
 /** Client → server: the outcome of one device command. Exactly one of these
@@ -285,6 +338,8 @@ export type DeviceResultEvent = {
 export type ClientEvent =
   | SessionStartEvent
   | DeviceResultEvent
+  | ToolResultEvent
+  | TextInputEvent
   // A hazard the embedded board detected and already announced. Upward only:
   // the board plays the audio itself from a local clip, so the relay must never
   // echo this back as `hazard.alert` — Max would speak the warning a second
@@ -572,7 +627,9 @@ export type AgentEvent =
   | PhoneLocationEvent
   | PhoneLocationStatusEvent
   | NavRouteEvent
-  | NavErrorEvent;
+  | NavErrorEvent
+  | ToolCallEvent
+  | ToolActivityEvent;
 
 /** What kind of wearable this assistant lives in. Drives copy and artwork only. */
 export type AssistantDevice = "helmet" | "glasses" | "other";
@@ -722,10 +779,14 @@ export const MOCK_CAPABILITIES: ProviderCapabilities = {
   voiceSelection: true,
   weatherContext: true,
   sessionMemory: true,
-  emergencyMode: true
+  emergencyMode: true,
+  tools: false,
+  // The scripted ride takes no typed turns; the app demo (server/providers/app-demo.ts) does.
+  textInput: false
 };
 
-/** What every live backend offers: real synthesized audio on top of the demo's set. */
+/** What every live backend offers: real synthesized audio on top of the demo's
+ *  set, tool calls and typed turns. */
 export const LIVE_CAPABILITIES: ProviderCapabilities = {
   serverVad: true,
   synthesizedAudio: true,
@@ -734,9 +795,16 @@ export const LIVE_CAPABILITIES: ProviderCapabilities = {
   voiceSelection: true,
   weatherContext: true,
   sessionMemory: true,
-  emergencyMode: true
+  emergencyMode: true,
+  tools: true,
+  textInput: true
 };
 
+/** Doubao's realtime dialogue has no function calling and no typed turns. */
+export const DOUBAO_CAPABILITIES: ProviderCapabilities = { ...LIVE_CAPABILITIES, tools: false, textInput: false };
+
 export function providerCapabilities(provider: string): ProviderCapabilities {
-  return provider === "mock" ? MOCK_CAPABILITIES : LIVE_CAPABILITIES;
+  if (provider === "mock") return MOCK_CAPABILITIES;
+  if (provider === "doubao") return DOUBAO_CAPABILITIES;
+  return LIVE_CAPABILITIES;
 }

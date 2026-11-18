@@ -27,7 +27,53 @@ type ServerMessage = {
   };
   goAway?: { timeLeft?: string };
   error?: { message?: string };
+  toolCall?: { functionCalls?: Array<{ id?: string; name?: string; args?: Record<string, unknown> }> };
+  toolCallCancellation?: { ids?: string[] };
 };
+
+// Gemini's function declarations take the OpenAPI subset of JSON Schema.
+// These keywords are rejected there, so they are dropped on the way out.
+const UNSUPPORTED_SCHEMA_KEYS = new Set([
+  "$schema",
+  "$id",
+  "$ref",
+  "$defs",
+  "definitions",
+  "additionalProperties",
+  "patternProperties",
+  "unevaluatedProperties",
+  "const",
+  "examples",
+  "default"
+]);
+
+/** A JSON Schema reduced to what Gemini function declarations accept. Exported for tests. */
+export function geminiSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(geminiSchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+    if (UNSUPPORTED_SCHEMA_KEYS.has(key)) continue;
+    // `properties` maps names to schemas; its keys are not schema keywords.
+    if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
+      output[key] = Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([name, child]) => [name, geminiSchema(child)])
+      );
+    } else output[key] = geminiSchema(value);
+  }
+  return output;
+}
+
+/** What Gemini wants as a function response: an object. */
+function functionResponse(output: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(output);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    return { result: parsed };
+  } catch {
+    return { result: output };
+  }
+}
 
 function rawToString(raw: RawData): string {
   if (typeof raw === "string") return raw;
@@ -50,6 +96,8 @@ export function createGeminiLiveEngine(
   let replying = false;
   let riderText = "";
   let riderOpen = false;
+  /** Tool calls awaiting a result: id → function name (the response needs both). */
+  const pendingCalls = new Map<string, string>();
 
   function sendMessage(message: Record<string, unknown>): void {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
@@ -73,6 +121,15 @@ export function createGeminiLiveEngine(
   function handle(message: ServerMessage): void {
     if (message.goAway) log.info("gemini live session ending soon", { timeLeft: message.goAway.timeLeft });
     if (message.error?.message) events?.onError(message.error.message);
+    for (const call of message.toolCall?.functionCalls ?? []) {
+      if (!call.id || !call.name) continue;
+      // The model asking for a tool is it answering: the wearer's turn is over.
+      closeRiderTurn();
+      pendingCalls.set(call.id, call.name);
+      if (events?.onToolCall) events.onToolCall({ callId: call.id, name: call.name, arguments: call.args ?? {} });
+      else sendToolResponse(call.id, JSON.stringify({ error: "tools are not available" }));
+    }
+    for (const id of message.toolCallCancellation?.ids ?? []) pendingCalls.delete(id);
     const content = message.serverContent;
     if (!content) return;
 
@@ -113,6 +170,13 @@ export function createGeminiLiveEngine(
     }
   }
 
+  function sendToolResponse(callId: string, output: string): void {
+    const name = pendingCalls.get(callId);
+    if (!name) return;
+    pendingCalls.delete(callId);
+    sendMessage({ toolResponse: { functionResponses: [{ id: callId, name, response: functionResponse(output) }] } });
+  }
+
   function setup(config: EngineConfig): Record<string, unknown> {
     const model = env("GEMINI_LIVE_MODEL") ?? "gemini-3.8-live";
     const voice =
@@ -128,7 +192,20 @@ export function createGeminiLiveEngine(
         },
         systemInstruction: { parts: [{ text: config.instructions }] },
         inputAudioTranscription: {},
-        outputAudioTranscription: {}
+        outputAudioTranscription: {},
+        ...(config.tools.length
+          ? {
+              tools: [
+                {
+                  functionDeclarations: config.tools.map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: geminiSchema(tool.parameters)
+                  }))
+                }
+              ]
+            }
+          : {})
       }
     };
   }
@@ -202,6 +279,14 @@ export function createGeminiLiveEngine(
           text: `Say exactly the following line and nothing else, in the language it is written in: ${text}`
         }
       });
+    },
+    sendToolResult(callId, output) {
+      if (ready) sendToolResponse(callId, output);
+    },
+    sendText(text) {
+      if (!ready) return;
+      closeRiderTurn();
+      sendMessage({ realtimeInput: { text } });
     },
     close() {
       closedByRelay = true;

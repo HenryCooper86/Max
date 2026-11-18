@@ -1,0 +1,212 @@
+import { createHmac } from "node:crypto";
+import type { ToolContext, ToolDefinition, ToolParameters } from "./index";
+import { toolSpecFrom } from "./schema";
+
+/**
+ * Webhook tools: the relay POSTs the call to a URL the owner configured and
+ * hands whatever comes back to the model. The tool can live in any language
+ * on any server.
+ *
+ * Request — `POST <url>`, `content-type: application/json`:
+ *
+ * ```json
+ * {
+ *   "tool": "get_order_status",
+ *   "callId": "call_8f2…",
+ *   "arguments": { "orderId": "A-1042" },
+ *   "session": { "id": "4b1e…", "language": "en", "userId": "user-17" }
+ * }
+ * ```
+ *
+ * With `webhook.secret` set, the request carries
+ * `x-voice-agent-signature: sha256=<hex HMAC-SHA256 of the raw body>` and
+ * `x-voice-agent-timestamp: <epoch ms>` (also part of the signed payload:
+ * the HMAC covers `<timestamp>.<body>`), so the receiver can reject forgeries
+ * and replays.
+ *
+ * Response — any 2xx status. A JSON body is passed to the model as JSON, any
+ * other body as text. A non-2xx status fails the call; a JSON `{ "error": "…" }`
+ * body becomes the reason the assistant is given.
+ *
+ * `${NAME}` anywhere in the URL, a header value or the secret is replaced with
+ * the relay's environment variable `NAME`, so credentials stay in `.env` and
+ * out of the config file.
+ */
+
+export type WebhookConfig = {
+  url: string;
+  method: "POST";
+  headers: Record<string, string>;
+  secret?: string;
+  timeoutMs: number;
+};
+
+const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_TIMEOUT_MS = 60_000;
+const MAX_RESPONSE_BYTES = 256 * 1024;
+const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Replaces `${NAME}` with the environment variable, or reports the missing names. */
+export function expandEnv(value: string, env: NodeJS.ProcessEnv = process.env): { value: string; missing: string[] } {
+  const missing: string[] = [];
+  const expanded = value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
+    const found = env[name];
+    if (found === undefined || found === "") {
+      missing.push(name);
+      return "";
+    }
+    return found;
+  });
+  return { value: expanded, missing };
+}
+
+/**
+ * Plain HTTP is allowed only where the traffic never crosses the internet:
+ * loopback, `.local`/`.internal` names, private address ranges and the
+ * single-label service names of a Docker or Kubernetes network. Everything
+ * else must be HTTPS, because the body carries what the user said.
+ */
+export function plainHttpAllowed(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host === "::1" || host.endsWith(".localhost")) return true;
+  if (host.endsWith(".local") || host.endsWith(".internal")) return true;
+  if (/^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+  if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;
+  return /^[a-z0-9-]+$/.test(host) && !/^\d+$/.test(host);
+}
+
+/** Parses one `tools[]` entry of the config file. */
+export function webhookToolFrom(raw: unknown): { tool?: ToolDefinition; webhook?: WebhookConfig; problem?: string } {
+  const { spec, problem } = toolSpecFrom(raw);
+  if (!spec) return { problem };
+  const record = raw as Record<string, unknown>;
+  const hook = isRecord(record.webhook) ? record.webhook : typeof record.url === "string" ? { url: record.url } : null;
+  if (!hook || typeof hook.url !== "string" || !hook.url.trim())
+    return { problem: `tool ${spec.name}: needs webhook.url (or define it in toolsModule)` };
+  const rawUrl = hook.url.trim();
+  // Validate the shape now with variables blanked; they are expanded per call
+  // so a key rotated in the environment takes effect without a restart.
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl.replace(/\$\{[A-Za-z_][A-Za-z0-9_]*\}/g, "x"));
+  } catch {
+    return { problem: `tool ${spec.name}: webhook.url is not a URL` };
+  }
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && plainHttpAllowed(parsed.hostname)))
+    return { problem: `tool ${spec.name}: webhook.url must be https (plain http only to local or private hosts)` };
+  const headers: Record<string, string> = {};
+  if (isRecord(hook.headers)) {
+    for (const [name, value] of Object.entries(hook.headers)) {
+      if (!HEADER_NAME.test(name) || typeof value !== "string")
+        return { problem: `tool ${spec.name}: invalid webhook header ${name}` };
+      headers[name] = value;
+    }
+  }
+  const timeout = Number(hook.timeoutMs);
+  const webhook: WebhookConfig = {
+    url: rawUrl,
+    method: "POST",
+    headers,
+    ...(typeof hook.secret === "string" && hook.secret.trim() ? { secret: hook.secret.trim() } : {}),
+    timeoutMs: Number.isFinite(timeout) && timeout > 0 ? Math.min(timeout, MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS
+  };
+  return {
+    webhook,
+    tool: {
+      name: spec.name,
+      description: spec.description,
+      parameters: spec.parameters as ToolParameters,
+      timeoutMs: webhook.timeoutMs,
+      handler: (args, context) => callWebhook(spec.name, webhook, args, context)
+    }
+  };
+}
+
+async function readCapped(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`response is larger than ${MAX_RESPONSE_BYTES / 1024} KiB`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Performs one webhook call. Exported for tests. */
+export async function callWebhook(
+  name: string,
+  webhook: WebhookConfig,
+  args: Record<string, unknown>,
+  context: Pick<ToolContext, "callId" | "sessionId" | "language" | "userId" | "signal">,
+  request: typeof fetch = fetch,
+  env: NodeJS.ProcessEnv = process.env,
+  now: () => number = Date.now
+): Promise<unknown> {
+  const url = expandEnv(webhook.url, env);
+  const missing = new Set(url.missing);
+  const headers: Record<string, string> = {};
+  for (const [header, value] of Object.entries(webhook.headers)) {
+    const expanded = expandEnv(value, env);
+    expanded.missing.forEach((item) => missing.add(item));
+    headers[header] = expanded.value;
+  }
+  const secret = webhook.secret ? expandEnv(webhook.secret, env) : undefined;
+  secret?.missing.forEach((item) => missing.add(item));
+  // Fail closed: a call with a blank credential would leak the request to an
+  // endpoint expecting authentication, and its 401 would be harder to read.
+  if (missing.size) throw new Error(`relay is missing environment variable ${[...missing].join(", ")}`);
+
+  const body = JSON.stringify({
+    tool: name,
+    callId: context.callId,
+    arguments: args,
+    session: {
+      id: context.sessionId,
+      ...(context.language ? { language: context.language } : {}),
+      ...(context.userId ? { userId: context.userId } : {})
+    }
+  });
+  if (secret) {
+    const timestamp = String(now());
+    headers["x-voice-agent-timestamp"] = timestamp;
+    headers["x-voice-agent-signature"] =
+      `sha256=${createHmac("sha256", secret.value).update(`${timestamp}.${body}`).digest("hex")}`;
+  }
+  const response = await request(url.value, {
+    method: webhook.method,
+    headers: { "content-type": "application/json", accept: "application/json, text/plain", ...headers },
+    body,
+    signal: context.signal,
+    redirect: "error"
+  });
+  const text = await readCapped(response);
+  const isJson = (response.headers.get("content-type") ?? "").includes("json");
+  let payload: unknown = text;
+  if (isJson && text.trim()) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = text;
+    }
+  }
+  if (!response.ok) {
+    const reason =
+      isRecord(payload) && typeof payload.error === "string"
+        ? payload.error
+        : `HTTP ${response.status}${text.trim() ? `: ${text.trim().replace(/\s+/g, " ").slice(0, 160)}` : ""}`;
+    throw new Error(reason);
+  }
+  return payload;
+}

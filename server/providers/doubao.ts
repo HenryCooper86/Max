@@ -2,7 +2,14 @@ import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import { RiderLocationContext, asksCurrentLocation } from "../rider-location";
 import { synthesizeMaxSpeech } from "../max-speech";
-import { assistant, basePersonaPrompt, DEFAULT_ASSISTANT_PROFILE, identityPrompt, wakeHint } from "../assistant";
+import {
+  assistant,
+  basePersonaPrompt,
+  DEFAULT_ASSISTANT_PROFILE,
+  identityPrompt,
+  wakeHint,
+  wakeWordActive
+} from "../assistant";
 import {
   buildLanguageInteractionPrompt,
   buildSessionLanguagePrompt,
@@ -13,7 +20,7 @@ import { createEqualizer, type Equalizer } from "../audio-eq";
 import { localizeOutgoing } from "../relay-speech";
 import { sessionEqualizer } from "../session-equalizer";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent, VoiceGender } from "./types";
-import { LIVE_CAPABILITIES } from "../../shared/agent";
+import { DOUBAO_CAPABILITIES } from "../../shared/agent";
 import { type AdasSeverity } from "../../shared/adas";
 import { containsWakePhrase, WAKE_FOLLOWUP_MAX_CHAIN_MS, WAKE_FOLLOWUP_WINDOW_MS } from "../../shared/wake";
 import { config as appConfig } from "../config";
@@ -585,7 +592,7 @@ export function createDoubaoProvider(
   // a late window expiry can't clip a reply that already started.
   // Decided again in start(): a device that spots the wake word itself turns
   // the relay's own name check off for its session (see audio-contract.ts).
-  let wakeWordEnabled = appConfig.wakeWord;
+  let wakeWordEnabled = wakeWordActive(appConfig.wakeWord);
   let riderTurnText = "";
   // Whether the current rider turn's transcript was already closed with a
   // final event (AsrEnded can repeat without new speech in between).
@@ -1755,7 +1762,7 @@ export function createDoubaoProvider(
             sessionId: sessionId.slice(0, 8),
             pendingAudioFrames: pendingAudio.length
           });
-          sendClient({ type: "session.started", provider: "doubao", mode: "live", capabilities: LIVE_CAPABILITIES });
+          sendClient({ type: "session.started", provider: "doubao", mode: "live", capabilities: DOUBAO_CAPABILITIES });
           emitRideContext();
           emitMemory();
           sendClient({ type: "status", state: "ready", detail: "豆包实时语音已连接" });

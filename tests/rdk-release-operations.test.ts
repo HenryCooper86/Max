@@ -117,7 +117,8 @@ describe("reviewed RDK release operations", () => {
   });
 
   it("states the transport encryption boundary truthfully", () => {
-    const rootReadme = readRepositoryFile("README.md");
+    // The reference helmet guide moved out of the root README.
+    const rootReadme = readRepositoryFile("docs/max-helmet.md");
 
     expect(rootReadme).not.toContain("Current location necessarily appears in the encrypted protocol frame");
     expect(rootReadme).toContain("production `wss://` with trusted TLS");

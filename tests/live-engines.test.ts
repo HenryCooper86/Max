@@ -67,7 +67,8 @@ const CONFIG: EngineConfig = {
   voiceGender: "female",
   manualResponse: true,
   languages: ["zh", "en"],
-  keyterms: ["Max"]
+  keyterms: ["Max"],
+  tools: []
 };
 
 const ENV_KEYS = [

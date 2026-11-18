@@ -1,4 +1,5 @@
 import type { VoiceGender } from "../../../shared/agent";
+import type { ToolSpec } from "../../tools";
 
 /**
  * A voice engine is the thin, vendor-specific half of a live voice backend:
@@ -33,6 +34,17 @@ export type EngineConfig = {
   languages: string[];
   /** Words the transcriber should expect, such as the assistant's name. */
   keyterms: string[];
+  /** Tools the model may call. Empty → no tools offered. */
+  tools: ToolSpec[];
+};
+
+/** The model asked to run a tool. */
+export type EngineToolCall = {
+  /** Upstream id; pass it back to `sendToolResult`. */
+  callId: string;
+  name: string;
+  /** JSON text or an already parsed object, as the upstream sent it. */
+  arguments: unknown;
 };
 
 export type EngineEvents = {
@@ -50,6 +62,9 @@ export type EngineEvents = {
   onError(message: string): void;
   /** The upstream connection ended without `close()` being called. */
   onClosed(reason: string): void;
+  /** The model wants a tool run. Answer with `sendToolResult`; the model
+   *  continues its reply once every call it made has an answer. */
+  onToolCall?(call: EngineToolCall): void;
 };
 
 export type VoiceEngine = {
@@ -69,6 +84,10 @@ export type VoiceEngine = {
   updateInstructions?(instructions: string): void;
   /** Tell the model something happened without making it answer. */
   addContext?(text: string): void;
+  /** Give the model a tool's result (text, usually JSON) and let it carry on. */
+  sendToolResult?(callId: string, output: string): void;
+  /** A turn the user typed: answer it as if it had been spoken. */
+  sendText?(text: string): void;
   close(): void;
 };
 

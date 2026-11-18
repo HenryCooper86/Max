@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://max.neuehct.dev/protocol/agent-events.schema.json",
-  "title": "Max helmet relay protocol",
+  "title": "Voice agent relay protocol",
   "description": "Authoritative discriminants and required fields for JSON events exchanged over /agent.",
   "$defs": {
     "ClientEvent": {
@@ -21,6 +21,31 @@
             },
             "deviceId": {
               "type": "string"
+            },
+            "tools": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$"
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 1024
+                  },
+                  "parameters": {
+                    "type": "object"
+                  }
+                },
+                "required": ["name", "description"]
+              }
+            },
+            "context": {
+              "type": "string",
+              "maxLength": 2000
             }
           },
           "required": ["type", "sampleRate", "channels"]
@@ -184,14 +209,31 @@
           "title": "CrashAlert",
           "type": "object",
           "properties": {
-            "type": { "const": "crash.alert" },
-            "incidentId": { "type": "string", "minLength": 1 },
-            "lat": { "type": "number" },
-            "lon": { "type": "number" },
-            "speedKmhRecent": { "type": "number" },
-            "contactNumber": { "type": "string" },
-            "contactOptIn": { "type": "boolean" },
-            "detectedAt": { "type": "number" }
+            "type": {
+              "const": "crash.alert"
+            },
+            "incidentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "lat": {
+              "type": "number"
+            },
+            "lon": {
+              "type": "number"
+            },
+            "speedKmhRecent": {
+              "type": "number"
+            },
+            "contactNumber": {
+              "type": "string"
+            },
+            "contactOptIn": {
+              "type": "boolean"
+            },
+            "detectedAt": {
+              "type": "number"
+            }
           },
           "required": ["type", "incidentId", "contactOptIn"]
         },
@@ -199,8 +241,13 @@
           "title": "CrashCancel",
           "type": "object",
           "properties": {
-            "type": { "const": "crash.cancel" },
-            "incidentId": { "type": "string", "minLength": 1 }
+            "type": {
+              "const": "crash.cancel"
+            },
+            "incidentId": {
+              "type": "string",
+              "minLength": 1
+            }
           },
           "required": ["type", "incidentId"]
         },
@@ -208,22 +255,47 @@
           "title": "NavRequest",
           "type": "object",
           "properties": {
-            "type": { "const": "nav.request" },
-            "commandId": { "type": "string", "minLength": 1 },
-            "reason": { "enum": ["start", "reroute"] },
+            "type": {
+              "const": "nav.request"
+            },
+            "commandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "enum": ["start", "reroute"]
+            },
             "origin": {
               "description": "GCJ-02, like every nav.* coordinate.",
               "type": "object",
-              "properties": { "lat": { "type": "number" }, "lon": { "type": "number" } },
+              "properties": {
+                "lat": {
+                  "type": "number"
+                },
+                "lon": {
+                  "type": "number"
+                }
+              },
               "required": ["lat", "lon"]
             },
-            "query": { "type": "string" },
+            "query": {
+              "type": "string"
+            },
             "destination": {
               "type": "object",
-              "properties": { "lat": { "type": "number" }, "lon": { "type": "number" } },
+              "properties": {
+                "lat": {
+                  "type": "number"
+                },
+                "lon": {
+                  "type": "number"
+                }
+              },
               "required": ["lat", "lon"]
             },
-            "destinationName": { "type": "string" }
+            "destinationName": {
+              "type": "string"
+            }
           },
           "required": ["type", "commandId", "reason", "origin"]
         },
@@ -231,13 +303,29 @@
           "title": "NavPrompt",
           "type": "object",
           "properties": {
-            "type": { "const": "nav.prompt" },
-            "promptId": { "type": "string", "minLength": 1 },
-            "routeCommandId": { "type": "string", "minLength": 1 },
-            "kind": { "enum": ["confirm", "maneuver", "offRoute", "rerouteFailed", "arrived", "locationLost"] },
-            "maneuverIndex": { "type": "number" },
-            "threshold": { "enum": ["far", "near", "now"] },
-            "distanceMeters": { "type": "number" }
+            "type": {
+              "const": "nav.prompt"
+            },
+            "promptId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "routeCommandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "enum": ["confirm", "maneuver", "offRoute", "rerouteFailed", "arrived", "locationLost"]
+            },
+            "maneuverIndex": {
+              "type": "number"
+            },
+            "threshold": {
+              "enum": ["far", "near", "now"]
+            },
+            "distanceMeters": {
+              "type": "number"
+            }
           },
           "required": ["type", "promptId", "routeCommandId", "kind"]
         },
@@ -245,15 +333,63 @@
           "title": "VisionFrames",
           "type": "object",
           "properties": {
-            "type": { "const": "vision.frames" },
-            "commandId": { "type": "string", "minLength": 1 },
-            "reason": { "enum": ["gallery", "watch"] },
-            "index": { "type": "number" },
-            "total": { "type": "number" },
-            "image": { "type": "string" },
-            "question": { "type": "string" }
+            "type": {
+              "const": "vision.frames"
+            },
+            "commandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "enum": ["gallery", "watch"]
+            },
+            "index": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            },
+            "image": {
+              "type": "string"
+            },
+            "question": {
+              "type": "string"
+            }
           },
           "required": ["type", "reason", "index", "total", "image"]
+        },
+        {
+          "title": "ToolResult",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool.result"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "output": {},
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "callId"]
+        },
+        {
+          "title": "TextInput",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "text.input"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          },
+          "required": ["type", "text"]
         }
       ]
     },
@@ -531,10 +667,19 @@
           "title": "CrashAck",
           "type": "object",
           "properties": {
-            "type": { "const": "crash.ack" },
-            "incidentId": { "type": "string", "minLength": 1 },
-            "status": { "enum": ["notified", "failed", "unconfigured"] },
-            "detail": { "type": "string" }
+            "type": {
+              "const": "crash.ack"
+            },
+            "incidentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "enum": ["notified", "failed", "unconfigured"]
+            },
+            "detail": {
+              "type": "string"
+            }
           },
           "required": ["type", "incidentId", "status"]
         },
@@ -542,7 +687,9 @@
           "title": "CrashSimulate",
           "type": "object",
           "properties": {
-            "type": { "const": "crash.simulate" }
+            "type": {
+              "const": "crash.simulate"
+            }
           },
           "required": ["type"]
         },
@@ -550,10 +697,18 @@
           "title": "CompanionPairing",
           "type": "object",
           "properties": {
-            "type": { "const": "companion.pairing" },
-            "code": { "type": "string" },
-            "expiresAt": { "type": "number" },
-            "paired": { "type": "boolean" }
+            "type": {
+              "const": "companion.pairing"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": "number"
+            },
+            "paired": {
+              "type": "boolean"
+            }
           },
           "required": ["type", "code", "expiresAt", "paired"]
         },
@@ -561,9 +716,15 @@
           "title": "CompanionDiscovery",
           "type": "object",
           "properties": {
-            "type": { "const": "companion.discovery" },
-            "token": { "type": ["string", "null"] },
-            "expiresAt": { "type": "number" }
+            "type": {
+              "const": "companion.discovery"
+            },
+            "token": {
+              "type": ["string", "null"]
+            },
+            "expiresAt": {
+              "type": "number"
+            }
           },
           "required": ["type", "token"]
         },
@@ -571,14 +732,30 @@
           "title": "PhoneLocation",
           "type": "object",
           "properties": {
-            "type": { "const": "phone.location" },
-            "sequence": { "type": "number" },
-            "lat": { "type": "number" },
-            "lon": { "type": "number" },
-            "horizontalAccuracyMeters": { "type": "number" },
-            "timestamp": { "type": "number" },
-            "courseDegrees": { "type": "number" },
-            "speedMps": { "type": "number" }
+            "type": {
+              "const": "phone.location"
+            },
+            "sequence": {
+              "type": "number"
+            },
+            "lat": {
+              "type": "number"
+            },
+            "lon": {
+              "type": "number"
+            },
+            "horizontalAccuracyMeters": {
+              "type": "number"
+            },
+            "timestamp": {
+              "type": "number"
+            },
+            "courseDegrees": {
+              "type": "number"
+            },
+            "speedMps": {
+              "type": "number"
+            }
           },
           "required": ["type", "sequence", "lat", "lon", "horizontalAccuracyMeters", "timestamp"]
         },
@@ -586,8 +763,12 @@
           "title": "PhoneLocationStatus",
           "type": "object",
           "properties": {
-            "type": { "const": "phone.location.status" },
-            "state": { "enum": ["connected", "sharing", "stopped", "stale", "unpaired"] }
+            "type": {
+              "const": "phone.location.status"
+            },
+            "state": {
+              "enum": ["connected", "sharing", "stopped", "stale", "unpaired"]
+            }
           },
           "required": ["type", "state"]
         },
@@ -595,22 +776,47 @@
           "title": "NavRoute",
           "type": "object",
           "properties": {
-            "type": { "const": "nav.route" },
-            "commandId": { "type": "string", "minLength": 1 },
-            "destinationName": { "type": "string" },
+            "type": {
+              "const": "nav.route"
+            },
+            "commandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "destinationName": {
+              "type": "string"
+            },
             "destination": {
               "description": "GCJ-02, like every nav.* coordinate.",
               "type": "object",
-              "properties": { "lat": { "type": "number" }, "lon": { "type": "number" } },
+              "properties": {
+                "lat": {
+                  "type": "number"
+                },
+                "lon": {
+                  "type": "number"
+                }
+              },
               "required": ["lat", "lon"]
             },
-            "distanceMeters": { "type": "number" },
-            "etaSeconds": { "type": "number" },
+            "distanceMeters": {
+              "type": "number"
+            },
+            "etaSeconds": {
+              "type": "number"
+            },
             "polyline": {
               "type": "array",
               "items": {
                 "type": "object",
-                "properties": { "lat": { "type": "number" }, "lon": { "type": "number" } },
+                "properties": {
+                  "lat": {
+                    "type": "number"
+                  },
+                  "lon": {
+                    "type": "number"
+                  }
+                },
                 "required": ["lat", "lon"]
               }
             },
@@ -619,10 +825,18 @@
               "items": {
                 "type": "object",
                 "properties": {
-                  "instruction": { "type": "string" },
-                  "lat": { "type": "number" },
-                  "lon": { "type": "number" },
-                  "alongRouteMeters": { "type": "number" }
+                  "instruction": {
+                    "type": "string"
+                  },
+                  "lat": {
+                    "type": "number"
+                  },
+                  "lon": {
+                    "type": "number"
+                  },
+                  "alongRouteMeters": {
+                    "type": "number"
+                  }
                 },
                 "required": ["instruction", "lat", "lon", "alongRouteMeters"]
               }
@@ -643,11 +857,67 @@
           "title": "NavError",
           "type": "object",
           "properties": {
-            "type": { "const": "nav.error" },
-            "commandId": { "type": "string", "minLength": 1 },
-            "code": { "enum": ["destination.notFound", "route.unavailable"] }
+            "type": {
+              "const": "nav.error"
+            },
+            "commandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "code": {
+              "enum": ["destination.notFound", "route.unavailable"]
+            }
           },
           "required": ["type", "commandId", "code"]
+        },
+        {
+          "title": "ToolCall",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool.call"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string"
+            },
+            "arguments": {
+              "type": "object"
+            }
+          },
+          "required": ["type", "callId", "name", "arguments"]
+        },
+        {
+          "title": "ToolActivity",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool.activity"
+            },
+            "callId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string"
+            },
+            "where": {
+              "enum": ["server", "client"]
+            },
+            "state": {
+              "enum": ["started", "succeeded", "failed"]
+            },
+            "durationMs": {
+              "type": "number"
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "callId", "name", "where", "state"]
         }
       ]
     }

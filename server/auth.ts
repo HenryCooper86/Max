@@ -1,6 +1,7 @@
 // Access control for the /agent WebSocket upgrade. Three layers, all optional
 // and configured via environment so the open demo setup keeps working:
-//   1. Shared token  — RELAY_AUTH_TOKEN, sent by clients as ?token=…
+//   1. Shared token  — RELAY_AUTH_TOKEN, sent by clients as ?token=…, or a
+//      short-lived session token minted with it (server/session-tokens.ts)
 //   2. Origin check  — RELAY_ALLOWED_ORIGINS, comma-separated allowlist
 //   3. Rate limiting — RELAY_CONN_PER_MINUTE upgrade attempts per client IP
 // The relay holds the Doubao credentials, so without at least the token anyone
@@ -10,6 +11,7 @@ import type { IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { authActive, sessionUser, type PublicUser } from "./accounts";
 import { config } from "./config";
+import { sessionTokens } from "./session-tokens";
 
 export type UpgradeDecision = { ok: true } | { ok: false; code: number; reason: string };
 export type AccountUpgradeDecision =
@@ -100,7 +102,7 @@ export function resetRateLimit() {
 }
 
 /** The credentials a request presented: `?token=…` and/or a Bearer header. */
-function presentedTokens(request: IncomingMessage): string[] {
+export function presentedTokens(request: IncomingMessage): string[] {
   const url = new URL(request.url ?? "/", "http://relay.local");
   const fromQuery = url.searchParams.get("token") ?? "";
   const authorization = request.headers.authorization ?? "";
@@ -222,11 +224,17 @@ export function authorizeUpgrade(request: IncomingMessage, now = Date.now()): Up
   // are never handed the shared token. With neither configured the relay
   // stays plug-and-play open, as documented.
   if (config.relayAuthToken || authActive()) {
-    const url = new URL(request.url ?? "/", "http://relay.local");
-    const provided = url.searchParams.get("token") ?? "";
-    const relayTokenOk = config.relayAuthToken ? tokenMatches(provided, config.relayAuthToken) : false;
-    if (!relayTokenOk && !sessionUser(provided)) {
-      return { ok: false, code: 401, reason: "Login or relay token required" };
+    // `?token=` (browsers cannot set headers on a WebSocket) or, for native
+    // clients that can, `Authorization: Bearer`, which keeps it out of URLs and logs.
+    const tokens = presentedTokens(request);
+    const accepted = tokens.some(
+      (provided) =>
+        (config.relayAuthToken ? tokenMatches(provided, config.relayAuthToken) : false) ||
+        Boolean(sessionTokens.grant(provided)) ||
+        Boolean(sessionUser(provided))
+    );
+    if (!accepted) {
+      return { ok: false, code: 401, reason: "Login, relay token or session token required" };
     }
   }
 

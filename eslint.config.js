@@ -9,6 +9,21 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // Plain Node.js scripts (examples). No `globals` dependency: list what they use.
+    files: ["**/*.mjs"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        Buffer: "readonly",
+        URL: "readonly",
+        fetch: "readonly",
+        console: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly"
+      }
+    }
+  },
+  {
     files: ["src/**/*.{ts,tsx}"],
     plugins: { "react-hooks": reactHooks },
     rules: {

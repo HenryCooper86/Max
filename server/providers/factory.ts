@@ -7,6 +7,8 @@ import { createRealtimeEngine, grokDialect, localRealtimeDialect, openAiDialect 
 import { createPipelineEngine, localPipelineSettings } from "./live/pipeline";
 import { createLiveProvider, type LiveBackend } from "./live/session";
 import { createMockProvider } from "./mock";
+import { createAppDemoProvider } from "./app-demo";
+import { assistant } from "../assistant";
 import type { AgentProvider, ProviderTelemetry, SessionStartEvent } from "./types";
 
 function liveBackend(id: VoiceProviderId, createEngine: LiveBackend["createEngine"]): LiveBackend {
@@ -67,7 +69,11 @@ export function createVoiceProvider(
         telemetry
       );
     case "mock":
-      return createMockProvider(client, telemetry);
+      // A software assistant gets a demo of its own: the scripted ride makes
+      // no sense on a website.
+      return assistant().preset.general
+        ? createAppDemoProvider(client, log, telemetry)
+        : createMockProvider(client, telemetry);
   }
 }
 
@@ -110,6 +116,8 @@ export function createSelectableProvider(create: (requested: string | undefined)
     visionFrames: async (event) => chosen?.visionFrames?.(event),
     attachNavOkSpeech: (speech) => chosen?.attachNavOkSpeech?.(speech),
     speakNavLine: (text) => chosen?.speakNavLine?.(text),
-    speakNavPrompt: (speech) => chosen?.speakNavPrompt?.(speech)
+    speakNavPrompt: (speech) => chosen?.speakNavPrompt?.(speech),
+    textInput: async (text) => (chosen?.textInput ? chosen.textInput(text) : false),
+    toolResult: async (event) => chosen?.toolResult?.(event)
   };
 }

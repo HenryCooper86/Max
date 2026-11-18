@@ -225,3 +225,7 @@ falls back to `ScriptProcessorNode` where worklets are missing. If your Content
 Security Policy restricts `script-src`, allow `blob:`. Current Chrome, Edge,
 Firefox and Safari (iOS 14.5+) are supported. Browser speech fallback needs
 `speechSynthesis`; without it, those replies stay text-only.
+
+## License
+
+[MIT](../LICENSE)

@@ -1,6 +1,7 @@
 # Max: realtime voice agents for any product
 
 [![CI](https://github.com/HenryCooper86/Max/actions/workflows/ci.yml/badge.svg)](https://github.com/HenryCooper86/Max/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Max is an open kit for putting a talking, listening AI agent into your own product: a website, a web or mobile app,
 a kiosk, a wearable. You run one small relay server. It holds your API keys, talks to the voice model you choose, and
@@ -262,3 +263,7 @@ npm run check   # everything CI runs: protocol, format, lint, dead code, types, 
 
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first, and report security issues privately as
 described in [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE). Use it in commercial and open-source products alike.

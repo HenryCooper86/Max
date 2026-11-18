@@ -119,3 +119,7 @@ Add a body when the reason is not obvious. Do not add tool or AI attribution lin
 - Describe what changed and why, and how you tested it. The template asks for this.
 - Update the docs when behaviour changes.
 - Make sure `npm run check` passes.
+
+## License
+
+By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).

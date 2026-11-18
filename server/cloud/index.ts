@@ -6,7 +6,17 @@ import { createLogger } from "../logger";
 import { bookedSeconds, secondsForFen } from "./billing";
 import { cloudEnabled, cloudSecretKey, now } from "./context";
 import { decryptModelKey, hashToken } from "./secrets";
-import { bookUsage, customerExists, customerFunds, liveProject, liveProjectByKeyHash } from "./store";
+import {
+  bookUsage,
+  customerExists,
+  customerFunds,
+  endLiveSession,
+  leftoverLiveSessions,
+  liveProject,
+  liveProjectByKeyHash,
+  startLiveSession,
+  touchLiveSession
+} from "./store";
 
 export { cloudEnabled } from "./context";
 export { registerCloudPaymentRoutes, registerCloudRoutes } from "./routes";
@@ -25,13 +35,77 @@ export type ProjectRuntime = {
   greeting?: string;
 };
 
-/** The project a project API key belongs to (live projects only). */
-export function projectForApiKey(apiKey: string): { projectId: string; customerId: string } | undefined {
+/** The project a project API key belongs to (live projects only), with the
+ *  key's fingerprint: sessions keep it to notice a rotated or deleted key. */
+export function projectForApiKey(
+  apiKey: string
+): { projectId: string; customerId: string; keyHash: string } | undefined {
   if (!cloudEnabled() || typeof apiKey !== "string" || !apiKey.startsWith("mpk_") || apiKey.length > 100) {
     return undefined;
   }
-  const project = liveProjectByKeyHash(hashToken(apiKey));
-  return project ? { projectId: project.id, customerId: project.customer_id } : undefined;
+  const keyHash = hashToken(apiKey);
+  const project = liveProjectByKeyHash(keyHash);
+  return project ? { projectId: project.id, customerId: project.customer_id, keyHash } : undefined;
+}
+
+/** True while the project still exists and the key that minted a session's
+ *  token is still its key (not rotated, not deleted). */
+export function projectKeyValid(projectId: string, keyHash: string): boolean {
+  if (!cloudEnabled()) return false;
+  return liveProjectByKeyHash(keyHash)?.id === projectId;
+}
+
+/** A project session began: recorded so a crash cannot lose its charge. */
+export function cloudSessionStarted(session: { sessionId: string; customerId: string; projectId: string }): void {
+  try {
+    startLiveSession({ ...session, at: now() });
+  } catch (error) {
+    log.warn("live session not recorded", { message: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/** A project session is still running (checkpoint, every 15 s). */
+export function cloudSessionAlive(sessionId: string): void {
+  try {
+    touchLiveSession(sessionId, now());
+  } catch {
+    /* the close or the next checkpoint records it */
+  }
+}
+
+/** A project session ended: book it and forget the checkpoint. */
+export function cloudSessionEnded(usage: {
+  customerId: string;
+  projectId: string;
+  sessionId: string;
+  seconds: number;
+  endedAt: number;
+}): void {
+  chargeSession(usage);
+  try {
+    endLiveSession(usage.sessionId);
+  } catch {
+    /* booking is idempotent: a leftover row is booked again harmlessly at startup */
+  }
+}
+
+/** Books every project session a crash or restart left open, up to its last
+ *  checkpoint. Call once at startup. Returns how many were booked. */
+export function recoverCloudSessions(): number {
+  if (!cloudEnabled()) return 0;
+  let booked = 0;
+  for (const row of leftoverLiveSessions()) {
+    cloudSessionEnded({
+      customerId: row.customer_id,
+      projectId: row.project_id,
+      sessionId: row.session_id,
+      seconds: Math.max(0, (row.last_seen - row.started_at) / 1000),
+      endedAt: row.last_seen
+    });
+    booked += 1;
+  }
+  if (booked) log.info("booked project sessions left open by the last run", { sessions: booked });
+  return booked;
 }
 
 /** What a session of this project runs with; undefined when the project is gone or has no model key. */

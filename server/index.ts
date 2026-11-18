@@ -33,14 +33,18 @@ import {
   testingClearAuthorized
 } from "./auth";
 import { buildHealth, config, describeConfig, readinessIssues, validateConfig } from "./config";
-import { sessionTokens } from "./session-tokens";
+import { cloudSessionTokens, sessionTokens } from "./session-tokens";
 import { installServerTools } from "./tools/registry";
 import { createUsageMeter, monthOf, usageSettingsFromEnv } from "./usage";
 import {
-  chargeSession,
   cloudEnabled,
+  cloudSessionAlive,
+  cloudSessionEnded,
+  cloudSessionStarted,
   projectForApiKey,
+  projectKeyValid,
   projectRuntime,
+  recoverCloudSessions,
   registerCloudPaymentRoutes,
   registerCloudRoutes,
   remainingSeconds
@@ -134,6 +138,33 @@ server.maxRequestsPerSocket = 1_000;
 const activeSessions = new Map<WebSocket, AgentSessionController>();
 const usageMeter = createUsageMeter(usageSettingsFromEnv());
 const CLOUD_BALANCE_MESSAGE = "Your Max Cloud balance is used up. Top up in the console.";
+/** Simultaneous voice sessions per Max Cloud customer. */
+const CLOUD_SESSIONS_PER_CUSTOMER = 5;
+const PROJECT_MINTS_PER_MINUTE = 120;
+const projectMints = new Map<string, number[]>();
+/** A project's token mints in the trailing minute, within the limit. */
+function projectMintAllowed(projectId: string, at = Date.now()): boolean {
+  const recent = (projectMints.get(projectId) ?? []).filter((time) => time > at - 60_000);
+  if (recent.length >= PROJECT_MINTS_PER_MINUTE) {
+    projectMints.set(projectId, recent);
+    return false;
+  }
+  recent.push(at);
+  projectMints.set(projectId, recent);
+  if (projectMints.size > 10_000) {
+    for (const [key, times] of projectMints) if (!times.some((time) => time > at - 60_000)) projectMints.delete(key);
+  }
+  return true;
+}
+/** Max Cloud sessions in progress: customer → session → when it connected.
+ *  A customer's balance pays for all of them at once, so every check counts
+ *  them all, not just the session asking. */
+const liveCloudSessions = new Map<string, Map<string, number>>();
+function liveCloudSeconds(customerId: string, at = Date.now()): number {
+  let seconds = 0;
+  for (const connectedAt of liveCloudSessions.get(customerId)?.values() ?? []) seconds += (at - connectedAt) / 1000;
+  return seconds;
+}
 const log = createLogger("relay");
 const companionStore = createCompanionBindingStore();
 const companionRegistry = createCompanionRegistry({ store: companionStore, log });
@@ -213,8 +244,12 @@ app.post("/v1/session-tokens", (req, res) => {
       res.status(401).json({ ok: false, error: "Unknown or revoked project key." });
       return;
     }
+    if (!projectMintAllowed(project.projectId)) {
+      res.status(429).json({ ok: false, error: `At most ${PROJECT_MINTS_PER_MINUTE} tokens a minute per project.` });
+      return;
+    }
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const minted = sessionTokens.mint(
+    const minted = cloudSessionTokens.mint(
       { ttlSeconds: body.ttlSeconds, userId: body.userId, context: body.context },
       project
     );
@@ -1003,7 +1038,7 @@ wss.on("connection", (client, request) => {
   const authenticatedSession = requestSession(request) ?? undefined;
   const authenticatedUser = authenticatedSession?.user;
   const tokenGrant = presentedTokens(request)
-    .map((token) => sessionTokens.grant(token))
+    .map((token) => sessionTokens.grant(token) ?? cloudSessionTokens.grant(token))
     .find((grant) => grant !== undefined);
   if (authenticatedSession) {
     registerAuthenticatedConnection(client, {
@@ -1025,13 +1060,31 @@ wss.on("connection", (client, request) => {
       client.close(code, reason);
     }
   };
-  if (cloudProject && !runtime) {
+  if (cloudProject && (!runtime || !projectKeyValid(cloudProject.projectId, cloudProject.keyHash))) {
     unregisterAuthenticatedConnection(client);
-    refuse(1008, "This Max Cloud project is not ready: add a model key in the console.", "project not ready");
+    refuse(
+      1008,
+      runtime
+        ? "This Max Cloud project key was rotated or the project was deleted."
+        : "This Max Cloud project is not ready: add a model key in the console.",
+      "project not ready"
+    );
     return;
   }
-  const cloudBalanceGone = (sessionSeconds: number) =>
-    cloudProject ? remainingSeconds(cloudProject.customerId) - sessionSeconds <= 0 : false;
+  const cloudCustomer = cloudProject?.customerId;
+  if (cloudCustomer && (liveCloudSessions.get(cloudCustomer)?.size ?? 0) >= CLOUD_SESSIONS_PER_CUSTOMER) {
+    unregisterAuthenticatedConnection(client);
+    refuse(
+      1013,
+      `This Max Cloud account already has ${CLOUD_SESSIONS_PER_CUSTOMER} voice sessions open.`,
+      "too many sessions"
+    );
+    return;
+  }
+  // Left to talk: the customer's free seconds and balance, minus every one of
+  // their sessions still running (they are only booked when they end).
+  const cloudSecondsLeft = () =>
+    cloudCustomer ? remainingSeconds(cloudCustomer) - liveCloudSeconds(cloudCustomer) : Infinity;
 
   // Usage: whose minutes these are, and whether they have any left.
   const usageUserId = cloudProject
@@ -1045,22 +1098,39 @@ wss.on("connection", (client, request) => {
           "This account has used all of its voice minutes for this month.",
           "usage limit reached"
         );
-  // A Cloud project pays from its balance; the relay-wide allowance is for the relay's own users.
-  if (cloudProject ? cloudBalanceGone(0) : usageMeter.overLimit(usageUserId)) {
+  // A Cloud project pays from its balance and must afford at least one check
+  // interval; the relay-wide allowance is for the relay's own users.
+  if (cloudProject ? cloudSecondsLeft() < 15 : usageMeter.overLimit(usageUserId)) {
     // Refused before any session exists: nothing else to clean up.
     unregisterAuthenticatedConnection(client);
     limitReached();
     return;
   }
-  const meteredSession = usageMeter.open(randomUUID(), usageUserId);
-  const connectedAt = Date.now();
+  const usageSessionId = randomUUID();
+  const meteredSession = usageMeter.open(usageSessionId, usageUserId);
+  if (cloudProject) {
+    const sessions = liveCloudSessions.get(cloudProject.customerId) ?? new Map<string, number>();
+    sessions.set(usageSessionId, Date.now());
+    liveCloudSessions.set(cloudProject.customerId, sessions);
+    cloudSessionStarted({
+      sessionId: usageSessionId,
+      customerId: cloudProject.customerId,
+      projectId: cloudProject.projectId
+    });
+  }
   const usageCheck =
     cloudProject || usageMeter.limitMinutes()
       ? setInterval(() => {
-          const over = cloudProject
-            ? cloudBalanceGone((Date.now() - connectedAt) / 1000)
-            : usageMeter.overLimit(usageUserId);
-          if (over) limitReached();
+          if (cloudProject) {
+            cloudSessionAlive(usageSessionId);
+            if (!projectKeyValid(cloudProject.projectId, cloudProject.keyHash)) {
+              refuse(1008, "This Max Cloud project key was rotated or the project was deleted.", "project revoked");
+              return;
+            }
+            if (cloudSecondsLeft() <= 0) limitReached();
+            return;
+          }
+          if (usageMeter.overLimit(usageUserId)) limitReached();
         }, 15_000)
       : undefined;
   usageCheck?.unref();
@@ -1113,9 +1183,14 @@ wss.on("connection", (client, request) => {
   client.on("close", async (code) => {
     if (usageCheck) clearInterval(usageCheck);
     const usage = meteredSession.close();
+    if (cloudProject) {
+      const sessions = liveCloudSessions.get(cloudProject.customerId);
+      sessions?.delete(usageSessionId);
+      if (sessions && sessions.size === 0) liveCloudSessions.delete(cloudProject.customerId);
+    }
     if (cloudProject && usage) {
       try {
-        chargeSession({
+        cloudSessionEnded({
           customerId: cloudProject.customerId,
           projectId: cloudProject.projectId,
           sessionId: usage.sessionId,
@@ -1189,6 +1264,8 @@ authSessionSweepTimer.unref();
 // The relay's own tools (assistant.config.json → tools / toolsModule) load
 // before the first session can start.
 await installServerTools(assistant().tools);
+// Max Cloud sessions a crash or restart left unbooked are charged up to their last checkpoint.
+recoverCloudSessions();
 
 const warnings = validateConfig();
 server.on("error", (error) => {

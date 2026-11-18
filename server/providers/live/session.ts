@@ -1112,6 +1112,9 @@ export function createLiveProvider(
       engine = undefined;
     },
     async updateLocation(lat: number, lon: number) {
+      // A software assistant has no use for the wearer's position (and its
+      // lookup would spend the relay owner's Amap quota).
+      if (general) return;
       weatherLocation = { lat, lon, source: "rider" };
       await riderLocation.update(lat, lon);
       refreshInstructions();

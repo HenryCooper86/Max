@@ -47,6 +47,15 @@ export type AgentSessionHooks = {
 };
 
 const MAX_TEXT_INPUT_CHARS = 2_000;
+/** Client events a private (Max Cloud) session may not send. */
+const PRIVATE_SESSION_REFUSED: ReadonlySet<string> = new Set([
+  "nav.request",
+  "nav.prompt",
+  "crash.alert",
+  "crash.cancel",
+  "location.update",
+  "demo.guided"
+]);
 const MAX_APP_CONTEXT_CHARS = 2_000;
 const MAX_TOOL_CALL_ID = 128;
 const MAX_TOOL_RESULT_ERROR_CHARS = 1_000;
@@ -881,6 +890,10 @@ export class AgentSessionController {
         await this.provider.stopAudio();
         this.audioActive = false;
       }
+      // Someone else's session (a Max Cloud project) may not use the relay
+      // owner's navigation (their Amap key) or write crash alerts into the
+      // owner's QA audit log.
+      if (this.hooks?.privateSession && PRIVATE_SESSION_REFUSED.has(event.type)) return;
       if (event.type === "demo.guided") await this.provider.setGuidedDemo?.(event.enabled);
       if (event.type === "location.update") await this.provider.updateLocation?.(event.lat, event.lon);
       if (event.type === "turn.feedback") recordTesterTurnFeedback(this.relaySessionId, event);

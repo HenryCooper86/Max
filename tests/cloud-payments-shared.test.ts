@@ -53,7 +53,8 @@ describe("headerValue", () => {
 });
 
 describe("test payment provider", () => {
-  const on = { CLOUD_PAYMENTS_TEST: "on", NODE_ENV: "development", CLOUD_PUBLIC_URL: "https://max.example.com/" };
+  // A local relay: the test provider refuses any address the public can reach.
+  const on = { CLOUD_PAYMENTS_TEST: "on", NODE_ENV: "development", CLOUD_PUBLIC_URL: "http://localhost:8787/" };
   const order = {
     orderId: "ord_test_1",
     amountFen: 5000,
@@ -72,7 +73,7 @@ describe("test payment provider", () => {
   it("returns a pay URL and reports the order paid once marked", async () => {
     const provider = createTestProvider({ env: on });
     expect(await provider.createQrOrder(order)).toEqual({
-      qrCode: "https://max.example.com/cloud/pay/test/ord_test_1"
+      qrCode: "http://localhost:8787/cloud/pay/test/ord_test_1"
     });
     expect(await provider.queryOrder("ord_test_1")).toBeNull();
     expect(markTestOrderPaid("ord_test_1", on)).toEqual({

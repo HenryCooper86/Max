@@ -123,7 +123,7 @@ describe("projects for the relay", () => {
     const { project, apiKey } = newProject(customerId);
     expect(apiKey).toMatch(/^mpk_[A-Za-z0-9_-]{43}$/);
     expect(project.keyPrefix).toBe(apiKey.slice(0, 8));
-    expect(projectForApiKey(apiKey)).toEqual({ projectId: project.id, customerId });
+    expect(projectForApiKey(apiKey)).toMatchObject({ projectId: project.id, customerId });
     expect(projectForApiKey(`${apiKey}x`)).toBeUndefined();
     expect(projectForApiKey("mcs_whatever")).toBeUndefined();
     expect(projectForApiKey("")).toBeUndefined();
@@ -131,7 +131,7 @@ describe("projects for the relay", () => {
     const rotated = rotateProjectKey(customerId, project.id);
     if (!rotated.ok) throw new Error(rotated.error);
     expect(projectForApiKey(apiKey)).toBeUndefined();
-    expect(projectForApiKey(rotated.value.apiKey)).toEqual({ projectId: project.id, customerId });
+    expect(projectForApiKey(rotated.value.apiKey)).toMatchObject({ projectId: project.id, customerId });
 
     delete process.env.CLOUD_SECRET_KEY;
     expect(projectForApiKey(rotated.value.apiKey)).toBeUndefined();
@@ -317,6 +317,7 @@ describe("top-ups", () => {
     const { fake, customerId, order } = await pendingOrder();
     expect((await topupStatus(customerId, order.orderId)).ok).toBe(true);
     fake.paidAtProvider.set(order.orderId, { orderId: order.orderId, providerTxnId: "q1", amountFen: 20_000 });
+    clock += 3_000; // the provider is asked at most once every 3 s per order
     expect(await topupStatus(customerId, order.orderId)).toEqual({ ok: true, value: { status: "paid" } });
     expect(await topupStatus(customerId, order.orderId)).toEqual({ ok: true, value: { status: "paid" } });
     expect(remainingSeconds(customerId)).toBe(140_000);

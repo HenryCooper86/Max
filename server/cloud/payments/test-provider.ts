@@ -11,7 +11,16 @@ type TestOrder = { amountFen: number; paid: boolean };
 const orders = new Map<string, TestOrder>();
 
 function enabled(env: Env): boolean {
-  return env.CLOUD_PAYMENTS_TEST === "on" && env.NODE_ENV !== "production";
+  if (env.CLOUD_PAYMENTS_TEST !== "on" || env.NODE_ENV === "production") return false;
+  // Free credit for anyone: never on a relay the public can reach, even when
+  // NODE_ENV was not set to production there.
+  const publicUrl = env.CLOUD_PUBLIC_URL?.trim();
+  if (!publicUrl) return true;
+  try {
+    return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(new URL(publicUrl).hostname);
+  } catch {
+    return false;
+  }
 }
 
 function paidOrder(orderId: string): PaidOrder {

@@ -33,7 +33,7 @@ type SessionTokenGrant = {
   context?: string;
   /** Set when a Max Cloud project's API key minted the token: the session
    *  runs as that project and is billed to its customer. */
-  project?: { projectId: string; customerId: string };
+  project?: { projectId: string; customerId: string; keyHash: string };
 };
 
 type MintRequest = { ttlSeconds?: unknown; userId?: unknown; context?: unknown };
@@ -42,7 +42,7 @@ export type SessionTokenStore = {
   /** Validates a request body and issues a token, or explains what is wrong. */
   mint(
     request: MintRequest,
-    project?: { projectId: string; customerId: string }
+    project?: { projectId: string; customerId: string; keyHash: string }
   ): { ok: true; token: string; expiresAt: number } | { ok: false; error: string };
   /** The grant behind a live token, if any. */
   grant(token: string | null | undefined): SessionTokenGrant | undefined;
@@ -52,7 +52,20 @@ export type SessionTokenStore = {
   size(): number;
 };
 
-export function createSessionTokenStore(now: () => number = Date.now): SessionTokenStore {
+export type SessionTokenLimits = {
+  /** Live tokens in the whole store; the oldest goes first when full. */
+  maxLive?: number;
+  /** Live tokens per project; that project's own oldest goes first. */
+  perProject?: number;
+  maxContextChars?: number;
+};
+
+export function createSessionTokenStore(
+  now: () => number = Date.now,
+  limits: SessionTokenLimits = {}
+): SessionTokenStore {
+  const maxLive = limits.maxLive ?? MAX_LIVE_TOKENS;
+  const maxContext = limits.maxContextChars ?? MAX_CONTEXT_CHARS;
   // Insertion order is issue order, so the first entries are the oldest.
   const tokens = new Map<string, SessionTokenGrant>();
 
@@ -77,13 +90,18 @@ export function createSessionTokenStore(now: () => number = Date.now): SessionTo
       }
       if (
         request.context !== undefined &&
-        (typeof request.context !== "string" || request.context.length > MAX_CONTEXT_CHARS)
+        (typeof request.context !== "string" || request.context.length > maxContext)
       ) {
-        return { ok: false, error: `context must be a string of at most ${MAX_CONTEXT_CHARS} characters` };
+        return { ok: false, error: `context must be a string of at most ${maxContext} characters` };
       }
       const at = now();
       prune(at);
-      while (tokens.size >= MAX_LIVE_TOKENS) {
+      if (project && limits.perProject) {
+        // A project can only ever push out its own tokens.
+        const own = [...tokens].filter(([, grant]) => grant.project?.projectId === project.projectId);
+        for (const [token] of own.slice(0, Math.max(0, own.length - limits.perProject + 1))) tokens.delete(token);
+      }
+      while (tokens.size >= maxLive) {
         const oldest = tokens.keys().next().value;
         if (oldest === undefined) break;
         tokens.delete(oldest);
@@ -125,3 +143,11 @@ export function createSessionTokenStore(now: () => number = Date.now): SessionTo
 
 /** The relay's token store. */
 export const sessionTokens = createSessionTokenStore();
+
+/** Max Cloud projects' tokens, kept apart: anyone can sign up for Cloud, and
+ *  nothing they mint may push out the relay's own tokens. */
+export const cloudSessionTokens = createSessionTokenStore(Date.now, {
+  maxLive: 20_000,
+  perProject: 200,
+  maxContextChars: 1_000
+});

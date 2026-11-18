@@ -156,6 +156,9 @@ export function readOrder(orderId: string): OrderRow | undefined {
  * the provider first (the polling fallback for a lost notification), also
  * once it has expired, so a payment made at the last second is still credited.
  */
+const ORDER_QUERY_INTERVAL_MS = 3_000;
+const lastOrderQuery = new Map<string, number>();
+
 export async function topupStatus(
   customerId: string,
   orderId: string
@@ -163,7 +166,12 @@ export async function topupStatus(
   const order = validOrderId(orderId) ? orderById(orderId) : undefined;
   if (!order || order.customer_id !== customerId) return { ok: false, status: 404, error: "Order not found." };
   const provider = cloudPaymentProvider(order.provider);
-  if (order.status === "pending" && provider) {
+  // At most one provider query per order every 3 s, however often the
+  // console (or anyone with a login) polls: the merchant's API is shared.
+  const lastQuery = lastOrderQuery.get(order.id) ?? 0;
+  if (order.status === "pending" && provider && now() - lastQuery >= ORDER_QUERY_INTERVAL_MS) {
+    lastOrderQuery.set(order.id, now());
+    if (lastOrderQuery.size > 10_000) lastOrderQuery.clear();
     try {
       const paid = await provider.queryOrder(order.id);
       if (paid && paid.orderId === order.id) creditPaidOrder(paid, provider.id);

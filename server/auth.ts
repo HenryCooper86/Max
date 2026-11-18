@@ -11,7 +11,7 @@ import type { IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { authActive, sessionUser, type PublicUser } from "./accounts";
 import { config } from "./config";
-import { sessionTokens } from "./session-tokens";
+import { cloudSessionTokens, sessionTokens } from "./session-tokens";
 
 export type UpgradeDecision = { ok: true } | { ok: false; code: number; reason: string };
 export type AccountUpgradeDecision =
@@ -231,6 +231,7 @@ export function authorizeUpgrade(request: IncomingMessage, now = Date.now()): Up
       (provided) =>
         (config.relayAuthToken ? tokenMatches(provided, config.relayAuthToken) : false) ||
         Boolean(sessionTokens.grant(provided)) ||
+        Boolean(cloudSessionTokens.grant(provided)) ||
         Boolean(sessionUser(provided))
     );
     if (!accepted) {

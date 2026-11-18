@@ -163,6 +163,13 @@ function database(): DatabaseSync {
         expires_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id, created_at);
+      CREATE TABLE IF NOT EXISTS live_sessions (
+        session_id TEXT PRIMARY KEY,
+        customer_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL
+      );
     `);
   } catch (error) {
     db.close();
@@ -521,4 +528,38 @@ export function openOrderCount(customerId: string, at: number): number {
 
 export function customerExists(customerId: string): boolean {
   return Boolean(database().prepare("SELECT 1 FROM customers WHERE id = ?").get(customerId));
+}
+
+/**
+ * Sessions in progress, checkpointed while they run, so a crash or a restart
+ * that skips the close handler cannot lose their charge: at startup every row
+ * left behind is booked up to its last checkpoint.
+ */
+export type LiveSessionRow = {
+  session_id: string;
+  customer_id: string;
+  project_id: string;
+  started_at: number;
+  last_seen: number;
+};
+
+export function startLiveSession(row: { sessionId: string; customerId: string; projectId: string; at: number }): void {
+  database()
+    .prepare(
+      `INSERT OR REPLACE INTO live_sessions (session_id, customer_id, project_id, started_at, last_seen)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(row.sessionId, row.customerId, row.projectId, row.at, row.at);
+}
+
+export function touchLiveSession(sessionId: string, at: number): void {
+  database().prepare("UPDATE live_sessions SET last_seen = ? WHERE session_id = ?").run(at, sessionId);
+}
+
+export function endLiveSession(sessionId: string): void {
+  database().prepare("DELETE FROM live_sessions WHERE session_id = ?").run(sessionId);
+}
+
+export function leftoverLiveSessions(): LiveSessionRow[] {
+  return database().prepare("SELECT * FROM live_sessions").all() as LiveSessionRow[];
 }

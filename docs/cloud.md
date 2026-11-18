@@ -44,9 +44,21 @@ other data. Back up that folder and `CLOUD_SECRET_KEY` together.
 4. Give the token to the page, exactly as in [getting started](getting-started.md): the widget's `token-url`, or the
    SDK's `token` function.
 
-A project session is refused (close code `4003`, "Your Max Cloud balance is used up. Top up in the console.") when the
-customer has no free minutes and no balance left, and is checked every 15 seconds while it runs. A project without a
-model key is refused with close code `1008`.
+Limits that keep one account from affecting everyone else:
+
+- **Balance.** A session starts only when the customer has at least 15 seconds left, counting every session they have
+  open, and all their sessions are checked every 15 seconds. When the time is used up they are closed with code `4003`
+  ("Your Max Cloud balance is used up. Top up in the console."). A balance can go negative by at most one check
+  interval per open session.
+- **5 simultaneous sessions** per customer; a sixth is refused with code `1013`.
+- **Session tokens:** at most 120 minted per minute per project, at most 200 live per project, and 1,000 characters of
+  `context`. Cloud tokens are kept apart from the relay's own, so no customer can push them out.
+- **Keys:** rotating a project key or deleting the project closes its sessions within 15 seconds, and tokens minted
+  with the old key stop working.
+- A project without a model key is refused with code `1008`.
+
+Sessions are checkpointed while they run, so a crash or restart cannot lose their charge: on startup the relay books
+every session left open, up to its last checkpoint.
 
 ## Getting paid
 

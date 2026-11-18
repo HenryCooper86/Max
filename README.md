@@ -74,11 +74,11 @@ transcript and an optional text box.
 <voice-agent relay="https://voice.example.com" token-url="/api/voice-token" text-input></voice-agent>
 ```
 
-**React.** The SDK is not on npm yet: run `npm run build:sdk`, copy `dist/sdk/` into your project, and your bundler
-resolves `react` for it.
+**React.** Install the typed `max-voice-agent` package. Until it is on npm, `npm run pack:sdk` builds a tarball you can
+`npm install` (see the [SDK reference](sdk/README.md#install)).
 
 ```tsx
-import { useVoiceAgent } from "./vendor/voice-agent/react.js";
+import { useVoiceAgent } from "max-voice-agent/react";
 
 function Assistant() {
   const { status, transcript, start, stop } = useVoiceAgent({ url: "https://voice.example.com", token: fetchToken });
@@ -98,7 +98,7 @@ function Assistant() {
 **Plain JavaScript**, for your own UI:
 
 ```js
-import { VoiceAgent } from "https://voice.example.com/sdk/voice-agent.js";
+import { VoiceAgent } from "max-voice-agent"; // or straight from your relay: https://voice.example.com/sdk/voice-agent.js
 
 const agent = new VoiceAgent({ url: "https://voice.example.com", token: fetchToken, language: "en" });
 agent.on("transcript", ({ transcript }) => render(transcript));

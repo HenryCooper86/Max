@@ -4,7 +4,7 @@
  * @packageDocumentation
  */
 
-export { VoiceAgent, VoiceAgentError, defineClientTool } from "./client";
+export { VoiceAgent, VoiceAgentError, defineClientTool } from "./client.js";
 export type {
   CloseInfo,
   ClientTool,
@@ -14,5 +14,5 @@ export type {
   VoiceAgentEvents,
   VoiceAgentOptions,
   VoiceAgentStatus
-} from "./client";
-export type { AgentCapabilities, JsonSchema, ToolActivityEvent, TranscriptItem, VoiceGender } from "./protocol";
+} from "./client.js";
+export type { AgentCapabilities, JsonSchema, ToolActivityEvent, TranscriptItem, VoiceGender } from "./protocol.js";

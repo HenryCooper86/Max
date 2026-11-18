@@ -7,9 +7,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { VoiceAgent } from "./client";
-import type { ClientTool, StartOptions, VoiceAgentError, VoiceAgentOptions, VoiceAgentStatus } from "./client";
-import type { TranscriptItem } from "./protocol";
+import { VoiceAgent } from "./client.js";
+import type { ClientTool, StartOptions, VoiceAgentError, VoiceAgentOptions, VoiceAgentStatus } from "./client.js";
+import type { TranscriptItem } from "./protocol.js";
 
 /** What {@link useVoiceAgent} returns. */
 export interface UseVoiceAgentResult {

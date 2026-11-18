@@ -1,0 +1,56 @@
+{
+  "name": "max-voice-agent",
+  "version": "0.1.0",
+  "description": "Put a realtime voice agent into any web page: a VoiceAgent client, a React hook and a <voice-agent> widget for the Max relay.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": [
+    "./widget.js",
+    "./voice-agent.iife.js"
+  ],
+  "main": "./voice-agent.js",
+  "module": "./voice-agent.js",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "import": "./voice-agent.js"
+    },
+    "./react": {
+      "types": "./types/react.d.ts",
+      "import": "./react.js"
+    },
+    "./widget": {
+      "types": "./types/widget-module.d.ts",
+      "import": "./widget.js"
+    },
+    "./voice-agent.iife.js": "./voice-agent.iife.js",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HenryCooper86/Max.git",
+    "directory": "sdk"
+  },
+  "homepage": "https://github.com/HenryCooper86/Max/tree/main/sdk#readme",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "realtime",
+    "speech",
+    "openai-realtime",
+    "gemini-live",
+    "webrtc",
+    "websocket",
+    "react",
+    "web-component"
+  ]
+}

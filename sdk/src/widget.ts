@@ -7,9 +7,9 @@
  * ```
  */
 
-import { VoiceAgent } from "./client";
-import type { ClientTool, VoiceAgentOptions, VoiceAgentStatus } from "./client";
-import type { TranscriptItem, VoiceGender } from "./protocol";
+import { VoiceAgent } from "./client.js";
+import type { ClientTool, VoiceAgentOptions, VoiceAgentStatus } from "./client.js";
+import type { TranscriptItem, VoiceGender } from "./protocol.js";
 
 const OBSERVED = [
   "relay",

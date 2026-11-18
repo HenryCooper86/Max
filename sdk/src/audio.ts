@@ -4,8 +4,8 @@
  * speech fallback. Internal; the public surface is {@link VoiceAgent}.
  */
 
-import { DOWNLINK_SAMPLE_RATE, FRAME_SAMPLES, PcmFramer, meterLevel, pcm16ToFloat32, rms } from "./protocol";
-import type { VoiceGender } from "./protocol";
+import { DOWNLINK_SAMPLE_RATE, FRAME_SAMPLES, PcmFramer, meterLevel, pcm16ToFloat32, rms } from "./protocol.js";
+import type { VoiceGender } from "./protocol.js";
 
 /**
  * Resumes a suspended context, but never waits for it longer than `ms`.

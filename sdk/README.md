@@ -4,15 +4,34 @@ Put a voice agent into any web page. The SDK talks to a voice-agent relay over
 WebSocket: it streams the microphone, plays the agent's voice, keeps a
 transcript, and runs tools you define in your page.
 
-It ships in three forms, all from `dist/sdk/` (the relay serves them at `/sdk/*`):
+## Install
 
-| File                  | Use it for                                                         |
-| --------------------- | ------------------------------------------------------------------ |
-| `voice-agent.js`      | ES module: `VoiceAgent`, `defineClientTool`                        |
-| `react.js`            | ES module: `useVoiceAgent` (React is a peer import)                |
-| `voice-agent.iife.js` | One script tag; defines `<voice-agent>` and `window.VoiceAgentKit` |
+**With a bundler** (Vite, Next.js, webpack, …), install the `max-voice-agent` package. It is fully typed and ships
+three entry points:
 
-Build them with `npm run build:sdk`.
+| Import                   | What you get                                                         |
+| ------------------------ | -------------------------------------------------------------------- |
+| `max-voice-agent`        | `VoiceAgent`, `VoiceAgentError`, `defineClientTool` and the types    |
+| `max-voice-agent/react`  | `useVoiceAgent` (React 18 or newer is a peer dependency)             |
+| `max-voice-agent/widget` | Registers the `<voice-agent>` element (browser only, not during SSR) |
+
+Until the package is published to npm, build it from this repository and install the file:
+
+```bash
+npm run pack:sdk                                  # in this repository: writes dist/max-voice-agent-0.1.0.tgz
+npm install /path/to/Max/dist/max-voice-agent-0.1.0.tgz   # in your project
+```
+
+Maintainers publish with `npm run pack:sdk && cd dist/sdk-package && npm publish`.
+
+**Without a build step**, load it from your relay, which serves the built files at `/sdk/`:
+
+| URL                        | Use it for                                                         |
+| -------------------------- | ------------------------------------------------------------------ |
+| `/sdk/voice-agent.iife.js` | One script tag; defines `<voice-agent>` and `window.VoiceAgentKit` |
+| `/sdk/voice-agent.js`      | ES module: `VoiceAgent`, `defineClientTool`                        |
+
+`npm run build:sdk` (part of `npm run build`) produces both.
 
 ## Session tokens
 
@@ -43,7 +62,7 @@ A relay with no auth needs no token.
 ## Vanilla JavaScript
 
 ```ts
-import { VoiceAgent } from "/sdk/voice-agent.js";
+import { VoiceAgent } from "max-voice-agent"; // or "https://your-relay/sdk/voice-agent.js"
 
 const agent = new VoiceAgent({
   url: "https://relay.example.com", // http(s)://, ws(s)://, or a full .../agent URL
@@ -111,7 +130,7 @@ Tools run in the page. The agent decides when to call them from the
 description; your handler runs, and its return value goes back to the agent.
 
 ```ts
-import { VoiceAgent, defineClientTool } from "/sdk/voice-agent.js";
+import { VoiceAgent, defineClientTool } from "max-voice-agent";
 
 const openPage = defineClientTool<{ path: string }>({
   name: "open_page",
@@ -141,7 +160,7 @@ name, description and parameters.
 ## React
 
 ```tsx
-import { useVoiceAgent } from "/sdk/react.js";
+import { useVoiceAgent } from "max-voice-agent/react";
 
 function Assistant() {
   const { status, transcript, start, stop, mute, unmute, isMuted, sendText, level, error } = useVoiceAgent({

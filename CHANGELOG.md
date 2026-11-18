@@ -15,6 +15,8 @@
   `userId` and `context` the client cannot change.
 - Web SDK (`sdk/`, built to `dist/sdk/` and served at `/sdk/`): `VoiceAgent`,
   a React hook, and a `<voice-agent>` widget that works from one script tag.
+  It is also a typed npm package, `max-voice-agent`, with `/react` and
+  `/widget` entry points. `npm run pack:sdk` builds it, ready to publish.
 - A software assistant: `"device": "app"`. No wake word, riding context,
   built-in device actions or weather. It has a persona written for products,
   and English by default. `instructions`, `greeting` and `wakeWord` are new

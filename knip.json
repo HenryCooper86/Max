@@ -3,6 +3,7 @@
     "sdk/src/index.ts",
     "sdk/src/react.ts",
     "sdk/src/widget-entry.ts",
+    "sdk/src/widget-module.ts",
     "server/companion-socket.contract.ts",
     "tests/fixtures/rdk-device-identity-child.ts",
     "scripts/synthetic-qa/browser/main.tsx",

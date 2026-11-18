@@ -8,8 +8,8 @@
  * ```
  */
 
-import { createBrowserAudio } from "./audio";
-import type { AudioIO } from "./audio";
+import { createBrowserAudio } from "./audio.js";
+import type { AudioIO } from "./audio.js";
 import {
   MAX_TEXT_CHARS,
   TOOL_NAME_PATTERN,
@@ -21,7 +21,7 @@ import {
   shouldReconnect,
   IDLE_CLOSE_CODE,
   MAX_TOOLS
-} from "./protocol";
+} from "./protocol.js";
 import type {
   AgentCapabilities,
   ClientMessage,
@@ -30,7 +30,7 @@ import type {
   ToolCallEvent,
   TranscriptItem,
   VoiceGender
-} from "./protocol";
+} from "./protocol.js";
 
 /** Where the agent is in its lifecycle. */
 export type VoiceAgentStatus =

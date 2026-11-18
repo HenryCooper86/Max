@@ -7,7 +7,7 @@ const entry = (file: string) => fileURLToPath(new URL(`./sdk/src/${file}`, impor
  * Builds the embeddable SDK into `dist/sdk/`, beside (never over) the app build.
  *
  * Two passes, selected by Vite's mode:
- * - default: ESM modules `voice-agent.js` and `react.js` (React stays external).
+ * - default: ESM modules `voice-agent.js`, `react.js` and `widget.js` (React stays external).
  * - `iife`: the one-file script `voice-agent.iife.js` exposing `window.VoiceAgentKit`.
  */
 export default defineConfig(({ mode }) => {
@@ -29,7 +29,7 @@ export default defineConfig(({ mode }) => {
             fileName: () => "voice-agent.iife.js"
           }
         : {
-            entry: { "voice-agent": entry("index.ts"), react: entry("react.ts") },
+            entry: { "voice-agent": entry("index.ts"), react: entry("react.ts"), widget: entry("widget-module.ts") },
             formats: ["es" as const],
             fileName: (_format: string, name: string) => `${name}.js`
           },

@@ -10,6 +10,39 @@ The relay can run the whole voice loop on your own hardware. Two backends do it:
 Both use the same session core as the cloud backends, so the wake word, device actions, navigation speech, the
 equaliser and the design templates behave identically.
 
+## Max Speech: our own speech server
+
+[Max Speech](../speech-server/README.md) is a speech server in this repo. It serves Whisper transcription and Kokoro
+speech over the OpenAI-compatible endpoints the `local` pipeline expects, on port 8790. Start it with
+`uv run --extra mlx max-speech serve` on a Mac, or `uv run max-speech serve` on Linux, then point the speech stages at
+it. Chat stays on Ollama:
+
+```dotenv
+VOICE_PROVIDER=local
+LOCAL_VOICE=on
+LOCAL_STT_BASE_URL=http://localhost:8790/v1
+LOCAL_TTS_BASE_URL=http://localhost:8790/v1
+LOCAL_TTS_FORMAT=pcm
+# LOCAL_LLM_BASE_URL stays at its default, http://localhost:11434/v1 (Ollama)
+```
+
+This first version does:
+
+- Text-to-speech with Kokoro preset voices, in English, Chinese and six more languages (Spanish, French, Hindi,
+  Italian, Japanese, Portuguese).
+- Transcription with Whisper.
+- Streaming speech output (`stream_format`). Max's relay does not use it: it asks for one sentence per request, so each sentence is synthesised and returned whole.
+- Only loads models whose licenses are on its allowlist, and pins each model to a fixed revision.
+
+It does not do these yet. They come in later milestones:
+
+- Live partial transcripts while you speak.
+- Turn detection on the server.
+- Voice cloning.
+- Voice management in Studio.
+
+The design is in [docs/superpowers/specs/2026-11-20-max-speech-server-design.md](superpowers/specs/2026-11-20-max-speech-server-design.md).
+
 ## Quick start
 
 ```bash

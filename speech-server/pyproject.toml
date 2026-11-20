@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "max-speech"
+version = "0.1.0"
+description = "OpenAI-compatible speech-to-text and text-to-speech server for Max, using commercially licensed local models."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi==0.165.0",
+    "uvicorn[standard]==0.54.0",
+    "python-multipart==0.0.34",
+    "numpy==2.5.5",
+    "soundfile==0.14.0",
+    "huggingface-hub==2.4.0",
+    "httpx==0.28.1",
+    "kokoro-onnx==0.6.1",
+    "faster-whisper==1.2.1",
+]
+
+[project.optional-dependencies]
+mlx = [
+    "mlx-whisper==0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+[project.scripts]
+max-speech = "max_speech.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "pytest-asyncio==1.5.0",
+    "openai==3.57.0",
+    "ruff==0.17.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/max_speech"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "models: downloads and runs real models (set MAX_SPEECH_MODEL_TESTS=1)",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"

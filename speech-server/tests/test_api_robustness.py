@@ -106,7 +106,7 @@ async def test_content_length_over_cap_rejected_before_handler(make_app, monkeyp
     calls = []
     app.state.slots.stt.transcribe = lambda *a, **k: calls.append(1)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as c:
         r = await c.post("/v1/audio/transcriptions", files={"file": ("a.wav", b"0" * (1024 * 1024 + 5000))})
     assert r.status_code == 413 and r.json()["error"]["code"] == "file_too_large"
     assert not calls
@@ -122,7 +122,7 @@ async def test_chunked_body_over_cap_aborted(make_app, monkeypatch):
         yield b"\r\n--x--\r\n"
 
     transport = httpx.ASGITransport(app=make_app(), raise_app_exceptions=False)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as c:
         r = await c.post(
             "/v1/audio/transcriptions",
             content=body(),
@@ -140,13 +140,15 @@ async def test_audio_too_long(make_app, monkeypatch):
     buf = io.BytesIO()
     sf.write(buf, np.zeros(32000, dtype=np.float32), 16000, format="WAV")
     transport = httpx.ASGITransport(app=make_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as c:
         r = await c.post("/v1/audio/transcriptions", files={"file": ("a.wav", buf.getvalue())})
     assert r.status_code == 400 and r.json()["error"]["code"] == "audio_too_long"
 
 
 async def test_docs_disabled(make_app):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=make_app()), base_url="http://test") as c:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=make_app()), base_url="http://localhost"
+    ) as c:
         for path in ("/docs", "/redoc", "/openapi.json"):
             assert (await c.get(path)).status_code == 404
 
@@ -158,7 +160,7 @@ async def test_early_stream_end_is_logged(make_app, caplog):
             raise RuntimeError("x")
 
     transport = httpx.ASGITransport(app=make_app(tts=Boom()), raise_app_exceptions=False)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as c:
         await c.post(
             "/v1/audio/speech", json={"input": "a", "response_format": "pcm", "stream_format": "audio"}
         )

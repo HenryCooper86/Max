@@ -14,7 +14,7 @@ from max_speech.engines.fake import FakeTts
 
 def client(app, **kw):
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test", **kw
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://localhost", **kw
     )
 
 
@@ -500,3 +500,39 @@ async def test_speech_language_normalised_and_unknown_ignored(make_app):
                 body["language"] = lang
             assert (await c.post("/v1/audio/speech", json=body)).status_code == 200
     assert seen == ["zh", None, None]
+
+
+async def test_custom_voice_works_through_speech(make_app, tmp_path):
+    from voice_helpers import STATEMENT, good_wav
+
+    from max_speech.engines.fake_cloning import FakeCloningTts
+    from max_speech.settings import Settings
+
+    cloning = FakeCloningTts()
+    app = make_app(Settings(data_dir=tmp_path), cloning=cloning)
+    voice = app.state.slots.voices.create(
+        audio=good_wav(),
+        name="Ava",
+        transcript="hello there",
+        consent=True,
+        consent_statement=STATEMENT,
+        consent_speaker="Ava Lee",
+    )
+    async with client(app) as c:
+        r = await c.post(
+            "/v1/audio/speech",
+            json={"voice": voice.id, "input": "Hello there. Second one.", "response_format": "pcm"},
+        )
+        streamed = await c.post(
+            "/v1/audio/speech",
+            json={
+                "voice": voice.id,
+                "input": "Hello there.",
+                "response_format": "pcm",
+                "stream_format": "audio",
+            },
+        )
+    assert r.status_code == 200 and r.headers["x-max-speech-engine"] == "fake"
+    assert len(r.content) == 2 * round(0.2 * 24000) * 2  # cloned audio comes back at 24 kHz
+    assert streamed.status_code == 200 and len(streamed.content) == round(0.2 * 24000) * 2
+    assert [call[1] for call in cloning.calls] == [voice.id] * 3  # one call per sentence

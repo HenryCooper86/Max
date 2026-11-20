@@ -154,3 +154,57 @@ def test_the_shipped_streaming_models_are_flagged():
         "x-asr-zh-en-480ms",
         "paraformer-zh-en-streaming",
     }
+
+
+def _two(a_extra: str = "", b_extra: str = "") -> str:
+    base = HF_OK.replace('kind = "stt"', 'kind = "tts"')
+    a = base.replace("[models.m]", f"[models.a]\n{a_extra}")
+    b = base.replace("[models.m]", f"[models.b]\n{b_extra}")
+    return a + b
+
+
+def test_cloning_and_requires_parse():
+    reg = load_registry(_two('cloning = true\nrequires = ["b"]'))
+    assert reg["a"].cloning and reg["a"].requires == ("b",)
+    assert not reg["b"].cloning and reg["b"].requires == ()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        HF_OK.replace('source = "hf"', 'source = "hf"\ncloning = true'),  # stt cannot clone
+        _two("cloning = 1"),
+        _two('requires = "b"'),
+        _two('requires = ["nope"]'),
+        _two('requires = ["b"]', 'requires = ["a"]'),  # cycle
+        _two('requires = ["a"]'),  # self cycle
+    ],
+)
+def test_bad_cloning_or_requires_rejected(text):
+    with pytest.raises(RegistryError):
+        load_registry(text)
+
+
+def test_companions_are_resolved_recursively_and_license_checked():
+    reg = load_registry(_two('requires = ["b"]'))
+    from max_speech.licenses import companions
+
+    assert [e.id for e in companions(reg["a"], reg)] == ["b"]
+    nc = _two('requires = ["b"]')
+    head, tail = nc.split("[models.b]")
+    nc = head + "[models.b]" + tail.replace('weights_license = "MIT"', 'weights_license = "CC-BY-NC-4.0"')
+    reg_nc = load_registry(nc)
+    with pytest.raises(LicenseError, match="CC-BY-NC-4.0"):
+        companions(reg_nc["a"], reg_nc)
+
+
+def test_shipped_registry_has_the_cloning_models():
+    from max_speech.licenses import companions
+
+    reg = load_registry()
+    for model_id in ("qwen3-tts-0.6b-mlx", "qwen3-tts-1.7b-mlx", "moss-tts-nano-onnx"):
+        assert reg[model_id].cloning and reg[model_id].kind == "tts"
+        require(model_id, "tts", registry=reg)
+    assert reg["qwen3-tts-0.6b-mlx"].revision == "1eccf1cb2519b5a4e8a95b5f0544f3303568164f"
+    assert [e.id for e in companions(reg["moss-tts-nano-onnx"], reg)] == ["moss-audio-tokenizer-nano-onnx"]
+    assert not reg["moss-audio-tokenizer-nano-onnx"].cloning

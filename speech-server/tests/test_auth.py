@@ -6,7 +6,7 @@ from max_speech.settings import Settings
 
 def client(app, host="127.0.0.1"):
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app, client=(host, 5000)), base_url="http://test"
+        transport=httpx.ASGITransport(app=app, client=(host, 5000)), base_url="http://localhost"
     )
 
 

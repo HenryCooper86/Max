@@ -7,7 +7,9 @@ from max_speech.settings import Settings
 
 def _s(**kw) -> Settings:
     """Settings with the live-conversation roles off, for the tests of the batch roles."""
-    return Settings(**{"vad_model": "off", "turn_model": "off", "stream_stt_model": "off", **kw})
+    return Settings(
+        **{"vad_model": "off", "turn_model": "off", "stream_stt_model": "off", "cloning_model": "off", **kw}
+    )
 
 
 @pytest.fixture
@@ -36,6 +38,11 @@ def patched(monkeypatch, tmp_path):
     monkeypatch.setattr(select, "_build_vad", lambda path, model_id: ctor("vad")(path, model_id))
     monkeypatch.setattr(select, "_build_turn", lambda path, model_id: ctor("turn")(path, model_id))
     monkeypatch.setattr(select, "SherpaStreamingStt", ctor("sherpa"))
+    monkeypatch.setattr(
+        select,
+        "_build_cloning",
+        lambda role_plan, entry, paths: ctor("cloning")(role_plan.engine, entry.id, dict(paths)),
+    )
     return calls
 
 
@@ -233,9 +240,9 @@ def test_second_pass_needs_the_batch_stt(patched):
 
 
 def test_plan_roles_and_kinds():
-    p = select.plan(Settings(), "cpu")
-    assert [r.role for r in p.roles()] == ["stt", "tts", "vad", "turn", "stt_stream"]
-    assert [r.kind for r in p.roles()] == ["stt", "tts", "vad", "turn", "stt"]
+    p = select.plan(Settings(cloning_model="moss-tts-nano-onnx"), "cpu")
+    assert [r.role for r in p.roles()] == ["stt", "tts", "cloning", "vad", "turn", "stt_stream"]
+    assert [r.kind for r in p.roles()] == ["stt", "tts", "tts", "vad", "turn", "stt"]
     assert p.second_pass is False
 
 
@@ -247,3 +254,108 @@ def test_a_non_streaming_stt_for_the_session_names_the_streaming_ones(patched):
     assert patched["ensure"] == []
     # the same model is fine as the batch stt
     select.build_engines(Settings(stt_model="faster-whisper-small", tts_engine="off"), "cpu")
+
+
+# ---- voice cloning ----
+
+
+@pytest.mark.parametrize(
+    ("profile", "model", "engine"),
+    [("mlx", "qwen3-tts-0.6b-mlx", "qwen3-mlx"), ("cpu", "moss-tts-nano-onnx", "moss-onnx")],
+)
+def test_cloning_defaults_and_cpu_opt_in(profile, model, engine):
+    default = select.plan(_s(cloning_model=None), profile).cloning
+    if profile == "cpu":
+        assert default is None  # ~2 GB RAM and a 730 MB download: opt-in only
+    else:
+        assert (default.engine, default.model_id, default.kind) == (engine, model, "tts")
+    p = select.plan(_s(cloning_model=model), profile)
+    assert (p.cloning.engine, p.cloning.model_id, p.cloning.kind) == (engine, model, "tts")
+
+
+def test_cloning_is_off_on_cuda_by_default():
+    assert select.plan(_s(cloning_model=None), "cuda").cloning is None
+
+
+def test_a_failing_default_cloning_engine_does_not_stop_the_rest(patched, monkeypatch, caplog):
+    def boom(*a):
+        raise RuntimeError("no memory")
+
+    monkeypatch.setattr(select, "_build_cloning", boom)
+    with caplog.at_level("WARNING"):
+        e = select.build_engines(_s(cloning_model=None, stt_engine="off", tts_zh_model="off"), "mlx")
+    assert e.cloning is None and e.tts is not None
+    assert "no memory" in caplog.text
+
+
+def test_a_failing_explicit_cloning_engine_fails_loudly(patched, monkeypatch):
+    def boom(*a):
+        raise RuntimeError("no memory")
+
+    monkeypatch.setattr(select, "_build_cloning", boom)
+    with pytest.raises(RuntimeError, match="no memory"):
+        select.build_engines(_s(cloning_model="qwen3-tts-0.6b-mlx", stt_engine="off"), "mlx")
+
+
+def test_cloning_off_and_needs_tts():
+    assert select.plan(_s(cloning_model="off"), "mlx").cloning is None
+    assert select.plan(_s(cloning_model=None, tts_engine="off"), "mlx").cloning is None
+
+
+def test_cloning_override_and_engine_for_the_larger_model():
+    p = select.plan(_s(cloning_model="qwen3-tts-1.7b-mlx"), "mlx")
+    assert (p.cloning.engine, p.cloning.model_id) == ("qwen3-mlx", "qwen3-tts-1.7b-mlx")
+    # an explicit model on a profile that has no default still works when the engine suits the profile
+    assert select.plan(_s(cloning_model="moss-tts-nano-onnx"), "cuda").cloning.engine == "moss-onnx"
+
+
+def test_cloning_engine_must_suit_the_profile():
+    with pytest.raises(ValueError, match="mlx profile only"):
+        select.plan(_s(cloning_model="qwen3-tts-0.6b-mlx"), "cpu")
+
+
+def test_cloning_model_without_an_engine_is_rejected():
+    with pytest.raises(ValueError, match="no cloning engine"):
+        select.plan(_s(cloning_model="kokoro-v1.0"), "mlx")
+
+
+def test_cloning_loads_the_model_and_its_companions(patched, tmp_path):
+    e = select.build_engines(
+        _s(cloning_model="moss-tts-nano-onnx", stt_engine="off", tts_zh_model="off"), "cpu"
+    )
+    assert patched["ensure"] == [
+        "kokoro-v1.0",
+        "moss-audio-tokenizer-nano-onnx",
+        "moss-tts-nano-onnx",
+    ]
+    name, args, _ = e.cloning
+    assert name == "cloning" and args[:2] == ("moss-onnx", "moss-tts-nano-onnx")
+    assert args[2] == {
+        "moss-audio-tokenizer-nano-onnx": tmp_path / "moss-audio-tokenizer-nano-onnx",
+        "moss-tts-nano-onnx": tmp_path / "moss-tts-nano-onnx",
+    }
+    assert e.cloning in e.loaded()
+
+
+def test_a_companion_is_not_a_cloning_model(patched):
+    with pytest.raises(ValueError, match="no cloning engine"):
+        select.build_engines(_s(cloning_model="moss-audio-tokenizer-nano-onnx"), "cpu")
+    assert patched["ensure"] == []
+
+
+def test_licensed_refuses_a_cloning_role_whose_model_cannot_clone():
+    role = select.RolePlan("cloning", "moss-onnx", "moss-audio-tokenizer-nano-onnx")
+    with pytest.raises(LicenseError, match="cannot clone voices.*qwen3-tts-0.6b-mlx"):
+        select.licensed(role)
+
+
+@pytest.mark.parametrize("model", ["not-registered", "faster-whisper-small"])
+def test_bad_cloning_model_is_refused_before_any_download(patched, model):
+    with pytest.raises((LicenseError, ValueError)):
+        select.build_engines(_s(cloning_model=model), "mlx")
+    assert patched["ensure"] == []
+
+
+def test_settings_read_the_cloning_model(clean_env):
+    clean_env.setenv("SPEECH_CLONING_MODEL", "off")
+    assert Settings.from_env().cloning_model == "off"

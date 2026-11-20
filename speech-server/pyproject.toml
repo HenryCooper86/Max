@@ -21,12 +21,15 @@ dependencies = [
     "kokoro-onnx==0.6.1",
     "misaki[zh]==0.9.4",
     "sherpa-onnx==2.0.2",
+    # Tokenizer of the MOSS-TTS-Nano CPU cloning engine (engines/moss_onnx.py).
+    "sentencepiece==0.2.3",
     "faster-whisper==1.2.1",
 ]
 
 [project.optional-dependencies]
 mlx = [
     "mlx-whisper==0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-audio==0.6.7; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [project.scripts]

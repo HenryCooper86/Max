@@ -66,25 +66,78 @@ def check_origin(headers: list[tuple[bytes, bytes]], allowed: tuple[str, ...]) -
     )
 
 
+def _origin_allowed(headers: list[tuple[bytes, bytes]], allowed: tuple[str, ...]) -> bool:
+    try:
+        check_origin(headers, allowed)
+    except OpenAIError:
+        return False
+    return True
+
+
+def _host_name(raw: str) -> str:
+    """Hostname of a Host header value: port stripped, brackets removed, lowercased."""
+    try:
+        return (urlsplit("//" + raw.strip()).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def check_host(headers: list[tuple[bytes, bytes]], bind_host: str | None) -> None:
+    """Refuse a request whose Host is not this machine (DNS rebinding: an attacker name resolving to 127.0.0.1)."""
+    raw = dict(headers).get(b"host", b"").decode("latin-1")
+    name = _host_name(raw)
+    if name in _LOCAL_HOSTS:
+        return
+    if bind_host and bind_host not in ("0.0.0.0", "::") and name == bind_host.strip("[]").lower():
+        return
+    raise OpenAIError(
+        403,
+        "this Host is not allowed without SPEECH_API_KEY; use localhost or 127.0.0.1",
+        code="forbidden_host",
+    )
+
+
 class AuthMiddleware:
     def __init__(
-        self, app: ASGIApp, api_key: str | None = None, allowed_origins: tuple[str, ...] = ()
+        self,
+        app: ASGIApp,
+        api_key: str | None = None,
+        allowed_origins: tuple[str, ...] = (),
+        bind_host: str | None = None,
     ) -> None:
         self.app = app
         self.api_key = api_key
         self.allowed_origins = allowed_origins
+        self.bind_host = bind_host
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] not in ("http", "websocket") or not scope["path"].startswith("/v1/"):
+        if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
+        is_ws = scope["type"] == "websocket"
+        guarded = scope["path"].startswith("/v1/")
         client = scope.get("client")
+        headers = scope["headers"]
         try:
-            check_auth(self.api_key, scope["headers"], client[0] if client else None)
-            if scope["type"] == "websocket":
-                check_origin(scope["headers"], self.allowed_origins)
+            if not is_ws:
+                # Browser-driven requests (CORS "simple" writes need no preflight) and rebinding, before any body is read.
+                if b"origin" in dict(headers) and not _origin_allowed(headers, self.allowed_origins):
+                    raise OpenAIError(
+                        403,
+                        "this origin may not use the server; add it to SPEECH_ALLOWED_ORIGINS",
+                        code="forbidden_origin",
+                    )
+                if not self.api_key:
+                    check_host(headers, self.bind_host)
+            if guarded:
+                check_auth(self.api_key, headers, client[0] if client else None)
+                if is_ws:
+                    check_origin(headers, self.allowed_origins)
+            elif is_ws:
+                await self.app(scope, receive, send)
+                return
         except OpenAIError as err:
-            if scope["type"] == "websocket":
+            if is_ws:
                 # Closing before accept makes the server answer the upgrade with HTTP 403.
                 await send({"type": "websocket.close", "code": 1008, "reason": err.message})
                 return

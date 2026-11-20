@@ -932,7 +932,9 @@ def test_engine_work_is_cut_into_pieces_of_at_most_a_second(build, engines, monk
         open_session(ws)
         ws.send_bytes(LOUD * 160 + QUIET * 40)  # 6.4 s in one message
         recv_until(ws, "transcript.final")
-    assert sum(pieces) == 200 and max(pieces) <= 31 and len(pieces) >= 7
+    # The turn ends around frame 170; the remaining quiet frames may or may not be processed before the client
+    # closes, so only the speech up to the final is certain to have gone through the VAD.
+    assert 160 <= sum(pieces) <= 200 and max(pieces) <= 31 and len(pieces) >= 6
     assert max(engines["stt_stream"].fed) <= 16_000
 
 
@@ -978,3 +980,33 @@ def test_reconfigure_mid_turn_closes_the_turn(build):
         ws.send_json({"type": "session.update", "languages": ["zh"]})
         final = recv_until(ws, "transcript.final")[-1]
         assert final["text"] == ""
+
+
+def test_custom_voice_through_session_update(build, engines, tmp_path):
+    from voice_helpers import STATEMENT, good_wav
+
+    from max_speech.engines.fake_cloning import FakeCloningTts
+
+    cloning = FakeCloningTts()
+    app = build(Settings(data_dir=tmp_path), cloning=cloning)
+    voice = app.state.slots.voices.create(
+        audio=good_wav(),
+        name="Ava",
+        transcript="hello there",
+        consent=True,
+        consent_statement=STATEMENT,
+        consent_speaker="Ava Lee",
+    )
+    client, cm = connect(app)
+    with client, cm as ws:
+        open_session(ws, {"type": "session.update", "voice": voice.id})
+        ws.send_json({"type": "speak", "id": "r1", "text": "Hello there.", "final": True})
+        msgs = recv_until(ws, "audio.done")
+        ws.send_json({"type": "session.update", "voice": "v_0000000000"})
+        err = ws.receive_json()
+    assert msgs[-1] == {"type": "audio.done", "id": "r1", "cancelled": False}
+    audio = [m for m in msgs if isinstance(m, bytes)]
+    assert audio and len(audio[0]) == round(0.2 * 24000) * 2
+    assert [c[1] for c in cloning.calls] == [voice.id]
+    assert engines["tts"].texts == []  # the preset engine never ran
+    assert err["type"] == "error" and err["code"] == "unknown_voice"

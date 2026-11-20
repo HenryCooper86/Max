@@ -10,7 +10,7 @@ from max_speech.api import openai_routes
 from max_speech.api.errors import OpenAIError
 
 _OVERHEAD = 1024 * 1024  # multipart boundaries and the other form fields
-_PATH = "/v1/audio/transcriptions"
+_PATHS = frozenset({"/v1/audio/transcriptions", "/v1/voices"})
 
 
 class UploadLimitMiddleware:
@@ -18,7 +18,7 @@ class UploadLimitMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] != _PATH:
+        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] not in _PATHS:
             await self.app(scope, receive, send)
             return
         cap = openai_routes.MAX_UPLOAD_BYTES + _OVERHEAD

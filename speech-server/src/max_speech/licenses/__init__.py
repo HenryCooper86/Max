@@ -51,6 +51,10 @@ class ModelEntry:
     archive: str | None = None  # "tar.bz2": the single url file is an archive to extract into the model dir
     allow_patterns: tuple[str, ...] = ()  # hf only: download just the files matching these globs
     streaming: bool = False  # stt only: a streaming recognizer, usable as the live session's STT
+    cloning: bool = False  # tts only: can speak in a custom voice (a CloningTtsEngine's model)
+    requires: tuple[
+        str, ...
+    ] = ()  # companion models that must be license-checked and downloaded with this one
 
 
 def _parse(model_id: str, raw: dict) -> ModelEntry:
@@ -116,6 +120,15 @@ def _parse(model_id: str, raw: dict) -> ModelEntry:
     if streaming and kind != "stt":
         raise fail("streaming", "is only for an stt model")
 
+    cloning = raw.get("cloning", False)
+    if not isinstance(cloning, bool):
+        raise fail("cloning", "must be true or false")
+    if cloning and kind != "tts":
+        raise fail("cloning", "is only for a tts model")
+    requires = raw.get("requires", [])
+    if not isinstance(requires, list) or not all(isinstance(r, str) and r for r in requires):
+        raise fail("requires", "must be a list of model ids")
+
     return ModelEntry(
         id=model_id,
         kind=kind,
@@ -133,14 +146,39 @@ def _parse(model_id: str, raw: dict) -> ModelEntry:
         archive=archive,
         allow_patterns=tuple(patterns),
         streaming=streaming,
+        cloning=cloning,
+        requires=tuple(requires),
     )
+
+
+def _check_requires(registry: dict[str, ModelEntry]) -> None:
+    """Every `requires` id must exist and the graph must be acyclic."""
+    done: set[str] = set()
+
+    def visit(model_id: str, path: tuple[str, ...]) -> None:
+        if model_id in path:
+            raise RegistryError(
+                f"model {model_id!r}: requires forms a cycle ({' -> '.join((*path, model_id))})"
+            )
+        if model_id in done:
+            return
+        for dep in registry[model_id].requires:
+            if dep not in registry:
+                raise RegistryError(f"model {model_id!r}: requires unknown model {dep!r}")
+            visit(dep, (*path, model_id))
+        done.add(model_id)
+
+    for model_id in registry:
+        visit(model_id, ())
 
 
 def load_registry(text: str | None = None) -> dict[str, ModelEntry]:
     if text is None:
         text = (importlib.resources.files(__package__) / "registry.toml").read_text(encoding="utf-8")
     data = tomllib.loads(text)
-    return {model_id: _parse(model_id, raw) for model_id, raw in data.get("models", {}).items()}
+    registry = {model_id: _parse(model_id, raw) for model_id, raw in data.get("models", {}).items()}
+    _check_requires(registry)
+    return registry
 
 
 def require(model_id: str, kind: str, *, registry: dict[str, ModelEntry] | None = None) -> ModelEntry:
@@ -159,3 +197,22 @@ def require(model_id: str, kind: str, *, registry: dict[str, ModelEntry] | None 
             f"allowed: {', '.join(sorted(ALLOWED_WEIGHTS_LICENSES))}"
         )
     return entry
+
+
+def companions(entry: ModelEntry, registry: dict[str, ModelEntry]) -> list[ModelEntry]:
+    """The models `entry` requires, recursively (dependencies first, no duplicates), each license-checked."""
+    out: dict[str, ModelEntry] = {}
+
+    def visit(current: ModelEntry, path: tuple[str, ...]) -> None:
+        if current.id in path:
+            raise LicenseError(f"{current.id}: requires forms a cycle ({' -> '.join((*path, current.id))})")
+        for dep_id in current.requires:
+            dep = registry.get(dep_id)
+            if dep is None:
+                raise LicenseError(f"{current.id} requires {dep_id}, which is not in the license registry")
+            require(dep_id, dep.kind, registry=registry)
+            visit(dep, (*path, current.id))
+            out.setdefault(dep_id, dep)
+
+    visit(entry, ())
+    return list(out.values())

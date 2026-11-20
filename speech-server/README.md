@@ -43,6 +43,12 @@ not `localhost`, `127.0.0.1` or `[::1]` (any port, `http` or `https`) is refused
 without a key, so a page on another site cannot talk to a server on your machine. List the origins you trust in
 `SPEECH_ALLOWED_ORIGINS`. Native clients send no `Origin` and pass.
 
+The same rules protect plain HTTP. Without a key, every HTTP request must carry a `Host` of `localhost`,
+`127.0.0.1`, `[::1]` or the address given to `--host` (any port), or it is refused with 403 `forbidden_host`; this
+blocks DNS rebinding. It covers `/healthz` and `/.well-known/max-speech` too. Any HTTP request that carries an `Origin` from another site is refused with 403
+`forbidden_origin` (also with a key), before its body is read. `Origin: null` is refused. Requests with no `Origin`
+(the relay, `curl`, the OpenAI SDK) are unaffected.
+
 ## Configuration
 
 | Variable                  | Default             | Meaning                                                                              |
@@ -55,6 +61,7 @@ without a key, so a page on another site cannot talk to a server on your machine
 | `SPEECH_STT_MODEL`        | profile default     | Any speech-to-text model id in the license registry.                                 |
 | `SPEECH_TTS_MODEL`        | `kokoro-v1.0`       | Any text-to-speech model id in the license registry.                                 |
 | `SPEECH_TTS_ZH_MODEL`     | `kokoro-v1.1-zh`    | Chinese text-to-speech model, or `off` to use v1.0 for Chinese.                      |
+| `SPEECH_CLONING_MODEL`    | `mlx` only          | Voice cloning model (a registry entry with `cloning = true`), or `off`.              |
 | `SPEECH_VAD_MODEL`        | `silero-vad-v6.2`   | Voice activity model for the live session, or `off`.                                 |
 | `SPEECH_TURN_MODEL`       | `smart-turn-v3.2`   | End-of-turn model for the live session, or `off`.                                    |
 | `SPEECH_STREAM_STT_MODEL` | `x-asr-zh-en-480ms` | Streaming speech-to-text for the live session (must be a streaming model), or `off`. |
@@ -127,6 +134,68 @@ Responses carry an `X-Max-Speech-Engine` header. When the client disconnects, sy
 Multipart form with a `file` field: WAV, FLAC or OGG, up to 25 MB and 15 minutes long. Optional `language` and
 `prompt`. `response_format` is `json` (default), `text` or `verbose_json` (adds language, duration and segments).
 `model` and `temperature` are accepted for SDK compatibility and ignored: the active model serves every name.
+
+## Custom voices
+
+With a cloning model loaded, an admin can add a voice from 5 to 30 seconds of recorded speech and use it anywhere a
+voice id is accepted: `/v1/audio/speech`, `session.update.voice` and the relay's `MAX_SPEECH_VOICE`. Custom ids look
+like `v_3f9a0c12ab`. Voices live in `SPEECH_DATA_DIR/voices/<id>/` (`reference.wav` and `voice.json`, mode 0600).
+Without a cloning model, `POST /v1/voices` returns `409 cloning_unavailable` and custom ids are not listed or
+spoken.
+
+`created_by` (stored with the consent record) is supplied by the client and not verified by this server. The relay or
+Studio that calls `POST /v1/voices` should fill it in with the signed-in admin rather than pass through user input.
+
+### Cloning engines
+
+`SPEECH_CLONING_MODEL` takes a registry id, or `off`. It needs the TTS role to be on, and a model that is not marked
+`cloning = true` in the registry is refused before anything downloads.
+
+| Profile | Default model        | Engine                             | Download     | Memory (peak) | Languages                     |
+| ------- | -------------------- | ---------------------------------- | ------------ | ------------- | ----------------------------- |
+| `mlx`   | `qwen3-tts-0.6b-mlx` | Qwen3-TTS Base through mlx-audio   | 2.3 GB       | about 4 GB    | zh en ja ko de fr ru pt es it |
+| `cpu`   | off (opt-in)         | MOSS-TTS-Nano (ONNX) and its codec | about 730 MB | about 2 GB    | 19, see the engine            |
+| `cuda`  | off                  | none yet                           |              |               |                               |
+
+On `cpu`, cloning is opt-in because of its memory cost: set `SPEECH_CLONING_MODEL=moss-tts-nano-onnx`
+(Apache-2.0 code and weights). If a _default_ cloning model fails to load or warm up, the server logs a warning
+and keeps running without cloning; a model you set explicitly fails loudly instead.
+
+- `qwen3-tts-1.7b-mlx` is the larger Qwen3 model (`SPEECH_CLONING_MODEL=qwen3-tts-1.7b-mlx`); it needs more memory.
+- Qwen3-TTS speaks each sentence in the language of its script (Chinese, Japanese or Korean characters) or, for
+  Latin text, the voice's first language, so one voice can read mixed English and Chinese text. On an M5 Max the 0.6B
+  model measured about 0.14 s to first audio and a real-time factor near 0.2.
+- A cloning model may need companion models (MOSS needs an audio codec). The registry lists them under `requires`;
+  they are license-checked and downloaded with it, and credited in `/.well-known/max-speech`.
+- CUDA has no cloning engine yet, because none has been tested there. Set `SPEECH_CLONING_MODEL` to try one anyway.
+- The `mlx` extra installs mlx-audio (MIT) and, through it, `transformers`, `safetensors` and `sentencepiece`. The
+  base install on Linux is unchanged.
+
+| Method | Path                        | Notes                                                          |
+| ------ | --------------------------- | -------------------------------------------------------------- |
+| GET    | `/v1/voices`                | Preset and custom voices, plus `cloning: bool`                 |
+| POST   | `/v1/voices`                | Multipart upload, returns `201` (see below)                    |
+| GET    | `/v1/voices/{id}`           | One voice with its consent record, or `404`                    |
+| PATCH  | `/v1/voices/{id}`           | JSON `name`, `languages`, `gender`, `transcript`               |
+| DELETE | `/v1/voices/{id}`           | `204`; removes the reference audio too                         |
+| GET    | `/v1/voices/{id}/reference` | The stored reference WAV, to hear what was recorded            |
+| POST   | `/v1/voices/{id}/preview`   | JSON `{"text"?}` (at most 300 characters), returns `audio/wav` |
+| GET    | `/v1/lexicon`, PUT          | Read or replace the whole pronunciation lexicon                |
+
+`POST /v1/voices` fields: `audio` (file, up to 25 MB), `name` (at most 64 characters), `transcript` (optional, at most
+1000; a blank one is transcribed by the speech recognizer, or `400 transcript_required` if there is none), `languages`
+(comma list), `gender` (`female`, `male` or `neutral`), `created_by`, and the consent fields below. The recording is
+trimmed, resampled to 24 kHz and normalised. It is refused with `reference_too_short`, `reference_too_long`,
+`reference_silent` or `reference_clipped` when it is unsuitable.
+
+**Consent is required.** Send `consent=true`, `consent_statement` (at least 20 characters, for example "I, Ava Lee,
+agree that my voice may be cloned for the Acme assistant.") and `consent_speaker` (the speaker's name). Anything else
+returns `400 consent_required`. The consent record is stored with the voice and returned by `GET`. The store itself
+enforces this, not only the route. Every `/v1` route needs the API key like the rest of the server.
+
+**Lexicon.** `PUT /v1/lexicon` takes `{"entries": {"MAX": "Max", "Dr": "Doctor"}}` and applies to all speech, preset
+or custom, before synthesis. Longest keys win. Latin keys match whole words, case-insensitively; keys with Chinese
+characters match anywhere in the text. At most 500 entries, keys up to 64 characters, values up to 128.
 
 ## Live session (`/v1/speech/session`)
 
@@ -247,6 +316,8 @@ To add a model:
 2. Add a `[models."<id>"]` table to `registry.toml`. Give it `kind` (`stt` or `tts`), `source` and the files or repo.
    For `source = "hf"`, pin a 40-character commit sha in `revision`. For `source = "url"`, give each file a
    `sha256`. Also set `weights_license`, `code_license`, `license_url`, `checked` (today's date) and `attribution`.
+   A voice-cloning model also sets `cloning = true`. A model that needs others loaded beside it lists their ids in
+   `requires = [...]`; each is license-checked and downloaded too (cycles are rejected).
 3. If the model needs an engine that does not exist yet, add it under `src/max_speech/engines/` and wire it into
    `engines/select.py`. The registry entry alone does not make a model runnable.
 

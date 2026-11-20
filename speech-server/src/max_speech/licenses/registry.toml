@@ -123,3 +123,55 @@ license_url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraforme
 checked = "2026-11-20"
 attribution = "Streaming Paraformer zh-en by Alibaba DAMO Academy, Apache-2.0; sherpa-onnx conversion by csukuangfj"
 note = "converted from the ModelScope damo paraformer; training data not stated"
+
+[models."qwen3-tts-0.6b-mlx"]
+kind = "tts"
+cloning = true
+source = "hf"
+repo = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16"
+revision = "1eccf1cb2519b5a4e8a95b5f0544f3303568164f"
+weights_license = "Apache-2.0"
+code_license = "Apache-2.0"
+license_url = "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+checked = "2026-11-20"
+attribution = "Qwen3-TTS by the Qwen team, Alibaba; MLX conversion by mlx-community"
+note = "voice cloning from a reference clip and its transcript; zh en ja ko de fr ru pt es it"
+
+[models."qwen3-tts-1.7b-mlx"]
+kind = "tts"
+cloning = true
+source = "hf"
+repo = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
+revision = "a6eb4f68e4b056f1215157bb696209bc82a6db48"
+weights_license = "Apache-2.0"
+code_license = "Apache-2.0"
+license_url = "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+checked = "2026-11-20"
+attribution = "Qwen3-TTS by the Qwen team, Alibaba; MLX conversion by mlx-community"
+note = "larger sibling of the 0.6b model; needs more memory"
+
+[models."moss-tts-nano-onnx"]
+kind = "tts"
+cloning = true
+requires = ["moss-audio-tokenizer-nano-onnx"]
+source = "hf"
+repo = "OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX"
+revision = "f52645cb467506d8e18e746ddd59482685b74e58"
+weights_license = "Apache-2.0"
+code_license = "Apache-2.0"
+license_url = "https://huggingface.co/OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX"
+checked = "2026-11-20"
+attribution = "MOSS-TTS-Nano by OpenMOSS (MOSI.AI and Fudan NLP lab), Apache-2.0"
+note = "CPU voice cloning; needs the moss-audio-tokenizer-nano-onnx companion"
+
+[models."moss-audio-tokenizer-nano-onnx"]
+kind = "tts"
+source = "hf"
+repo = "OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX"
+revision = "ceff0d0749bfb3fa2d61149794ec6feef0d1e1ae"
+weights_license = "Apache-2.0"
+code_license = "Apache-2.0"
+license_url = "https://huggingface.co/OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX"
+checked = "2026-11-20"
+attribution = "MOSS-Audio-Tokenizer-Nano by OpenMOSS, Apache-2.0"
+note = "audio codec companion of moss-tts-nano-onnx"

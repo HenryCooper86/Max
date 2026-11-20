@@ -106,6 +106,8 @@ describe("relay process integration", () => {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        // Usage counts, Studio settings and backend keys go under STUDIO_DIR; keep them out of the real home.
+        STUDIO_DIR: tempDir,
         PORT: String(port),
         NODE_ENV: "production",
         VOICE_PROVIDER: "mock",
@@ -337,6 +339,8 @@ describe("relay process integration", () => {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        // Usage counts, Studio settings and backend keys go under STUDIO_DIR; keep them out of the real home.
+        STUDIO_DIR: tempDir,
         PORT: String(port),
         NODE_ENV: "production",
         VOICE_PROVIDER: "mock",
@@ -386,6 +390,8 @@ describe("relay process integration", () => {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        // Usage counts, Studio settings and backend keys go under STUDIO_DIR; keep them out of the real home.
+        STUDIO_DIR: tempDir,
         PORT: String(port),
         NODE_ENV: "production",
         VOICE_PROVIDER: "mock",
@@ -498,6 +504,8 @@ describe("relay process integration", () => {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        // Usage counts, Studio settings and backend keys go under STUDIO_DIR; keep them out of the real home.
+        STUDIO_DIR: tempDir,
         PORT: String(port),
         NODE_ENV: "development",
         VOICE_PROVIDER: "mock",
@@ -559,6 +567,8 @@ describe("relay process integration", () => {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        // Usage counts, Studio settings and backend keys go under STUDIO_DIR; keep them out of the real home.
+        STUDIO_DIR: tempDir,
         PORT: String(port),
         NODE_ENV: "production",
         VOICE_PROVIDER: "mock",
@@ -612,6 +622,8 @@ describe("relay process integration", () => {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        // Usage counts, Studio settings and backend keys go under STUDIO_DIR; keep them out of the real home.
+        STUDIO_DIR: tempDir,
         PORT: String(port),
         NODE_ENV: "production",
         VOICE_PROVIDER: "mock",

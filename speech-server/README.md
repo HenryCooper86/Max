@@ -2,7 +2,8 @@
 
 Max Speech is a local speech server. It serves OpenAI-compatible speech-to-text (Whisper) and text-to-speech
 (Kokoro) from models whose weights are commercially usable, so Max's `local` voice pipeline can run without a cloud
-provider.
+provider. It also runs a live conversation over one WebSocket, `/v1/speech/session`: voice detection, turn-taking,
+streaming transcripts and spoken replies, which Max's `max-speech` backend uses.
 
 It listens on port **8790**. The model list, licenses and hardware profiles are in
 [docs/local-models.md](../docs/local-models.md).
@@ -37,18 +38,28 @@ machines, and always set it when the server sits behind a reverse proxy. Clients
 
 `/healthz` and `/.well-known/max-speech` need no key. Everything under `/v1` does.
 
+A WebSocket opened by a web page carries an `Origin` header. Under `/v1`, a WebSocket with an `Origin` whose host is
+not `localhost`, `127.0.0.1` or `[::1]` (any port, `http` or `https`) is refused before accept (HTTP 403), with or
+without a key, so a page on another site cannot talk to a server on your machine. List the origins you trust in
+`SPEECH_ALLOWED_ORIGINS`. Native clients send no `Origin` and pass.
+
 ## Configuration
 
-| Variable              | Default          | Meaning                                                         |
-| --------------------- | ---------------- | --------------------------------------------------------------- |
-| `SPEECH_API_KEY`      | unset            | Bearer token required on `/v1`. Unset means loopback only.      |
-| `SPEECH_PROFILE`      | detected         | `mlx`, `cuda` or `cpu`. Detected from the hardware when unset.  |
-| `SPEECH_DATA_DIR`     | `~/.max-speech`  | Where models are stored (`models/` under this directory).       |
-| `SPEECH_STT_ENGINE`   | profile default  | `whisper-ct2`, `whisper-mlx`, or `off`.                         |
-| `SPEECH_TTS_ENGINE`   | `kokoro`         | `kokoro`, or `off`.                                             |
-| `SPEECH_STT_MODEL`    | profile default  | Any speech-to-text model id in the license registry.            |
-| `SPEECH_TTS_MODEL`    | `kokoro-v1.0`    | Any text-to-speech model id in the license registry.            |
-| `SPEECH_TTS_ZH_MODEL` | `kokoro-v1.1-zh` | Chinese text-to-speech model, or `off` to use v1.0 for Chinese. |
+| Variable                  | Default             | Meaning                                                                              |
+| ------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
+| `SPEECH_API_KEY`          | unset               | Bearer token required on `/v1`. Unset means loopback only.                           |
+| `SPEECH_PROFILE`          | detected            | `mlx`, `cuda` or `cpu`. Detected from the hardware when unset.                       |
+| `SPEECH_DATA_DIR`         | `~/.max-speech`     | Where models are stored (`models/` under this directory).                            |
+| `SPEECH_STT_ENGINE`       | profile default     | `whisper-ct2`, `whisper-mlx`, or `off`.                                              |
+| `SPEECH_TTS_ENGINE`       | `kokoro`            | `kokoro`, or `off`.                                                                  |
+| `SPEECH_STT_MODEL`        | profile default     | Any speech-to-text model id in the license registry.                                 |
+| `SPEECH_TTS_MODEL`        | `kokoro-v1.0`       | Any text-to-speech model id in the license registry.                                 |
+| `SPEECH_TTS_ZH_MODEL`     | `kokoro-v1.1-zh`    | Chinese text-to-speech model, or `off` to use v1.0 for Chinese.                      |
+| `SPEECH_VAD_MODEL`        | `silero-vad-v6.2`   | Voice activity model for the live session, or `off`.                                 |
+| `SPEECH_TURN_MODEL`       | `smart-turn-v3.2`   | End-of-turn model for the live session, or `off`.                                    |
+| `SPEECH_STREAM_STT_MODEL` | `x-asr-zh-en-480ms` | Streaming speech-to-text for the live session (must be a streaming model), or `off`. |
+| `SPEECH_SECOND_PASS`      | `auto`              | `on`, `off` or `auto` (on for the `mlx` and `cuda` profiles).                        |
+| `SPEECH_ALLOWED_ORIGINS`  | unset               | Comma-separated browser origins allowed on WebSockets, beyond localhost.             |
 
 `serve` also takes `--host`, `--port` and `--profile`, which override the environment.
 
@@ -117,6 +128,112 @@ Multipart form with a `file` field: WAV, FLAC or OGG, up to 25 MB and 15 minutes
 `prompt`. `response_format` is `json` (default), `text` or `verbose_json` (adds language, duration and segments).
 `model` and `temperature` are accepted for SDK compatibility and ignored: the active model serves every name.
 
+## Live session (`/v1/speech/session`)
+
+One WebSocket does both directions of a voice conversation. The server listens with a voice activity model
+(Silero VAD), a streaming recognizer and an end-of-turn model (Smart Turn), and it speaks replies with Kokoro. The
+client sends microphone audio and the reply text; the server sends back when the user started and stopped talking,
+the transcript, and reply audio. The chat model stays on the client side.
+
+The session needs the VAD, turn, streaming speech-to-text and text-to-speech engines. If any is `off` the server
+closes the session with an `engine_disabled` error. While models load it sends `loading` and closes with 1013.
+Auth is the same as `/v1`: a bearer key when `SPEECH_API_KEY` is set, otherwise loopback only. A refused connection
+is closed before accept, which the client sees as HTTP 403.
+
+### Protocol
+
+Client to server:
+
+| Message                                                                                                                               | Meaning                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `{"type":"session.update","languages":["zh","en"],"keyterms":[…],"voice":"af_heart","gender":"female","turn":{"eagerness":"normal"}}` | Every field is optional. Send it first; send it again to change a setting. `voice` wins over `gender`. |
+| binary frame                                                                                                                          | Microphone audio: 16 kHz, mono, PCM16 little-endian, any length.                                       |
+| `{"type":"speak","id":"r1","text":"…","final":false}`                                                                                 | More reply text for reply `r1`. `final: true` (text may be empty) ends `r1`.                           |
+| `{"type":"cancel","id":"r1"}`                                                                                                         | Stop reply `r1` now.                                                                                   |
+| `{"type":"turn.end"}`                                                                                                                 | End the user's turn now.                                                                               |
+
+Server to client:
+
+| Message                                                             | Meaning                                                                                                                                                                |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{"type":"ready","protocol":"max-speech.session.v1","engines":{…}}` | Sent after the first `session.update`. `engines` names the vad, turn, stt and tts models.                                                                              |
+| `{"type":"speech.started"}`                                         | The user started talking. This is also the barge-in signal.                                                                                                            |
+| `{"type":"transcript.partial","text":"…"}`                          | Cumulative text of this turn, sent only when it changes.                                                                                                               |
+| `{"type":"transcript.final","text":"…","ms":{"turn":N,"stt":N}}`    | The turn ended. `turn` is the audio time since the speaker stopped, plus the time the turn check took; `stt` is the decision to the final text. The text may be empty. |
+| `{"type":"audio.start","id":"r1","sampleRate":24000}`               | Reply `r1` starts. Binary frames of 24 kHz PCM16 follow.                                                                                                               |
+| `{"type":"audio.done","id":"r1","cancelled":false}`                 | Reply `r1` ended. Every `speak` id gets exactly one `audio.done`; `cancelled` is true after `cancel`.                                                                  |
+| `{"type":"error","code":"…","message":"…"}`                         | A recoverable problem, such as a bad message or an unknown voice. The session continues.                                                                               |
+
+### Limits and errors
+
+| Limit                                  | Value                                  | What happens                                                                         |
+| -------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------ |
+| Text of one `speak`                    | 8 KB (UTF-8)                           | Error `speak_too_long`; that message is ignored.                                     |
+| Text of one reply                      | 64 KB (UTF-8)                          | Error `reply_too_long`, then the reply is cancelled (`audio.done` with `cancelled`). |
+| One WebSocket message                  | 1 MiB                                  | The connection is closed (uvicorn `ws_max_size`).                                    |
+| Microphone audio waiting to be handled | about 10 s (320 KB)                    | Queued audio is dropped, the turn restarts, error `overrun`.                         |
+| Reply audio the client has not taken   | about 5 s queued, or one send over 5 s | The server closes the socket with 1008 and reason `slow_reader`.                     |
+
+When the server drops a turn that is in progress, because an engine failed, the audio overran, or `session.update`
+changed the languages or keyterms, the client still gets a `transcript.final` with empty text and `ms` of 0, so a
+turn that began with `speech.started` always ends.
+
+Replies are spoken one at a time, in the order their ids first appear. A reply keeps at most two sentences queued
+for synthesis and asks for the next when one finishes, so several sessions and HTTP requests share the speech engine
+sentence by sentence instead of one long reply holding it. Engine work for microphone audio is cut into pieces of
+at most 1 s per engine lock hold.
+Binary frames from the server belong to the
+reply whose `audio.start` came last. Audio sent before `ready` is kept and processed after it.
+
+### Turn-taking
+
+The server cuts the microphone into 512-sample frames (32 ms) and asks the VAD for a speech probability per frame.
+
+- Speech starts when the probability is at least 0.5 for 2 frames in a row. The recognizer is given 300 ms of audio
+  from before that point, and the server sends `speech.started`.
+- A frame is quiet when the probability is below 0.35.
+- Once quiet time reaches the pause length, Smart Turn judges the last 8 s of the utterance. If it says the turn is
+  complete (0.5 or more), the turn ends. Otherwise the server keeps waiting; if speech resumes, the turn continues.
+  If the speaker stays quiet until 400 ms past the pause length, Smart Turn judges again and the turn ends at 0.3 or
+  more (very short phrases, such as 你好。, are scored low at first and high a moment later). If quiet time reaches
+  the maximum wait, the turn ends anyway.
+- An utterance with less than 200 ms of voiced frames ends with an empty `transcript.final`. One longer than 30 s is
+  ended.
+- `turn.end` ends the turn at once.
+
+`turn.eagerness` sets the two quiet-time limits:
+
+| Eagerness | Pause before the check | Maximum wait |
+| --------- | ---------------------- | ------------ |
+| `low`     | 400 ms                 | 2000 ms      |
+| `normal`  | 200 ms                 | 1500 ms      |
+| `high`    | 120 ms                 | 800 ms       |
+
+Lower eagerness waits longer, so it interrupts slow talkers less. Higher eagerness answers sooner.
+
+At the end of a turn the streaming recognizer is flushed and the final text is sent. If a batch speech-to-text model
+is loaded and `SPEECH_SECOND_PASS` is not `off`, the utterance is also transcribed by it under a 300 ms deadline, and
+its text replaces the streaming text when it arrives in time and is not empty. `auto` turns this on for the `mlx` and
+`cuda` profiles and off for `cpu`. Some short Chinese phrases can still sit at the maximum wait, because
+Smart Turn judges them unfinished even on the second check.
+
+### Live session models
+
+| Model                        | Role                     | Weights license | Default |
+| ---------------------------- | ------------------------ | --------------- | ------- |
+| `silero-vad-v6.2`            | Voice activity           | MIT             | yes     |
+| `smart-turn-v3.2`            | End of turn              | BSD-2-Clause    | yes     |
+| `x-asr-zh-en-480ms`          | Streaming speech-to-text | Apache-2.0      | yes     |
+| `paraformer-zh-en-streaming` | Streaming speech-to-text | Apache-2.0      | no      |
+
+Set `SPEECH_STREAM_STT_MODEL=paraformer-zh-en-streaming` to use the Paraformer recognizer instead of X-ASR. They run
+on the CPU on every profile. The session needs a streaming model: the registry marks them with `streaming = true`,
+and the server refuses any other speech-to-text id for this setting before it downloads anything.
+
+X-ASR-zh-en's upstream card says its training data is open-source and collected data, and does not itemise it. The
+weights license is Apache-2.0, which is what the registry checks, but the data provenance is unstated, so review it
+before you ship the model in a product. The Paraformer conversion likewise does not state its training data.
+
 ## Licenses
 
 Every model must have an entry in [`src/max_speech/licenses/registry.toml`](src/max_speech/licenses/registry.toml).
@@ -152,6 +269,19 @@ Options: `--api-key`, `--voice`, `--tts-model`, `--stt-model`, `--fixtures DIR` 
 Text-to-speech reports time to first byte, total time, audio seconds and real-time factor. Speech-to-text reports
 latency, plus word error rate for English or character error rate for Chinese when a reference is known. Tables show
 p50 and p95. Output goes to `bench/out/`, which is git-ignored. See [bench/README.md](bench/README.md).
+
+The session benchmark drives `/v1/speech/session` at real-time pace:
+
+```bash
+uv run python -m bench.session --url ws://localhost:8790/v1/speech/session --runs 3 --json bench/out/session.json
+```
+
+For each built-in English and Chinese phrase it synthesizes the phrase with the server, streams it as 16 kHz audio
+with 0.4 s of silence before and 1.5 s after, and reports end of speech to `transcript.final`, time to the first
+partial, WER or CER, and the server's `ms.turn` and `ms.stt`. It then sends the phrase as a `speak` message and times
+the first audio frame and `audio.done`. For comparison it reports the M1 pipeline equivalent: the relay's fixed
+700 ms silence wait plus one `POST /v1/audio/transcriptions` of the same utterance. Options: `--api-key`, `--voice`,
+`--lead`, `--trail`, `--languages`.
 
 ## Tests
 

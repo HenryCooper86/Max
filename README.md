@@ -172,16 +172,17 @@ well.
 
 ## Choose a voice backend
 
-| `VOICE_PROVIDER` | Backend                                                            | Needs                                  | Tools |
-| ---------------- | ------------------------------------------------------------------ | -------------------------------------- | ----- |
-| `mock`           | Keyless demo (speech detection, typed turns, real tool calls)      | nothing                                | yes¹  |
-| `openai`         | OpenAI Realtime, speech to speech                                  | `OPENAI_API_KEY`                       | yes   |
-| `gemini`         | Google Gemini Live, speech to speech                               | `GEMINI_API_KEY`                       | yes   |
-| `grok`           | xAI Grok Voice, speech to speech                                   | `XAI_API_KEY`                          | yes   |
-| `doubao`         | ByteDance Doubao realtime voice, strongest in Chinese              | `DOUBAO_API_KEY`                       | no    |
-| `pipeline`       | Speech-to-text → any OpenAI-compatible chat model → text-to-speech | `PIPELINE_API_KEY` or `OPENAI_API_KEY` | yes   |
-| `local`          | The same pipeline on your own hardware (Whisper, Ollama, Kokoro)   | `LOCAL_VOICE=on`                       | yes   |
-| `local-realtime` | A self-hosted server that speaks the OpenAI Realtime protocol      | `LOCAL_REALTIME_URL`                   | yes   |
+| `VOICE_PROVIDER` | Backend                                                                                | Needs                                  | Tools |
+| ---------------- | -------------------------------------------------------------------------------------- | -------------------------------------- | ----- |
+| `mock`           | Keyless demo (speech detection, typed turns, real tool calls)                          | nothing                                | yes¹  |
+| `openai`         | OpenAI Realtime, speech to speech                                                      | `OPENAI_API_KEY`                       | yes   |
+| `gemini`         | Google Gemini Live, speech to speech                                                   | `GEMINI_API_KEY`                       | yes   |
+| `grok`           | xAI Grok Voice, speech to speech                                                       | `XAI_API_KEY`                          | yes   |
+| `doubao`         | ByteDance Doubao realtime voice, strongest in Chinese                                  | `DOUBAO_API_KEY`                       | no    |
+| `pipeline`       | Speech-to-text → any OpenAI-compatible chat model → text-to-speech                     | `PIPELINE_API_KEY` or `OPENAI_API_KEY` | yes   |
+| `local`          | The same pipeline on your own hardware (Whisper, Ollama, Kokoro)                       | `LOCAL_VOICE=on`                       | yes   |
+| `local-realtime` | A self-hosted server that speaks the OpenAI Realtime protocol                          | `LOCAL_REALTIME_URL`                   | yes   |
+| `max-speech`     | Our own local speech server: live transcripts, smart turn-taking, any local chat model | `MAX_SPEECH_URL` or `MAX_SPEECH=on`    | yes   |
 
 ¹ For `"device": "app"` assistants. The stock helmet assistant's demo is a scripted ride.
 

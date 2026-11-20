@@ -122,11 +122,11 @@ The most used ones. `.env.example` documents all of them, including each backend
 
 ### Voice backend
 
-| Variable                                                               | Default | What it does                                                                                              |
-| ---------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `VOICE_PROVIDER`                                                       | `mock`  | The default backend: `mock`, `openai`, `gemini`, `grok`, `doubao`, `pipeline`, `local`, `local-realtime`. |
-| `VOICE_PROVIDER_SWITCHING`                                             | `on`    | `off` pins every session to the default. Otherwise a client may choose any backend that is set up.        |
-| `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `DOUBAO_API_KEY`, … |         | Each backend's credentials. See [voice backends](backends.md).                                            |
+| Variable                                                               | Default | What it does                                                                                                            |
+| ---------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `VOICE_PROVIDER`                                                       | `mock`  | The default backend: `mock`, `openai`, `gemini`, `grok`, `doubao`, `pipeline`, `local`, `local-realtime`, `max-speech`. |
+| `VOICE_PROVIDER_SWITCHING`                                             | `on`    | `off` pins every session to the default. Otherwise a client may choose any backend that is set up.                      |
+| `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `DOUBAO_API_KEY`, … |         | Each backend's credentials. See [voice backends](backends.md).                                                          |
 
 ### Security and access
 

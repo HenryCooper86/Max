@@ -283,6 +283,37 @@ async def test_discovery_attributions_from_registry(make_app):
     assert "Kokoro" in d["attributions"][0]["text"]
 
 
+async def test_discovery_session_ws_needs_every_live_engine(make_app):
+    class Named:
+        def __init__(self, model_id):
+            self.id, self.model_id = "x", model_id
+
+    def features(**live):
+        app = make_app()
+        for name, value in live.items():
+            setattr(app.state.slots, name, value)
+        return app
+
+    full = {
+        "vad": Named("silero-vad-v6.2"),
+        "turn": Named("smart-turn-v3.2"),
+        "stt_stream": Named("x-asr-zh-en-480ms"),
+    }
+    async with client(features(**full)) as c:
+        d = (await c.get("/.well-known/max-speech")).json()
+    assert d["features"]["session_ws"] is True
+    assert [a["model"] for a in d["attributions"]] == [
+        "silero-vad-v6.2",
+        "smart-turn-v3.2",
+        "x-asr-zh-en-480ms",
+    ]
+    for missing in full:
+        async with client(features(**{**full, missing: None})) as c:
+            assert (await c.get("/.well-known/max-speech")).json()["features"]["session_ws"] is False
+    async with client(make_app(tts=None)) as c:
+        assert (await c.get("/.well-known/max-speech")).json()["features"]["session_ws"] is False
+
+
 async def test_discovery_attributions_include_the_zh_model(make_app):
     class Kokoro(FakeTts):
         id = "kokoro"

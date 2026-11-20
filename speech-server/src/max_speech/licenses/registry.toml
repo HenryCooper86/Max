@@ -66,3 +66,60 @@ license_url = "https://huggingface.co/mlx-community/whisper-large-v3-turbo"
 checked = "2026-11-20"
 attribution = "Whisper large-v3-turbo by OpenAI, MIT; MLX conversion by mlx-community"
 note = "conversion card states no license; upstream openai/whisper-large-v3-turbo is MIT"
+
+[models."silero-vad-v6.2"]
+kind = "vad"
+source = "url"
+# Pinned to the snakers4/silero-vad commit that carries the v6.2 ONNX model.
+files = [
+  { url = "https://github.com/snakers4/silero-vad/raw/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx", sha256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3" },
+]
+weights_license = "MIT"
+code_license = "MIT"
+license_url = "https://github.com/snakers4/silero-vad/blob/bfdc0193023f121ea5b3cc7b176dbed570a68a59/LICENSE"
+checked = "2026-11-20"
+attribution = "Silero VAD v6.2 by Silero Team, MIT"
+
+[models."smart-turn-v3.2"]
+kind = "turn"
+source = "url"
+# Pinned to pipecat-ai/smart-turn-v3 at f766f81d3cfdf7737ac64aad813d91bbfd56bf93. The hash was computed from the
+# downloaded file on `checked`.
+files = [
+  { url = "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/smart-turn-v3.2-cpu.onnx", sha256 = "2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f" },
+]
+weights_license = "BSD-2-Clause"
+code_license = "BSD-2-Clause"
+license_url = "https://huggingface.co/pipecat-ai/smart-turn-v3"
+checked = "2026-11-20"
+attribution = "Smart Turn v3.2 by Daily (pipecat-ai), BSD-2-Clause"
+
+[models."x-asr-zh-en-480ms"]
+kind = "stt"
+streaming = true
+source = "url"
+archive = "tar.bz2"
+# The sherpa-onnx release asset publishes this digest; it was re-computed from the downloaded archive on `checked`.
+files = [
+  { url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2", sha256 = "fa5f63d618e5a01526e275a358bb7772e403f84808a4769fba52cffd8160bf74" },
+]
+weights_license = "Apache-2.0"
+code_license = "Apache-2.0"
+license_url = "https://huggingface.co/GilgameshWind/X-ASR-zh-en"
+checked = "2026-11-20"
+attribution = "X-ASR-zh-en by GilgameshWind, Apache-2.0; sherpa-onnx streaming export by k2-fsa"
+note = "upstream states its training data as open-source and collected, not itemised"
+
+[models."paraformer-zh-en-streaming"]
+kind = "stt"
+streaming = true
+source = "hf"
+repo = "csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en"
+revision = "8e40c43232a1c5c66c82111efc5820d3accca11b"
+allow_patterns = ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"]
+weights_license = "Apache-2.0"
+code_license = "Apache-2.0"
+license_url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en"
+checked = "2026-11-20"
+attribution = "Streaming Paraformer zh-en by Alibaba DAMO Academy, Apache-2.0; sherpa-onnx conversion by csukuangfj"
+note = "converted from the ModelScope damo paraformer; training data not stated"

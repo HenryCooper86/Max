@@ -87,6 +87,19 @@ export const BACKEND_FIELDS: Record<VoiceProviderId, BackendField[]> = {
     },
     { env: "LOCAL_REALTIME_MODEL", label: "Model" },
     ...voices("LOCAL_REALTIME_VOICE", "af_heart", "am_michael")
+  ],
+  "max-speech": [
+    { env: "MAX_SPEECH", label: "Use Max Speech", kind: "toggle" },
+    {
+      env: "MAX_SPEECH_URL",
+      label: "Speech server",
+      kind: "url",
+      placeholder: "ws://localhost:8790/v1/speech/session"
+    },
+    { env: "MAX_SPEECH_API_KEY", label: "API key", secret: true },
+    { env: "MAX_SPEECH_VOICE", label: "Voice", placeholder: "af_heart" },
+    { env: "LOCAL_LLM_BASE_URL", label: "Chat model server", kind: "url", placeholder: "http://localhost:11434/v1" },
+    { env: "LOCAL_LLM_MODEL", label: "Chat model", placeholder: "qwen2.5:7b" }
   ]
 };
 

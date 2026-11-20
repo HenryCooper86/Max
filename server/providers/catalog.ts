@@ -2,6 +2,7 @@ import type { ProviderCapabilities, VoiceProviderKind, VoiceProviderSummary } fr
 import { DOUBAO_CAPABILITIES, LIVE_CAPABILITIES, MOCK_CAPABILITIES } from "../../shared/agent";
 import { env } from "./live/engine";
 import { geminiConfigured } from "./live/gemini-live";
+import { maxSpeechEnabled } from "./live/max-speech";
 import { localRealtimeEnabled } from "./live/openai-realtime";
 import { localPipelineEnabled, pipelineConfigured } from "./live/pipeline";
 
@@ -13,7 +14,7 @@ import { localPipelineEnabled, pipelineConfigured } from "./live/pipeline";
  * factories live in server/index.ts.
  */
 export type VoiceProviderId =
-  "mock" | "doubao" | "openai" | "grok" | "gemini" | "pipeline" | "local" | "local-realtime";
+  "mock" | "doubao" | "openai" | "grok" | "gemini" | "pipeline" | "local" | "local-realtime" | "max-speech";
 
 export type VoiceProviderEntry = {
   id: VoiceProviderId;
@@ -106,6 +107,17 @@ export const VOICE_PROVIDERS: readonly VoiceProviderEntry[] = [
     capabilities: LIVE_CAPABILITIES,
     configured: localRealtimeEnabled,
     requires: "LOCAL_REALTIME_URL",
+    local: true
+  },
+  {
+    id: "max-speech",
+    label: "Max Speech (local)",
+    kind: "pipeline",
+    description:
+      "Max's own speech server: voice detection, turn-taking, transcription and speech, with an Ollama chat model.",
+    capabilities: LIVE_CAPABILITIES,
+    configured: maxSpeechEnabled,
+    requires: "MAX_SPEECH_URL or MAX_SPEECH=on (see docs/local-models.md)",
     local: true
   }
 ];

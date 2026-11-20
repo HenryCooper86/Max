@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import json
+from urllib.parse import urlsplit
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -38,19 +39,55 @@ def check_auth(api_key: str | None, headers: list[tuple[bytes, bytes]], client_h
         )
 
 
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def check_origin(headers: list[tuple[bytes, bytes]], allowed: tuple[str, ...]) -> None:
+    """Refuse a WebSocket opened by a web page from another site (a browser always sends `Origin`).
+
+    No `Origin` (a native client) passes; so do localhost origins on any port and anything listed in `allowed`.
+    """
+    raw = dict(headers).get(b"origin")
+    if raw is None:
+        return
+    origin = raw.decode("latin-1").strip().rstrip("/").lower()
+    if origin in allowed:
+        return
+    try:
+        parts = urlsplit(origin)
+        if parts.scheme in ("http", "https") and parts.hostname in _LOCAL_HOSTS:
+            return
+    except ValueError:
+        pass
+    raise OpenAIError(
+        403,
+        "this origin may not use the session; add it to SPEECH_ALLOWED_ORIGINS",
+        code="origin_not_allowed",
+    )
+
+
 class AuthMiddleware:
-    def __init__(self, app: ASGIApp, api_key: str | None = None) -> None:
+    def __init__(
+        self, app: ASGIApp, api_key: str | None = None, allowed_origins: tuple[str, ...] = ()
+    ) -> None:
         self.app = app
         self.api_key = api_key
+        self.allowed_origins = allowed_origins
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not scope["path"].startswith("/v1/"):
+        if scope["type"] not in ("http", "websocket") or not scope["path"].startswith("/v1/"):
             await self.app(scope, receive, send)
             return
         client = scope.get("client")
         try:
             check_auth(self.api_key, scope["headers"], client[0] if client else None)
+            if scope["type"] == "websocket":
+                check_origin(scope["headers"], self.allowed_origins)
         except OpenAIError as err:
+            if scope["type"] == "websocket":
+                # Closing before accept makes the server answer the upgrade with HTTP 403.
+                await send({"type": "websocket.close", "code": 1008, "reason": err.message})
+                return
             body = json.dumps(err.body()).encode()
             await send(
                 {

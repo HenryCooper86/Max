@@ -23,6 +23,7 @@ class Settings:
     tts_engine: str | None = None
     stt_model: str | None = None
     tts_model: str | None = None
+    tts_zh_model: str | None = None  # model id, "off" to disable, None for the default
 
     @property
     def models_dir(self) -> Path:
@@ -43,4 +44,5 @@ class Settings:
             tts_engine=env.get("SPEECH_TTS_ENGINE") or None,
             stt_model=env.get("SPEECH_STT_MODEL") or None,
             tts_model=env.get("SPEECH_TTS_MODEL") or None,
+            tts_zh_model=env.get("SPEECH_TTS_ZH_MODEL") or None,
         )

@@ -17,6 +17,7 @@ def test_defaults(clean_env, tmp_path):
     assert settings.tts_engine is None
     assert settings.stt_model is None
     assert settings.tts_model is None
+    assert settings.tts_zh_model is None
 
 
 def test_models_dir_is_under_data_dir(tmp_path):
@@ -34,6 +35,7 @@ def test_each_env_var_is_parsed(tmp_path):
         "SPEECH_TTS_ENGINE": "kokoro",
         "SPEECH_STT_MODEL": "faster-whisper-small",
         "SPEECH_TTS_MODEL": "kokoro-v1.0",
+        "SPEECH_TTS_ZH_MODEL": "off",
     }
     settings = Settings.from_env(env)
     assert settings.api_key == "secret"
@@ -43,6 +45,7 @@ def test_each_env_var_is_parsed(tmp_path):
     assert settings.tts_engine == "kokoro"
     assert settings.stt_model == "faster-whisper-small"
     assert settings.tts_model == "kokoro-v1.0"
+    assert settings.tts_zh_model == "off"
 
 
 @pytest.mark.parametrize("profile", ["cuda", "mlx", "cpu"])

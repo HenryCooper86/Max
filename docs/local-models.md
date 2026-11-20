@@ -29,7 +29,9 @@ LOCAL_TTS_FORMAT=pcm
 This first version does:
 
 - Text-to-speech with Kokoro preset voices, in English, Chinese and six more languages (Spanish, French, Hindi,
-  Italian, Japanese, Portuguese).
+  Italian, Japanese, Portuguese). Chinese is spoken by Kokoro v1.1-zh with misaki's Chinese G2P, which cut the
+  character error rate on a speak-then-transcribe check from about 0.4-0.7 to under 0.05; other languages use v1.0.
+  `SPEECH_TTS_ZH_MODEL=off` turns the Chinese model off. Max Speech needs Python 3.12 because misaki does not support 3.13.
 - Transcription with Whisper.
 - Streaming speech output (`stream_format`). Max's relay does not use it: it asks for one sentence per request, so each sentence is synthesised and returned whole.
 - Only loads models whose licenses are on its allowlist, and pins each model to a fixed revision.

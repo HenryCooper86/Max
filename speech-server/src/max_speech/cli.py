@@ -8,8 +8,8 @@ import threading
 from collections.abc import Sequence
 
 from max_speech.api.slots import EngineSlots
-from max_speech.engines.select import build_engines, licensed, plan
-from max_speech.licenses import LicenseError, load_registry
+from max_speech.engines.select import build_engines, licensed, plan, zh_model_id
+from max_speech.licenses import LicenseError, load_registry, require
 from max_speech.models import ModelDownloadError, ensure_model
 from max_speech.profile import resolve_profile
 from max_speech.settings import PROFILES, Settings
@@ -75,8 +75,11 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         # Fail before listening: a bad engine, unknown/unlicensed model or kind mismatch is a config error.
         registry = load_registry()
-        for role_plan in filter(None, plan(settings, profile)):
+        stt_plan, tts_plan = plan(settings, profile)
+        for role_plan in filter(None, (stt_plan, tts_plan)):
             licensed(role_plan, registry)
+        if zh_id := zh_model_id(settings, tts_plan):
+            require(zh_id, "tts", registry=registry)
     except (LicenseError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -92,10 +95,13 @@ def _cmd_download(args: argparse.Namespace) -> int:
     settings, profile = _settings_with_profile(args.profile)
     registry = load_registry()
     try:
-        for role_plan in filter(None, plan(settings, profile)):
-            entry = licensed(role_plan, registry)
+        stt_plan, tts_plan = plan(settings, profile)
+        wanted = [(p.role, p.model_id, licensed(p, registry)) for p in (stt_plan, tts_plan) if p]
+        if zh_id := zh_model_id(settings, tts_plan):
+            wanted.append(("tts-zh", zh_id, require(zh_id, "tts", registry=registry)))
+        for role, model_id, entry in wanted:
             path = ensure_model(entry, settings.models_dir, progress=_progress_logger())
-            print(f"{role_plan.role}: {role_plan.model_id} -> {path}")
+            print(f"{role}: {model_id} -> {path}")
     except (LicenseError, ModelDownloadError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -121,6 +127,13 @@ def _cmd_engines(args: argparse.Namespace) -> int:
         except LicenseError as exc:
             lic = f"NOT ALLOWED ({exc})"
         print(f"{role}: {role_plan.engine} / {role_plan.model_id} [{lic}]")
+        if role == "tts" and (zh_id := zh_model_id(settings, role_plan)):
+            try:
+                zh = require(zh_id, "tts", registry=registry)
+                zh_lic = f"weights {zh.weights_license}, code {zh.code_license}"
+            except LicenseError as exc:
+                zh_lic = f"NOT ALLOWED ({exc})"
+            print(f"tts-zh: {role_plan.engine} / {zh_id} [{zh_lic}]")
     return 0
 
 

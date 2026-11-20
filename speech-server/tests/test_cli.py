@@ -16,6 +16,13 @@ def test_engines_command_prints_resolved(capsys, clean_env):
     assert "stt: whisper-ct2 / faster-whisper-small" in out
     assert "tts: kokoro / kokoro-v1.0" in out
     assert "weights Apache-2.0" in out
+    assert "tts-zh: kokoro / kokoro-v1.1-zh" in out
+
+
+def test_engines_command_hides_the_zh_model_when_off(capsys, clean_env):
+    clean_env.setenv("SPEECH_TTS_ZH_MODEL", "off")
+    assert cli.main(["engines", "--profile", "cpu"]) == 0
+    assert "tts-zh" not in capsys.readouterr().out
 
 
 def test_engines_command_reports_off(capsys, clean_env):
@@ -75,6 +82,7 @@ def _serve_must_not_start(monkeypatch):
         {"SPEECH_STT_ENGINE": "nope"},
         {"SPEECH_STT_MODEL": "not-registered"},
         {"SPEECH_TTS_MODEL": "faster-whisper-small"},
+        {"SPEECH_TTS_ZH_MODEL": "not-registered"},
     ],
 )
 def test_serve_refuses_a_bad_plan_before_starting(env, clean_env, monkeypatch, capsys):

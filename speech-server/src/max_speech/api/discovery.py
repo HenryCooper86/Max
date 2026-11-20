@@ -16,10 +16,16 @@ def _attributions(engines) -> list[dict]:
     registry = load_registry()
     out = []
     for engine in engines:
-        entry = registry.get(engine.model_id) if engine is not None else None
-        if entry is None:  # fakes (fake-*) and anything unregistered have nothing to credit
+        if engine is None:
             continue
-        out.append({"model": entry.id, "weights_license": entry.weights_license, "text": entry.attribution})
+        # An engine may load more than one model (Kokoro adds its Chinese model).
+        for model_id in (engine.model_id, *getattr(engine, "extra_model_ids", ())):
+            entry = registry.get(model_id)
+            if entry is None:  # fakes (fake-*) and anything unregistered have nothing to credit
+                continue
+            out.append(
+                {"model": entry.id, "weights_license": entry.weights_license, "text": entry.attribution}
+            )
     return out
 
 

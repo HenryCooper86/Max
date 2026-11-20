@@ -43,7 +43,32 @@ def test_defaults(patched, profile, stt_model, stt_name):
     stt, tts = select.build_engines(Settings(), profile)
     assert stt[0] == stt_name
     assert tts[0] == "kokoro"
-    assert patched["ensure"] == [stt_model, "kokoro-v1.0"]
+    assert patched["ensure"] == [stt_model, "kokoro-v1.0", "kokoro-v1.1-zh"]
+
+
+def test_kokoro_gets_the_zh_model_dir_and_id(patched, tmp_path):
+    _, tts = select.build_engines(Settings(stt_engine="off"), "cpu")
+    assert tts[2]["zh_model_dir"] == tmp_path / "kokoro-v1.1-zh"
+    assert tts[2]["zh_model_id"] == "kokoro-v1.1-zh"
+
+
+def test_zh_model_off_loads_only_v1_0(patched):
+    _, tts = select.build_engines(Settings(stt_engine="off", tts_zh_model="off"), "cpu")
+    assert patched["ensure"] == ["kokoro-v1.0"]
+    assert tts[2]["zh_model_dir"] is None
+
+
+def test_zh_model_override_is_license_checked_before_any_download(patched):
+    with pytest.raises(LicenseError):
+        select.build_engines(Settings(tts_zh_model="not-registered"), "cpu")
+    with pytest.raises(LicenseError):
+        select.build_engines(Settings(tts_zh_model="faster-whisper-small"), "cpu")
+    assert patched["ensure"] == []
+
+
+def test_no_zh_model_without_tts(patched):
+    select.build_engines(Settings(tts_engine="off", stt_engine="off"), "cpu")
+    assert patched["ensure"] == []
 
 
 def test_ct2_devices(patched):

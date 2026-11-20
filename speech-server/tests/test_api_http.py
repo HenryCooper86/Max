@@ -283,6 +283,17 @@ async def test_discovery_attributions_from_registry(make_app):
     assert "Kokoro" in d["attributions"][0]["text"]
 
 
+async def test_discovery_attributions_include_the_zh_model(make_app):
+    class Kokoro(FakeTts):
+        id = "kokoro"
+        model_id = "kokoro-v1.0"
+        extra_model_ids = ("kokoro-v1.1-zh",)
+
+    async with client(make_app(tts=Kokoro())) as c:
+        d = (await c.get("/.well-known/max-speech")).json()
+    assert [a["model"] for a in d["attributions"]] == ["kokoro-v1.0", "kokoro-v1.1-zh"]
+
+
 async def test_engine_disabled(make_app):
     async with client(make_app(stt=None, tts=None)) as c:
         for r in (

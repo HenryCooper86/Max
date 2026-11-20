@@ -39,15 +39,16 @@ machines, and always set it when the server sits behind a reverse proxy. Clients
 
 ## Configuration
 
-| Variable            | Default         | Meaning                                                        |
-| ------------------- | --------------- | -------------------------------------------------------------- |
-| `SPEECH_API_KEY`    | unset           | Bearer token required on `/v1`. Unset means loopback only.     |
-| `SPEECH_PROFILE`    | detected        | `mlx`, `cuda` or `cpu`. Detected from the hardware when unset. |
-| `SPEECH_DATA_DIR`   | `~/.max-speech` | Where models are stored (`models/` under this directory).      |
-| `SPEECH_STT_ENGINE` | profile default | `whisper-ct2`, `whisper-mlx`, or `off`.                        |
-| `SPEECH_TTS_ENGINE` | `kokoro`        | `kokoro`, or `off`.                                            |
-| `SPEECH_STT_MODEL`  | profile default | Any speech-to-text model id in the license registry.           |
-| `SPEECH_TTS_MODEL`  | `kokoro-v1.0`   | Any text-to-speech model id in the license registry.           |
+| Variable              | Default          | Meaning                                                         |
+| --------------------- | ---------------- | --------------------------------------------------------------- |
+| `SPEECH_API_KEY`      | unset            | Bearer token required on `/v1`. Unset means loopback only.      |
+| `SPEECH_PROFILE`      | detected         | `mlx`, `cuda` or `cpu`. Detected from the hardware when unset.  |
+| `SPEECH_DATA_DIR`     | `~/.max-speech`  | Where models are stored (`models/` under this directory).       |
+| `SPEECH_STT_ENGINE`   | profile default  | `whisper-ct2`, `whisper-mlx`, or `off`.                         |
+| `SPEECH_TTS_ENGINE`   | `kokoro`         | `kokoro`, or `off`.                                             |
+| `SPEECH_STT_MODEL`    | profile default  | Any speech-to-text model id in the license registry.            |
+| `SPEECH_TTS_MODEL`    | `kokoro-v1.0`    | Any text-to-speech model id in the license registry.            |
+| `SPEECH_TTS_ZH_MODEL` | `kokoro-v1.1-zh` | Chinese text-to-speech model, or `off` to use v1.0 for Chinese. |
 
 `serve` also takes `--host`, `--port` and `--profile`, which override the environment.
 
@@ -59,10 +60,30 @@ Defaults per profile:
 | `cuda`  | `faster-whisper-large-v3-turbo` | `whisper-ct2` |
 | `cpu`   | `faster-whisper-small`          | `whisper-ct2` |
 
-Text-to-speech is `kokoro-v1.0` on every profile. Kokoro runs on the CPU through onnxruntime unless
+Text-to-speech is `kokoro-v1.0` on every profile, plus `kokoro-v1.1-zh` for Chinese (below). Kokoro runs on the CPU through onnxruntime unless
 `onnxruntime-gpu` is installed, in which case it uses CUDA. GPU speech-to-text needs the CUDA 12 and cuDNN 9
 libraries that faster-whisper and CTranslate2 require; if they are missing, the server logs a warning and
 runs the same model on the CPU with int8.
+
+### Chinese speech
+
+Kokoro v1.0 reads Chinese through espeak's Mandarin rules, which is poor: a speak-then-transcribe check on the five
+Chinese benchmark phrases gave a mean character error rate (CER) of 0.39 to 0.68. So Chinese sentences go to a
+dedicated model, `kokoro-v1.1-zh` (Apache-2.0), phonemized by [misaki](https://github.com/hexgrad/misaki)'s Chinese
+G2P (jieba and pypinyin). The same check now gives a mean CER of 0.00. English words inside a Chinese sentence are
+phonemized by v1.0's espeak path. Every other language still uses v1.0.
+
+- The script of each sentence picks the model, as it picked the voice before. A Chinese voice id, an English voice
+  id with Chinese text, or `language: "zh"` all end up on `kokoro-v1.1-zh`.
+- `/v1/audio/voices` lists the v1.1-zh Chinese voices (`zf_001`, `zm_009`, ...). The default female voice is `zf_002`
+  and the default male voice is `zm_009`, picked by lowest CER over the benchmark phrases. The old v1.0 Chinese ids
+  (`zf_xiaobei`, `zm_yunjian`, ...) are still accepted and map to the default voice of the same gender.
+- It adds a 325 MB download and a second model in memory. `SPEECH_TTS_ZH_MODEL=off` skips both and keeps the old
+  v1.0 behaviour for Chinese.
+
+### Python version
+
+Max Speech needs Python 3.12 exactly (`>=3.12,<3.13`). misaki, the Chinese G2P, does not support Python 3.13.
 
 ## Endpoints
 
@@ -114,7 +135,8 @@ To add a model:
 
 Kokoro's weights are Apache-2.0, but its phonemizer and espeak-ng are GPL-3.0 code, imported in-process by
 `kokoro-onnx`. Running Max Speech as a service is fine. If you distribute an image or other bundle that includes
-them, you must also offer their source under GPL-3.0.
+them, you must also offer their source under GPL-3.0. The Chinese model's G2P (misaki, jieba, pypinyin) is
+Apache-2.0 and MIT.
 
 ## Benchmark
 

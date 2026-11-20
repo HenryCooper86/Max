@@ -25,6 +25,8 @@ _DEFAULT_STT = {
     "cpu": ("whisper-ct2", "faster-whisper-small"),
 }
 _DEFAULT_TTS = ("kokoro", "kokoro-v1.0")
+# Chinese is spoken by a dedicated Kokoro model; SPEECH_TTS_ZH_MODEL overrides the id or turns it off.
+_DEFAULT_TTS_ZH = "kokoro-v1.1-zh"
 # Model to use when only the engine is overridden.
 _STT_MODEL_FOR_ENGINE = {
     "whisper-mlx": "mlx-whisper-large-v3-turbo",
@@ -62,6 +64,13 @@ def plan(settings: Settings, profile: str) -> tuple[RolePlan | None, RolePlan | 
     return stt, tts
 
 
+def zh_model_id(settings: Settings, tts: RolePlan | None) -> str | None:
+    """The registry id of the Chinese TTS model to load alongside Kokoro, or None."""
+    if tts is None or tts.engine != "kokoro" or settings.tts_zh_model == OFF:
+        return None
+    return settings.tts_zh_model or _DEFAULT_TTS_ZH
+
+
 def licensed(role_plan: RolePlan, registry: dict[str, ModelEntry] | None = None) -> ModelEntry:
     return require(role_plan.model_id, role_plan.role, registry=registry)
 
@@ -87,6 +96,8 @@ def build_engines(
     # Check every license before the first download so a bad override fails fast.
     stt_entry = licensed(stt_plan, registry) if stt_plan else None
     tts_entry = licensed(tts_plan, registry) if tts_plan else None
+    zh_id = zh_model_id(settings, tts_plan)
+    zh_entry = require(zh_id, "tts", registry=registry) if zh_id else None
 
     stt: SttEngine | None = None
     tts: TtsEngine | None = None
@@ -102,5 +113,15 @@ def build_engines(
     if tts_plan and tts_entry:
         log.info("loading tts %s (%s)", tts_plan.engine, tts_plan.model_id)
         path = ensure_model(tts_entry, settings.models_dir, progress=progress)
-        tts = KokoroTts(path, tts_plan.model_id, use_cuda=profile == "cuda")
+        zh_path = None
+        if zh_entry:
+            log.info("loading tts zh model %s", zh_entry.id)
+            zh_path = ensure_model(zh_entry, settings.models_dir, progress=progress)
+        tts = KokoroTts(
+            path,
+            tts_plan.model_id,
+            use_cuda=profile == "cuda",
+            zh_model_dir=zh_path,
+            zh_model_id=zh_entry.id if zh_entry else _DEFAULT_TTS_ZH,
+        )
     return stt, tts

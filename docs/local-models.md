@@ -13,10 +13,11 @@ equaliser and the design templates behave identically.
 
 ## Max Speech: our own speech server
 
-[Max Speech](../speech-server/README.md) is a speech server in this repo, on port 8790. Start it with
-`uv run --extra mlx max-speech serve` on a Mac, or `uv run max-speech serve` on Linux. It serves Whisper transcription
-and Kokoro speech, and it can run the whole listening side of a conversation. There are two ways to use it. Chat stays
-on Ollama in both, set with the `LOCAL_LLM_*` variables (default `http://localhost:11434/v1`).
+[Max Speech](../speech-server/README.md) is a speech server in this repo, on port 8790. It serves Whisper
+transcription and Kokoro speech, and it can run the whole listening side of a conversation. On a Mac, double-click
+`start-speech.command`; elsewhere use Docker. [Deploying Max Speech](speech-server-deployment.md) covers both, NVIDIA
+and a reverse proxy. There are two ways to use it. Chat stays on Ollama in both, set with the `LOCAL_*` variables
+(default `http://localhost:11434/v1`).
 
 ### As the speech stages of the `local` pipeline
 
@@ -45,8 +46,8 @@ VOICE_PROVIDER=max-speech
 MAX_SPEECH=on
 # optional
 MAX_SPEECH_URL=ws://localhost:8790/v1/speech/session   # http(s)://host:port also works
-MAX_SPEECH_API_KEY=
-MAX_SPEECH_VOICE=af_heart
+MAX_SPEECH_API_KEY=            # the server's SPEECH_API_KEY, if it has one
+MAX_SPEECH_VOICE=af_heart      # a Kokoro preset or a custom voice id
 ```
 
 The server decides when the wearer has finished, so replies start sooner than with the energy-based detector, and
@@ -65,31 +66,86 @@ when it starts. The protocol, turn-taking rules and the session benchmark are in
 - Turn detection on the server: Silero VAD and Smart Turn, with a `low`, `normal` or `high` eagerness.
 - Only loads models whose licenses are on its allowlist, and pins each model to a fixed revision.
 
-It does not do these yet:
+- Voice cloning with consent: an admin adds a voice from 5 to 30 seconds of recorded speech. On by default on Apple
+  silicon; on a CPU it is opt-in with `SPEECH_CLONING_MODEL=moss-tts-nano-onnx`; there is none on NVIDIA yet.
+- Voice design: describe a voice and pick one of three candidates. Apple silicon with at least 24 GB of memory.
+- A **Voices** section in the relay's admin Studio to hear voices, clone or design one, choose the assistant's voice
+  (`voice.id` in the assistant config, which overrides `MAX_SPEECH_VOICE`) and edit pronunciations. The relay proxies
+  it, so the browser never sees the speech server's address or key; it needs `MAX_SPEECH=on` or `MAX_SPEECH_URL`.
 
-- Voice cloning.
-- Voice management in Studio.
-
-The design is in [docs/superpowers/specs/2026-11-20-max-speech-server-design.md](superpowers/specs/2026-11-20-max-speech-server-design.md).
+Details, limits and the consent rules are in the [Max Speech README](../speech-server/README.md#custom-voices). The
+design is in [docs/superpowers/specs/2026-11-20-max-speech-server-design.md](superpowers/specs/2026-11-20-max-speech-server-design.md).
 
 ## Quick start
 
+### With Docker: Max Speech and Ollama
+
 ```bash
-docker compose -f docker-compose.local-voice.yml up -d
+echo "SPEECH_API_KEY=$(openssl rand -hex 24)" >> .env
+docker compose -f docker-compose.local-voice.yml up -d --build
 docker compose -f docker-compose.local-voice.yml exec ollama ollama pull qwen2.5:7b
 ```
+
+This builds the CPU image of Max Speech on `127.0.0.1:8790` and starts Ollama on `127.0.0.1:11434` (both bound to
+loopback; Ollama has no authentication). The API key is required in Docker. The first start downloads about 1.5 GB of
+speech models, and `max-speech` shows "starting" until they load. Then point the relay at it, in one of two ways
+depending on where the relay runs.
+
+**Relay on the host:** use `localhost`. Ollama at `localhost:11434` is the default chat endpoint.
+
+```dotenv
+VOICE_PROVIDER=max-speech
+MAX_SPEECH_URL=ws://localhost:8790/v1/speech/session
+MAX_SPEECH_API_KEY=<the same value as SPEECH_API_KEY>
+```
+
+or, with the `local` pipeline, `LOCAL_VOICE=on`, `LOCAL_TTS_FORMAT=pcm`, `LOCAL_STT_BASE_URL` and `LOCAL_TTS_BASE_URL` set to
+`http://localhost:8790/v1`, and `LOCAL_STT_API_KEY` and `LOCAL_TTS_API_KEY` set to the same value as `SPEECH_API_KEY`.
+
+**Relay in the compose network:** use the service names, and point the chat stage at Ollama, because its default
+(`localhost:11434`) would be the relay's own container:
+
+```dotenv
+LOCAL_LLM_BASE_URL=http://ollama:11434/v1
+LOCAL_LLM_MODEL=qwen2.5:7b
+LOCAL_LLM_API_KEY=ollama   # any value; the local pipeline needs a key on every stage that is not localhost
+
+VOICE_PROVIDER=max-speech
+MAX_SPEECH_URL=ws://max-speech:8790/v1/speech/session
+MAX_SPEECH_API_KEY=<the same value as SPEECH_API_KEY>
+```
+
+or for the `local` pipeline:
 
 ```dotenv
 VOICE_PROVIDER=local
 LOCAL_VOICE=on
+LOCAL_STT_BASE_URL=http://max-speech:8790/v1
+LOCAL_TTS_BASE_URL=http://max-speech:8790/v1
+LOCAL_TTS_FORMAT=pcm
+LOCAL_STT_API_KEY=<the same value as SPEECH_API_KEY>
+LOCAL_TTS_API_KEY=<the same value as SPEECH_API_KEY>
+LOCAL_LLM_BASE_URL=http://ollama:11434/v1
+LOCAL_LLM_MODEL=qwen2.5:7b
+LOCAL_LLM_API_KEY=ollama
 ```
 
-That starts Speaches (faster-whisper) on `:8000`, Ollama on `:11434` and Kokoro-FastAPI on `:8880` — the three
-defaults the `local` backend expects. The first request to each downloads its model.
+(`LOCAL_API_KEY` sets all three stages' keys at once, but then Ollama also receives the speech key.) Docker on a Mac has
+no Metal, so the container runs on the CPU there; on Apple silicon prefer the native path below. For NVIDIA see
+[Deploying Max Speech](speech-server-deployment.md#docker-nvidia). A relay in Docker cannot use a native keyless Max
+Speech via `host.docker.internal`; see the [deployment guide](speech-server-deployment.md#troubleshooting).
+
+### On a Mac, natively
+
+Double-click `start-speech.command` in the repo root (it needs [uv](https://docs.astral.sh/uv/)). It starts Max Speech
+on `http://localhost:8790` with the MLX models, cloning and (with 24 GB or more) voice design. Without an API key it
+answers loopback clients only. Run Ollama yourself (`ollama pull qwen2.5:7b`), then use `VOICE_PROVIDER=max-speech`
+with `MAX_SPEECH_URL=ws://localhost:8790/v1/speech/session`, or the `local` settings above with `localhost`.
 
 ## The `local` pipeline
 
-Each stage is independent. Point any of them at a different server or model:
+Each stage is independent. Point any of them at a different server or model. The defaults below are the ports of the
+third-party servers listed later; with Max Speech you set the speech stages to `http://localhost:8790/v1` as above.
 
 | Stage          | Variables                                                    | Default                                                    |
 | -------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
@@ -113,7 +169,8 @@ What each stage needs from its server:
 
 ### Models and servers people commonly use
 
-Anything that exposes the endpoints above works; none of these is required.
+Anything that exposes the endpoints above works; none of these is required. They are alternatives to Max Speech, and
+the `local` pipeline works with any of them.
 
 | Stage          | Open-weight models                                                                                       | Servers with an OpenAI-compatible API                                                                                |
 | -------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -159,7 +216,7 @@ repository. Either can become a backend once it has a documented streaming inter
 
 ### What to expect
 
-The pipeline transcribes the wearer's whole sentence before the model starts, so replies begin later than with a
+The `local` pipeline transcribes the wearer's whole sentence before the model starts, so replies begin later than with a
 live speech-to-speech backend. Speech is synthesised sentence by sentence as the model writes, and barge-in stops
 generation and playback at once. Turn-taking is done in the relay by an energy-based voice detector.
 

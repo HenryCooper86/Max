@@ -186,6 +186,10 @@ well.
 
 ¹ For `"device": "app"` assistants. The stock helmet assistant's demo is a scripted ride.
 
+**Run everything locally.** `docker compose -f docker-compose.local-voice.yml up` starts Max Speech and Ollama, and on a
+Mac `start-speech.command` runs Max Speech natively. No cloud account or model key. See
+[running locally](docs/local-models.md) and [deploying Max Speech](docs/speech-server-deployment.md).
+
 Models, voices and endpoints are all overridable; see [voice backends](docs/backends.md) and
 [running locally](docs/local-models.md). Clients may pick a backend per session when the relay allows it.
 

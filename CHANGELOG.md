@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-11-20 — Max Speech, a local speech server
+
+- Max Speech (`speech-server/`, port 8790) serves OpenAI-compatible
+  transcription (Whisper) and speech (Kokoro, with Chinese on Kokoro v1.1-zh)
+  from models on a license allowlist, each pinned to a fixed revision. Profiles:
+  `mlx` on Apple silicon, `cpu`, and `cuda` for transcription.
+- A live session WebSocket (`/v1/speech/session`) with voice detection, smart
+  turn-taking, streaming transcripts and spoken replies, and a new `max-speech`
+  voice backend in the relay that uses it while the relay keeps the chat model,
+  tools and persona.
+- Voice cloning with consent from 5 to 30 seconds of speech (Apple silicon by
+  default; on a CPU with `SPEECH_CLONING_MODEL=moss-tts-nano-onnx`; none on
+  NVIDIA yet), and voice design from a description on Apple silicon with 24 GB
+  of memory or more.
+- A Voices section in the admin Studio to hear, clone, design and choose voices
+  and edit pronunciations, proxied by the relay (`MAX_SPEECH=on` or
+  `MAX_SPEECH_URL`). The assistant's voice is `voice.id` in its config.
+- Docker images (targets `cpu` and `cuda`, API key required), a compose file
+  that runs Max Speech with Ollama in place of Speaches and Kokoro-FastAPI,
+  `start-speech.command` for Macs, and a deployment guide. CI builds the CPU
+  image and checks its entrypoint.
+
 ## 2026-11-18 — Max Cloud Studio
 
 - Every project opens in a Studio built for people new to voice agents:

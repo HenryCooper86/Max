@@ -8,6 +8,14 @@ streaming transcripts and spoken replies, which Max's `max-speech` backend uses.
 It listens on port **8790**. The model list, licenses and hardware profiles are in
 [docs/local-models.md](../docs/local-models.md).
 
+## Deployment
+
+[docs/speech-server-deployment.md](../docs/speech-server-deployment.md) covers running it on a Mac, in Docker and
+behind a reverse proxy. On Apple silicon, double-click `start-speech.command` in the repo root. In Docker, build
+`speech-server/Dockerfile` with `--target cpu` or `--target cuda` (the CUDA image is untested on a GPU); an API key is
+required there. `docker-compose.local-voice.yml` runs the CPU image next to Ollama. Downloads measured on an M5 Max:
+about 4.7 GB of models for the default `mlx` set, about 8.9 GB with voice design, and about 1.4 GB for the `cpu` set.
+
 ## Quick start
 
 Models download on first start into `~/.max-speech/models`, at pinned revisions. The server answers `503` until they

@@ -148,7 +148,7 @@ The chat step runs tool calls in up to four rounds per turn. A typed message rep
 ### local
 
 The pipeline on open-weight models you host: Whisper-class speech-to-text, an Ollama chat model and Kokoro speech.
-Nothing leaves your network. Setup, default servers and a ready-made compose file are in
+Nothing leaves your network. Setup, default servers and a ready-made compose file (Max Speech and Ollama) are in
 [local-models.md](local-models.md).
 
 ```dotenv
@@ -190,9 +190,13 @@ MAX_SPEECH_URL=ws://localhost:8790/v1/speech/session
 LOCAL_LLM_MODEL=qwen2.5:7b
 ```
 
-Optional: `MAX_SPEECH_API_KEY` (when the server sets `SPEECH_API_KEY`), `MAX_SPEECH_VOICE`. Unlike `local`, the user's
+Optional: `MAX_SPEECH_API_KEY` (when the server sets `SPEECH_API_KEY`; required for a Docker server) and
+`MAX_SPEECH_VOICE`, the default voice (a Kokoro preset or a custom voice id). The assistant's own `voice.id` in its
+config, which the Studio's Voices section sets, takes precedence. That section also clones and designs voices and
+edits pronunciations, through the relay; it needs `MAX_SPEECH=on` or `MAX_SPEECH_URL`. Unlike `local`, the user's
 words arrive while they are still talking, and a learned turn detector decides when they have finished instead of a
-fixed silence. See [local models](local-models.md).
+fixed silence. See [local models](local-models.md) and
+[deploying Max Speech](speech-server-deployment.md).
 
 ## Trade-offs
 

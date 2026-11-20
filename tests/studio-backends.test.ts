@@ -62,7 +62,8 @@ describe("studio voice backends", () => {
       "gemini",
       "pipeline",
       "local",
-      "local-realtime"
+      "local-realtime",
+      "max-speech"
     ]);
     expect(field("openai", "OPENAI_API_KEY")).toEqual({
       env: "OPENAI_API_KEY",

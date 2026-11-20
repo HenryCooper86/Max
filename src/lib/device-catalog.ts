@@ -234,6 +234,16 @@ export const BACKENDS: readonly BackendInfo[] = [
       en: "A server you host that speaks the OpenAI Realtime protocol."
     },
     env: ["LOCAL_REALTIME_URL="]
+  },
+  {
+    id: "max-speech",
+    label: "Max Speech (local)",
+    place: "local",
+    description: {
+      zh: "Max 自带的本地语音服务：语音检测、轮次判断、语音识别与合成，对话用 Ollama 等本地模型。",
+      en: "Max's own local speech server: voice detection, turn-taking, transcription and speech, with an Ollama or other local chat model."
+    },
+    env: ["MAX_SPEECH=on"]
   }
 ];
 

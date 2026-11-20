@@ -18,8 +18,8 @@ pytestmark = [
 
 @pytest.fixture(scope="module")
 def engines():
-    stt, tts = build_engines(Settings(), detect_profile())
-    return stt, tts
+    engines = build_engines(Settings(), detect_profile())
+    return engines.stt, engines.tts
 
 
 def test_kokoro_synthesizes_chunks(engines):

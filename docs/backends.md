@@ -15,6 +15,7 @@ Choose the default with `VOICE_PROVIDER` in `.env`. The relay knows eight backen
 | `pipeline`       | pipeline | Speech-to-text, then any chat model, then text-to-speech.      | `PIPELINE_API_KEY` or `OPENAI_API_KEY` |
 | `local`          | pipeline | The same pipeline on open-weight models you run yourself.      | none (`LOCAL_VOICE=on`)                |
 | `local-realtime` | live     | A self-hosted server that speaks the OpenAI Realtime protocol. | `LOCAL_REALTIME_URL`                   |
+| `max-speech`     | pipeline | Max Speech listens and speaks; any local chat model answers.   | `MAX_SPEECH_URL` or `MAX_SPEECH=on`    |
 
 Friendly aliases also work: `demo`, `xai`, `chatgpt`, `google`, `whisper`, `cascade`, `ollama`, `offline`. An unknown
 value falls back to `mock`, and the relay says so at startup.
@@ -27,12 +28,12 @@ sooner. Pipeline backends let you mix vendors and run each step on your own hard
 
 The `capabilities` object in `session.started` tells the client what the backend can do.
 
-| Backend                                                           | Tools | Typed input (`text.input`) | Synthesized audio | Notes                                                                            |
-| ----------------------------------------------------------------- | ----- | -------------------------- | ----------------- | -------------------------------------------------------------------------------- |
-| `mock` (app assistant)                                            | yes   | yes                        | no                | Speech is left to the client (`useBrowserSpeech`). Type a tool's name to run it. |
-| `mock` (helmet default)                                           | no    | no (see below)             | no                | The scripted riding demo.                                                        |
-| `doubao`                                                          | no    | no                         | yes               | No function calling and no typed turns.                                          |
-| `openai`, `grok`, `gemini`, `pipeline`, `local`, `local-realtime` | yes   | yes                        | yes               |                                                                                  |
+| Backend                                                                         | Tools | Typed input (`text.input`) | Synthesized audio | Notes                                                                            |
+| ------------------------------------------------------------------------------- | ----- | -------------------------- | ----------------- | -------------------------------------------------------------------------------- |
+| `mock` (app assistant)                                                          | yes   | yes                        | no                | Speech is left to the client (`useBrowserSpeech`). Type a tool's name to run it. |
+| `mock` (helmet default)                                                         | no    | no (see below)             | no                | The scripted riding demo.                                                        |
+| `doubao`                                                                        | no    | no                         | yes               | No function calling and no typed turns.                                          |
+| `openai`, `grok`, `gemini`, `pipeline`, `local`, `local-realtime`, `max-speech` | yes   | yes                        | yes               |                                                                                  |
 
 The "app assistant" row applies when the assistant's device is `app` (a general software assistant, see
 `assistant.config.json`). Without an assistant config the relay is the original "Max" helmet assistant and uses the
@@ -178,6 +179,21 @@ LOCAL_REALTIME_MODEL=qwen2.5:7b
 Optional: `LOCAL_REALTIME_TRANSCRIBE_MODEL` (default `Systran/faster-whisper-small`), `LOCAL_REALTIME_VOICE` (`af_heart`),
 `LOCAL_REALTIME_VOICE_MALE` (`am_michael`), `LOCAL_REALTIME_API_KEY`.
 
+### max-speech
+
+[Max Speech](../speech-server/README.md), our own speech server, listens and speaks over one WebSocket; the relay
+runs the chat model and tools exactly as for `local`.
+
+```dotenv
+VOICE_PROVIDER=max-speech
+MAX_SPEECH_URL=ws://localhost:8790/v1/speech/session
+LOCAL_LLM_MODEL=qwen2.5:7b
+```
+
+Optional: `MAX_SPEECH_API_KEY` (when the server sets `SPEECH_API_KEY`), `MAX_SPEECH_VOICE`. Unlike `local`, the user's
+words arrive while they are still talking, and a learned turn detector decides when they have finished instead of a
+fixed silence. See [local models](local-models.md).
+
 ## Trade-offs
 
 Numbers depend on your region, network and models, so measure with your own audio. Qualitatively:
@@ -187,7 +203,9 @@ Numbers depend on your region, network and models, so measure with your own audi
 - `pipeline` and `local` add the time to transcribe a whole sentence, then to start the model, then to start speech.
   The relay speaks the reply sentence by sentence while the model is still writing, which hides much of the wait.
 - `pipeline` is the most flexible: pick the cheapest or best model for each step, or mix vendors.
-- `local` and `local-realtime` cost nothing per minute and keep audio on your hardware, in return for hardware, setup
+- `max-speech` sits between the two: it streams the user's words and ends turns with a learned turn detector, so it
+  answers sooner than `local`, while the chat model still starts only after the turn ends.
+- `local`, `local-realtime` and `max-speech` cost nothing per minute and keep audio on your hardware, in return for hardware, setup
   and a smaller choice of voices and languages.
 - `mock` is instant and free, and is not an assistant.
 

@@ -16,6 +16,8 @@ from max_speech.settings import PROFILES, Settings
 
 log = logging.getLogger("max_speech")
 
+WS_MAX_MESSAGE_BYTES = 1 << 20
+
 
 def _progress_logger():
     last: dict[str, int] = {}
@@ -34,11 +36,14 @@ def _progress_logger():
 def _load_engines(slots: EngineSlots, settings: Settings, profile: str) -> None:
     """Runs in a background thread: a failure is recorded on the slots so the server keeps answering 503."""
     try:
-        stt, tts = build_engines(settings, profile, progress=_progress_logger())
-        for engine in (stt, tts):
-            if engine is not None:
-                engine.warm_up()
-        slots.stt, slots.tts = stt, tts
+        engines = build_engines(settings, profile, progress=_progress_logger())
+        for engine in engines.loaded():
+            warm_up = getattr(engine, "warm_up", None)  # the VAD has nothing to warm up
+            if warm_up is not None:
+                warm_up()
+        slots.stt, slots.tts = engines.stt, engines.tts
+        slots.vad, slots.turn, slots.stt_stream = engines.vad, engines.turn, engines.stt_stream
+        slots.second_pass = engines.second_pass
         slots.mark_ready()
         log.info("models ready")
     except Exception as exc:  # anything at all must surface as a readable 503
@@ -58,7 +63,15 @@ def _uvicorn_config(app, settings: Settings):
 
     # No-key mode trusts loopback clients only; proxy headers would let a local reverse proxy make remote
     # traffic look like 127.0.0.1.
-    return uvicorn.Config(app, host=settings.host, port=settings.port, log_level="info", proxy_headers=False)
+    # ws_max_size: the session only receives microphone chunks and small JSON; 1 MiB is far more than either needs.
+    return uvicorn.Config(
+        app,
+        host=settings.host,
+        port=settings.port,
+        log_level="info",
+        proxy_headers=False,
+        ws_max_size=WS_MAX_MESSAGE_BYTES,
+    )
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -75,10 +88,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         # Fail before listening: a bad engine, unknown/unlicensed model or kind mismatch is a config error.
         registry = load_registry()
-        stt_plan, tts_plan = plan(settings, profile)
-        for role_plan in filter(None, (stt_plan, tts_plan)):
+        the_plan = plan(settings, profile)
+        for role_plan in the_plan.roles():
             licensed(role_plan, registry)
-        if zh_id := zh_model_id(settings, tts_plan):
+        if zh_id := zh_model_id(settings, the_plan.tts):
             require(zh_id, "tts", registry=registry)
     except (LicenseError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -95,9 +108,9 @@ def _cmd_download(args: argparse.Namespace) -> int:
     settings, profile = _settings_with_profile(args.profile)
     registry = load_registry()
     try:
-        stt_plan, tts_plan = plan(settings, profile)
-        wanted = [(p.role, p.model_id, licensed(p, registry)) for p in (stt_plan, tts_plan) if p]
-        if zh_id := zh_model_id(settings, tts_plan):
+        the_plan = plan(settings, profile)
+        wanted = [(p.role, p.model_id, licensed(p, registry)) for p in the_plan.roles()]
+        if zh_id := zh_model_id(settings, the_plan.tts):
             wanted.append(("tts-zh", zh_id, require(zh_id, "tts", registry=registry)))
         for role, model_id, entry in wanted:
             path = ensure_model(entry, settings.models_dir, progress=_progress_logger())
@@ -113,20 +126,22 @@ def _cmd_engines(args: argparse.Namespace) -> int:
     print(f"profile: {profile}")
     registry = load_registry()
     try:
-        plans = plan(settings, profile)
+        the_plan = plan(settings, profile)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    for role, role_plan in zip(("stt", "tts"), plans, strict=True):
+    plans = (
+        ("stt", the_plan.stt),
+        ("tts", the_plan.tts),
+        ("vad", the_plan.vad),
+        ("turn", the_plan.turn),
+        ("stt_stream", the_plan.stt_stream),
+    )
+    for role, role_plan in plans:
         if role_plan is None:
             print(f"{role}: off")
             continue
-        try:
-            entry = licensed(role_plan, registry)
-            lic = f"weights {entry.weights_license}, code {entry.code_license}"
-        except LicenseError as exc:
-            lic = f"NOT ALLOWED ({exc})"
-        print(f"{role}: {role_plan.engine} / {role_plan.model_id} [{lic}]")
+        print(f"{role}: {role_plan.engine} / {role_plan.model_id} [{_license_text(role_plan, registry)}]")
         if role == "tts" and (zh_id := zh_model_id(settings, role_plan)):
             try:
                 zh = require(zh_id, "tts", registry=registry)
@@ -134,7 +149,16 @@ def _cmd_engines(args: argparse.Namespace) -> int:
             except LicenseError as exc:
                 zh_lic = f"NOT ALLOWED ({exc})"
             print(f"tts-zh: {role_plan.engine} / {zh_id} [{zh_lic}]")
+    print(f"second_pass: {'on' if the_plan.second_pass else 'off'}")
     return 0
+
+
+def _license_text(role_plan, registry) -> str:
+    try:
+        entry = licensed(role_plan, registry)
+        return f"weights {entry.weights_license}, code {entry.code_license}"
+    except LicenseError as exc:
+        return f"NOT ALLOWED ({exc})"
 
 
 def main(argv: Sequence[str] | None = None) -> int:

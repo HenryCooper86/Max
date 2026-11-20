@@ -1,5 +1,6 @@
 import type { VoiceGender } from "../../../shared/agent";
 import type { Logger } from "../../logger";
+import { authHeaders, createChatLoop, failure, type ChatStage } from "./chat-loop";
 import {
   CLIENT_INPUT_RATE,
   CLIENT_OUTPUT_RATE,
@@ -22,7 +23,7 @@ import {
  * voice activity detector, since no upstream is listening to the stream.
  */
 
-type PipelineStage = { baseUrl: string; apiKey: string; model: string };
+type PipelineStage = ChatStage;
 
 export type PipelineSettings = {
   stt: PipelineStage;
@@ -374,39 +375,6 @@ export function createVad(
 
 // ---- Engine -----------------------------------------------------------------
 
-type ChatToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
-
-type ChatMessage =
-  | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string | null; tool_calls?: ChatToolCall[] }
-  | { role: "tool"; tool_call_id: string; content: string };
-
-/** Tool rounds one reply may take before the model must answer in words. */
-const MAX_TOOL_ROUNDS = 4;
-
-type StreamedChunk = {
-  choices?: Array<{
-    delta?: {
-      content?: string;
-      tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
-    };
-  }>;
-};
-
-const MAX_HISTORY_MESSAGES = 16;
-// Sentence boundaries for both Latin and CJK punctuation.
-const SENTENCE_END = /[。！？!?；;\n]|[.](?=\s|$)/u;
-
-function authHeaders(item: PipelineStage): Record<string, string> {
-  return item.apiKey ? { Authorization: `Bearer ${item.apiKey}` } : {};
-}
-
-async function failure(stageName: string, response: Response): Promise<Error> {
-  const body = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
-  const hint = response.status === 401 || response.status === 403 ? " — check the API key" : "";
-  return new Error(`${stageName} HTTP ${response.status}${hint}${body ? `: ${body}` : ""}`);
-}
-
 export function createPipelineEngine(
   log: Logger,
   settings: PipelineSettings = pipelineSettings(),
@@ -417,26 +385,7 @@ export function createPipelineEngine(
   let config: EngineConfig | undefined;
   let instructions = "";
   let closed = false;
-  let history: ChatMessage[] = [];
   let pendingUser: string | undefined;
-  /** Tool calls waiting for `sendToolResult`, by call id. */
-  const toolWaiters = new Map<string, (output: string) => void>();
-  /** Bumped whenever the current work must stop: barge-in, cancel, close. */
-  let generation = 0;
-  let abort: AbortController | undefined;
-  let replyActive = false;
-
-  function stopWork(): void {
-    generation += 1;
-    abort?.abort();
-    abort = undefined;
-  }
-
-  function endReply(cancelled: boolean): void {
-    if (!replyActive) return;
-    replyActive = false;
-    events?.onResponseDone({ cancelled });
-  }
 
   async function transcribe(audio: Buffer, mine: number): Promise<void> {
     const form = new FormData();
@@ -458,7 +407,7 @@ export function createPipelineEngine(
     });
     if (!response.ok) throw await failure("Speech-to-text", response);
     const text = spokenText(((await response.json()) as { text?: string }).text ?? "");
-    if (closed || mine !== generation) return;
+    if (closed || mine !== chat.generation) return;
     pendingUser = text || undefined;
     // An empty transcript still closes the turn the VAD opened.
     events?.onRiderTranscript(text, true);
@@ -480,197 +429,45 @@ export function createPipelineEngine(
     return speechToPcm(Buffer.from(await response.arrayBuffer()), settings.tts.sampleRate);
   }
 
-  /** Streams chat-completion text, handing each finished sentence to
-   *  `onSentence`, and collects any tool calls the model makes. */
-  async function streamChat(
-    messages: ChatMessage[],
-    signal: AbortSignal,
-    onDelta: (delta: string) => void,
-    onSentence: (sentence: string) => void,
-    offerTools: boolean
-  ): Promise<{ text: string; toolCalls: ChatToolCall[] }> {
-    const tools = offerTools ? (config?.tools ?? []) : [];
-    const response = await request(`${settings.llm.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(settings.llm) },
-      body: JSON.stringify({
-        model: settings.llm.model,
-        messages,
-        stream: true,
-        ...(tools.length
-          ? {
-              tools: tools.map((tool) => ({
-                type: "function",
-                function: { name: tool.name, description: tool.description, parameters: tool.parameters }
-              }))
-            }
-          : {})
-      }),
-      signal
-    });
-    if (!response.ok || !response.body) throw await failure("Chat model", response);
-    const decoder = new TextDecoder();
-    let buffered = "";
-    let sentence = "";
-    let full = "";
-    const calls: Array<{ id: string; name: string; arguments: string }> = [];
-    const consume = (delta: string) => {
-      full += delta;
-      onDelta(delta);
-      sentence += delta;
-      for (;;) {
-        const match = SENTENCE_END.exec(sentence);
-        if (!match) break;
-        const end = match.index + match[0].length;
-        const complete = sentence.slice(0, end).trim();
-        sentence = sentence.slice(end);
-        if (complete) onSentence(complete);
-      }
-    };
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-      buffered += decoder.decode(chunk, { stream: true });
-      let newline = buffered.indexOf("\n");
-      while (newline >= 0) {
-        const line = buffered.slice(0, newline).trim();
-        buffered = buffered.slice(newline + 1);
-        newline = buffered.indexOf("\n");
-        if (!line.startsWith("data:")) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === "[DONE]") continue;
-        let chunk: StreamedChunk;
-        try {
-          chunk = JSON.parse(data) as StreamedChunk;
-        } catch {
-          continue; // a keep-alive or partial line
-        }
-        const delta = chunk.choices?.[0]?.delta;
-        if (delta?.content) consume(delta.content);
-        // Tool calls stream in pieces: the first piece of each carries its id
-        // and name, later pieces append to its arguments.
-        for (const piece of delta?.tool_calls ?? []) {
-          // Servers that omit `index` start a new call with each new id and
-          // send later pieces of the same call without one.
-          const last = calls.length - 1;
-          const index = piece.index ?? (last < 0 || (piece.id && piece.id !== calls[last]?.id) ? calls.length : last);
-          const call = (calls[index] ??= { id: "", name: "", arguments: "" });
-          if (piece.id) call.id = piece.id;
-          if (piece.function?.name) call.name += piece.function.name;
-          if (piece.function?.arguments) call.arguments += piece.function.arguments;
-        }
-      }
-    }
-    if (sentence.trim()) onSentence(sentence.trim());
-    const toolCalls = calls
-      .filter((call) => call.name)
-      .map((call, index) => ({
-        id: call.id || `call_${Date.now().toString(36)}_${index}`,
-        type: "function" as const,
-        function: { name: call.name, arguments: call.arguments }
-      }));
-    return { text: full, toolCalls };
-  }
-
-  /** Hands one call to the session and waits for its result. */
-  function awaitTool(call: ChatToolCall, signal: AbortSignal): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      const onAbort = () => {
-        toolWaiters.delete(call.id);
-        reject(new Error("aborted"));
+  const chat = createChatLoop({
+    log,
+    request,
+    label: "pipeline",
+    stage: () => settings.llm,
+    events: () => events,
+    tools: () => config?.tools ?? [],
+    instructions: () => instructions,
+    closed: () => closed,
+    newSpeaker({ signal, current }) {
+      // Sentences are synthesized as they complete but played strictly in order.
+      let speechTail: Promise<void> = Promise.resolve();
+      const speak = (sentence: string) => {
+        const audio = synthesize(sentence, signal);
+        audio.catch(() => undefined);
+        speechTail = speechTail.then(async () => {
+          const pcm = await audio;
+          if (current()) events?.onAgentAudio(pcm);
+        });
       };
-      if (signal.aborted) return onAbort();
-      signal.addEventListener("abort", onAbort, { once: true });
-      toolWaiters.set(call.id, (output) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(output);
-      });
-      if (events?.onToolCall) {
-        events.onToolCall({ callId: call.id, name: call.function.name, arguments: call.function.arguments });
-      } else {
-        toolWaiters.delete(call.id);
-        resolve(JSON.stringify({ error: "tools are not available" }));
-      }
-    });
-  }
-
-  async function reply(userText: string | undefined, exactLine?: string): Promise<void> {
-    stopWork();
-    const mine = generation;
-    const controller = new AbortController();
-    abort = controller;
-    replyActive = true;
-    events?.onResponseStarted();
-
-    // Sentences are synthesized as they complete but played strictly in order.
-    let speechTail: Promise<void> = Promise.resolve();
-    const speak = (sentence: string) => {
-      const audio = synthesize(sentence, controller.signal);
-      audio.catch(() => undefined);
-      speechTail = speechTail.then(async () => {
-        const pcm = await audio;
-        if (!closed && mine === generation) events?.onAgentAudio(pcm);
-      });
-    };
-
-    try {
-      if (exactLine) {
-        speak(exactLine);
-      } else {
-        const turn: ChatMessage[] = userText ? [{ role: "user", content: userText }] : [];
-        let full = "";
-        for (let round = 0; ; round += 1) {
-          // The last round offers no tools, so the model has to answer in words.
-          const offerTools = round < MAX_TOOL_ROUNDS;
-          const result = await streamChat(
-            [{ role: "system", content: instructions }, ...history, ...turn],
-            controller.signal,
-            (delta) => {
-              if (!closed && mine === generation) events?.onAgentText(delta);
-            },
-            speak,
-            offerTools
-          );
-          full += result.text;
-          if (!result.toolCalls.length || !offerTools) break;
-          turn.push({ role: "assistant", content: result.text || null, tool_calls: result.toolCalls });
-          for (const call of result.toolCalls) {
-            const output = await awaitTool(call, controller.signal);
-            if (closed || mine !== generation) return;
-            turn.push({ role: "tool", tool_call_id: call.id, content: output });
-          }
-        }
-        // History keeps what was said; tool chatter stays inside its turn.
-        if (userText) history.push({ role: "user", content: userText });
-        if (full.trim()) history.push({ role: "assistant", content: full.trim() });
-        if (history.length > MAX_HISTORY_MESSAGES) history = history.slice(-MAX_HISTORY_MESSAGES);
-      }
-      await speechTail;
-      if (mine === generation) endReply(false);
-    } catch (error) {
-      if (mine !== generation || closed) return;
-      const message = error instanceof Error ? error.message : String(error);
-      log.warn("pipeline reply failed", { message });
-      events?.onError(message);
-      // Text that did arrive still reaches the wearer: the session core falls
-      // back to client-side speech when a reply ends with text and no audio.
-      endReply(false);
+      return { sentence: speak, finish: () => speechTail };
     }
-  }
+  });
 
   const vad = createVad(
     {
       onStart() {
         if (closed) return;
         // Barge-in: whatever is being generated or queued stops now.
-        const wasReplying = replyActive;
-        stopWork();
+        const wasReplying = chat.replying;
+        chat.stop();
         events?.onSpeechStarted();
-        if (wasReplying) endReply(true);
+        if (wasReplying) chat.endReply(true);
       },
       onEnd(audio) {
         if (closed) return;
-        const mine = generation;
+        const mine = chat.generation;
         transcribe(audio, mine).catch((error: unknown) => {
-          if (closed || mine !== generation) return;
+          if (closed || mine !== chat.generation) return;
           const message = error instanceof Error ? error.message : String(error);
           log.warn("pipeline transcription failed", { message });
           events?.onError(message);
@@ -700,36 +497,33 @@ export function createPipelineEngine(
       if (closed) return;
       const userText = pendingUser;
       pendingUser = undefined;
-      if (userText) void reply(userText);
+      if (userText) void chat.reply(userText);
     },
     cancel() {
-      const wasReplying = replyActive;
-      stopWork();
-      if (wasReplying) endReply(true);
+      const wasReplying = chat.replying;
+      chat.stop();
+      if (wasReplying) chat.endReply(true);
     },
     say(text) {
-      if (!closed) void reply(undefined, text);
+      if (!closed) void chat.reply(undefined, text);
     },
     updateInstructions(next) {
       instructions = next;
     },
     addContext(text) {
-      history.push({ role: "system", content: text });
+      chat.addContext(text);
     },
     sendToolResult(callId, output) {
-      const waiter = toolWaiters.get(callId);
-      if (!waiter) return;
-      toolWaiters.delete(callId);
-      waiter(output);
+      chat.sendToolResult(callId, output);
     },
     sendText(text) {
       if (closed) return;
       pendingUser = undefined;
-      void reply(text);
+      void chat.reply(text);
     },
     close() {
       closed = true;
-      stopWork();
+      chat.stop();
       vad.reset();
     }
   };

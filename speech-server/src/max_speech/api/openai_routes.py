@@ -5,7 +5,7 @@ import base64
 import io
 import json
 import logging
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Annotated, Literal
 
 import soundfile as sf
@@ -128,6 +128,18 @@ class SynthJob:
         if not self._running:
             # Still waiting for the lock (or not started): safe to cancel, no thread is involved yet.
             self._task.cancel()
+
+    @property
+    def finished(self) -> bool:
+        """Production has ended (completed, failed or cancelled)."""
+        return self._task.done()
+
+    def on_finished(self, callback: Callable[[], None]) -> None:
+        self._task.add_done_callback(lambda _t: callback())
+
+    async def wait(self) -> None:
+        """Returns once production has stopped and the engine lock has been released."""
+        await asyncio.wait({self._task})
 
     async def _run(self) -> None:
         try:

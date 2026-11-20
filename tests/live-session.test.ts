@@ -43,6 +43,7 @@ class FakeEngine implements VoiceEngine {
   instructions: string[] = [];
   audioIn = 0;
   closedCount = 0;
+  inputEnded = 0;
   connectError?: Error;
   constructor(readonly responseMode: EngineResponseMode) {}
   async connect(config: EngineConfig, events: EngineEvents) {
@@ -67,6 +68,9 @@ class FakeEngine implements VoiceEngine {
   }
   addContext(text: string) {
     this.context.push(text);
+  }
+  endInput() {
+    this.inputEnded += 1;
   }
   close() {
     this.closedCount += 1;
@@ -146,6 +150,16 @@ describe("live voice session", () => {
     await provider.stopAudio();
     await provider.sendAudio(Buffer.alloc(640));
     expect(engine().audioIn).toBe(640);
+  });
+
+  it("tells the engine the input ended when the microphone stops, once", async () => {
+    // An upstream that times turns by audio would otherwise hold a half-spoken turn open forever.
+    const { provider, engine } = await open("manual-only");
+    await provider.sendAudio(Buffer.alloc(640));
+    await provider.stopAudio();
+    expect(engine().inputEnded).toBe(1);
+    await provider.stopAudio();
+    expect(engine().inputEnded).toBe(1);
   });
 
   it("answers only when addressed, then keeps a follow-up window open", async () => {

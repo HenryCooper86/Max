@@ -90,3 +90,132 @@ def test_flush_resets():
     c.push("abc")
     assert c.flush() == ["abc"]
     assert c.flush() == []
+
+
+EARLY_CASES = [
+    # no break before the sentence end: the normal first sentence
+    (
+        "Sure, I can help with that. It takes a minute.",
+        ["Sure, I can help with that.", "It takes a minute."],
+    ),
+    ("Okay then, let us go. We can leave now.", ["Okay then, let us go.", "We can leave now."]),
+    ("One two three four five six seven.", ["One two three four five six seven."]),
+    # long sentence cut at the first comma with 3+ words before it
+    (
+        "If you ask me, we should leave now because it is late. Go.",
+        ["If you ask me,", "we should leave now because it is late.", "Go."],
+    ),
+    (
+        "Well, if you want to know, it takes a minute.",
+        ["Well, if you want to know,", "it takes a minute."],
+    ),
+    ("Here is the list: apples and pears.", ["Here is the list:", "apples and pears."]),
+    ("I really think—maybe—we should go now.", ["I really think—", "maybe—we should go now."]),
+    # only the first chunk is cut early
+    (
+        "If you ask me, we leave. And then we go, because it is late.",
+        ["If you ask me,", "we leave.", "And then we go, because it is late."],
+    ),
+    # long sentence cut by the word limit, at the last word boundary
+    (
+        "We should leave now because the weather is turning bad quickly.",
+        ["We should leave now because the", "weather is turning bad quickly."],
+    ),
+    ("One two three four five six seven eight.", ["One two three four five six", "seven eight."]),
+    # a comma inside a number or URL is not a break
+    ("It costs 1,000 yes.", ["It costs 1,000 yes."]),
+    ("It is 12:30 now, so go.", ["It is 12:30 now,", "so go."]),
+    ("Meet me at 12:30 sharp.", ["Meet me at 12:30 sharp."]),
+    (
+        "Please open https://example.com/a,b,c today if you can, thanks.",
+        ["Please open https://example.com/a,b,c today if you", "can, thanks."],
+    ),
+    (
+        "The price is 1,000 dollars for this item today.",
+        ["The price is 1,000 dollars for", "this item today."],
+    ),
+    # Chinese
+    ("今天天气真不错，我们一起去公园玩吧。", ["今天天气真不错，", "我们一起去公园玩吧。"]),
+    ("你好，今天天气不错。", ["你好，今天天气不错。"]),
+    ("我们今天下午一起去公园。", ["我们今天下午一起去公园。"]),
+    (
+        "我们今天下午一起去公园里面玩耍然后回家吃饭。",
+        ["我们今天下午一起去公", "园里面玩耍然后回家吃饭。"],
+    ),
+    ("我们今天下午一起去公园里面。你好。", ["我们今天下午一起去公", "园里面。", "你好。"]),
+    ("", []),
+]
+
+
+def _early(**kw):
+    return SentenceChunker(early_first_chunk=True, **kw)
+
+
+@pytest.mark.parametrize("text,expected", EARLY_CASES)
+def test_early_first_chunk_whole_text(text, expected):
+    c = _early()
+    assert c.push(text) + c.flush() == expected
+
+
+@pytest.mark.parametrize("size", [1, 2, 3, 5, 7])
+@pytest.mark.parametrize("text,expected", EARLY_CASES)
+def test_early_first_chunk_streaming_matches(text, expected, size):
+    c = _early()
+    out = []
+    for i in range(0, len(text), size):
+        out += c.push(text[i : i + size])
+    out += c.flush()
+    assert out == expected
+
+
+def test_early_default_off_keeps_sentence_chunking():
+    text = "If you ask me, we should leave now because it is late."
+    c = SentenceChunker()
+    assert c.push(text) + c.flush() == [text]
+
+
+def test_early_comma_cut_is_decided_as_soon_as_possible():
+    c = _early()
+    assert c.push("If you ask me") == []
+    assert c.push(",") == []  # a digit could still follow ("1,000")
+    assert c.push(" we") == ["If you ask me,"]
+
+
+def test_early_comma_before_digit_holds_then_decides():
+    c = _early()
+    assert c.push("It costs about 1,") == []
+    assert c.push("000 dollars") == []
+
+
+def test_early_word_limit_cut_streaming():
+    c = _early()
+    assert c.push("one two three four five six seven") == []
+    assert c.push(" eight") == ["one two three four five six"]
+
+
+def test_early_custom_limits():
+    c = _early(first_chunk_max_words=3, first_chunk_max_chars=4)
+    assert c.push("a b c d e. ") == ["a b c", "d e."]
+    c2 = _early(first_chunk_max_chars=4)
+    assert c2.push("你好吗朋友们今天") == ["你好吗朋"]
+    assert c2.flush() == ["友们今天"]
+
+
+def test_reset_makes_next_chunk_first_again():
+    c = _early()
+    assert c.push("If you ask me, we leave. Then we go, yes. ") == [
+        "If you ask me,",
+        "we leave.",
+        "Then we go, yes.",
+    ]
+    # without reset the next reply is not "first": no early cut
+    assert c.push("I think we should go, then. ") == ["I think we should go, then."]
+    c.reset()
+    assert c.push("I think we should go, then. ") == ["I think we should go,", "then."]
+
+
+def test_reset_drops_buffered_text():
+    c = _early()
+    c.push("half a sen")
+    c.reset()
+    assert c.flush() == []

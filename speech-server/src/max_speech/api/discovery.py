@@ -32,6 +32,9 @@ def _attributions(engines) -> list[dict]:
 @router.get("/.well-known/max-speech")
 async def discovery(request: Request):
     slots = request.app.state.slots
+    # Task D adds these fields to EngineSlots; until then they read as not loaded.
+    vad, turn, stt_stream = (getattr(slots, name, None) for name in ("vad", "turn", "stt_stream"))
+    live = (vad, turn, stt_stream, slots.tts)
     return {
         "protocol": "max-speech.v1",
         "version": __version__,
@@ -41,9 +44,9 @@ async def discovery(request: Request):
         "features": {
             "openai_compatible": True,
             "streaming_tts": True,
-            "session_ws": False,
+            "session_ws": all(e is not None for e in live),
             "cloning": False,
             "voice_design": False,
         },
-        "attributions": _attributions([slots.stt, slots.tts]),
+        "attributions": _attributions([slots.stt, slots.tts, vad, turn, stt_stream]),
     }

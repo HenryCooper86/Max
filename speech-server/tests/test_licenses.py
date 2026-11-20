@@ -97,3 +97,60 @@ def test_unknown_id_refused_with_exact_message():
 def test_wrong_kind_refused():
     with pytest.raises(LicenseError, match="tts"):
         require("faster-whisper-small", "tts")
+
+
+def test_shipped_registry_has_the_m2_models():
+    registry = load_registry()
+    assert registry["silero-vad-v6.2"].kind == "vad"
+    assert registry["smart-turn-v3.2"].kind == "turn"
+    x = registry["x-asr-zh-en-480ms"]
+    assert (x.kind, x.archive) == ("stt", "tar.bz2")
+    assert x.files[0].sha256.startswith("fa5f63d6") and x.files[0].sha256.endswith("bf74")
+    p = registry["paraformer-zh-en-streaming"]
+    assert p.source == "hf" and len(p.revision) == 40
+    assert set(p.allow_patterns) == {"encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"}
+    for model_id, kind in [("silero-vad-v6.2", "vad"), ("smart-turn-v3.2", "turn")]:
+        require(model_id, kind, registry=registry)
+
+
+def test_archive_and_allow_patterns_parse():
+    arch = load_registry(URL_OK.replace('source = "url"', 'source = "url"\narchive = "tar.bz2"'))["m"]
+    assert arch.archive == "tar.bz2"
+    pats = load_registry(HF_OK.replace('repo = "x/y"', 'repo = "x/y"\nallow_patterns = ["a.onnx"]'))["m"]
+    assert pats.allow_patterns == ("a.onnx",)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        URL_OK.replace('source = "url"', 'source = "url"\narchive = "zip"'),
+        HF_OK.replace('source = "hf"', 'source = "hf"\narchive = "tar.bz2"'),
+        URL_OK.replace("files = [", f'files = [{{ url = "https://e.com/b", sha256 = "{DIGEST}" }}, ').replace(
+            'source = "url"', 'source = "url"\narchive = "tar.bz2"'
+        ),
+        URL_OK.replace('source = "url"', 'source = "url"\nallow_patterns = ["a"]'),
+        HF_OK.replace('repo = "x/y"', 'repo = "x/y"\nallow_patterns = "a"'),
+    ],
+)
+def test_bad_archive_or_patterns_rejected(text):
+    with pytest.raises(RegistryError):
+        load_registry(text)
+
+
+def test_streaming_flag_is_parsed_and_only_for_stt():
+    assert load_registry(HF_OK)["m"].streaming is False
+    assert (
+        load_registry(HF_OK.replace('kind = "stt"', 'kind = "stt"\nstreaming = true'))["m"].streaming is True
+    )
+    with pytest.raises(RegistryError, match="streaming"):
+        load_registry(URL_OK.replace('kind = "tts"', 'kind = "tts"\nstreaming = true'))
+    with pytest.raises(RegistryError, match="streaming"):
+        load_registry(HF_OK.replace('kind = "stt"', 'kind = "stt"\nstreaming = "yes"'))
+
+
+def test_the_shipped_streaming_models_are_flagged():
+    registry = load_registry()
+    assert {m.id for m in registry.values() if m.streaming} == {
+        "x-asr-zh-en-480ms",
+        "paraformer-zh-en-streaming",
+    }

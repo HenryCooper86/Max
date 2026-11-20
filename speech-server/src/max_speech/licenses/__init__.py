@@ -13,6 +13,7 @@ ALLOWED_WEIGHTS_LICENSES = frozenset(
 )
 KINDS = ("stt", "tts", "vad", "turn")
 SOURCES = ("hf", "url")
+ARCHIVES = ("tar.bz2",)
 
 _SHA1 = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -47,6 +48,9 @@ class ModelEntry:
     revision: str | None = None
     runtime_licenses: tuple[str, ...] = ()
     note: str | None = None
+    archive: str | None = None  # "tar.bz2": the single url file is an archive to extract into the model dir
+    allow_patterns: tuple[str, ...] = ()  # hf only: download just the files matching these globs
+    streaming: bool = False  # stt only: a streaming recognizer, usable as the live session's STT
 
 
 def _parse(model_id: str, raw: dict) -> ModelEntry:
@@ -93,6 +97,25 @@ def _parse(model_id: str, raw: dict) -> ModelEntry:
             parsed.append(RemoteFile(url=url, sha256=digest))
         files = tuple(parsed)
 
+    archive = raw.get("archive")
+    if archive is not None:
+        if archive not in ARCHIVES:
+            raise fail("archive", f"must be one of {', '.join(ARCHIVES)}")
+        if source != "url" or len(files) != 1:
+            raise fail("archive", "is only for a url source with exactly one file")
+    patterns = raw.get("allow_patterns", ())
+    if patterns:
+        if source != "hf":
+            raise fail("allow_patterns", "is only for an hf source")
+        if not isinstance(patterns, list) or not all(isinstance(p, str) and p for p in patterns):
+            raise fail("allow_patterns", "must be a list of non-empty strings")
+
+    streaming = raw.get("streaming", False)
+    if not isinstance(streaming, bool):
+        raise fail("streaming", "must be true or false")
+    if streaming and kind != "stt":
+        raise fail("streaming", "is only for an stt model")
+
     return ModelEntry(
         id=model_id,
         kind=kind,
@@ -107,6 +130,9 @@ def _parse(model_id: str, raw: dict) -> ModelEntry:
         revision=revision,
         runtime_licenses=tuple(raw.get("runtime_licenses", ())),
         note=raw.get("note"),
+        archive=archive,
+        allow_patterns=tuple(patterns),
+        streaming=streaming,
     )
 
 

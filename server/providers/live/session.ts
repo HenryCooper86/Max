@@ -1081,6 +1081,7 @@ export function createLiveProvider(
       engine?.sendAudio(chunk);
     },
     async stopAudio() {
+      if (audioActive && engineReady) engine?.endInput?.();
       audioActive = false;
       hazardInjector.stop();
       status("ready", t("麦克风已静音", "Microphone muted"));

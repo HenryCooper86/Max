@@ -796,62 +796,104 @@ private struct VisualizerPicker: View {
 }
 
 /// A tiny still frame of a voice display style (speaking state, fixed time).
+///
+/// The drawing lives in small, explicitly typed helpers: as one Canvas closure
+/// mixing Double and CGFloat arithmetic, it took the Swift type checker longer
+/// than the compiler allows and failed the build.
 struct VisualizerPreview: View {
     let style: VoiceVisualizer
     let size: CGSize
 
     var body: some View {
+        let style = self.style
         let tint = Visor.accent
         let line = Visor.textTertiary
         Canvas { context, canvas in
-            let values = Spectrum.synthesize(mode: .speaking, level: 0.5, t: 1.2)
-            let w = canvas.width, h = canvas.height
-            switch style {
-            case .wave:
-                var p = Path()
-                for i in 0...40 {
-                    let u = Double(i) / 40
-                    let y = h / 2 - sin(u * .pi) * sin(u * 14) * h * 0.38
-                    let pt = CGPoint(x: 4 + (w - 8) * u, y: y)
-                    i == 0 ? p.move(to: pt) : p.addLine(to: pt)
-                }
-                context.stroke(p, with: .color(tint), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
-            case .bars, .mirror, .dots:
-                let n = 12
-                let colW = (w - 8) / CGFloat(n)
-                for i in 0..<n {
-                    let v = CGFloat(values[i * 2])
-                    let x = 4 + CGFloat(i) * colW
-                    if style == .bars {
-                        let bh = max(2, v * (h - 6))
-                        context.fill(Path(roundedRect: CGRect(x: x, y: h - 3 - bh, width: colW * 0.7, height: bh), cornerRadius: 1), with: .color(tint))
-                    } else if style == .mirror {
-                        let bh = max(2, v * (h - 6))
-                        context.fill(Path(roundedRect: CGRect(x: x, y: (h - bh) / 2, width: colW * 0.7, height: bh), cornerRadius: 1), with: .color(tint))
-                    } else {
-                        let lit = Int((Double(v) * 5).rounded())
-                        for row in 0..<5 {
-                            let r = colW * 0.3
-                            let y = h - 4 - CGFloat(row) * ((h - 8) / 5)
-                            context.fill(Path(ellipseIn: CGRect(x: x, y: y - r, width: r * 2, height: r * 2)), with: .color(row < lit ? tint : line.opacity(0.35)))
-                        }
-                    }
-                }
-            case .ring:
-                let c = CGPoint(x: w / 2, y: h / 2)
-                let rIn = h * 0.2
-                for k in 0..<24 {
-                    let a = Double(k) / 24 * 2 * .pi
-                    let v = values[k < 12 ? k : 23 - k]
-                    let out = rIn + 2 + CGFloat(v) * h * 0.26
-                    var p = Path()
-                    p.move(to: CGPoint(x: c.x + cos(a) * rIn, y: c.y + sin(a) * rIn))
-                    p.addLine(to: CGPoint(x: c.x + cos(a) * out, y: c.y + sin(a) * out))
-                    context.stroke(p, with: .color(tint), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-                }
-            }
+            Self.draw(style, in: &context, size: canvas, tint: tint, line: line)
         }
         .frame(width: size.width, height: size.height)
         .accessibilityHidden(true)
+    }
+
+    private static func draw(
+        _ style: VoiceVisualizer, in context: inout GraphicsContext, size: CGSize, tint: Color, line: Color
+    ) {
+        let values: [Double] = Spectrum.synthesize(mode: .speaking, level: 0.5, t: 1.2)
+        switch style {
+        case .wave:
+            drawWave(in: &context, size: size, tint: tint)
+        case .bars, .mirror, .dots:
+            drawColumns(style, values: values, in: &context, size: size, tint: tint, line: line)
+        case .ring:
+            drawRing(values: values, in: &context, size: size, tint: tint)
+        }
+    }
+
+    private static func drawWave(in context: inout GraphicsContext, size: CGSize, tint: Color) {
+        let w: CGFloat = size.width
+        let h: CGFloat = size.height
+        var path = Path()
+        for i in 0...40 {
+            let u: CGFloat = CGFloat(i) / 40
+            let envelope: CGFloat = sin(u * .pi)
+            let ripple: CGFloat = sin(u * 14)
+            let y: CGFloat = h / 2 - envelope * ripple * h * 0.38
+            let point = CGPoint(x: 4 + (w - 8) * u, y: y)
+            if i == 0 {
+                path.move(to: point)
+            } else {
+                path.addLine(to: point)
+            }
+        }
+        context.stroke(path, with: .color(tint), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+    }
+
+    private static func drawColumns(
+        _ style: VoiceVisualizer, values: [Double], in context: inout GraphicsContext, size: CGSize,
+        tint: Color, line: Color
+    ) {
+        let w: CGFloat = size.width
+        let h: CGFloat = size.height
+        let n = 12
+        let colW: CGFloat = (w - 8) / CGFloat(n)
+        for i in 0..<n {
+            let v = CGFloat(values[i * 2])
+            let x: CGFloat = 4 + CGFloat(i) * colW
+            switch style {
+            case .bars:
+                let bh: CGFloat = max(2, v * (h - 6))
+                let rect = CGRect(x: x, y: h - 3 - bh, width: colW * 0.7, height: bh)
+                context.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(tint))
+            case .mirror:
+                let bh: CGFloat = max(2, v * (h - 6))
+                let rect = CGRect(x: x, y: (h - bh) / 2, width: colW * 0.7, height: bh)
+                context.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(tint))
+            default:
+                let lit = Int((Double(v) * 5).rounded())
+                let r: CGFloat = colW * 0.3
+                for row in 0..<5 {
+                    let y: CGFloat = h - 4 - CGFloat(row) * ((h - 8) / 5)
+                    let rect = CGRect(x: x, y: y - r, width: r * 2, height: r * 2)
+                    let color: Color = row < lit ? tint : line.opacity(0.35)
+                    context.fill(Path(ellipseIn: rect), with: .color(color))
+                }
+            }
+        }
+    }
+
+    private static func drawRing(values: [Double], in context: inout GraphicsContext, size: CGSize, tint: Color) {
+        let w: CGFloat = size.width
+        let h: CGFloat = size.height
+        let center = CGPoint(x: w / 2, y: h / 2)
+        let rIn: CGFloat = h * 0.2
+        for k in 0..<24 {
+            let a: CGFloat = CGFloat(k) / 24 * 2 * .pi
+            let v = CGFloat(values[k < 12 ? k : 23 - k])
+            let out: CGFloat = rIn + 2 + v * h * 0.26
+            var path = Path()
+            path.move(to: CGPoint(x: center.x + cos(a) * rIn, y: center.y + sin(a) * rIn))
+            path.addLine(to: CGPoint(x: center.x + cos(a) * out, y: center.y + sin(a) * out))
+            context.stroke(path, with: .color(tint), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+        }
     }
 }

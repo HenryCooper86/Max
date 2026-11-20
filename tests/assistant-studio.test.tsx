@@ -5,6 +5,7 @@ import { EQUALIZER_FREQUENCIES } from "../shared/agent";
 import { AssistantStudio, SECTION_LEAVE_EVENT } from "../src/components/admin/AssistantStudio";
 import type { ApiResult } from "../src/lib/api-client";
 import type { StudioBackends, StudioState } from "../src/lib/studio-api";
+import type { VoicesApi } from "../src/lib/voices-api";
 import { BUILT_IN_EQUALIZER } from "../src/lib/device-catalog";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -40,6 +41,24 @@ const backendApi = {
   fetchStudioBackends: async (): Promise<ApiResult<StudioBackends>> => ({ ok: true, data: BACKENDS }),
   saveStudioBackends: async (): Promise<ApiResult<StudioBackends>> => ({ ok: true, data: BACKENDS })
 };
+
+const voicesApi = {
+  listVoices: async () => ({
+    ok: true as const,
+    data: {
+      available: true as const,
+      cloning: false,
+      design: false,
+      voices: [
+        { id: "af_heart", name: "Heart", kind: "preset" as const, languages: ["en"] },
+        { id: "v_0123456789", name: "Ann", kind: "custom" as const, languages: ["zh"] }
+      ],
+      attributions: []
+    }
+  }),
+  getLexicon: async () => ({ ok: true as const, data: {} }),
+  deleteVoice: async () => ({ ok: true as const, data: undefined })
+} as unknown as VoicesApi;
 
 type Listener = (event: Event) => void;
 let listeners: Map<string, Set<Listener>>;
@@ -83,7 +102,13 @@ afterEach(() => {
 async function mount(api: Parameters<typeof AssistantStudio>[0]["api"], onSaved = vi.fn(), onExpired = vi.fn()) {
   await act(async () => {
     renderer = create(
-      <AssistantStudio api={api} backendApi={backendApi} onSaved={onSaved} onAuthenticationExpired={onExpired} />
+      <AssistantStudio
+        api={api}
+        backendApi={backendApi}
+        voicesApi={voicesApi}
+        onSaved={onSaved}
+        onAuthenticationExpired={onExpired}
+      />
     );
   });
   return { onSaved, onExpired };
@@ -132,6 +157,58 @@ describe("admin Studio", () => {
     expect(onSaved).toHaveBeenCalledOnce();
     expect(status()).toContain("已保存");
     expect(button(/^保存$/).props.disabled).toBe(true);
+  });
+
+  it("mounts the Voices section between Sound and Voice backend", async () => {
+    await mount(fakeApi(studioState()));
+    const headings = root()
+      .findAll((node) => node.type === "h3")
+      .map(textOf);
+    expect(headings.indexOf("声音库")).toBe(headings.indexOf("声音") + 1);
+    expect(headings.indexOf("语音后端")).toBe(headings.indexOf("声音库") + 1);
+    expect(textOf(root())).toContain("Ann");
+  });
+
+  it("treats choosing the assistant's voice as an unsaved change and saves voice.id beside the equalizer", async () => {
+    const equalizer = { bands: [0, 1, 2, 3, 4, 5, 4, 3, 2, 1], preamp: -2 };
+    const api = fakeApi(studioState({ name: "Iris", languages: ["en"], voice: { equalizer, keep: true } }));
+    await mount(api);
+    expect(button(/^保存$/).props.disabled).toBe(true);
+    const picker = root().find((node) => node.type === "select" && node.props.id?.endsWith("-voice"));
+    expect(picker.props.value).toBe("");
+    await act(async () => picker.props.onChange({ currentTarget: { value: "v_0123456789" } }));
+    expect(status()).toContain("未保存");
+    await act(async () => button(/^保存$/).props.onClick());
+    expect(api.saveStudio).toHaveBeenCalledWith({
+      name: "Iris",
+      device: "motorcycle-helmet",
+      languages: ["en"],
+      voice: { keep: true, id: "v_0123456789", equalizer }
+    });
+  });
+
+  it("drops a deleted voice from the draft without making it an unsaved change", async () => {
+    const api = fakeApi(studioState({ name: "Iris", languages: ["en"], voice: { id: "v_0123456789" } }));
+    await mount(api);
+    const picker = () => root().find((node) => node.type === "select" && node.props.id?.endsWith("-voice"));
+    expect(picker().props.value).toBe("v_0123456789");
+    await act(async () => button(/^删除$/).props.onClick());
+    await act(async () => button(/确认删除/).props.onClick());
+    expect(picker().props.value).toBe("");
+    expect(button(/^保存$/).props.disabled).toBe(true);
+    expect(status()).toContain("没有未保存");
+  });
+
+  it("round-trips a stored voice id, and Default clears it", async () => {
+    const api = fakeApi(studioState({ name: "Iris", languages: ["en"], voice: { id: "af_heart" } }));
+    await mount(api);
+    const picker = () => root().find((node) => node.type === "select" && node.props.id?.endsWith("-voice"));
+    expect(picker().props.value).toBe("af_heart");
+    expect(button(/^保存$/).props.disabled).toBe(true);
+    await act(async () => picker().props.onChange({ currentTarget: { value: "" } }));
+    await act(async () => button(/^保存$/).props.onClick());
+    const saved = api.saveStudio.mock.calls[0]![0];
+    expect(saved).not.toHaveProperty("voice");
   });
 
   it("shows the relay's reason when a save is refused and keeps the edit", async () => {

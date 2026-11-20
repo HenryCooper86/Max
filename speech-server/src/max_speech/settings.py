@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 PROFILES = ("cuda", "mlx", "cpu")
+SECOND_PASS_MODES = ("on", "off", "auto")
 
 
 def _default_data_dir() -> Path:
@@ -23,6 +24,19 @@ class Settings:
     tts_engine: str | None = None
     stt_model: str | None = None
     tts_model: str | None = None
+    tts_zh_model: str | None = None  # model id, "off" to disable, None for the default
+    cloning_model: str | None = (
+        None  # voice cloning model id (a registry entry with cloning = true), "off", or default
+    )
+    # Voice design (a registry entry with design = true), "off", or the default. Needs cloning to be on.
+    design_model: str | None = None
+    # Live conversation (/v1/speech/session). Each is a registry id, "off" to disable, None for the default.
+    vad_model: str | None = None
+    turn_model: str | None = None
+    stream_stt_model: str | None = None
+    # Browser origins allowed to open the session WebSocket besides localhost (SPEECH_ALLOWED_ORIGINS, comma list).
+    allowed_origins: tuple[str, ...] = ()
+    second_pass: str = "auto"  # "on", "off", or "auto" (on for the mlx and cuda profiles)
 
     @property
     def models_dir(self) -> Path:
@@ -34,6 +48,12 @@ class Settings:
         if profile is not None and profile not in PROFILES:
             raise ValueError(f"SPEECH_PROFILE must be one of {', '.join(PROFILES)}; got {profile!r}")
 
+        second_pass = (env.get("SPEECH_SECOND_PASS") or "auto").lower()
+        if second_pass not in SECOND_PASS_MODES:
+            raise ValueError(
+                f"SPEECH_SECOND_PASS must be one of {', '.join(SECOND_PASS_MODES)}; got {second_pass!r}"
+            )
+
         data_dir_env = env.get("SPEECH_DATA_DIR")
         return cls(
             api_key=env.get("SPEECH_API_KEY") or None,
@@ -43,4 +63,16 @@ class Settings:
             tts_engine=env.get("SPEECH_TTS_ENGINE") or None,
             stt_model=env.get("SPEECH_STT_MODEL") or None,
             tts_model=env.get("SPEECH_TTS_MODEL") or None,
+            tts_zh_model=env.get("SPEECH_TTS_ZH_MODEL") or None,
+            cloning_model=env.get("SPEECH_CLONING_MODEL") or None,
+            design_model=env.get("SPEECH_DESIGN_MODEL") or None,
+            vad_model=env.get("SPEECH_VAD_MODEL") or None,
+            turn_model=env.get("SPEECH_TURN_MODEL") or None,
+            stream_stt_model=env.get("SPEECH_STREAM_STT_MODEL") or None,
+            allowed_origins=tuple(
+                o.strip().rstrip("/").lower()
+                for o in (env.get("SPEECH_ALLOWED_ORIGINS") or "").split(",")
+                if o.strip()
+            ),
+            second_pass=second_pass,
         )

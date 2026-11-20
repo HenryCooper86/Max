@@ -45,7 +45,8 @@ describe("voice provider catalog", () => {
       "live",
       "pipeline",
       "pipeline",
-      "live"
+      "live",
+      "pipeline"
     ]);
   });
 

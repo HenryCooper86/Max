@@ -1,21 +1,26 @@
 # Running on local, open-weight models
 
-The relay can run the whole voice loop on your own hardware. Two backends do it:
+The relay can run the whole voice loop on your own hardware. Three backends do it:
 
-| `VOICE_PROVIDER` | What it is                                                                                               | Turn on with           |
-| ---------------- | -------------------------------------------------------------------------------------------------------- | ---------------------- |
-| `local`          | A cascade: speech-to-text → chat model → text-to-speech, each an OpenAI-compatible HTTP server you run   | `LOCAL_VOICE=on`       |
-| `local-realtime` | One self-hosted server that speaks the OpenAI Realtime WebSocket protocol in front of open-weight models | `LOCAL_REALTIME_URL=…` |
+| `VOICE_PROVIDER` | What it is                                                                                                    | Turn on with           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `local`          | A cascade: speech-to-text → chat model → text-to-speech, each an OpenAI-compatible HTTP server you run        | `LOCAL_VOICE=on`       |
+| `local-realtime` | One self-hosted server that speaks the OpenAI Realtime WebSocket protocol in front of open-weight models      | `LOCAL_REALTIME_URL=…` |
+| `max-speech`     | Max Speech (below) for listening, turn-taking and speaking over one WebSocket; the relay keeps the chat model | `MAX_SPEECH=on`        |
 
 Both use the same session core as the cloud backends, so the wake word, device actions, navigation speech, the
 equaliser and the design templates behave identically.
 
 ## Max Speech: our own speech server
 
-[Max Speech](../speech-server/README.md) is a speech server in this repo. It serves Whisper transcription and Kokoro
-speech over the OpenAI-compatible endpoints the `local` pipeline expects, on port 8790. Start it with
-`uv run --extra mlx max-speech serve` on a Mac, or `uv run max-speech serve` on Linux, then point the speech stages at
-it. Chat stays on Ollama:
+[Max Speech](../speech-server/README.md) is a speech server in this repo, on port 8790. Start it with
+`uv run --extra mlx max-speech serve` on a Mac, or `uv run max-speech serve` on Linux. It serves Whisper transcription
+and Kokoro speech, and it can run the whole listening side of a conversation. There are two ways to use it. Chat stays
+on Ollama in both, set with the `LOCAL_LLM_*` variables (default `http://localhost:11434/v1`).
+
+### As the speech stages of the `local` pipeline
+
+Point the `local` backend's speech stages at the OpenAI-compatible endpoints:
 
 ```dotenv
 VOICE_PROVIDER=local
@@ -23,21 +28,45 @@ LOCAL_VOICE=on
 LOCAL_STT_BASE_URL=http://localhost:8790/v1
 LOCAL_TTS_BASE_URL=http://localhost:8790/v1
 LOCAL_TTS_FORMAT=pcm
-# LOCAL_LLM_BASE_URL stays at its default, http://localhost:11434/v1 (Ollama)
 ```
 
-This first version does:
+The relay detects the end of the wearer's turn itself, with its energy-based detector and a fixed 700 ms wait, then
+sends the utterance to `/v1/audio/transcriptions`. It asks for one sentence of speech per request, so each sentence is
+synthesised and returned whole; it does not use `stream_format`.
+
+### As the `max-speech` backend
+
+The server hears the wearer itself: voice detection, turn-taking, streaming transcription and spoken replies run over
+a single WebSocket (`/v1/speech/session`). The relay keeps the chat model, so the model, tools and persona work as in
+the `local` backend.
+
+```dotenv
+VOICE_PROVIDER=max-speech
+MAX_SPEECH=on
+# optional
+MAX_SPEECH_URL=ws://localhost:8790/v1/speech/session   # http(s)://host:port also works
+MAX_SPEECH_API_KEY=
+MAX_SPEECH_VOICE=af_heart
+```
+
+The server decides when the wearer has finished, so replies start sooner than with the energy-based detector, and
+talking over the assistant stops it at once. If the server is down or still loading its models, the session says so
+when it starts. The protocol, turn-taking rules and the session benchmark are in the
+[Max Speech README](../speech-server/README.md#live-session-v1speechsession).
+
+### What it does
 
 - Text-to-speech with Kokoro preset voices, in English, Chinese and six more languages (Spanish, French, Hindi,
-  Italian, Japanese, Portuguese).
-- Transcription with Whisper.
-- Streaming speech output (`stream_format`). Max's relay does not use it: it asks for one sentence per request, so each sentence is synthesised and returned whole.
+  Italian, Japanese, Portuguese). Chinese is spoken by Kokoro v1.1-zh with misaki's Chinese G2P, which cut the
+  character error rate on a speak-then-transcribe check from about 0.4-0.7 to under 0.05; other languages use v1.0.
+  `SPEECH_TTS_ZH_MODEL=off` turns the Chinese model off. Max Speech needs Python 3.12 because misaki does not support 3.13.
+- Transcription with Whisper, and live partial transcripts while the wearer speaks (streaming X-ASR, Chinese and
+  English).
+- Turn detection on the server: Silero VAD and Smart Turn, with a `low`, `normal` or `high` eagerness.
 - Only loads models whose licenses are on its allowlist, and pins each model to a fixed revision.
 
-It does not do these yet. They come in later milestones:
+It does not do these yet:
 
-- Live partial transcripts while you speak.
-- Turn detection on the server.
 - Voice cloning.
 - Voice management in Studio.
 

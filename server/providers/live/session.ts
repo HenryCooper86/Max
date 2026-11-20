@@ -931,6 +931,7 @@ export function createLiveProvider(
     return {
       instructions: instructions(),
       voiceGender: startEvent?.voiceGender ?? "female",
+      ...(profile.voiceId ? { voiceId: profile.voiceId } : {}),
       manualResponse,
       languages: profile.languages,
       keyterms: [profile.name, ...profile.wake.cjk.slice(0, 3)],
@@ -1081,6 +1082,7 @@ export function createLiveProvider(
       engine?.sendAudio(chunk);
     },
     async stopAudio() {
+      if (audioActive && engineReady) engine?.endInput?.();
       audioActive = false;
       hazardInjector.stop();
       status("ready", t("麦克风已静音", "Microphone muted"));

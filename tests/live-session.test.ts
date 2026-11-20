@@ -43,6 +43,7 @@ class FakeEngine implements VoiceEngine {
   instructions: string[] = [];
   audioIn = 0;
   closedCount = 0;
+  inputEnded = 0;
   connectError?: Error;
   constructor(readonly responseMode: EngineResponseMode) {}
   async connect(config: EngineConfig, events: EngineEvents) {
@@ -67,6 +68,9 @@ class FakeEngine implements VoiceEngine {
   }
   addContext(text: string) {
     this.context.push(text);
+  }
+  endInput() {
+    this.inputEnded += 1;
   }
   close() {
     this.closedCount += 1;
@@ -146,6 +150,16 @@ describe("live voice session", () => {
     await provider.stopAudio();
     await provider.sendAudio(Buffer.alloc(640));
     expect(engine().audioIn).toBe(640);
+  });
+
+  it("tells the engine the input ended when the microphone stops, once", async () => {
+    // An upstream that times turns by audio would otherwise hold a half-spoken turn open forever.
+    const { provider, engine } = await open("manual-only");
+    await provider.sendAudio(Buffer.alloc(640));
+    await provider.stopAudio();
+    expect(engine().inputEnded).toBe(1);
+    await provider.stopAudio();
+    expect(engine().inputEnded).toBe(1);
   });
 
   it("answers only when addressed, then keeps a follow-up window open", async () => {
@@ -297,6 +311,15 @@ describe("live voice session", () => {
 
     provider.speakNavPrompt?.({ text: "过期提示", expiresAt: Date.now() - 1 } as never);
     expect(engine().said).toHaveLength(1);
+  });
+
+  it("hands the assistant's chosen voice id to the engine", async () => {
+    setAssistantProfileForTests(assistantProfileFrom({ voice: { id: "v_0123456789" } }));
+    const withVoice = await open("auto");
+    expect(withVoice.engine().config.voiceId).toBe("v_0123456789");
+    setAssistantProfileForTests();
+    const without = await open("auto");
+    expect(without.engine().config).not.toHaveProperty("voiceId");
   });
 
   it("surfaces the upstream's own message when the backend cannot connect", async () => {

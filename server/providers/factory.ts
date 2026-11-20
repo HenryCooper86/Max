@@ -4,6 +4,7 @@ import { resolveVoiceProviderId, voiceProvider, type VoiceProviderId } from "./c
 import { createDoubaoProvider } from "./doubao";
 import { createGeminiLiveEngine } from "./live/gemini-live";
 import { createRealtimeEngine, grokDialect, localRealtimeDialect, openAiDialect } from "./live/openai-realtime";
+import { createMaxSpeechEngine } from "./live/max-speech";
 import { createPipelineEngine, localPipelineSettings } from "./live/pipeline";
 import { createLiveProvider, type LiveBackend } from "./live/session";
 import { createMockProvider } from "./mock";
@@ -86,6 +87,13 @@ export function createVoiceProvider(
       return createLiveProvider(
         client,
         liveBackend(id, (engineLog) => createRealtimeEngine(localRealtimeDialect(), engineLog)),
+        log,
+        telemetry
+      );
+    case "max-speech":
+      return createLiveProvider(
+        client,
+        liveBackend(id, (engineLog) => createMaxSpeechEngine(engineLog)),
         log,
         telemetry
       );

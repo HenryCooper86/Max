@@ -7,6 +7,8 @@ outcome depends on characters that have not arrived yet (the text after "Dr.", t
 
 from __future__ import annotations
 
+import re
+
 _HARD = "。！？；!?;"
 _ABBREVIATIONS = frozenset(
     ("mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc")
@@ -85,17 +87,104 @@ def _next_break(buf: str, final: bool) -> int | None:
     return n if final and n else None
 
 
-def _drain(buf: str, final: bool) -> tuple[list[str], str]:
+_COMMA_LIKE = ",，、:：—"
+_ENDERS = ".…!?;。！？；"
+_TOKEN = re.compile(r"\S+")
+
+
+def _comma_ok(text: str, max_words: int, max_chars: int) -> bool:
+    """3+ Latin words or 4+ CJK characters before the comma, but no more than the limits.
+
+    Past the limits the word/char-limit cut takes over; allowing the comma there too would make the
+    streaming decision (the comma arrives first) differ from the whole-text one.
+    """
+    cjk = sum(_is_cjk(c) for c in text)
+    words = sum(1 for t in text.split() if not all(_is_cjk(c) for c in t))
+    return (words >= 3 or cjk >= 4) and words <= max_words and cjk <= max_chars
+
+
+def _comma_cut(buf: str, start: int, stop: int, max_words: int, max_chars: int) -> int | None:
+    for i in range(start, stop):
+        ch = buf[i]
+        if ch not in _COMMA_LIKE or not _comma_ok(buf[start:i], max_words, max_chars):
+            continue
+        if ch in ",:":
+            # "1,000", "12:30", "https://x", "a,b": only a break when whitespace follows.
+            if i + 1 >= len(buf):
+                return None  # undecided until the next character arrives
+            if not buf[i + 1].isspace():
+                continue
+        elif ch == "—" and i > start and buf[i - 1].isdigit():
+            if i + 1 >= len(buf):
+                return None
+            if buf[i + 1].isdigit():  # "2020—2021"
+                continue
+        return i + 1
+    return None
+
+
+def _word_limit_cut(buf: str, start: int, stop: int, max_words: int) -> int | None:
+    """Cut after max_words Latin words, only when at least two more words follow."""
+    if max_words < 1:
+        return None
+    toks = list(_TOKEN.finditer(buf, start, stop))
+    for k, m in enumerate(toks[: max_words + 1]):
+        if any(_is_cjk(c) for c in m.group()):
+            return None
+        if k == max_words:
+            last = toks[k - 1].group()
+            if len(toks) < max_words + 2 or last[-1] in _ENDERS:
+                return None
+            return toks[k - 1].end()
+    return None
+
+
+def _char_limit_cut(buf: str, start: int, stop: int, max_chars: int) -> int | None:
+    """Cut after max_chars CJK characters, only when two more CJK characters follow directly."""
+    if max_chars < 1:
+        return None
+    pos = [i for i in range(start, stop) if _is_cjk(buf[i])]
+    if len(pos) < max_chars + 2:
+        return None
+    cut = pos[max_chars - 1] + 1
+    return cut if pos[max_chars] == cut else None
+
+
+def _early_cut(buf: str, end: int | None, max_words: int, max_chars: int) -> int | None:
+    """Where the first chunk may be cut before the sentence ends (end), or None."""
+    stop = len(buf) if end is None else end
+    start = len(buf) - len(buf.lstrip())
+    if start >= stop:
+        return None
+    cuts = (
+        _comma_cut(buf, start, stop, max_words, max_chars),
+        _word_limit_cut(buf, start, stop, max_words),
+        _char_limit_cut(buf, start, stop, max_chars),
+    )
+    found = [c for c in cuts if c is not None]
+    return min(found) if found else None
+
+
+def _drain(buf: str, final: bool, early: tuple[int, int] | None = None) -> tuple[list[str], str, bool]:
+    """Split buf into chunks; early=(max_words, max_chars) enables the early cut for the first piece.
+
+    Returns (chunks, rest, early_still_pending).
+    """
     out: list[str] = []
     while buf:
         end = _next_break(buf, final)
+        if early is not None:
+            cut = _early_cut(buf, end, *early)
+            if cut is not None:
+                end = cut
         if end is None:
             break
         piece = buf[:end].strip()
         if piece:
             out.append(piece)
+            early = None
         buf = buf[end:]
-    return out, buf
+    return out, buf, early is not None
 
 
 def split_sentences(text: str) -> list[str]:
@@ -103,14 +192,30 @@ def split_sentences(text: str) -> list[str]:
 
 
 class SentenceChunker:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        early_first_chunk: bool = False,
+        first_chunk_max_words: int = 6,
+        first_chunk_max_chars: int = 10,
+    ) -> None:
         self._buf = ""
+        self._early_enabled = early_first_chunk
+        self._limits = (first_chunk_max_words, first_chunk_max_chars)
+        self._first = True
+
+    def _drain(self, final: bool) -> list[str]:
+        early = self._limits if self._early_enabled and self._first else None
+        out, self._buf, self._first = _drain(self._buf, final, early)
+        return out
 
     def push(self, delta: str) -> list[str]:
         self._buf += delta
-        out, self._buf = _drain(self._buf, False)
-        return out
+        return self._drain(False)
 
     def flush(self) -> list[str]:
-        out, self._buf = _drain(self._buf, True)
-        return out
+        return self._drain(True)
+
+    def reset(self) -> None:
+        """Start a new reply: drop any buffered text; the next chunk is a first chunk again."""
+        self._buf = ""
+        self._first = True

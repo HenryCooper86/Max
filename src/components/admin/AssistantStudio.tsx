@@ -24,6 +24,7 @@ import type { ApiResult } from "../../lib/api-client";
 import { useLanguage } from "../LanguageToggle";
 import { DeviceFields, IdentityFields, LookFields, SoundFields, type LogoControls } from "../studio/AssistantFields";
 import { AssistantPreview } from "../studio/AssistantPreview";
+import { VoicesPanel } from "../studio/VoicesPanel";
 import { BackendSetup } from "./BackendSetup";
 
 /** Cancelable event the workspace sends before switching section. */
@@ -49,6 +50,8 @@ type Props = {
   onAuthenticationExpired: () => void;
   /** Injected in tests. */
   backendApi?: Parameters<typeof BackendSetup>[0]["api"];
+  voicesApi?: Parameters<typeof VoicesPanel>[0]["api"];
+  voicesAudio?: Parameters<typeof VoicesPanel>[0]["audio"];
   api?: {
     fetchStudio: typeof fetchStudio;
     saveStudio: typeof saveStudio;
@@ -64,7 +67,14 @@ const DEFAULT_API = { fetchStudio, saveStudio, uploadStudioLogo, removeStudioLog
  * controls and a live preview. Saves apply to new sessions and /health at
  * once. API keys are never shown or edited here.
  */
-export function AssistantStudio({ onSaved, onAuthenticationExpired, api = DEFAULT_API, backendApi }: Props) {
+export function AssistantStudio({
+  onSaved,
+  onAuthenticationExpired,
+  api = DEFAULT_API,
+  backendApi,
+  voicesApi,
+  voicesAudio
+}: Props) {
   const { language } = useLanguage();
   const say = useCallback((zh: string, en: string) => localized(language, zh, en), [language]);
   const [studio, setStudio] = useState<StudioState | null>(null);
@@ -326,6 +336,22 @@ export function AssistantStudio({ onSaved, onAuthenticationExpired, api = DEFAUL
           <section aria-labelledby="studio-sound">
             <h3 id="studio-sound">{say("声音", "Sound")}</h3>
             <SoundFields draft={draft} onChange={update} errors={shownErrors} equalizer={studio.equalizer} />
+          </section>
+          <section aria-labelledby="studio-voices">
+            <h3 id="studio-voices">{say("声音库", "Voices")}</h3>
+            <VoicesPanel
+              voiceId={draft.voiceId}
+              onVoiceChange={(voiceId) => update({ voiceId })}
+              onVoiceDeleted={(id) => {
+                // The relay cleared it from the saved config; mirror that without making the draft dirty.
+                setSaved((current) => (current && current.voiceId === id ? { ...current, voiceId: "" } : current));
+                setDraft((current) => (current && current.voiceId === id ? { ...current, voiceId: "" } : current));
+              }}
+              assistantName={draft.name.trim() || studio.assistant.name}
+              onAuthenticationExpired={onAuthenticationExpired}
+              api={voicesApi}
+              audio={voicesAudio}
+            />
           </section>
           <section aria-labelledby="studio-backend">
             <h3 id="studio-backend">{say("语音后端", "Voice backend")}</h3>

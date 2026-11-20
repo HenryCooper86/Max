@@ -18,8 +18,8 @@ pytestmark = [
 
 @pytest.fixture(scope="module")
 def engines():
-    stt, tts = build_engines(Settings(), detect_profile())
-    return stt, tts
+    engines = build_engines(Settings(), detect_profile())
+    return engines.stt, engines.tts
 
 
 def test_kokoro_synthesizes_chunks(engines):
@@ -40,3 +40,23 @@ def test_kokoro_chinese(engines):
     _, tts = engines
     chunks = list(tts.synthesize("你好，今天天气很好。", "zf_xiaobei"))
     assert chunks
+
+
+def test_chinese_round_trip_cer(engines):
+    from bench.latency import PHRASES, cer
+
+    stt, tts = engines
+    voice = tts.default_voice("female", "zh")
+    assert voice.startswith("zf_") and "zf_xiaobei" not in {v.id for v in tts.voices()}
+    scores = []
+    for phrase in (p.text for p in PHRASES if p.lang == "zh"):
+        audio = np.concatenate(list(tts.synthesize(phrase, voice)))
+        heard = stt.transcribe(resample(audio, tts.sample_rate, INPUT_RATE), INPUT_RATE, language="zh").text
+        scores.append(cer(phrase, heard))
+    assert sum(scores) / len(scores) < 0.15, scores
+
+
+def test_chinese_with_an_english_word(engines):
+    _, tts = engines
+    audio = np.concatenate(list(tts.synthesize("打开 Spotify 播放音乐。", tts.default_voice("female", "zh"))))
+    assert len(audio) / tts.sample_rate > 1.0

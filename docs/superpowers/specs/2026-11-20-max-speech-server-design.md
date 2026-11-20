@@ -68,10 +68,10 @@ Considered and rejected:
 - **Unmaintained:** Chatterbox, retired in August 2026.
 - **Copyleft engine and per-voice terms:** Piper.
 
-**CPU cloning stays off until a license is confirmed.** MOSS-TTS-Nano is the only CPU-friendly cloning model that
-fits, but its README says to treat the repo as unlicensed if the root LICENSE file is missing. Until that file
-exists, the CPU tier offers Kokoro's preset voices, and cloned voices need a GPU or a Mac. The existing MOSS adapter in
-`examples/moss-tts-nano` stays as an example for people making their own license decision.
+**CPU cloning is available as an opt-in.** MOSS-TTS-Nano's repo now has a root Apache-2.0 LICENSE, and its Hugging
+Face cards (TTS ONNX and audio tokenizer ONNX) are Apache-2.0 (checked 2026-11-20). It stays off by default on the
+CPU profile because of its memory cost (about 2 GB of RAM and a 730 MB download, too much to switch on silently for
+small servers). Set `SPEECH_CLONING_MODEL=moss-tts-nano-onnx` to turn it on.
 
 ## Architecture
 

@@ -649,6 +649,8 @@ export type AssistantSummary = {
   accentColor?: string;
   /** Languages the assistant speaks, most preferred first (BCP-47-ish, e.g. "zh", "en"). */
   languages: string[];
+  /** The speech-server voice the owner picked; absent → the backend's default. */
+  voiceId?: string;
   /** The specific embodied device this build is for — an id from the relay's
    *  device presets (server/device-presets.ts), e.g. "motorcycle-helmet",
    *  "assistive-glasses", "vr-headset". `device` stays the coarse family. */

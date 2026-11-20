@@ -47,6 +47,7 @@ The apps read all of this from the relay's `/health`.
 | `pipeline`       | Whisper speech-to-text → any chat model → any text-to-speech (OpenAI-compatible endpoints)                                            | `PIPELINE_API_KEY` or `OPENAI_API_KEY` |
 | `local`          | Open-weight models on your own hardware: Whisper-class speech-to-text, an Ollama/llama.cpp/vLLM chat model, Kokoro/Piper-class speech | `LOCAL_VOICE=on`, no key               |
 | `local-realtime` | A self-hosted server that speaks the OpenAI Realtime protocol                                                                         | `LOCAL_REALTIME_URL`                   |
+| `max-speech`     | Max Speech, our own local speech server (live transcripts, learned turn-taking) with any local chat model                             | `MAX_SPEECH_URL` or `MAX_SPEECH=on`    |
 
 Running fully local is covered in [docs/local-models.md](local-models.md), with a ready-made `docker-compose.local-voice.yml`.
 

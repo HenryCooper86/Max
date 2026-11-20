@@ -188,6 +188,16 @@ async function main(): Promise<void> {
   if (provider.id === "local-realtime") {
     env.LOCAL_REALTIME_URL = await ask("Local realtime server URL", "ws://localhost:8000/v1/realtime");
   }
+  if (provider.id === "max-speech") {
+    // Max Speech listens and speaks; the chat model is the same LOCAL_LLM_* stage the `local` pipeline uses.
+    const llm = localPipelineSettings().llm;
+    console.log(
+      "\nMax Speech (speech-server/) listens and speaks. Start it with: cd speech-server && uv run max-speech serve"
+    );
+    env.MAX_SPEECH_URL = await ask("Max Speech session URL", "ws://localhost:8790/v1/speech/session");
+    env.LOCAL_LLM_BASE_URL = await ask("Chat model server (Ollama, llama.cpp, vLLM, LM Studio)", llm.baseUrl);
+    env.LOCAL_LLM_MODEL = await ask("Chat model", llm.model);
+  }
   const keyName = KEY_FOR[provider.id];
   if (keyName) {
     const key = await ask(`${keyName} (Enter to skip and add it to .env yourself)`, "");

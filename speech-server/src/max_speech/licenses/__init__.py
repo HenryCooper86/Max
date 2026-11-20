@@ -13,6 +13,7 @@ ALLOWED_WEIGHTS_LICENSES = frozenset(
 )
 KINDS = ("stt", "tts", "vad", "turn")
 SOURCES = ("hf", "url")
+ARCHIVES = ("tar.bz2",)
 
 _SHA1 = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -47,6 +48,14 @@ class ModelEntry:
     revision: str | None = None
     runtime_licenses: tuple[str, ...] = ()
     note: str | None = None
+    archive: str | None = None  # "tar.bz2": the single url file is an archive to extract into the model dir
+    allow_patterns: tuple[str, ...] = ()  # hf only: download just the files matching these globs
+    streaming: bool = False  # stt only: a streaming recognizer, usable as the live session's STT
+    cloning: bool = False  # tts only: can speak in a custom voice (a CloningTtsEngine's model)
+    design: bool = False  # tts only: designs a new voice from a text description (a design engine's model)
+    requires: tuple[
+        str, ...
+    ] = ()  # companion models that must be license-checked and downloaded with this one
 
 
 def _parse(model_id: str, raw: dict) -> ModelEntry:
@@ -93,6 +102,41 @@ def _parse(model_id: str, raw: dict) -> ModelEntry:
             parsed.append(RemoteFile(url=url, sha256=digest))
         files = tuple(parsed)
 
+    archive = raw.get("archive")
+    if archive is not None:
+        if archive not in ARCHIVES:
+            raise fail("archive", f"must be one of {', '.join(ARCHIVES)}")
+        if source != "url" or len(files) != 1:
+            raise fail("archive", "is only for a url source with exactly one file")
+    patterns = raw.get("allow_patterns", ())
+    if patterns:
+        if source != "hf":
+            raise fail("allow_patterns", "is only for an hf source")
+        if not isinstance(patterns, list) or not all(isinstance(p, str) and p for p in patterns):
+            raise fail("allow_patterns", "must be a list of non-empty strings")
+
+    streaming = raw.get("streaming", False)
+    if not isinstance(streaming, bool):
+        raise fail("streaming", "must be true or false")
+    if streaming and kind != "stt":
+        raise fail("streaming", "is only for an stt model")
+
+    cloning = raw.get("cloning", False)
+    if not isinstance(cloning, bool):
+        raise fail("cloning", "must be true or false")
+    if cloning and kind != "tts":
+        raise fail("cloning", "is only for a tts model")
+    design = raw.get("design", False)
+    if not isinstance(design, bool):
+        raise fail("design", "must be true or false")
+    if design and kind != "tts":
+        raise fail("design", "is only for a tts model")
+    if design and cloning:
+        raise fail("design", "and cloning are different roles; a model has one")
+    requires = raw.get("requires", [])
+    if not isinstance(requires, list) or not all(isinstance(r, str) and r for r in requires):
+        raise fail("requires", "must be a list of model ids")
+
     return ModelEntry(
         id=model_id,
         kind=kind,
@@ -107,14 +151,43 @@ def _parse(model_id: str, raw: dict) -> ModelEntry:
         revision=revision,
         runtime_licenses=tuple(raw.get("runtime_licenses", ())),
         note=raw.get("note"),
+        archive=archive,
+        allow_patterns=tuple(patterns),
+        streaming=streaming,
+        cloning=cloning,
+        design=design,
+        requires=tuple(requires),
     )
+
+
+def _check_requires(registry: dict[str, ModelEntry]) -> None:
+    """Every `requires` id must exist and the graph must be acyclic."""
+    done: set[str] = set()
+
+    def visit(model_id: str, path: tuple[str, ...]) -> None:
+        if model_id in path:
+            raise RegistryError(
+                f"model {model_id!r}: requires forms a cycle ({' -> '.join((*path, model_id))})"
+            )
+        if model_id in done:
+            return
+        for dep in registry[model_id].requires:
+            if dep not in registry:
+                raise RegistryError(f"model {model_id!r}: requires unknown model {dep!r}")
+            visit(dep, (*path, model_id))
+        done.add(model_id)
+
+    for model_id in registry:
+        visit(model_id, ())
 
 
 def load_registry(text: str | None = None) -> dict[str, ModelEntry]:
     if text is None:
         text = (importlib.resources.files(__package__) / "registry.toml").read_text(encoding="utf-8")
     data = tomllib.loads(text)
-    return {model_id: _parse(model_id, raw) for model_id, raw in data.get("models", {}).items()}
+    registry = {model_id: _parse(model_id, raw) for model_id, raw in data.get("models", {}).items()}
+    _check_requires(registry)
+    return registry
 
 
 def require(model_id: str, kind: str, *, registry: dict[str, ModelEntry] | None = None) -> ModelEntry:
@@ -133,3 +206,22 @@ def require(model_id: str, kind: str, *, registry: dict[str, ModelEntry] | None 
             f"allowed: {', '.join(sorted(ALLOWED_WEIGHTS_LICENSES))}"
         )
     return entry
+
+
+def companions(entry: ModelEntry, registry: dict[str, ModelEntry]) -> list[ModelEntry]:
+    """The models `entry` requires, recursively (dependencies first, no duplicates), each license-checked."""
+    out: dict[str, ModelEntry] = {}
+
+    def visit(current: ModelEntry, path: tuple[str, ...]) -> None:
+        if current.id in path:
+            raise LicenseError(f"{current.id}: requires forms a cycle ({' -> '.join((*path, current.id))})")
+        for dep_id in current.requires:
+            dep = registry.get(dep_id)
+            if dep is None:
+                raise LicenseError(f"{current.id} requires {dep_id}, which is not in the license registry")
+            require(dep_id, dep.kind, registry=registry)
+            visit(dep, (*path, current.id))
+            out.setdefault(dep_id, dep)
+
+    visit(entry, ())
+    return list(out.values())

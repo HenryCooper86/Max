@@ -102,7 +102,8 @@ import {
 import { assistant, assistantLogo, projectAssistantProfile } from "./assistant";
 import { sendBrandLogo } from "./brand-logo-route";
 import { localizeErrors } from "./error-language";
-import { removeStudioLogo, saveStudioConfig, saveStudioLogo, studioState } from "./studio";
+import { clearStudioVoice, removeStudioLogo, saveStudioConfig, saveStudioLogo, studioState } from "./studio";
+import { createStudioVoicesRouter, jsonParserExceptStudioVoices } from "./studio-voices";
 import { loadStudioBackends, saveStudioBackends, studioBackendsState } from "./studio-backends";
 import { chooseVoiceProvider, createSelectableProvider, createVoiceProvider } from "./providers/factory";
 import type { AgentProvider, ProviderTelemetry } from "./providers/types";
@@ -220,7 +221,8 @@ app.use((req, res, next) => {
 registerCloudPaymentRoutes(app);
 // A Cloud project carries up to 20,000 characters of knowledge (3 bytes each in Chinese) and its tools.
 app.use("/cloud/api/projects", express.json({ limit: "512kb", strict: true }));
-app.use(express.json({ limit: "32kb", strict: true }));
+// The Studio's voice routes set their own limits (a recording is megabytes), after the admin check.
+app.use(jsonParserExceptStudioVoices("32kb"));
 // Errors go out in English to a client that asks for it.
 app.use(localizeErrors);
 
@@ -620,6 +622,9 @@ app.put("/auth/admin/studio/backends", (req, res) => {
     res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Invalid settings." });
   }
 });
+
+// Custom voices and pronunciations live on the speech server; the relay holds its key.
+app.use("/auth/admin/studio", createStudioVoicesRouter({ requireAdmin, log, clearAssistantVoice: clearStudioVoice }));
 
 app.delete("/auth/admin/studio/logo", (req, res) => {
   const admin = requireAdmin(req, res);

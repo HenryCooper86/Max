@@ -14,7 +14,7 @@ from max_speech.engines.fake import FakeTts
 
 def client(app, **kw):
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test", **kw
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://localhost", **kw
     )
 
 
@@ -283,6 +283,48 @@ async def test_discovery_attributions_from_registry(make_app):
     assert "Kokoro" in d["attributions"][0]["text"]
 
 
+async def test_discovery_session_ws_needs_every_live_engine(make_app):
+    class Named:
+        def __init__(self, model_id):
+            self.id, self.model_id = "x", model_id
+
+    def features(**live):
+        app = make_app()
+        for name, value in live.items():
+            setattr(app.state.slots, name, value)
+        return app
+
+    full = {
+        "vad": Named("silero-vad-v6.2"),
+        "turn": Named("smart-turn-v3.2"),
+        "stt_stream": Named("x-asr-zh-en-480ms"),
+    }
+    async with client(features(**full)) as c:
+        d = (await c.get("/.well-known/max-speech")).json()
+    assert d["features"]["session_ws"] is True
+    assert [a["model"] for a in d["attributions"]] == [
+        "silero-vad-v6.2",
+        "smart-turn-v3.2",
+        "x-asr-zh-en-480ms",
+    ]
+    for missing in full:
+        async with client(features(**{**full, missing: None})) as c:
+            assert (await c.get("/.well-known/max-speech")).json()["features"]["session_ws"] is False
+    async with client(make_app(tts=None)) as c:
+        assert (await c.get("/.well-known/max-speech")).json()["features"]["session_ws"] is False
+
+
+async def test_discovery_attributions_include_the_zh_model(make_app):
+    class Kokoro(FakeTts):
+        id = "kokoro"
+        model_id = "kokoro-v1.0"
+        extra_model_ids = ("kokoro-v1.1-zh",)
+
+    async with client(make_app(tts=Kokoro())) as c:
+        d = (await c.get("/.well-known/max-speech")).json()
+    assert [a["model"] for a in d["attributions"]] == ["kokoro-v1.0", "kokoro-v1.1-zh"]
+
+
 async def test_engine_disabled(make_app):
     async with client(make_app(stt=None, tts=None)) as c:
         for r in (
@@ -458,3 +500,39 @@ async def test_speech_language_normalised_and_unknown_ignored(make_app):
                 body["language"] = lang
             assert (await c.post("/v1/audio/speech", json=body)).status_code == 200
     assert seen == ["zh", None, None]
+
+
+async def test_custom_voice_works_through_speech(make_app, tmp_path):
+    from voice_helpers import STATEMENT, good_wav
+
+    from max_speech.engines.fake_cloning import FakeCloningTts
+    from max_speech.settings import Settings
+
+    cloning = FakeCloningTts()
+    app = make_app(Settings(data_dir=tmp_path), cloning=cloning)
+    voice = app.state.slots.voices.create(
+        audio=good_wav(),
+        name="Ava",
+        transcript="hello there",
+        consent=True,
+        consent_statement=STATEMENT,
+        consent_speaker="Ava Lee",
+    )
+    async with client(app) as c:
+        r = await c.post(
+            "/v1/audio/speech",
+            json={"voice": voice.id, "input": "Hello there. Second one.", "response_format": "pcm"},
+        )
+        streamed = await c.post(
+            "/v1/audio/speech",
+            json={
+                "voice": voice.id,
+                "input": "Hello there.",
+                "response_format": "pcm",
+                "stream_format": "audio",
+            },
+        )
+    assert r.status_code == 200 and r.headers["x-max-speech-engine"] == "fake"
+    assert len(r.content) == 2 * round(0.2 * 24000) * 2  # cloned audio comes back at 24 kHz
+    assert streamed.status_code == 200 and len(streamed.content) == round(0.2 * 24000) * 2
+    assert [call[1] for call in cloning.calls] == [voice.id] * 3  # one call per sentence

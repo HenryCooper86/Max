@@ -183,6 +183,20 @@ export function saveStudioConfig(raw: unknown): StudioState {
   return studioState();
 }
 
+/** Clears the assistant's saved voice id when it is `id`, through the same
+ *  validated save the Studio uses. Returns whether it changed anything. */
+export function clearStudioVoice(id: string): boolean {
+  const stored = readStored();
+  const voice = stored.voice;
+  if (!isRecord(voice) || voice.id !== id) return false;
+  const rest = Object.fromEntries(Object.entries(voice).filter(([key]) => key !== "id"));
+  const next = { ...stored };
+  if (Object.keys(rest).length) next.voice = rest;
+  else delete next.voice;
+  saveStudioConfig(next);
+  return true;
+}
+
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 // The logo is served on the relay's own origin. It goes out under a sandbox

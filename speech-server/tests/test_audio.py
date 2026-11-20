@@ -8,6 +8,7 @@ from max_speech.audio import (
     INPUT_RATE,
     OUTPUT_RATE,
     AudioDecodeError,
+    DownResampler,
     decode_audio,
     float_to_pcm16,
     pcm16_to_float,
@@ -70,3 +71,34 @@ def test_decode_audio_flac():
 def test_decode_garbage_raises():
     with pytest.raises(AudioDecodeError, match="WAV, FLAC or OGG"):
         decode_audio(b"definitely not audio")
+
+
+def _tone(hz, rate, seconds=1.0):
+    t = np.arange(int(rate * seconds)) / rate
+    return (0.5 * np.sin(2 * np.pi * hz * t)).astype(np.float32)
+
+
+def _rms_db(x):
+    x = x[len(x) // 10 : -len(x) // 10]  # ignore the edges
+    return 20 * np.log10(np.sqrt(np.mean(x.astype(np.float64) ** 2)) + 1e-12)
+
+
+def test_downsampling_attenuates_what_would_alias():
+    # 15 kHz at 48 kHz folds to 9 kHz at 24 kHz unless it is filtered out first
+    ref = _rms_db(_tone(15_000, 48_000))
+    assert _rms_db(resample(_tone(15_000, 48_000), 48_000, 24_000)) < ref - 40
+
+
+def test_downsampling_passes_speech_band_and_keeps_length():
+    ref = _rms_db(_tone(1_000, 48_000))
+    out = resample(_tone(1_000, 48_000), 48_000, 24_000)
+    assert abs(_rms_db(out) - ref) < 0.5
+    assert len(out) == 24_000
+
+
+def test_streaming_downsampler_matches_one_shot_for_any_chunking():
+    x = _tone(1_000, 48_000, 0.5) + _tone(3_300, 48_000, 0.5)
+    r = DownResampler(48_000, 24_000)
+    parts = [r.process(x[i : i + 777]) for i in range(0, len(x), 777)] + [r.flush()]
+    assert np.allclose(np.concatenate(parts), resample(x, 48_000, 24_000), atol=1e-5)
+    assert len(resample(x, 44_100, 24_000)) == round(len(x) * 24_000 / 44_100)

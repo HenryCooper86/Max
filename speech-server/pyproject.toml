@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "OpenAI-compatible speech-to-text and text-to-speech server for Max, using commercially licensed local models."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12,<3.14"
+# misaki (Chinese G2P for Kokoro v1.1-zh) supports Python < 3.13 only.
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi==0.165.0",
     "uvicorn[standard]==0.54.0",
@@ -18,12 +19,17 @@ dependencies = [
     "huggingface-hub==2.4.0",
     "httpx==0.28.1",
     "kokoro-onnx==0.6.1",
+    "misaki[zh]==0.9.4",
+    "sherpa-onnx==2.0.2",
+    # Tokenizer of the MOSS-TTS-Nano CPU cloning engine (engines/moss_onnx.py).
+    "sentencepiece==0.2.3",
     "faster-whisper==1.2.1",
 ]
 
 [project.optional-dependencies]
 mlx = [
     "mlx-whisper==0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-audio==0.6.7; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [project.scripts]

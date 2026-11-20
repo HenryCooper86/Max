@@ -11226,3 +11226,201 @@ button.opsCard:disabled {
   margin: 0;
   line-height: 1.55;
 }
+
+/* ---- Studio: voice library ------------------------------------------- */
+.studioScope .voicesPanel {
+  display: grid;
+  min-width: 0;
+  gap: 24px;
+}
+
+.studioScope .voicesBlock {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  padding-top: 20px;
+  border-top: var(--line-w) solid var(--line-strong);
+}
+
+.studioScope .voicesBlock h4 {
+  margin: 0;
+  font-size: var(--fs-15);
+}
+
+.studioScope .voicesInline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.studioScope .voicesInline .studioInput,
+.studioScope .voicesInline .studioSelect {
+  flex: 1 1 160px;
+  width: auto;
+  min-width: 0;
+}
+
+.studioScope .voicesList {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.studioScope .voiceRow {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  padding: 14px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+}
+
+.studioScope .voiceRowHead {
+  display: grid;
+  gap: 2px;
+}
+
+.studioScope .voiceMeta,
+.studioScope .voiceConsent,
+.studioScope .voicesAttributions {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.studioScope .voiceRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.studioScope .voiceConfirm {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: var(--line-w) solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border-radius: var(--radius-control);
+}
+
+.studioScope .voiceConfirm p,
+.studioScope .voiceConsent p {
+  margin: 4px 0 0;
+}
+
+.studioScope .voiceRow audio,
+.studioScope .voicesRecord audio,
+.studioScope .studioField audio {
+  width: 100%;
+  max-width: 100%;
+}
+
+.studioScope textarea.studioTextarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-15);
+  resize: vertical;
+}
+
+.studioScope .voicesRecord {
+  display: grid;
+  gap: 10px;
+}
+
+.studioScope .voicesRecording {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.studioScope .voicesTimer {
+  font: 500 var(--fs-13) / 1 var(--font-mono);
+}
+
+.studioScope .voiceMeter {
+  display: block;
+  flex: 1 1 auto;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--surface-2);
+}
+
+.studioScope .voiceMeterFill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.studioScope .voicesClip {
+  margin: 0;
+  font-size: var(--fs-13);
+}
+
+.studioScope .voicesClip.bad {
+  color: var(--danger);
+}
+
+.studioScope .voicesConsent {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  margin: 0;
+  padding: 14px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-control);
+}
+
+.studioScope .voicesConsent .studioCheck {
+  align-items: flex-start;
+}
+
+.studioScope .voicesConsent .studioCheck input {
+  flex: none;
+  margin-top: 2px;
+}
+
+.studioScope .lexRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.studioScope .voicesStatus:empty {
+  display: none;
+}
+
+.studioScope .voicesStatus.error {
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .studioScope .lexRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .studioScope .lexRow .studioInput:nth-of-type(2) {
+    grid-column: 1;
+  }
+}
+
+.studioScope button.studioButton.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent, #000);
+}
+
+.studioScope button.studioButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

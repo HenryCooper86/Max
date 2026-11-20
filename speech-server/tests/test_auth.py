@@ -1,11 +1,12 @@
 import httpx
+import pytest
 
 from max_speech.settings import Settings
 
 
 def client(app, host="127.0.0.1"):
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app, client=(host, 5000)), base_url="http://test"
+        transport=httpx.ASGITransport(app=app, client=(host, 5000)), base_url="http://localhost"
     )
 
 
@@ -87,3 +88,98 @@ async def test_unauthenticated_upload_is_refused_without_reading_the_body(make_a
 async def test_testclient_host_is_not_trusted(make_app):
     async with client(make_app(), "testclient") as c:
         assert (await c.get("/v1/models")).status_code == 401
+
+
+async def _ws_scope(path, headers=(), host="127.0.0.1"):
+    return {
+        "type": "websocket",
+        "path": path,
+        "headers": list(headers),
+        "client": (host, 5000),
+        "query_string": b"",
+        "scheme": "ws",
+        "server": ("test", 80),
+        "subprotocols": [],
+    }
+
+
+async def test_websocket_is_refused_before_accept(make_app):
+    app = make_app(Settings(api_key="secret"))
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        raise AssertionError("the app must not be reached")
+
+    await app(await _ws_scope("/v1/speech/session"), receive, send)
+    assert [m["type"] for m in sent] == ["websocket.close"] and sent[0]["code"] == 1008
+
+
+async def test_websocket_without_key_is_loopback_only(make_app):
+    app = make_app()
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        raise AssertionError("the app must not be reached")
+
+    await app(await _ws_scope("/v1/speech/session", host="10.1.2.3"), receive, send)
+    assert sent[0]["type"] == "websocket.close" and sent[0]["code"] == 1008
+
+
+async def _ws_close_code(app, headers=()):
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    await app(await _ws_scope("/v1/speech/session", headers=headers), receive, send)
+    return sent[0]
+
+
+async def test_websocket_without_origin_is_allowed(make_app):
+    first = await _ws_close_code(make_app())
+    assert first.get("code") != 1008  # reached the app, which accepts or answers on its own
+
+
+@pytest.mark.parametrize(
+    "origin", ["http://localhost:5173", "https://localhost", "http://127.0.0.1:3000", "http://[::1]:8080"]
+)
+async def test_websocket_from_a_localhost_origin_is_allowed(make_app, origin):
+    first = await _ws_close_code(make_app(), [(b"origin", origin.encode())])
+    assert first.get("code") != 1008
+
+
+@pytest.mark.parametrize(
+    "origin", ["https://evil.example", "http://localhost.evil.example", "null", "file://x"]
+)
+async def test_websocket_from_a_foreign_origin_is_refused_before_accept(make_app, origin):
+    first = await _ws_close_code(make_app(), [(b"origin", origin.encode())])
+    assert first["type"] == "websocket.close" and first["code"] == 1008
+
+
+async def test_foreign_origin_is_refused_even_with_the_right_key(make_app):
+    app = make_app(Settings(api_key="secret"))
+    headers = [(b"authorization", b"Bearer secret"), (b"origin", b"https://evil.example")]
+    assert (await _ws_close_code(app, headers))["code"] == 1008
+    ok = await _ws_close_code(app, [(b"authorization", b"Bearer secret")])
+    assert ok.get("code") != 1008
+
+
+async def test_a_listed_origin_is_allowed(make_app):
+    app = make_app(Settings(api_key="secret", allowed_origins=("https://studio.example",)))
+    headers = [(b"authorization", b"Bearer secret"), (b"origin", b"https://studio.example")]
+    assert (await _ws_close_code(app, headers)).get("code") != 1008
+
+
+def test_allowed_origins_setting_is_parsed():
+    s = Settings.from_env({"SPEECH_ALLOWED_ORIGINS": "https://A.example/, http://b.example:81 ,"})
+    assert s.allowed_origins == ("https://a.example", "http://b.example:81")
+    assert Settings.from_env({}).allowed_origins == ()

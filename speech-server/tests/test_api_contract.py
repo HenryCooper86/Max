@@ -18,7 +18,7 @@ from max_speech.settings import Settings
 def sdk(make_app):
     app = make_app(Settings(api_key="k"))
     http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app))
-    return AsyncOpenAI(base_url="http://test/v1", api_key="k", http_client=http)
+    return AsyncOpenAI(base_url="http://localhost/v1", api_key="k", http_client=http)
 
 
 def wav16k():
@@ -85,10 +85,10 @@ async def test_models(sdk):
 async def test_errors(make_app):
     app = make_app(Settings(api_key="k"))
     http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app))
-    bad = AsyncOpenAI(base_url="http://test/v1", api_key="wrong", http_client=http, max_retries=0)
+    bad = AsyncOpenAI(base_url="http://localhost/v1", api_key="wrong", http_client=http, max_retries=0)
     with pytest.raises(openai.AuthenticationError):
         await bad.models.list()
-    good = AsyncOpenAI(base_url="http://test/v1", api_key="k", http_client=http, max_retries=0)
+    good = AsyncOpenAI(base_url="http://localhost/v1", api_key="k", http_client=http, max_retries=0)
     with pytest.raises(openai.NotFoundError):
         await good.audio.speech.create(model="tts-1", voice="nobody", input="hi")
     with pytest.raises(openai.BadRequestError, match="pcm"):

@@ -24,6 +24,13 @@ _LANG_BY_LETTER = {
     "p": ("pt", "pt-br"),
     "z": ("zh", "cmn"),
 }
+# Defaults among the Kokoro v1.1-zh voices (kokoro-v1.1-zh.onnx), chosen by speak-then-transcribe CER.
+# Each candidate spoke the five Chinese bench phrases and mlx Whisper large-v3-turbo transcribed them with
+# language="zh"; the lowest mean CER won, the lowest id breaking ties. Mean CER, first 8 voices per gender:
+#   female: zf_002 0.000 (tie with zf_004, zf_006), zf_003 0.010, zf_008 0.010, zf_001 0.083, zf_007 0.148, zf_005 0.155
+#   male:   zm_009 0.000, zm_010/011/013/014 0.005, zm_015/016 0.010, zm_012 0.050
+# For comparison the v1.0 espeak voices scored 0.676 (zf_xiaobei) and 0.394 (zm_yunjian).
+_ZH_DEFAULTS = {"female": "zf_002", "male": "zm_009"}
 _DEFAULT_VOICES = {
     ("female", "en"): "af_heart",
     ("female", "zh"): "zf_xiaobei",
@@ -55,6 +62,10 @@ def _script_language(sentence: str) -> str | None:
     return "zh" if han else None
 
 
+def _is_zh_voice(voice_id: str) -> bool:
+    return voice_id[:1] == "z" and voice_id[1:2] in ("f", "m")
+
+
 def _voice_info(voice_id: str) -> VoiceInfo:
     letter = voice_id[:1]
     language = _LANG_BY_LETTER.get(letter, ("en", "en-us"))[0]
@@ -68,12 +79,42 @@ class KokoroTts:
     id = "kokoro"
     sample_rate = 24000
 
-    def __init__(self, model_dir: Path, model_id: str = "kokoro-v1.0", *, use_cuda: bool = False):
+    # Class-level defaults keep an engine built without the zh model (and test doubles) working unchanged.
+    extra_model_ids: tuple[str, ...] = ()
+    _zh = None  # the Kokoro v1.1-zh instance, when the zh model is loaded
+    _zh_g2p = None
+    _zh_ids: frozenset[str] = frozenset()
+    _legacy_zh_ids: frozenset[str] = frozenset()  # v1.0 Chinese voice ids, accepted but not listed
+
+    def __init__(
+        self,
+        model_dir: Path,
+        model_id: str = "kokoro-v1.0",
+        *,
+        use_cuda: bool = False,
+        zh_model_dir: Path | None = None,
+        zh_model_id: str = "kokoro-v1.1-zh",
+    ):
+        self.model_id = model_id
+        self.extra_model_ids = (zh_model_id,) if zh_model_dir is not None else ()
+        self._kokoro = self._open(model_dir / "kokoro-v1.0.onnx", model_dir / "voices-v1.0.bin", use_cuda)
+        voices = [_voice_info(v) for v in self._kokoro.get_voices()]
+        if zh_model_dir is not None:
+            self._zh = self._open(
+                zh_model_dir / "kokoro-v1.1-zh.onnx", zh_model_dir / "voices-v1.1-zh.bin", use_cuda
+            )
+            self._legacy_zh_ids = frozenset(v.id for v in voices if "zh" in v.languages)
+            zh_voices = [_voice_info(v) for v in sorted(self._zh.get_voices()) if _is_zh_voice(v)]
+            voices = [v for v in voices if "zh" not in v.languages] + zh_voices
+            self._zh_ids = frozenset(v.id for v in zh_voices)
+        self._voices = voices
+        self._ids = {v.id for v in self._voices}
+
+    @staticmethod
+    def _open(model_path: Path, voices_path: Path, use_cuda: bool):
         from kokoro_onnx import Kokoro
 
-        model_path = str(model_dir / "kokoro-v1.0.onnx")
-        voices_path = str(model_dir / "voices-v1.0.bin")
-        self.model_id = model_id
+        model, voices = str(model_path), str(voices_path)
         if use_cuda:
             import onnxruntime as ort
 
@@ -81,21 +122,18 @@ class KokoroTts:
             if "CUDAExecutionProvider" in providers:
                 # kokoro-onnx only picks GPU providers for the onnxruntime-gpu wheel, so hand it a session.
                 session = ort.InferenceSession(
-                    model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+                    model, providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
                 )
-                self._kokoro = Kokoro.from_session(session, voices_path)
-            else:
-                self._kokoro = Kokoro(model_path, voices_path)
-        else:
-            self._kokoro = Kokoro(model_path, voices_path)
-        self._voices = [_voice_info(v) for v in self._kokoro.get_voices()]
-        self._ids = {v.id for v in self._voices}
+                return Kokoro.from_session(session, voices)
+        return Kokoro(model, voices)
 
     def voices(self) -> list[VoiceInfo]:
         return list(self._voices)
 
     def default_voice(self, gender: str = "female", language: str | None = None) -> str:
         lang = language or "en"
+        if lang == "zh" and self._zh_ids and _ZH_DEFAULTS.get(gender) in self._zh_ids:
+            return _ZH_DEFAULTS[gender]
         preferred = _DEFAULT_VOICES.get((gender, lang))
         if preferred in self._ids:
             return preferred
@@ -110,7 +148,7 @@ class KokoroTts:
     def synthesize(
         self, text: str, voice: str, *, speed: float = 1.0, language: str | None = None
     ) -> Iterator[np.ndarray]:
-        if voice not in self._ids:
+        if voice not in self._ids and voice not in self._legacy_zh_ids:
             raise UnknownVoiceError(voice)
         # Kokoro itself only supports 0.5-2.0; the API accepts the wider OpenAI range, so clamp here.
         speed = min(max(speed, _MIN_SPEED), _MAX_SPEED)
@@ -118,9 +156,33 @@ class KokoroTts:
         for sentence in split_sentences(text):
             sentence_voice, lang = self._voice_for(sentence, info, language)
             # Yielding per sentence lets the caller send the first one before the rest are synthesized.
-            samples, _ = self._kokoro.create(sentence, voice=sentence_voice, speed=speed, lang=lang)
+            if self._zh is not None and lang == "cmn":
+                samples = self._create_zh(sentence, sentence_voice, info, speed)
+            else:
+                samples, _ = self._kokoro.create(sentence, voice=sentence_voice, speed=speed, lang=lang)
             if len(samples):
                 yield samples.astype(np.float32, copy=False)
+
+    def _create_zh(self, sentence: str, voice: str, info: VoiceInfo, speed: float) -> np.ndarray:
+        """One Chinese sentence through Kokoro v1.1-zh with misaki's Chinese G2P."""
+        if voice not in self._zh_ids:
+            # A v1.0 Chinese voice id (zf_xiaobei, ...): the same gender's default v1.1-zh voice speaks it.
+            voice = self.default_voice(info.gender, "zh")
+        phonemes, _ = self._g2p_zh()(sentence)
+        samples, _ = self._zh.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
+        return samples
+
+    def _g2p_zh(self):
+        if self._zh_g2p is None:
+            from misaki.zh import ZHG2P
+
+            def english(text: str) -> str:
+                # English words inside a Chinese sentence: v1.0's espeak path; unknown symbols are dropped
+                # later by the v1.1-zh tokenizer.
+                return self._kokoro.tokenizer.phonemize(text, "en-us")
+
+            self._zh_g2p = ZHG2P(version="1.1", en_callable=english)
+        return self._zh_g2p
 
     def _voice_for(self, sentence: str, info: VoiceInfo, language: str | None) -> tuple[str, str]:
         """The voice and espeak code for one sentence: the script decides first, then `language`,
@@ -147,3 +209,7 @@ class KokoroTts:
     def warm_up(self) -> None:
         for _ in self.synthesize("Ready.", self.default_voice()):
             pass
+        if self._zh is not None:
+            # Builds the Chinese G2P (jieba loads its dictionary on first use) and runs the zh model once.
+            for _ in self.synthesize("准备好了。", self.default_voice("female", "zh")):
+                pass

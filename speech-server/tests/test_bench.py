@@ -13,7 +13,7 @@ from bench import latency
 
 def client(app):
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test/v1/"
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://localhost/v1/"
     )
 
 

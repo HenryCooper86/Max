@@ -28,6 +28,8 @@ export type EngineResponseMode = "auto" | "manual-capable" | "manual-only";
 export type EngineConfig = {
   instructions: string;
   voiceGender: VoiceGender;
+  /** A named voice of the speech server; engines without named voices ignore it. */
+  voiceId?: string;
   /** True → do not answer until `respond()` is called. */
   manualResponse: boolean;
   /** Languages the assistant speaks, most preferred first. */
@@ -74,6 +76,9 @@ export type VoiceEngine = {
   connect(config: EngineConfig, events: EngineEvents): Promise<void>;
   /** Microphone audio: 16 kHz mono PCM16. */
   sendAudio(pcm: Buffer): void;
+  /** The device stopped sending microphone audio, so a turn left open on the
+   *  upstream (whose clock is audio time) should be ended now. */
+  endInput?(): void;
   /** Answer the wearer's latest turn. A no-op for engines that answer on their own. */
   respond(): void;
   /** Stop the reply in progress, if the upstream allows it. */

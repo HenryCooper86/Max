@@ -1,40 +1,121 @@
-# A fully local voice stack for VOICE_PROVIDER=local: open-weight models on
-# your own machine, no cloud account and no API key.
+# A fully local voice stack for VOICE_PROVIDER=local or VOICE_PROVIDER=max-speech:
+# open-weight models on your own machine, no cloud account.
 #
-#   docker compose -f docker-compose.local-voice.yml up -d
+#   echo "SPEECH_API_KEY=$(openssl rand -hex 24)" >> .env
+#   docker compose -f docker-compose.local-voice.yml up -d --build
 #   docker compose -f docker-compose.local-voice.yml exec ollama ollama pull qwen2.5:7b
 #
-# then in .env:  VOICE_PROVIDER=local   LOCAL_VOICE=on
+# Max Speech (speech-server/) does speech-to-text and text-to-speech; Ollama is
+# the chat model. The first start downloads about 1.5 GB of speech models into
+# the max-speech-data volume, so `max-speech` shows "starting" until they load.
 #
-# These are the CPU images, which run anywhere. For a GPU, switch each service
-# to its project's GPU image and add the device reservation its README shows.
-# Image tags move: if a pull fails, check the project's current tag.
+# Two ways to point the relay at it, and the settings depend on where the relay
+# runs. Chat stays on Ollama in both, set with the LOCAL_LLM_* variables.
+#
+# A. Relay on the host (published ports, bound to 127.0.0.1 below). Ollama at
+#    localhost:11434 is the relay's default chat endpoint, so no LLM URL is needed
+#    beyond LOCAL_LLM_MODEL if you pulled another model:
+#      VOICE_PROVIDER=max-speech                     # or the local pipeline below
+#      MAX_SPEECH_URL=ws://localhost:8790/v1/speech/session
+#      MAX_SPEECH_API_KEY=<the same value as SPEECH_API_KEY>
+#    or
+#      VOICE_PROVIDER=local
+#      LOCAL_VOICE=on
+#      LOCAL_STT_BASE_URL=http://localhost:8790/v1
+#      LOCAL_TTS_BASE_URL=http://localhost:8790/v1
+#      LOCAL_TTS_FORMAT=pcm
+#      LOCAL_STT_API_KEY=<the same value as SPEECH_API_KEY>
+#      LOCAL_TTS_API_KEY=<the same value as SPEECH_API_KEY>
+#    (Use per-stage keys here rather than LOCAL_API_KEY: LOCAL_API_KEY applies to
+#    all three stages, so the speech key would also be sent to Ollama.)
+#
+# B. Relay in this compose network (services reach each other by name). The relay's
+#    chat stage defaults to http://localhost:11434/v1, which inside the relay's own
+#    container is the relay itself, so point it at the ollama service:
+#      LOCAL_LLM_BASE_URL=http://ollama:11434/v1
+#      LOCAL_LLM_MODEL=qwen2.5:7b                   # the model you pulled
+#    then either
+#      VOICE_PROVIDER=max-speech
+#      MAX_SPEECH_URL=ws://max-speech:8790/v1/speech/session
+#      MAX_SPEECH_API_KEY=<the same value as SPEECH_API_KEY>
+#    or
+#      VOICE_PROVIDER=local
+#      LOCAL_VOICE=on
+#      LOCAL_STT_BASE_URL=http://max-speech:8790/v1
+#      LOCAL_TTS_BASE_URL=http://max-speech:8790/v1
+#      LOCAL_TTS_FORMAT=pcm
+#      LOCAL_STT_API_KEY=<the same value as SPEECH_API_KEY>
+#      LOCAL_TTS_API_KEY=<the same value as SPEECH_API_KEY>
+#      LOCAL_LLM_API_KEY=ollama                     # any non-empty value, see below
+#    The local pipeline only counts as configured when every stage that is not on
+#    localhost has a key, and http://ollama:11434 is not localhost, so the chat
+#    stage needs LOCAL_LLM_API_KEY (Ollama ignores the value). LOCAL_API_KEY=<key>
+#    would satisfy all three stages at once, but it also sends the speech key to Ollama.
+#
+# SPEECH_API_KEY is required: the server binds 0.0.0.0 here and refuses
+# non-loopback clients without a key. The container exits if it is empty.
+#
+# Ports are published on 127.0.0.1 only. To reach them from other machines, change
+# "127.0.0.1:8790:8790" to "8790:8790" (keep the API key). Ollama has no
+# authentication at all: do not publish 11434 beyond loopback unless a firewall or
+# proxy in front of it does the authenticating. With the relay in this network,
+# you can drop the ollama `ports` entry altogether.
+#
+# Port 8790 is also what a native Max Speech (start-speech.command) uses. To run
+# both on one machine, change the published port below, e.g. "127.0.0.1:18790:8790".
+#
+# GPU: the image follows MAX_SPEECH_TARGET (default cpu), so the cuda build is
+# tagged max-speech:cuda and never overwrites the cpu one:
+#   MAX_SPEECH_TARGET=cuda docker compose -f docker-compose.local-voice.yml up -d --build
+# and uncomment the `deploy` block on max-speech (needs the NVIDIA Container
+# Toolkit). The CUDA image has not been tested on GPU hardware; without a GPU it
+# runs the large model on the CPU, which is slow, so use the cpu target there.
+# Ollama has its own GPU setup; see its README. Apple silicon: Docker has no
+# Metal, so run start-speech.command natively instead (see docs/speech-server-deployment.md).
 services:
-  # Speech-to-text: faster-whisper behind an OpenAI-compatible API.
-  speaches:
-    image: ghcr.io/speaches-ai/speaches:latest-cpu
+  # Speech-to-text and text-to-speech behind an OpenAI-compatible API, plus the
+  # live session WebSocket.
+  max-speech:
+    build:
+      context: ./speech-server
+      target: ${MAX_SPEECH_TARGET:-cpu}
+    image: max-speech:${MAX_SPEECH_TARGET:-cpu}
+    environment:
+      SPEECH_API_KEY: ${SPEECH_API_KEY:?set SPEECH_API_KEY in .env (openssl rand -hex 24)}
+      # SPEECH_CLONING_MODEL: moss-tts-nano-onnx  # voice cloning on CPU, about 2 GB more memory
+      # SPEECH_ALLOWED_ORIGINS: https://app.example.com  # browsers allowed to open the WebSocket
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8790:8790"
     volumes:
-      - speaches-models:/home/ubuntu/.cache/huggingface/hub
+      - max-speech-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,sys,urllib.request as u; sys.exit(0 if json.load(u.urlopen('http://127.0.0.1:8790/healthz', timeout=4)).get('ready') else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 20m
+      retries: 3
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
     restart: unless-stopped
 
   # Chat model: any open-weight model Ollama can run.
   ollama:
     image: ollama/ollama:latest
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama-models:/root/.ollama
     restart: unless-stopped
 
-  # Text-to-speech: Kokoro behind an OpenAI-compatible API.
-  kokoro:
-    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
-    ports:
-      - "8880:8880"
-    restart: unless-stopped
-
 volumes:
-  speaches-models:
+  max-speech-data:
   ollama-models:

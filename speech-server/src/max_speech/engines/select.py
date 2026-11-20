@@ -284,17 +284,19 @@ def _build_design(role_plan: RolePlan, entry: ModelEntry, path: Path) -> DesignE
     raise ValueError(f"unknown design engine {role_plan.engine!r}")
 
 
-def _cuda_stt_or_cpu(path, model_id: str) -> SttEngine:
-    """faster-whisper needs the CUDA 12 and cuDNN 9 libraries; without them, run the same model on the CPU."""
+def _cuda_stt_or_cpu(path, model_id: str) -> tuple[SttEngine, bool]:
+    """faster-whisper needs the CUDA 12 and cuDNN 9 libraries; without them, run the same model on the CPU.
+
+    Returns the engine and whether it fell back to the CPU."""
     try:
         stt = WhisperCt2Stt(path, model_id, device="cuda", compute_type="float16")
         stt.warm_up()  # missing libraries often only show up on the first inference
-        return stt
+        return stt, False
     except Exception as exc:  # noqa: BLE001 - any CUDA failure should degrade, not kill the server
         log.warning(
             "faster-whisper on CUDA failed (%s: %s); falling back to CPU int8", type(exc).__name__, exc
         )
-        return WhisperCt2Stt(path, model_id, device="cpu", compute_type="int8")
+        return WhisperCt2Stt(path, model_id, device="cpu", compute_type="int8"), True
 
 
 def _build_vad(path: Path, model_id: str) -> VadEngine:
@@ -327,7 +329,14 @@ def build_engines(settings: Settings, profile: str, *, progress: Progress | None
         if stt_plan.engine == "whisper-mlx":
             out.stt = WhisperMlxStt(path, stt_plan.model_id)
         elif profile == "cuda":
-            out.stt = _cuda_stt_or_cpu(path, stt_plan.model_id)
+            out.stt, on_cpu = _cuda_stt_or_cpu(path, stt_plan.model_id)
+            if on_cpu and out.second_pass and settings.second_pass != "on":
+                # The large model on the CPU is too slow to run over every utterance; SPEECH_SECOND_PASS=on keeps it.
+                log.warning(
+                    "the GPU is not usable, so the session's second pass is off (the large model on the CPU is "
+                    "too slow); set SPEECH_SECOND_PASS=on to keep it"
+                )
+                out.second_pass = False
         else:
             out.stt = WhisperCt2Stt(path, stt_plan.model_id, device="cpu", compute_type="int8")
     if the_plan.tts:

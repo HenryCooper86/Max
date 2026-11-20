@@ -181,6 +181,43 @@ def test_cuda_stt_warm_up_failure_falls_back_to_cpu(patched, monkeypatch, caplog
     assert "cuDNN missing" in caplog.text
 
 
+def _failing_cuda(monkeypatch):
+    class Ct2:
+        def __init__(self, path, model_id, *, device, compute_type):
+            if device == "cuda":
+                raise RuntimeError("no gpu")
+
+        def warm_up(self):
+            pass
+
+    monkeypatch.setattr(select, "WhisperCt2Stt", Ct2)
+
+
+def test_cuda_fallback_turns_second_pass_off(patched, monkeypatch, caplog):
+    _failing_cuda(monkeypatch)
+    with caplog.at_level("WARNING"):
+        e = select.build_engines(_s(tts_engine="off"), "cuda")
+    assert e.second_pass is False
+    assert "second pass is off" in caplog.text
+
+
+def test_cuda_fallback_keeps_explicit_second_pass(patched, monkeypatch):
+    _failing_cuda(monkeypatch)
+    assert select.build_engines(_s(tts_engine="off", second_pass="on"), "cuda").second_pass is True
+
+
+def test_cuda_with_gpu_keeps_auto_second_pass(patched, monkeypatch):
+    class Ct2:
+        def __init__(self, path, model_id, *, device, compute_type):
+            pass
+
+        def warm_up(self):
+            pass
+
+    monkeypatch.setattr(select, "WhisperCt2Stt", Ct2)
+    assert select.build_engines(_s(tts_engine="off"), "cuda").second_pass is True
+
+
 # ---- live conversation roles -------------------------------------------------------------------------------
 
 

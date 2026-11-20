@@ -64,6 +64,30 @@ jobs:
       - run: uv run --frozen ruff check .
       - run: uv run --frozen ruff format --check .
 
+  speech-server-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+      # CPU target only. The cuda target is about 4 GB and cannot be run without a GPU, so CI does not build it.
+      - uses: docker/build-push-action@v7
+        with:
+          context: speech-server
+          target: cpu
+          push: false
+          load: true
+          tags: max-speech:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Entrypoint refuses to start without SPEECH_API_KEY
+        run: |
+          set +e
+          docker run --rm max-speech:ci
+          code=$?
+          echo "exit code: $code"
+          test "$code" -eq 64
+
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 25

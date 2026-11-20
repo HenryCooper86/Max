@@ -12,6 +12,16 @@ def _s(**kw) -> Settings:
     )
 
 
+GB = 1024**3
+REAL_RAM = select.total_ram_bytes
+
+
+@pytest.fixture(autouse=True)
+def big_machine(monkeypatch):
+    """Design is on by default only with enough RAM; the tests that care pass `total_ram` themselves."""
+    monkeypatch.setattr(select, "total_ram_bytes", lambda: 64 * GB)
+
+
 @pytest.fixture
 def patched(monkeypatch, tmp_path):
     calls = {"ensure": [], "built": []}
@@ -359,3 +369,110 @@ def test_bad_cloning_model_is_refused_before_any_download(patched, model):
 def test_settings_read_the_cloning_model(clean_env):
     clean_env.setenv("SPEECH_CLONING_MODEL", "off")
     assert Settings.from_env().cloning_model == "off"
+
+
+# ---- voice design ----------------------------------------------------------------------------------------------
+DESIGN = "qwen3-tts-1.7b-voicedesign-mlx"
+
+
+def test_design_defaults_to_the_mlx_model_only():
+    p = select.plan(_s(cloning_model=None, design_model=None), "mlx")
+    assert (p.design.role, p.design.engine, p.design.model_id, p.design.kind) == (
+        "design",
+        "qwen3-design-mlx",
+        DESIGN,
+        "tts",
+    )
+    assert [r.role for r in p.roles()].index("design") == [r.role for r in p.roles()].index("cloning") + 1
+    assert select.plan(_s(cloning_model="moss-tts-nano-onnx", design_model=None), "cpu").design is None
+    assert select.plan(_s(cloning_model="moss-tts-nano-onnx", design_model=None), "cuda").design is None
+
+
+def test_design_can_be_turned_off_or_overridden():
+    assert select.plan(_s(cloning_model=None, design_model="off"), "mlx").design is None
+    assert select.plan(_s(cloning_model=None, design_model=DESIGN), "mlx").design.model_id == DESIGN
+
+
+def test_design_needs_cloning_and_says_so(caplog):
+    with caplog.at_level("INFO"):
+        p = select.plan(_s(cloning_model="off", design_model=None), "mlx")
+    assert p.design is None and "voice design is off" in caplog.text
+
+
+def test_design_engine_must_exist_and_suit_the_profile():
+    with pytest.raises(ValueError, match="no design engine"):
+        select.plan(_s(cloning_model=None, design_model="kokoro-v1.0"), "mlx")
+    with pytest.raises(ValueError, match="mlx profile only"):
+        select.plan(_s(cloning_model="moss-tts-nano-onnx", design_model=DESIGN), "cpu")
+
+
+def test_licensed_refuses_a_design_role_whose_model_cannot_design():
+    role = select.RolePlan("design", "qwen3-design-mlx", "qwen3-tts-0.6b-mlx")
+    with pytest.raises(LicenseError, match="cannot design voices"):
+        select.licensed(role)
+    assert select.licensed(select.RolePlan("design", "qwen3-design-mlx", DESIGN)).design
+
+
+def test_design_is_downloaded_but_not_loaded(patched, monkeypatch):
+    built = []
+    monkeypatch.setattr(
+        select, "_build_design", lambda role, entry, path: built.append((entry.id, path)) or "engine"
+    )
+    e = select.build_engines(_s(cloning_model=None, stt_engine="off", tts_zh_model="off"), "mlx")
+    assert DESIGN in patched["ensure"] and e.design == "engine" and built[0][0] == DESIGN
+    assert e.design not in e.loaded()  # never warmed up: the engine loads its weights on first use
+
+
+def test_design_is_skipped_when_cloning_failed(patched, monkeypatch, caplog):
+    def boom(*a):
+        raise RuntimeError("no memory")
+
+    monkeypatch.setattr(select, "_build_cloning", boom)
+    with caplog.at_level("INFO"):
+        e = select.build_engines(_s(cloning_model=None, stt_engine="off", tts_zh_model="off"), "mlx")
+    assert e.cloning is None and e.design is None and DESIGN not in patched["ensure"]
+
+
+def test_a_failing_default_design_degrades_and_an_explicit_one_fails(patched, monkeypatch, caplog):
+    def boom(*a):
+        raise RuntimeError("download stalled")
+
+    monkeypatch.setattr(select, "_build_design", boom)
+    with caplog.at_level("WARNING"):
+        e = select.build_engines(_s(cloning_model=None, stt_engine="off", tts_zh_model="off"), "mlx")
+    assert e.design is None and e.cloning is not None and "download stalled" in caplog.text
+    with pytest.raises(RuntimeError, match="download stalled"):
+        select.build_engines(
+            _s(cloning_model=None, design_model=DESIGN, stt_engine="off", tts_zh_model="off"), "mlx"
+        )
+
+
+def test_settings_read_the_design_model(clean_env):
+    clean_env.setenv("SPEECH_DESIGN_MODEL", "off")
+    assert Settings.from_env().design_model == "off"
+
+
+@pytest.mark.parametrize(
+    ("ram", "on"), [(16 * GB, False), (24 * GB - 1, False), (24 * GB, True), (64 * GB, True), (None, False)]
+)
+def test_design_is_on_by_default_only_with_24_gb_of_ram(ram, on, caplog):
+    with caplog.at_level("INFO"):
+        p = select.plan(_s(cloning_model=None, design_model=None), "mlx", total_ram=lambda: ram)
+    assert (p.design is not None) is on
+    if not on:
+        assert "SPEECH_DESIGN_MODEL" in caplog.text and "24 GB" in caplog.text
+
+
+def test_a_small_machine_can_force_design_on_and_off_means_off():
+    small = lambda: 8 * GB
+    forced = select.plan(_s(cloning_model=None, design_model=DESIGN), "mlx", total_ram=small)
+    assert forced.design.model_id == DESIGN
+    assert (
+        select.plan(_s(cloning_model=None, design_model="off"), "mlx", total_ram=lambda: 64 * GB).design
+        is None
+    )
+
+
+def test_ram_is_read_from_the_machine():
+    ram = REAL_RAM()
+    assert ram is None or ram > 0

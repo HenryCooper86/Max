@@ -35,6 +35,8 @@ MAX_SPEAKER = 128
 MAX_CREATED_BY = 128
 MIN_STATEMENT = 20
 MAX_LANGUAGES = 8
+MAX_DESCRIPTION = 300
+ORIGINS = ("recorded", "designed")
 
 MIN_SECONDS = 5.0
 MAX_SECONDS = 30.0
@@ -83,13 +85,18 @@ class CustomVoice:
     created_by: str
     consent: Mapping = field(default_factory=dict)  # read-only: a copy wrapped in MappingProxyType
     engine_hint: str | None = None
+    origin: str = (
+        "recorded"  # "recorded" (a real person, with consent) or "designed" (from a text description)
+    )
+    design: Mapping = field(default_factory=dict)  # designed voices only: {description, seed, model, text}
 
     def __post_init__(self) -> None:
         # The record is frozen, so its consent must not be editable through the dict either.
         object.__setattr__(self, "consent", MappingProxyType(dict(self.consent)))
+        object.__setattr__(self, "design", MappingProxyType(dict(self.design)))
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "id": self.id,
             "name": self.name,
             "languages": list(self.languages),
@@ -99,12 +106,24 @@ class CustomVoice:
             "duration_s": self.duration_s,
             "created_at": self.created_at,
             "created_by": self.created_by,
-            "consent": dict(self.consent),
             "engine_hint": self.engine_hint,
+            "origin": self.origin,
         }
+        if self.origin == "designed":
+            out["design"] = dict(self.design)
+        else:
+            out["consent"] = dict(self.consent)
+        return out
 
     @classmethod
     def from_dict(cls, d: dict) -> CustomVoice:
+        origin = d.get("origin", "recorded")  # voices made before design existed were all recorded
+        if origin not in ORIGINS:
+            raise ValueError(f"unknown origin {origin!r}")
+        if origin == "recorded" and not d.get("consent"):
+            raise ValueError("a recorded voice has no consent record")
+        if origin == "designed" and not (d.get("design") or {}).get("description"):
+            raise ValueError("a designed voice has no description")
         return cls(
             id=d["id"],
             name=d["name"],
@@ -115,8 +134,10 @@ class CustomVoice:
             duration_s=float(d["duration_s"]),
             created_at=d["created_at"],
             created_by=d.get("created_by", ""),
-            consent=dict(d["consent"]),
+            consent=dict(d.get("consent") or {}) if origin == "recorded" else {},
             engine_hint=d.get("engine_hint"),
+            origin=origin,
+            design=dict(d.get("design") or {}) if origin == "designed" else {},
         )
 
 
@@ -278,6 +299,25 @@ def process_reference(data: bytes) -> ProcessedReference:
     return ProcessedReference(out, OUTPUT_RATE, round(len(out) / OUTPUT_RATE, 3))
 
 
+MIN_DESIGN_SECONDS = 3.0  # shorter references clone poorly
+
+
+def reference_from_samples(samples: np.ndarray, rate: int) -> ProcessedReference:
+    """A reference from audio the server generated itself: trimmed and peak-normalised like an upload, but with
+    no minimum length beyond `MIN_DESIGN_SECONDS` (a designed sample is one short sentence)."""
+    x = np.asarray(samples, dtype=np.float32).reshape(-1)
+    if not np.all(np.isfinite(x)):
+        raise VoiceError("invalid_audio", "the audio contains invalid samples", "audio")
+    x = _trim(x, rate)
+    if len(x) / rate < MIN_DESIGN_SECONDS or _rms_dbfs(x) < MIN_RMS_DBFS:
+        raise VoiceError("reference_too_short", "the sample is too short or too quiet to save", "audio")
+    out = resample(x, rate, OUTPUT_RATE).astype(np.float32)
+    peak = float(np.max(np.abs(out)))
+    if peak > 0:
+        out = (out * (10 ** (PEAK_DBFS / 20) / peak)).astype(np.float32)
+    return ProcessedReference(out, OUTPUT_RATE, round(len(out) / OUTPUT_RATE, 3))
+
+
 # ---- files -------------------------------------------------------------------------------------------------------
 
 
@@ -423,7 +463,76 @@ class VoiceStore:
         if not langs:
             langs = (_guess_language(text),)
         ref = audio if isinstance(audio, ProcessedReference) else process_reference(audio)
+        return self._persist(
+            ref,
+            name=clean_name,
+            languages=langs,
+            gender=clean_gender,
+            transcript=text,
+            transcript_source=transcript_source if transcript_source in ("given", "stt") else "given",
+            created_by=who or "unknown",
+            origin="recorded",
+            consent_fields=lambda now: {"statement": statement, "speaker": speaker, "recorded_at": now},
+        )
 
+    def create_designed(
+        self,
+        *,
+        audio: bytes | ProcessedReference,
+        name: object,
+        transcript: object,
+        description: object,
+        seed: object,
+        model: object,
+        languages: object = None,
+        gender: object = "neutral",
+        created_by: object = None,
+    ) -> CustomVoice:
+        """Save a voice made from a text description: no real person is cloned, so there is no consent record.
+
+        Only the design path calls this; `POST /v1/voices` always goes through `create` and its consent check.
+        """
+        clean_name = _name(name)
+        clean_gender = _gender(gender if gender not in (None, "") else "neutral")
+        who = _text(created_by, "created_by", MAX_CREATED_BY) if created_by else ""
+        text = _transcript(transcript) if transcript else ""
+        if not text:
+            raise VoiceError("transcript_required", "a transcript of the sample is required", "transcript")
+        desc = _text(description, "description", MAX_DESCRIPTION)
+        if not desc:
+            raise VoiceError("invalid_field", "a designed voice needs a description", "description")
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            raise VoiceError("invalid_field", "seed must be an integer", "seed")
+        langs = _languages(languages) if languages not in (None, "", []) else ()
+        if not langs:
+            langs = (_guess_language(text),)
+        ref = audio if isinstance(audio, ProcessedReference) else process_reference(audio)
+        return self._persist(
+            ref,
+            name=clean_name,
+            languages=langs,
+            gender=clean_gender,
+            transcript=text,
+            transcript_source="given",
+            created_by=who or "unknown",
+            origin="designed",
+            design={"description": desc, "seed": seed, "model": _text(model, "model", 128), "text": text},
+        )
+
+    def _persist(
+        self,
+        ref: ProcessedReference,
+        *,
+        name: str,
+        languages: tuple[str, ...],
+        gender: str,
+        transcript: str,
+        transcript_source: str,
+        created_by: str,
+        origin: str,
+        consent_fields=None,
+        design: dict | None = None,
+    ) -> CustomVoice:
         now = _now()
         with self._lock:
             voice_id = next(
@@ -431,15 +540,17 @@ class VoiceStore:
             )
             voice = CustomVoice(
                 id=voice_id,
-                name=clean_name,
-                languages=langs,
-                gender=clean_gender,
-                transcript=text,
-                transcript_source=transcript_source if transcript_source in ("given", "stt") else "given",
+                name=name,
+                languages=languages,
+                gender=gender,
+                transcript=transcript,
+                transcript_source=transcript_source,
                 duration_s=ref.duration_s,
                 created_at=now,
-                created_by=who or "unknown",
-                consent={"statement": statement, "speaker": speaker, "recorded_at": now},
+                created_by=created_by,
+                consent=consent_fields(now) if consent_fields else {},
+                origin=origin,
+                design=design or {},
             )
             directory = self.root / voice_id
             try:

@@ -11,6 +11,7 @@ import {
 } from "../server/assistant";
 import {
   checkLogoUpload,
+  clearStudioVoice,
   removeStudioLogo,
   saveStudioConfig,
   saveStudioLogo,
@@ -57,6 +58,27 @@ describe("studio", () => {
     );
     // Nothing about credentials beyond set / not set.
     expect(JSON.stringify(state)).not.toMatch(/api[_-]?key|secret|token/i);
+  });
+
+  it("saves the assistant's voice id and exposes it, and drops a malformed one", () => {
+    const saved = saveStudioConfig({ voice: { id: "v_0123456789", equalizer: { preset: "warm" } } });
+    expect(saved.assistant.voiceId).toBe("v_0123456789");
+    expect(assistant().voiceId).toBe("v_0123456789");
+    for (const id of ["../etc", "a b", "x".repeat(65), 7]) {
+      expect(assistantProfileFrom({ voice: { id } }).voiceId).toBeUndefined();
+    }
+  });
+
+  it("clears the saved voice id only when it matches, keeping the rest of the voice settings", () => {
+    saveStudioConfig({ name: "Max", voice: { id: "v_0123456789", equalizer: { preset: "warm" } } });
+    expect(clearStudioVoice("v_aaaaaaaaaa")).toBe(false);
+    expect(assistant().voiceId).toBe("v_0123456789");
+    expect(clearStudioVoice("v_0123456789")).toBe(true);
+    expect(assistant().voiceId).toBeUndefined();
+    const stored = JSON.parse(fs.readFileSync(studioConfigPath(), "utf8")) as { voice?: Record<string, unknown> };
+    expect(stored.voice?.id).toBeUndefined();
+    expect(stored.voice?.equalizer).toBeDefined();
+    expect(clearStudioVoice("v_0123456789")).toBe(false);
   });
 
   it("saves a config, keeps only editable keys, and makes it the live assistant", () => {

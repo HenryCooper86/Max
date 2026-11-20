@@ -145,3 +145,22 @@ class CloningTtsEngine(Protocol):
         ...
 
     def warm_up(self) -> None: ...
+
+
+class DesignEngine(Protocol):
+    """Makes a voice from a text description. Loads its weights on first use and frees them when idle."""
+
+    id: str
+    model_id: str
+    sample_rate: int
+    languages: tuple[str, ...]
+
+    def ensure_loaded(self) -> None:
+        """Load the weights if needed. Blocking and slow: call it before taking the speech lock."""
+        ...
+
+    def design(self, description: str, text: str, language: str, seed: int) -> np.ndarray:
+        """`text` spoken in a voice matching `description`: mono float32 at `sample_rate`. Deterministic per seed."""
+        ...
+
+    def close(self) -> None: ...

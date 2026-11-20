@@ -49,6 +49,8 @@ export type AssistantProfile = {
   logoBackground: string;
   /** Default equaliser for the assistant's voice; defaults to the device preset's. */
   equalizer: VoiceEqualizer;
+  /** Which voice of the speech server to speak with (`voice.id`); only the max-speech backend uses it. */
+  voiceId?: string;
   /** Languages it speaks, most preferred first. */
   languages: string[];
   /** true → refuse languages outside `languages`; false → prefer them but follow the wearer. */
@@ -254,6 +256,11 @@ function wakeNamesFrom(name: string, raw: unknown): WakeNames {
   };
 }
 
+/** A speech-server voice id: short and plain, since it is sent upstream. */
+function voiceIdFrom(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= 64 && /^[A-Za-z0-9_-]+$/.test(value) ? value : undefined;
+}
+
 /** Builds a profile from parsed config JSON. Exported for tests. */
 export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): AssistantProfile {
   if (!isRecord(raw)) throw new Error("assistant config must be a JSON object");
@@ -284,6 +291,7 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     logoBackground:
       logoBackground && /^#[0-9a-f]{6}$/i.test(logoBackground) ? logoBackground.toUpperCase() : DEFAULT_LOGO_BACKGROUND,
     equalizer: normalizeEqualizer(raw.equalizer ?? voice.equalizer) ?? { preset: preset.equalizer },
+    ...(voiceIdFrom(voice.id) ? { voiceId: voiceIdFrom(voice.id) } : {}),
     // Who built it is the owner's to say; without a `developer` it names no company.
     // A config that only changes the look keeps the stock Max, maker included.
     developer: raw.developer === null ? undefined : (text(raw.developer, 80) ?? (stock ? MAX_DEVELOPER : undefined)),
@@ -415,6 +423,7 @@ export function assistantSummary(wakeWordEnabled: boolean): AssistantSummary {
     ...(profile.developer ? { developer: profile.developer } : {}),
     ...(profile.accentColor ? { accentColor: profile.accentColor } : {}),
     languages: [...profile.languages],
+    ...(profile.voiceId ? { voiceId: profile.voiceId } : {}),
     deviceProfile: profile.preset.id,
     deviceLabel: promptsInChinese(profile) ? profile.deviceLabel.zh : profile.deviceLabel.en,
     template: profile.template,

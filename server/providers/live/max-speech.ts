@@ -291,7 +291,7 @@ export function createMaxSpeechEngine(
             languages: engineConfig.languages,
             keyterms: engineConfig.keyterms,
             gender: engineConfig.voiceGender,
-            ...(settings.voice ? { voice: settings.voice } : {})
+            ...(engineConfig.voiceId || settings.voice ? { voice: engineConfig.voiceId ?? settings.voice } : {})
           });
         });
         upstream.on("message", (raw, isBinary) => {

@@ -150,6 +150,19 @@ checked = "2026-11-20"
 attribution = "Qwen3-TTS by the Qwen team, Alibaba; MLX conversion by mlx-community"
 note = "larger sibling of the 0.6b model; needs more memory"
 
+[models."qwen3-tts-1.7b-voicedesign-mlx"]
+kind = "tts"
+design = true
+source = "hf"
+repo = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
+revision = "7d3824abff87e49756bb0f83fb5411de75d160c4"
+weights_license = "Apache-2.0"
+code_license = "Apache-2.0"
+license_url = "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+checked = "2026-11-20"
+attribution = "Qwen3-TTS VoiceDesign by the Qwen team, Alibaba; MLX conversion by mlx-community"
+note = "designs a voice from a text description (zh en); 4.5 GB, peaks near 8.6 GB while generating, loaded on first use"
+
 [models."moss-tts-nano-onnx"]
 kind = "tts"
 cloning = true

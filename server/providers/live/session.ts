@@ -931,6 +931,7 @@ export function createLiveProvider(
     return {
       instructions: instructions(),
       voiceGender: startEvent?.voiceGender ?? "female",
+      ...(profile.voiceId ? { voiceId: profile.voiceId } : {}),
       manualResponse,
       languages: profile.languages,
       keyterms: [profile.name, ...profile.wake.cjk.slice(0, 3)],

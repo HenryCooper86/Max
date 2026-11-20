@@ -161,6 +161,14 @@ describe("max speech catalog entry", () => {
 });
 
 describe("max speech engine", () => {
+  it("prefers the assistant's voice id over MAX_SPEECH_VOICE", async () => {
+    const fake = await fakeServer();
+    const { engine, events } = setup(fake, [], "secret");
+    await engine.connect({ ...config, voiceId: "v_0123456789" }, events);
+    expect(fake.received[0]).toMatchObject({ type: "session.update", voice: "v_0123456789" });
+    engine.close();
+  });
+
   it("connects, sends the session settings and the bearer key, and waits for ready", async () => {
     const fake = await fakeServer();
     const { engine, events } = setup(fake, [], "secret");

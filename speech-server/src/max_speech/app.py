@@ -12,6 +12,7 @@ from max_speech.api.limits import UploadLimitMiddleware
 from max_speech.api.slots import EngineSlots
 from max_speech.engines.base import (
     CloningTtsEngine,
+    DesignEngine,
     StreamingSttEngine,
     SttEngine,
     TtsEngine,
@@ -38,6 +39,7 @@ def create_app(
     stt_stream: StreamingSttEngine | None = None,
     second_pass: bool = False,
     cloning: CloningTtsEngine | None = None,
+    design: DesignEngine | None = None,
     voice_store: VoiceStore | None = None,
     lexicon: Lexicon | None = None,
 ) -> FastAPI:
@@ -59,6 +61,7 @@ def create_app(
         stt=stt,
         tts=router,
         cloning=cloning,
+        design=design,
         voices=voice_store,
         lexicon=lexicon,
         vad=vad,

@@ -10,6 +10,7 @@ export default tseslint.config(
       "android/**/build/**",
       "ios/build/**",
       "public/pcm-worklet.js",
+      "public/wav-capture-worklet.js",
       "**/.venv/**"
     ]
   },

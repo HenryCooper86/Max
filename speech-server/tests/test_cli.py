@@ -14,6 +14,13 @@ from max_speech.voices.lexicon import Lexicon
 from max_speech.voices.store import VoiceStore
 
 
+@pytest.fixture(autouse=True)
+def big_machine(monkeypatch):
+    from max_speech.engines import select
+
+    monkeypatch.setattr(select, "total_ram_bytes", lambda: 64 * 1024**3)
+
+
 def test_engines_command_prints_resolved(capsys, clean_env):
     assert cli.main(["engines", "--profile", "cpu"]) == 0
     out = capsys.readouterr().out
@@ -232,3 +239,50 @@ def test_engines_command_prints_the_cloning_role(capsys, clean_env):
     clean_env.delenv("SPEECH_CLONING_MODEL")
     assert cli.main(["engines", "--profile", "cuda"]) == 0
     assert "cloning: off" in capsys.readouterr().out
+
+
+def test_engines_command_prints_the_design_role(capsys, clean_env):
+    assert cli.main(["engines", "--profile", "mlx"]) == 0
+    assert (
+        "design: qwen3-design-mlx / qwen3-tts-1.7b-voicedesign-mlx [weights Apache-2.0"
+        in capsys.readouterr().out
+    )
+    assert cli.main(["engines", "--profile", "cpu"]) == 0
+    assert "design: off" in capsys.readouterr().out
+    clean_env.setenv("SPEECH_DESIGN_MODEL", "off")
+    assert cli.main(["engines", "--profile", "mlx"]) == 0
+    assert "design: off" in capsys.readouterr().out
+
+
+def test_download_fetches_the_design_model(monkeypatch, tmp_path, clean_env):
+    fetched = []
+    monkeypatch.setattr(
+        cli, "ensure_model", lambda entry, d, progress=None: fetched.append(entry.id) or tmp_path
+    )
+    clean_env.setenv("SPEECH_VAD_MODEL", "off")
+    clean_env.setenv("SPEECH_TURN_MODEL", "off")
+    clean_env.setenv("SPEECH_STREAM_STT_MODEL", "off")
+    assert cli.main(["download", "--profile", "mlx"]) == 0
+    assert "qwen3-tts-1.7b-voicedesign-mlx" in fetched
+
+
+def test_a_failed_default_cloning_takes_design_with_it(monkeypatch, tmp_path):
+    from max_speech.engines.fake_design import FakeDesignEngine
+
+    engines = Engines(tts=FakeTts(), cloning=_BadWarmCloning(), design=FakeDesignEngine())
+    monkeypatch.setattr(cli, "build_engines", lambda s, p, progress=None: engines)
+    slots = EngineSlots(ready_event=threading.Event(), voices=VoiceStore(tmp_path), lexicon=Lexicon(tmp_path))
+    cli._load_engines(slots, Settings(), "mlx")
+    assert slots.ready and slots.cloning is None and slots.design is None
+
+
+def test_a_working_design_engine_reaches_the_slots(monkeypatch, tmp_path):
+    from max_speech.engines.fake_cloning import FakeCloningTts
+    from max_speech.engines.fake_design import FakeDesignEngine
+
+    design = FakeDesignEngine()
+    engines = Engines(tts=FakeTts(), cloning=FakeCloningTts(), design=design)
+    monkeypatch.setattr(cli, "build_engines", lambda s, p, progress=None: engines)
+    slots = EngineSlots(ready_event=threading.Event(), voices=VoiceStore(tmp_path), lexicon=Lexicon(tmp_path))
+    cli._load_engines(slots, Settings(), "mlx")
+    assert slots.ready and slots.design is design

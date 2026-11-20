@@ -51,22 +51,23 @@ blocks DNS rebinding. It covers `/healthz` and `/.well-known/max-speech` too. An
 
 ## Configuration
 
-| Variable                  | Default             | Meaning                                                                              |
-| ------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
-| `SPEECH_API_KEY`          | unset               | Bearer token required on `/v1`. Unset means loopback only.                           |
-| `SPEECH_PROFILE`          | detected            | `mlx`, `cuda` or `cpu`. Detected from the hardware when unset.                       |
-| `SPEECH_DATA_DIR`         | `~/.max-speech`     | Where models are stored (`models/` under this directory).                            |
-| `SPEECH_STT_ENGINE`       | profile default     | `whisper-ct2`, `whisper-mlx`, or `off`.                                              |
-| `SPEECH_TTS_ENGINE`       | `kokoro`            | `kokoro`, or `off`.                                                                  |
-| `SPEECH_STT_MODEL`        | profile default     | Any speech-to-text model id in the license registry.                                 |
-| `SPEECH_TTS_MODEL`        | `kokoro-v1.0`       | Any text-to-speech model id in the license registry.                                 |
-| `SPEECH_TTS_ZH_MODEL`     | `kokoro-v1.1-zh`    | Chinese text-to-speech model, or `off` to use v1.0 for Chinese.                      |
-| `SPEECH_CLONING_MODEL`    | `mlx` only          | Voice cloning model (a registry entry with `cloning = true`), or `off`.              |
-| `SPEECH_VAD_MODEL`        | `silero-vad-v6.2`   | Voice activity model for the live session, or `off`.                                 |
-| `SPEECH_TURN_MODEL`       | `smart-turn-v3.2`   | End-of-turn model for the live session, or `off`.                                    |
-| `SPEECH_STREAM_STT_MODEL` | `x-asr-zh-en-480ms` | Streaming speech-to-text for the live session (must be a streaming model), or `off`. |
-| `SPEECH_SECOND_PASS`      | `auto`              | `on`, `off` or `auto` (on for the `mlx` and `cuda` profiles).                        |
-| `SPEECH_ALLOWED_ORIGINS`  | unset               | Comma-separated browser origins allowed on WebSockets, beyond localhost.             |
+| Variable                  | Default             | Meaning                                                                                                                                      |
+| ------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SPEECH_API_KEY`          | unset               | Bearer token required on `/v1`. Unset means loopback only.                                                                                   |
+| `SPEECH_PROFILE`          | detected            | `mlx`, `cuda` or `cpu`. Detected from the hardware when unset.                                                                               |
+| `SPEECH_DATA_DIR`         | `~/.max-speech`     | Where models are stored (`models/` under this directory).                                                                                    |
+| `SPEECH_STT_ENGINE`       | profile default     | `whisper-ct2`, `whisper-mlx`, or `off`.                                                                                                      |
+| `SPEECH_TTS_ENGINE`       | `kokoro`            | `kokoro`, or `off`.                                                                                                                          |
+| `SPEECH_STT_MODEL`        | profile default     | Any speech-to-text model id in the license registry.                                                                                         |
+| `SPEECH_TTS_MODEL`        | `kokoro-v1.0`       | Any text-to-speech model id in the license registry.                                                                                         |
+| `SPEECH_TTS_ZH_MODEL`     | `kokoro-v1.1-zh`    | Chinese text-to-speech model, or `off` to use v1.0 for Chinese.                                                                              |
+| `SPEECH_CLONING_MODEL`    | `mlx` only          | Voice cloning model (a registry entry with `cloning = true`), or `off`.                                                                      |
+| `SPEECH_DESIGN_MODEL`     | `mlx` only          | Voice design model (a registry entry with `design = true`), or `off`. On by default only with 24 GB of RAM or more; setting it forces it on. |
+| `SPEECH_VAD_MODEL`        | `silero-vad-v6.2`   | Voice activity model for the live session, or `off`.                                                                                         |
+| `SPEECH_TURN_MODEL`       | `smart-turn-v3.2`   | End-of-turn model for the live session, or `off`.                                                                                            |
+| `SPEECH_STREAM_STT_MODEL` | `x-asr-zh-en-480ms` | Streaming speech-to-text for the live session (must be a streaming model), or `off`.                                                         |
+| `SPEECH_SECOND_PASS`      | `auto`              | `on`, `off` or `auto` (on for the `mlx` and `cuda` profiles).                                                                                |
+| `SPEECH_ALLOWED_ORIGINS`  | unset               | Comma-separated browser origins allowed on WebSockets, beyond localhost.                                                                     |
 
 `serve` also takes `--host`, `--port` and `--profile`, which override the environment.
 
@@ -171,16 +172,16 @@ and keeps running without cloning; a model you set explicitly fails loudly inste
 - The `mlx` extra installs mlx-audio (MIT) and, through it, `transformers`, `safetensors` and `sentencepiece`. The
   base install on Linux is unchanged.
 
-| Method | Path                        | Notes                                                          |
-| ------ | --------------------------- | -------------------------------------------------------------- |
-| GET    | `/v1/voices`                | Preset and custom voices, plus `cloning: bool`                 |
-| POST   | `/v1/voices`                | Multipart upload, returns `201` (see below)                    |
-| GET    | `/v1/voices/{id}`           | One voice with its consent record, or `404`                    |
-| PATCH  | `/v1/voices/{id}`           | JSON `name`, `languages`, `gender`, `transcript`               |
-| DELETE | `/v1/voices/{id}`           | `204`; removes the reference audio too                         |
-| GET    | `/v1/voices/{id}/reference` | The stored reference WAV, to hear what was recorded            |
-| POST   | `/v1/voices/{id}/preview`   | JSON `{"text"?}` (at most 300 characters), returns `audio/wav` |
-| GET    | `/v1/lexicon`, PUT          | Read or replace the whole pronunciation lexicon                |
+| Method | Path                        | Notes                                                             |
+| ------ | --------------------------- | ----------------------------------------------------------------- |
+| GET    | `/v1/voices`                | Preset and custom voices, plus `cloning: bool` and `design: bool` |
+| POST   | `/v1/voices`                | Multipart upload, returns `201` (see below)                       |
+| GET    | `/v1/voices/{id}`           | One voice with its consent record, or `404`                       |
+| PATCH  | `/v1/voices/{id}`           | JSON `name`, `languages`, `gender`, `transcript`                  |
+| DELETE | `/v1/voices/{id}`           | `204`; removes the reference audio too                            |
+| GET    | `/v1/voices/{id}/reference` | The stored reference WAV, to hear what was recorded               |
+| POST   | `/v1/voices/{id}/preview`   | JSON `{"text"?}` (at most 300 characters), returns `audio/wav`    |
+| GET    | `/v1/lexicon`, PUT          | Read or replace the whole pronunciation lexicon                   |
 
 `POST /v1/voices` fields: `audio` (file, up to 25 MB), `name` (at most 64 characters), `transcript` (optional, at most
 1000; a blank one is transcribed by the speech recognizer, or `400 transcript_required` if there is none), `languages`
@@ -192,6 +193,64 @@ trimmed, resampled to 24 kHz and normalised. It is refused with `reference_too_s
 agree that my voice may be cloned for the Acme assistant.") and `consent_speaker` (the speaker's name). Anything else
 returns `400 consent_required`. The consent record is stored with the voice and returned by `GET`. The store itself
 enforces this, not only the route. Every `/v1` route needs the API key like the rest of the server.
+
+Every custom voice has an `origin`: `recorded` (the consent record above) or `designed` (see below; it carries a
+`design` record instead of consent). `POST /v1/voices` only ever makes recorded voices, whatever fields it is sent.
+
+### Designing a voice
+
+An admin can also describe a voice in words ("a deep, low-pitched older male voice") instead of recording one. This
+uses `qwen3-tts-1.7b-voicedesign-mlx` (Qwen3-TTS VoiceDesign, Apache-2.0, English and Chinese) on the `mlx` profile.
+Nothing about a real person is cloned, so a designed voice has no consent record.
+
+How it works: the model speaks a fixed sample sentence in a voice that fits the description. Design on its own drifts
+from one sentence to the next, so a designed voice is never spoken by the design model. You audition candidates, save
+one, and the saved sample becomes the reference audio (and the sample text its transcript) of an ordinary custom
+voice that the cloning engine then speaks. Measured on an M5 Max, a cloned designed sample kept the voice (speaker
+similarity 0.72 to 0.82, against 0.27 for design alone).
+
+| Method | Path                            | Notes                                                                                                                                                                              |
+| ------ | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/v1/voices/design`             | JSON `{description (at most 300), text? (at most 300), language?, count? (1 to 3, default 3), created_by?}` returns `{candidates:[{id, text, description, language, expires_at}]}` |
+| GET    | `/v1/voices/design/{cid}/audio` | The candidate as `audio/wav`, or `404`                                                                                                                                             |
+| POST   | `/v1/voices/design/{cid}/save`  | JSON `{name, gender?, languages?, created_by?}` returns `201` and the new custom voice                                                                                             |
+
+- `text` defaults to a fixed sentence in the language (`en` or `zh`), which comes from `language`, else from the script
+  of `text` or the description. Each candidate uses a different random seed; the seed is stored in the voice's `design`
+  record (`description`, `seed`, `model`, `text`), and the same seed, text and description give the same audio.
+- Candidates live in memory only: 15 minutes each, at most 30 per server (the oldest is dropped first). A restart
+  forgets them. Candidate ids look like `c_3f9a0c12ab45`.
+- Generation takes the same lock as speech, one candidate at a time, so live speech waits for at most one sentence (about
+  1.5 to 3 s). It runs at a real-time factor near 0.25.
+- Memory: the model is 4.5 GB on disk and peaks near 8.6 GB while generating. It is downloaded at startup (and by
+  `max-speech download`) but loaded into memory only on the first design request, and unloaded after 10 idle minutes.
+  Memory use of the rest of the server is unchanged until then.
+- Design needs cloning. If cloning is off or failed to load, design is off (the server logs why), and the routes
+  return `409 design_unavailable`. A default design model that fails to download is skipped with a warning; one set
+  through `SPEECH_DESIGN_MODEL` fails loudly. `features.voice_design` in `/.well-known/max-speech` reports it.
+- **Saving consumes the candidate.** A second save of the same candidate (or of an expired one) returns
+  `404 candidate_not_found`, so a double click cannot make two voices. If a save fails, the candidate is kept for a
+  retry. Its audio route is `404` after a save too.
+- **Sample length.** A saved reference must be at least 3 s of speech. The default sample sentences give 4.9 to 6.1 s
+  (English) and 4.3 to 7.3 s (Chinese) on the real model. A `text` of your own must have at least 25 characters (12
+  Han characters for Chinese), otherwise `400 sample_text_too_short` at design time.
+- **Loading.** The first design request loads the model before it takes the speech lock, so the multi-second load
+  never blocks live speech; only each generated sentence does.
+- **Memory default.** On the `mlx` profile design is on by default only with at least 24 GB of RAM (the server logs why
+  it is off otherwise). `SPEECH_DESIGN_MODEL=qwen3-tts-1.7b-voicedesign-mlx` forces it on.
+- **Real people.** A description that asks for a particular person's voice is refused with `400 design_refused`.
+  The check is best effort, not a safeguard. It refuses: capitalised names after "like" or "as" ("like Morgan
+  Freeman", "speak as Taylor Swift"), "the voice of Name", "Name's voice", "Name Surname voice"; the verbs imitate,
+  impersonate, mimic, clone, "in the style of", and "sound(s) like" followed by anything but a generic article
+  ("sounds like my boss"); and in Chinese 模仿, 冒充, 仿照, 克隆, 听起来像/像/学 followed by a 2 to 4 character name,
+  and "名字的声音" ("雷军的声音"). It allows generic descriptors ("a young woman's voice", "the voice of a cheerful
+  young girl", "a deep voice from the south", "像老人一样说话"). Names are told from descriptions by capitalisation
+  (English) and by a word list of common descriptive words (Chinese), so it misses lower-case or unusual names and
+  can wrongly refuse a capitalised word or an adjective it does not know. A determined user can phrase around it.
+  Treat designed voices that resemble someone as that person's likeness and do not use them to deceive.
+- **Error codes** of the design routes: `design_unavailable` (409 when design is off; 503 when the model could not
+  be loaded), `design_refused` (400), `candidate_not_found` (404), `sample_text_too_short` (400). Bad fields use the
+  usual `invalid_field` and `invalid_language`.
 
 **Lexicon.** `PUT /v1/lexicon` takes `{"entries": {"MAX": "Max", "Dr": "Doctor"}}` and applies to all speech, preset
 or custom, before synthesis. Longest keys win. Latin keys match whole words, case-insensitively; keys with Chinese

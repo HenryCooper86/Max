@@ -208,3 +208,26 @@ def test_shipped_registry_has_the_cloning_models():
     assert reg["qwen3-tts-0.6b-mlx"].revision == "1eccf1cb2519b5a4e8a95b5f0544f3303568164f"
     assert [e.id for e in companions(reg["moss-tts-nano-onnx"], reg)] == ["moss-audio-tokenizer-nano-onnx"]
     assert not reg["moss-audio-tokenizer-nano-onnx"].cloning
+
+
+def test_design_flag_parses_and_the_shipped_design_model_is_pinned():
+    reg = load_registry()
+    entry = reg["qwen3-tts-1.7b-voicedesign-mlx"]
+    assert entry.design and not entry.cloning and entry.kind == "tts"
+    assert entry.revision == "7d3824abff87e49756bb0f83fb5411de75d160c4"
+    assert entry.weights_license == "Apache-2.0" and entry.code_license == "Apache-2.0"
+    require("qwen3-tts-1.7b-voicedesign-mlx", "tts", registry=reg)
+    assert not reg["qwen3-tts-0.6b-mlx"].design
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        HF_OK.replace('source = "hf"', 'source = "hf"\ndesign = true'),  # stt cannot design
+        _two("design = 1"),
+        _two("design = true\ncloning = true"),
+    ],
+)
+def test_bad_design_flag_rejected(text):
+    with pytest.raises(RegistryError):
+        load_registry(text)

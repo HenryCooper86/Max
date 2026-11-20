@@ -52,6 +52,7 @@ class ModelEntry:
     allow_patterns: tuple[str, ...] = ()  # hf only: download just the files matching these globs
     streaming: bool = False  # stt only: a streaming recognizer, usable as the live session's STT
     cloning: bool = False  # tts only: can speak in a custom voice (a CloningTtsEngine's model)
+    design: bool = False  # tts only: designs a new voice from a text description (a design engine's model)
     requires: tuple[
         str, ...
     ] = ()  # companion models that must be license-checked and downloaded with this one
@@ -125,6 +126,13 @@ def _parse(model_id: str, raw: dict) -> ModelEntry:
         raise fail("cloning", "must be true or false")
     if cloning and kind != "tts":
         raise fail("cloning", "is only for a tts model")
+    design = raw.get("design", False)
+    if not isinstance(design, bool):
+        raise fail("design", "must be true or false")
+    if design and kind != "tts":
+        raise fail("design", "is only for a tts model")
+    if design and cloning:
+        raise fail("design", "and cloning are different roles; a model has one")
     requires = raw.get("requires", [])
     if not isinstance(requires, list) or not all(isinstance(r, str) and r for r in requires):
         raise fail("requires", "must be a list of model ids")
@@ -147,6 +155,7 @@ def _parse(model_id: str, raw: dict) -> ModelEntry:
         allow_patterns=tuple(patterns),
         streaming=streaming,
         cloning=cloning,
+        design=design,
         requires=tuple(requires),
     )
 

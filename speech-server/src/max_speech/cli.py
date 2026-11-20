@@ -50,6 +50,8 @@ def _load_engines(slots: EngineSlots, settings: Settings, profile: str) -> None:
                     "voice cloning is unavailable, continuing without it (%s: %s)", type(exc).__name__, exc
                 )
                 engines.cloning = None
+                engines.design = None  # a designed voice is spoken by cloning
+        slots.design = engines.design
         slots.stt = engines.stt
         slots.install_tts(engines.tts, engines.cloning)
         slots.vad, slots.turn, slots.stt_stream = engines.vad, engines.turn, engines.stt_stream
@@ -149,6 +151,7 @@ def _cmd_engines(args: argparse.Namespace) -> int:
         ("stt", the_plan.stt),
         ("tts", the_plan.tts),
         ("cloning", the_plan.cloning),
+        ("design", the_plan.design),
         ("vad", the_plan.vad),
         ("turn", the_plan.turn),
         ("stt_stream", the_plan.stt_stream),

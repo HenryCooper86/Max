@@ -28,6 +28,8 @@ export type EngineResponseMode = "auto" | "manual-capable" | "manual-only";
 export type EngineConfig = {
   instructions: string;
   voiceGender: VoiceGender;
+  /** A named voice of the speech server; engines without named voices ignore it. */
+  voiceId?: string;
   /** True → do not answer until `respond()` is called. */
   manualResponse: boolean;
   /** Languages the assistant speaks, most preferred first. */

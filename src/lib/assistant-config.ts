@@ -29,6 +29,8 @@ export type AssistantDraft = {
   accentColor: string;
   /** null follows the device's default preset. */
   equalizer: VoiceEqualizer | null;
+  /** The speech voice the assistant speaks with (Max Speech); "" for the default. */
+  voiceId: string;
   /** The voice backend (configurator only: it lives in .env, not the config). */
   voiceProvider: string;
   /** Stored keys this editor does not edit, written back as they were. */
@@ -36,6 +38,7 @@ export type AssistantDraft = {
 };
 
 const LIMITS = { name: 24, wakeName: 24, wakeNames: 8, languages: 8, developer: 80, tagline: 80 } as const;
+const VOICE_ID_MAX = 64;
 const HEX = /^#[0-9a-f]{6}$/i;
 const LANGUAGE_CODE = /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/;
 const FAMILY_DEFAULT: Record<string, string> = {
@@ -74,6 +77,7 @@ export function emptyDraft(language: Language = "en-US"): AssistantDraft {
     visualizer: null,
     accentColor: "",
     equalizer: null,
+    voiceId: "",
     voiceProvider: "mock",
     extra: {}
   };
@@ -105,7 +109,7 @@ export function draftFromConfig(config: unknown, language: Language = "en-US"): 
   if (Object.keys(wakeRest).length) extra.wake = wakeRest;
   const voice = isRecord(config.voice) ? config.voice : {};
   const voiceEqualizer = voice.equalizer;
-  const voiceRest = Object.fromEntries(Object.entries(voice).filter(([key]) => key !== "equalizer"));
+  const voiceRest = Object.fromEntries(Object.entries(voice).filter(([key]) => key !== "equalizer" && key !== "id"));
   if (Object.keys(voiceRest).length) extra.voice = voiceRest;
   const name = text(config.name);
   const languages = textList(config.languages).map((code) => code.trim().toLowerCase());
@@ -125,6 +129,7 @@ export function draftFromConfig(config: unknown, language: Language = "en-US"): 
     visualizer: isVisualizer(config.visualizer) ? config.visualizer : null,
     accentColor: HEX.test(text(config.accentColor)) ? text(config.accentColor).toUpperCase() : "",
     equalizer: normalizeEqualizer(voiceEqualizer ?? config.equalizer),
+    voiceId: text(voice.id).slice(0, VOICE_ID_MAX),
     extra
   };
 }
@@ -150,8 +155,13 @@ export function configFromDraft(draft: AssistantDraft): Record<string, unknown> 
   if (draft.accentColor) config.accentColor = draft.accentColor.toUpperCase();
   if (theme !== undefined) config.theme = theme;
   const equalizer = draft.equalizer ? normalizeEqualizer(draft.equalizer) : null;
-  if (equalizer || isRecord(extraVoice)) {
-    config.voice = { ...(isRecord(extraVoice) ? extraVoice : {}), ...(equalizer ? { equalizer } : {}) };
+  const voiceId = draft.voiceId.trim();
+  if (equalizer || voiceId || isRecord(extraVoice)) {
+    config.voice = {
+      ...(isRecord(extraVoice) ? extraVoice : {}),
+      ...(voiceId ? { id: voiceId } : {}),
+      ...(equalizer ? { equalizer } : {})
+    };
   }
   return { ...config, ...rest };
 }

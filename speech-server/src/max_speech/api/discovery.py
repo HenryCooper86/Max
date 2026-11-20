@@ -39,6 +39,7 @@ async def discovery(request: Request):
     vad, turn, stt_stream = (getattr(slots, name, None) for name in ("vad", "turn", "stt_stream"))
     live = (vad, turn, stt_stream, slots.tts)
     cloning = slots.cloning
+    design = slots.design if cloning is not None else None  # a designed voice is spoken by cloning
     return {
         "protocol": "max-speech.v1",
         "version": __version__,
@@ -50,7 +51,7 @@ async def discovery(request: Request):
             "streaming_tts": True,
             "session_ws": all(e is not None for e in live),
             "cloning": cloning is not None,
-            "voice_design": False,
+            "voice_design": design is not None,
         },
-        "attributions": _attributions([slots.stt, slots.tts, cloning, vad, turn, stt_stream]),
+        "attributions": _attributions([slots.stt, slots.tts, cloning, design, vad, turn, stt_stream]),
     }

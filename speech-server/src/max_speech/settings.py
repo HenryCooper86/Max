@@ -28,6 +28,8 @@ class Settings:
     cloning_model: str | None = (
         None  # voice cloning model id (a registry entry with cloning = true), "off", or default
     )
+    # Voice design (a registry entry with design = true), "off", or the default. Needs cloning to be on.
+    design_model: str | None = None
     # Live conversation (/v1/speech/session). Each is a registry id, "off" to disable, None for the default.
     vad_model: str | None = None
     turn_model: str | None = None
@@ -63,6 +65,7 @@ class Settings:
             tts_model=env.get("SPEECH_TTS_MODEL") or None,
             tts_zh_model=env.get("SPEECH_TTS_ZH_MODEL") or None,
             cloning_model=env.get("SPEECH_CLONING_MODEL") or None,
+            design_model=env.get("SPEECH_DESIGN_MODEL") or None,
             vad_model=env.get("SPEECH_VAD_MODEL") or None,
             turn_model=env.get("SPEECH_TURN_MODEL") or None,
             stream_stt_model=env.get("SPEECH_STREAM_STT_MODEL") or None,

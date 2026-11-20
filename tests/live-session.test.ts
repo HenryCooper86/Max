@@ -313,6 +313,15 @@ describe("live voice session", () => {
     expect(engine().said).toHaveLength(1);
   });
 
+  it("hands the assistant's chosen voice id to the engine", async () => {
+    setAssistantProfileForTests(assistantProfileFrom({ voice: { id: "v_0123456789" } }));
+    const withVoice = await open("auto");
+    expect(withVoice.engine().config.voiceId).toBe("v_0123456789");
+    setAssistantProfileForTests();
+    const without = await open("auto");
+    expect(without.engine().config).not.toHaveProperty("voiceId");
+  });
+
   it("surfaces the upstream's own message when the backend cannot connect", async () => {
     const engine = new FakeEngine("auto");
     engine.connectError = new Error("OpenAI Realtime: HTTP 401 — check the API key");

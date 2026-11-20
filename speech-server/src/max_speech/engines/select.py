@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+import os
+import subprocess
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from max_speech.engines.base import (
     CloningTtsEngine,
+    DesignEngine,
     StreamingSttEngine,
     SttEngine,
     TtsEngine,
@@ -54,6 +57,14 @@ _CLONING_ENGINE = {
     "moss-tts-nano-onnx": "moss-onnx",
 }
 _CLONING_PROFILES = {"qwen3-mlx": ("mlx",)}  # engines that only run on some profiles
+# Voice design: a designed voice is used through cloning, so the role needs cloning on. The model is loaded into
+# memory on first use, not at startup.
+_DEFAULT_DESIGN = {"mlx": "qwen3-tts-1.7b-voicedesign-mlx", "cpu": None, "cuda": None}
+_DESIGN_ENGINE = {"qwen3-tts-1.7b-voicedesign-mlx": "qwen3-design-mlx"}
+_DESIGN_PROFILES = {"qwen3-design-mlx": ("mlx",)}
+# The design model peaks near 8.6 GB while generating, beside the other models; below this much RAM it is not
+# switched on by default (SPEECH_DESIGN_MODEL=qwen3-tts-1.7b-voicedesign-mlx forces it).
+DESIGN_MIN_RAM_GB = 24
 _SECOND_PASS_PROFILES = ("mlx", "cuda")
 # Model to use when only the engine is overridden.
 _STT_MODEL_FOR_ENGINE = {
@@ -61,16 +72,32 @@ _STT_MODEL_FOR_ENGINE = {
 }
 
 
+def total_ram_bytes() -> int | None:
+    """Physical memory, or None when it cannot be read (sysconf on Linux and macOS, sysctl as a fallback)."""
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        return int(
+            subprocess.run(
+                ["sysctl", "-n", "hw.memsize"], check=False, capture_output=True, text=True, timeout=5
+            ).stdout
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 @dataclass(frozen=True)
 class RolePlan:
-    role: str  # "stt", "tts", "cloning", "vad", "turn" or "stt_stream"
+    role: str  # "stt", "tts", "cloning", "design", "vad", "turn" or "stt_stream"
     engine: str
     model_id: str
 
     @property
     def kind(self) -> str:
         """The registry kind the model must have; the streaming recognizer is an stt model, cloning a tts one."""
-        return {"stt_stream": "stt", "cloning": "tts"}.get(self.role, self.role)
+        return {"stt_stream": "stt", "cloning": "tts", "design": "tts"}.get(self.role, self.role)
 
 
 @dataclass(frozen=True)
@@ -82,10 +109,13 @@ class Plan:
     stt_stream: RolePlan | None
     second_pass: bool  # whether the session should run the batch model over each finished utterance
     cloning: RolePlan | None = None  # voice cloning; needs `tts` (custom voices sit beside its preset ones)
+    design: RolePlan | None = None  # voice design; needs `cloning` (a designed voice is spoken by cloning)
 
     def roles(self) -> Iterator[RolePlan]:
         """The roles that are on, in load order."""
-        yield from filter(None, (self.stt, self.tts, self.cloning, self.vad, self.turn, self.stt_stream))
+        yield from filter(
+            None, (self.stt, self.tts, self.cloning, self.design, self.vad, self.turn, self.stt_stream)
+        )
 
 
 @dataclass
@@ -97,6 +127,7 @@ class Engines:
     stt_stream: StreamingSttEngine | None = None
     second_pass: bool = False
     cloning: CloningTtsEngine | None = None
+    design: DesignEngine | None = None  # built but not loaded: it reads its weights on the first call
 
     def loaded(self) -> list:
         return [
@@ -117,7 +148,7 @@ def _live_role(role: str, default: tuple[str, str], override: str | None) -> Rol
     return RolePlan(role, default[0], override or default[1])
 
 
-def plan(settings: Settings, profile: str) -> Plan:
+def plan(settings: Settings, profile: str, *, total_ram: Callable[[], int | None] | None = None) -> Plan:
     """Resolve every role's engine and model id from defaults and SPEECH_* overrides; None means off."""
     stt = tts = None
     if settings.stt_engine != OFF:
@@ -147,6 +178,35 @@ def plan(settings: Settings, profile: str) -> Plan:
                     f"not {profile}"
                 )
             cloning = RolePlan("cloning", engine, model_id)
+    design = None
+    if settings.design_model != OFF:
+        model_id = settings.design_model or _DEFAULT_DESIGN[profile]
+        if settings.design_model is None and model_id is not None:
+            ram = (total_ram or total_ram_bytes)()
+            if ram is None or ram < DESIGN_MIN_RAM_GB * 1024**3:
+                have = "unknown" if ram is None else f"{ram / 1024**3:.0f} GB"
+                log.info(
+                    "voice design is off by default: it needs at least %d GB of RAM and this machine has %s; "
+                    "set SPEECH_DESIGN_MODEL=%s to force it on",
+                    DESIGN_MIN_RAM_GB,
+                    have,
+                    model_id,
+                )
+                model_id = None
+        if model_id is not None:
+            engine = _DESIGN_ENGINE.get(model_id)
+            if engine is None:
+                known = ", ".join(sorted(_DESIGN_ENGINE))
+                raise ValueError(f"no design engine for {model_id!r}; choose one of {known} or {OFF}")
+            if profile not in _DESIGN_PROFILES.get(engine, PROFILES):
+                raise ValueError(
+                    f"design model {model_id} runs on the {'/'.join(_DESIGN_PROFILES[engine])} profile only, "
+                    f"not {profile}"
+                )
+            if cloning is None:
+                log.info("voice design is off: it needs voice cloning, which is off")
+            else:
+                design = RolePlan("design", engine, model_id)
     vad = _live_role("vad", _DEFAULT_VAD, settings.vad_model)
     turn = _live_role("turn", _DEFAULT_TURN, settings.turn_model)
     stt_stream = None
@@ -159,7 +219,7 @@ def plan(settings: Settings, profile: str) -> Plan:
         second_pass = profile in _SECOND_PASS_PROFILES
     else:
         second_pass = settings.second_pass == "on"
-    return Plan(stt, tts, vad, turn, stt_stream, second_pass and stt is not None, cloning)
+    return Plan(stt, tts, vad, turn, stt_stream, second_pass and stt is not None, cloning, design)
 
 
 def zh_model_id(settings: Settings, tts: RolePlan | None) -> str | None:
@@ -184,6 +244,12 @@ def licensed(role_plan: RolePlan, registry: dict[str, ModelEntry] | None = None)
             f"{entry.id} cannot clone voices, so it cannot be the cloning model "
             f"(SPEECH_CLONING_MODEL); choose one of: {', '.join(cloning)}"
         )
+    if role_plan.role == "design" and not entry.design:
+        design = sorted(e.id for e in registry.values() if e.design)
+        raise LicenseError(
+            f"{entry.id} cannot design voices, so it cannot be the design model "
+            f"(SPEECH_DESIGN_MODEL); choose one of: {', '.join(design)}"
+        )
     return entry
 
 
@@ -207,6 +273,15 @@ def _build_cloning(role_plan: RolePlan, entry: ModelEntry, paths: dict[str, Path
         (codec,) = entry.requires
         return MossNanoCloning(paths[entry.id], paths[codec], entry.id)
     raise ValueError(f"unknown cloning engine {role_plan.engine!r}")
+
+
+def _build_design(role_plan: RolePlan, entry: ModelEntry, path: Path) -> DesignEngine:
+    """Imports the engine module late. The engine only records where the weights are; it loads them on first use."""
+    if role_plan.engine == "qwen3-design-mlx":
+        from max_speech.engines.qwen3_design_mlx import Qwen3MlxDesign
+
+        return Qwen3MlxDesign(path, entry.id)
+    raise ValueError(f"unknown design engine {role_plan.engine!r}")
 
 
 def _cuda_stt_or_cpu(path, model_id: str) -> SttEngine:
@@ -284,6 +359,20 @@ def build_engines(settings: Settings, profile: str, *, progress: Progress | None
                 raise  # explicitly configured: fail loudly
             log.warning(
                 "voice cloning is unavailable, continuing without it (%s: %s)", type(exc).__name__, exc
+            )
+    if the_plan.design and out.cloning is None:
+        log.info("voice design is off: voice cloning is unavailable")
+    elif the_plan.design:
+        design = the_plan.design
+        log.info("preparing voice design %s (%s), loaded on first use", design.engine, design.model_id)
+        try:
+            design_path = ensure_model(entries["design"], settings.models_dir, progress=progress)
+            out.design = _build_design(design, entries["design"], design_path)
+        except Exception as exc:
+            if settings.design_model is not None:
+                raise
+            log.warning(
+                "voice design is unavailable, continuing without it (%s: %s)", type(exc).__name__, exc
             )
     if the_plan.vad:
         log.info("loading vad %s", the_plan.vad.model_id)

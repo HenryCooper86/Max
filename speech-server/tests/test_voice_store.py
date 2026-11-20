@@ -455,3 +455,104 @@ def test_consent_is_read_only(store):
     source["speaker"] = "changed"
     assert copy.consent["speaker"] == "p"
     assert isinstance(v.to_dict()["consent"], dict)
+
+
+# ---- origin: recorded or designed ------------------------------------------------------------------------------
+def designed(store, **kw):
+    args = {
+        "audio": good_wav(),
+        "name": "Calm",
+        "transcript": "Hello! This is a sample.",
+        "description": "A calm, low voice",
+        "seed": 11,
+        "model": "qwen3-tts-1.7b-voicedesign-mlx",
+        "created_by": "admin",
+    }
+    args.update(kw)
+    return store.create_designed(**args)
+
+
+def test_recorded_voices_have_origin_and_consent(store):
+    v = make(store)
+    d = v.to_dict()
+    assert v.origin == "recorded" and d["origin"] == "recorded" and "consent" in d and "design" not in d
+
+
+def test_the_store_still_refuses_a_recorded_voice_without_consent(store):
+    with pytest.raises(VoiceError) as e:
+        make(store, consent=None)
+    assert code(e) == "consent_required"
+    assert store.list() == []
+
+
+def test_a_designed_voice_carries_its_design_and_no_consent(store, tmp_path):
+    v = designed(store, languages="en")
+    d = v.to_dict()
+    assert v.origin == "designed" and "consent" not in d
+    assert d["design"] == {
+        "description": "A calm, low voice",
+        "seed": 11,
+        "model": "qwen3-tts-1.7b-voicedesign-mlx",
+        "text": "Hello! This is a sample.",
+    }
+    meta = json.loads((tmp_path / "voices" / v.id / "voice.json").read_text())
+    assert meta["origin"] == "designed" and "consent" not in meta
+    reloaded = VoiceStore(tmp_path / "voices").info(v.id)
+    assert reloaded.origin == "designed" and reloaded.design["description"] == "A calm, low voice"
+
+
+def test_a_designed_voice_needs_a_description(store):
+    for bad in (None, "", "   ", 5):
+        with pytest.raises(VoiceError) as e:
+            designed(store, description=bad)
+        assert code(e) == "invalid_field"
+    assert store.list() == []
+
+
+def test_a_designed_voice_needs_an_integer_seed_and_a_transcript(store):
+    with pytest.raises(VoiceError):
+        designed(store, seed="7")
+    with pytest.raises(VoiceError) as e:
+        designed(store, transcript="")
+    assert code(e) == "transcript_required"
+
+
+def test_update_keeps_the_origin_and_design(store):
+    v = designed(store)
+    updated = store.update(v.id, name="Renamed")
+    assert (
+        updated.origin == "designed" and updated.design["seed"] == 11 and "consent" not in updated.to_dict()
+    )
+
+
+def test_voices_saved_before_origin_existed_load_as_recorded(store, tmp_path):
+    v = make(store)
+    path = tmp_path / "voices" / v.id / "voice.json"
+    meta = json.loads(path.read_text())
+    del meta["origin"]
+    path.write_text(json.dumps(meta))
+    assert VoiceStore(tmp_path / "voices").info(v.id).origin == "recorded"
+
+
+def test_a_recorded_voice_file_without_consent_is_not_loaded(store, tmp_path):
+    v = make(store)
+    path = tmp_path / "voices" / v.id / "voice.json"
+    meta = json.loads(path.read_text())
+    del meta["consent"]
+    path.write_text(json.dumps(meta))
+    assert VoiceStore(tmp_path / "voices").list() == []
+
+
+def test_a_designed_reference_needs_three_seconds():
+    import numpy as np
+    import pytest
+
+    from max_speech.voices.store import MIN_DESIGN_SECONDS, VoiceError, reference_from_samples
+
+    t = np.arange(24000 * 5) / 24000
+    tone = (0.3 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
+    assert MIN_DESIGN_SECONDS == 3.0
+    with pytest.raises(VoiceError) as e:
+        reference_from_samples(tone[: int(24000 * 2.8)], 24000)
+    assert e.value.code == "reference_too_short"
+    assert reference_from_samples(tone[: int(24000 * 3.2)], 24000).duration_s >= 3.0

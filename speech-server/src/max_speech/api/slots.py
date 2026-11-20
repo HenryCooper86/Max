@@ -8,12 +8,14 @@ from dataclasses import dataclass, field
 
 from max_speech.engines.base import (
     CloningTtsEngine,
+    DesignEngine,
     StreamingSttEngine,
     SttEngine,
     TtsEngine,
     TurnDetector,
     VadEngine,
 )
+from max_speech.voices.candidates import CandidateCache
 from max_speech.voices.lexicon import Lexicon
 from max_speech.voices.store import VoiceStore
 
@@ -24,6 +26,8 @@ class EngineSlots:
     tts: TtsEngine | None = None  # a VoiceRouter once the app is built: preset voices plus custom ones
     # Voice cloning (milestone 3). `cloning` is None when no cloning model is loaded.
     cloning: CloningTtsEngine | None = None
+    design: DesignEngine | None = None  # voice design; only set together with `cloning`
+    candidates: CandidateCache = field(default_factory=CandidateCache)  # designed samples awaiting a choice
     voices: VoiceStore | None = None
     lexicon: Lexicon | None = None
     # Realtime listening, used by the session WebSocket only.

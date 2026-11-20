@@ -4,7 +4,14 @@ import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "android/**/build/**", "ios/build/**", "public/pcm-worklet.js", ".venv/**"]
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "android/**/build/**",
+      "ios/build/**",
+      "public/pcm-worklet.js",
+      "**/.venv/**"
+    ]
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

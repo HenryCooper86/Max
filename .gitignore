@@ -44,3 +44,6 @@ assistant.config.json
 # Internal analysis and research, kept locally only.
 reports/
 research_notes/
+
+# Max Speech benchmark output
+speech-server/bench/out/

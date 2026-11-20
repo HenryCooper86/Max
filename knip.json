@@ -16,5 +16,5 @@
     "examples/web-embed/server.mjs"
   ],
   "ignore": ["public/pcm-worklet.js", "rdk/**"],
-  "ignoreBinaries": ["mkfifo", "rsvg-convert", "magick", "which", "say", "ffmpeg"]
+  "ignoreBinaries": ["mkfifo", "rsvg-convert", "magick", "which", "say", "ffmpeg", "uv"]
 }

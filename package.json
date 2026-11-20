@@ -30,6 +30,7 @@
     "check:rdk": "tsc -p rdk/agent/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:rdk-vision": "python3 -m pytest -c rdk/vision/pytest.ini -m \"not hardware\" --strict-markers rdk/vision/tests",
+    "test:speech": "cd speech-server && uv run --frozen pytest -q",
     "test:watch": "vitest",
     "test:fault-matrix": "tsx scripts/testing-fault-matrix.ts",
     "test:release-gate": "tsx scripts/testing-release-gate.ts"

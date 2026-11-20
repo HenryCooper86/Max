@@ -54,7 +54,7 @@ jobs:
         working-directory: speech-server
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: speech-server/uv.lock

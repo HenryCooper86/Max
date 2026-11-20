@@ -8,7 +8,8 @@ describe("voices api", () => {
     const bytes = new Uint8Array(3_000_000).map((_, i) => i % 251);
     const encoded = bytesToBase64(bytes);
     expect(encoded.length).toBe(Math.ceil(bytes.length / 3) * 4);
-    expect(Uint8Array.from(Buffer.from(encoded, "base64"))).toEqual(bytes);
+    // Buffer.equals, not toEqual: a deep compare of 3 MB element by element takes seconds on CI runners.
+    expect(Buffer.from(encoded, "base64").equals(Buffer.from(bytes))).toBe(true);
   });
 
   it("posts a clone as JSON with base64 audio", async () => {

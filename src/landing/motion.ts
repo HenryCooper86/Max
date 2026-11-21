@@ -88,6 +88,7 @@ const SECTION_MOODS: Record<string, MascotMood> = {
   demo: "listening",
   devices: "ready",
   backends: "speaking",
+  speech: "listening",
   look: "happy",
   how: "thinking",
   start: "happy"

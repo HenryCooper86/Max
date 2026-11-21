@@ -48,6 +48,10 @@ export const PLANS: readonly Plan[] = [
       { zh: "本仓库的全部内容", en: "Everything in this repository" },
       { zh: "部署在你自己的服务器或 Docker 上", en: "Host it on your own server or with Docker" },
       { zh: "所有语音后端、工具、SDK 和组件", en: "Every voice backend, tools, the SDK and the widget" },
+      {
+        zh: "Max Speech：本地语音、声音克隆和声音设计",
+        en: "Max Speech: local voice, voice cloning and voice design"
+      },
       { zh: "可以用在商业产品里", en: "Use it in commercial products" },
       { zh: "GitHub 社区支持", en: "Community support on GitHub" }
     ],
@@ -151,6 +155,13 @@ export const PRICING_FAQ: readonly Question[] = [
     answer: {
       zh: "可以。代码、SDK 和协议都一样，只要改一个地址。",
       en: "Yes. The code, the SDK and the protocol are the same; you change one URL."
+    }
+  },
+  {
+    question: { zh: "Max Cloud 包含 Max Speech 吗？", en: "Does Max Cloud include Max Speech?" },
+    answer: {
+      zh: "不包含。Max Speech 运行在你自己的硬件上，属于自行部署，免费使用。Max Cloud 使用你的 OpenAI、Gemini 或 xAI 密钥。",
+      en: "No. Max Speech runs on your own hardware, so it comes with self-hosting, free. Max Cloud uses your OpenAI, Gemini or xAI key."
     }
   },
   {

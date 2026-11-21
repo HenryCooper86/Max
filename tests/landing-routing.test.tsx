@@ -90,8 +90,19 @@ describe("landing page", () => {
     expect(html).toContain('href="#demo"');
     expect(html).toContain('href="/build"');
     expect(html).toContain("脚本预览");
-    for (const id of ["demo", "devices", "backends", "look", "how", "start"]) expect(html).toContain(`id="${id}"`);
+    for (const id of ["demo", "devices", "backends", "speech", "look", "how", "start"]) {
+      expect(html).toContain(`id="${id}"`);
+    }
     expect(html).toContain("npm run setup");
+  });
+
+  it("presents Max Speech as self-hosted, with its consent and hardware limits", () => {
+    const html = render(false);
+    expect(html).toContain("Max Speech");
+    expect(html).toContain("同意声明");
+    expect(html).toContain("24 GB");
+    expect(html).toContain("不包含在 Max Cloud 中");
+    expect(html).toContain(`${REPOSITORY_URL}/blob/main/docs/speech-server-deployment.md`);
   });
 
   it("turns the primary action into Open the app for a signed-in visitor", () => {

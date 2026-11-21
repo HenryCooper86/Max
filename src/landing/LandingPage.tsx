@@ -300,6 +300,88 @@ function Backends() {
   );
 }
 
+function LocalSpeech() {
+  const { language } = useLanguage();
+  const say = (zh: string, en: string) => localized(language, zh, en);
+  const features = [
+    {
+      title: say("实时对话", "Live conversation"),
+      text: say(
+        "你说话时文字就开始出现（中文和英文），由学习得到的轮次检测判断你是否说完。",
+        "Your words appear while you speak, in Chinese and English, and a learned turn detector decides when you have finished."
+      )
+    },
+    {
+      title: say("八种语言的语音", "Speech in eight languages"),
+      text: say(
+        "中文、英语、西班牙语、法语、印地语、意大利语、日语和葡萄牙语。中文由专门的模型朗读。",
+        "English, Chinese, Spanish, French, Hindi, Italian, Japanese and Portuguese, with a dedicated model for Chinese."
+      )
+    },
+    {
+      title: say("经同意的声音克隆", "Voice cloning, with consent"),
+      text: say(
+        "用 5 到 30 秒的录音克隆声音，必须提供说话人的同意声明，并与声音一起保存。支持 Apple 芯片和 CPU，暂不支持 NVIDIA。",
+        "Clone a voice from 5 to 30 seconds of speech. The speaker's consent statement is required and kept with the voice. Works on Apple silicon or a CPU, not yet on NVIDIA."
+      )
+    },
+    {
+      title: say("用文字设计声音", "Voice design"),
+      text: say(
+        "描述你想要的声音，试听候选后保存。需要 24 GB 或以上内存的 Apple 芯片电脑。",
+        "Describe the voice you want, listen to the candidates and keep one. Needs Apple silicon with 24 GB of memory or more."
+      )
+    },
+    {
+      title: say("工作室里的声音管理", "Voices in the Studio"),
+      text: say(
+        "在管理工作室里试听、克隆、设计和选择声音，并修改发音。",
+        "Hear, clone, design and choose voices, and correct pronunciations, from the admin Studio."
+      )
+    },
+    {
+      title: say("Mac 或 Docker", "On a Mac or in Docker"),
+      text: say(
+        "在 Mac 上双击 start-speech.command，或运行 CPU、NVIDIA 的 Docker 镜像。NVIDIA 镜像尚未在 GPU 上测试。",
+        "Double-click start-speech.command on a Mac, or run the CPU or NVIDIA Docker image. The NVIDIA image has not been tested on a GPU yet."
+      )
+    }
+  ];
+  return (
+    <section className="siteSection" aria-labelledby="speech">
+      <SectionHead
+        id="speech"
+        title={say("Max Speech：声音留在你自己的机器上", "Max Speech: a voice that stays on your machine")}
+        lede={say(
+          "Max 自带的开源语音服务。它在你自己的硬件上听和说，音频不出你的机器，也没有按分钟计算的模型费用。",
+          "The open-source speech server that comes with Max. It listens and speaks on your own hardware, so audio stays with you and there is no per-minute model bill."
+        )}
+      />
+      <ul className="speechFeatures revealStagger" data-reveal="">
+        {features.map((feature) => (
+          <li key={feature.title}>
+            <h3>{feature.title}</h3>
+            <p>{feature.text}</p>
+          </li>
+        ))}
+      </ul>
+      <p className="backendDemoNote" data-reveal="">
+        {say(
+          "每个模型都要通过商用许可白名单，并固定在指定版本。Max Speech 用于自行部署，不包含在 Max Cloud 中。",
+          "Every model must pass a commercial-use license allowlist and is pinned to a fixed version. Max Speech is for self-hosting and is not part of Max Cloud."
+        )}{" "}
+        <a
+          className="siteTextLink"
+          href={`${REPOSITORY_URL}/blob/main/docs/speech-server-deployment.md`}
+          rel="noreferrer noopener"
+        >
+          {say("部署指南", "Deployment guide")}
+        </a>
+      </p>
+    </section>
+  );
+}
+
 function LookAndSound() {
   const { language } = useLanguage();
   const say = (zh: string, en: string) => localized(language, zh, en);
@@ -458,6 +540,10 @@ function GetStarted() {
           <li>
             <code>docs/local-models.md</code> {say("介绍如何完全离线运行。", "explains running fully offline.")}
           </li>
+          <li>
+            <code>start-speech.command</code>{" "}
+            {say("在 Apple 芯片的 Mac 上启动 Max Speech。", "starts Max Speech on an Apple silicon Mac.")}
+          </li>
         </ul>
       </div>
       <div className="startActions" data-reveal="">
@@ -493,6 +579,7 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
       <Demo />
       <Devices />
       <Backends />
+      <LocalSpeech />
       <LookAndSound />
       <HowItWorks />
       <GetStarted />

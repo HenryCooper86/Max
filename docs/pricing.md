@@ -29,6 +29,9 @@ only: no markup, no surprises, and switching models never changes our price.
 **Can I move between Cloud and self-hosting?** Yes, in both directions. The code, the SDK and the protocol are the same;
 you change one URL.
 
+**Does Max Cloud include Max Speech?** No. [Max Speech](speech-server-deployment.md) runs on your own hardware, so it
+comes with self-hosting, free. Max Cloud uses your OpenAI, Gemini or xAI key.
+
 **Can I charge my own customers?** Yes. The relay counts voice minutes per user, can cap them, and can send each
 session's usage to your billing system. See [usage and billing](usage-and-billing.md).
 

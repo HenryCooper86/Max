@@ -452,6 +452,9 @@ export function createPipelineEngine(
           const pcm = await audio;
           if (current()) events?.onAgentAudio(pcm);
         });
+        // `finish` reports a failure, but runs later or not at all after a barge-in. Until then
+        // an unobserved rejection here would take the whole relay down.
+        speechTail.catch(() => undefined);
       };
       return { sentence: speak, finish: () => speechTail };
     }

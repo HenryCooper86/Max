@@ -506,6 +506,76 @@ describe("Whisper pipeline engine", () => {
     return new Response(`${body}data: [DONE]\n\n`, { status: 200 });
   }
 
+  /** A reply whose second sentence arrives later, so speech can fail before the stream has ended. */
+  function slowSse(first: string, second: string): Response {
+    const encoder = new TextEncoder();
+    const line = (content: string) =>
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`);
+    return new Response(
+      new ReadableStream({
+        async start(controller) {
+          controller.enqueue(line(first));
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          controller.enqueue(line(second));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        }
+      }),
+      { status: 200 }
+    );
+  }
+
+  async function expectNoUnhandledRejection(run: () => Promise<void>): Promise<void> {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+    try {
+      await run();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+    expect(rejections).toEqual([]);
+  }
+
+  it("survives an unreachable speech server and reports the failed reply", async () => {
+    const request = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/chat/completions")) return slowSse("One. ", "Two.");
+      throw new TypeError("fetch failed");
+    });
+    const { log: seen, events } = recorder();
+    const engine = createPipelineEngine(log, settings, request as never, { endSilenceMs: 200 });
+    await engine.connect(CONFIG, events);
+    await expectNoUnhandledRejection(async () => {
+      engine.sendText!("hello");
+      await vi.waitFor(() => expect(seen.some(([kind]) => kind === "done")).toBe(true));
+    });
+    expect(seen.some(([kind]) => kind === "error")).toBe(true);
+  });
+
+  it("survives an interruption while a sentence is being synthesized", async () => {
+    let speaking!: () => void;
+    const speechStarted = new Promise<void>((resolve) => (speaking = resolve));
+    const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/chat/completions")) return slowSse("One. ", "Two.");
+      speaking();
+      return new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+          once: true
+        });
+      });
+    });
+    const { log: seen, events } = recorder();
+    const engine = createPipelineEngine(log, settings, request as never, { endSilenceMs: 200 });
+    await engine.connect(CONFIG, events);
+    await expectNoUnhandledRejection(async () => {
+      engine.sendText!("hello");
+      await speechStarted;
+      engine.cancel();
+      await vi.waitFor(() => expect(seen.at(-1)).toEqual(["done", true]));
+    });
+  });
+
   it("needs a key for hosted stages but not for local ones", () => {
     expect(pipelineConfigured(settings)).toBe(true);
     expect(pipelineConfigured({ ...settings, llm: { ...settings.llm, apiKey: "" } })).toBe(false);

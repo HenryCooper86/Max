@@ -25,6 +25,7 @@ from max_speech.audio import (
     wav_bytes,
 )
 from max_speech.engines.base import UnknownVoiceError
+from max_speech.engines.router import speech_engine_id
 from max_speech.languages import whisper_language
 
 log = logging.getLogger(__name__)
@@ -203,7 +204,7 @@ async def speech(request: Request, body: SpeechRequest):
     if body.stream_format == "audio" and fmt != "pcm":
         raise OpenAIError(400, "stream_format 'audio' requires response_format 'pcm'", param="stream_format")
     voice = resolve_voice(tts, body.voice)
-    headers = {"X-Max-Speech-Engine": tts.id}
+    headers = {"X-Max-Speech-Engine": speech_engine_id(tts, voice)}
     # The language is an optional hint, so an unknown value is ignored rather than rejected.
     hint = whisper_language(body.language)
     job = SynthJob(slots.tts_lock, _pcm_chunks(tts, body.input, voice, body.speed, hint))

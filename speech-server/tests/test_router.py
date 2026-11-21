@@ -5,7 +5,7 @@ from voice_helpers import STATEMENT, good_wav
 from max_speech.engines.base import UnknownVoiceError
 from max_speech.engines.fake import FakeTts
 from max_speech.engines.fake_cloning import FakeCloningTts, pitch_for
-from max_speech.engines.router import VoiceRouter
+from max_speech.engines.router import VoiceRouter, speech_engine_id
 from max_speech.voices.lexicon import Lexicon
 from max_speech.voices.store import VoiceStore
 
@@ -34,6 +34,16 @@ def dominant_hz(chunks, rate):
     x = np.concatenate(chunks)
     spectrum = np.abs(np.fft.rfft(x))
     return np.argmax(spectrum) * rate / len(x)
+
+
+def test_reports_the_engine_that_speaks_each_voice(parts):
+    store, voice, lexicon = parts
+    preset = FakeTts()
+    with_cloning = VoiceRouter(preset, FakeCloningTts(), store, lexicon)
+    assert speech_engine_id(with_cloning, voice.id) == "fake-cloning"
+    assert speech_engine_id(with_cloning, "alpha") == "fake"
+    assert speech_engine_id(VoiceRouter(preset, None, store, lexicon), voice.id) == "fake"
+    assert speech_engine_id(preset, voice.id) == "fake"
 
 
 def test_follows_the_preset_engine(parts):

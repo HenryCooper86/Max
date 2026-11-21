@@ -23,7 +23,7 @@ const MODE_INTELLIGENCE: Record<RideMode, RideIntelligence> = {
   ride: {
     modeLabel: "骑行",
     responseStyle: "回复必须极短，优先语音提示，不展开解释。",
-    safetyRule: "拒绝会分散骑手注意力的长任务，改为建议停车后继续。",
+    safetyRule: "需要看屏幕或多步操作的长任务，改为建议停车后继续；闲聊、笑话和常识问题用一两句话直接回答，不要拒绝。",
     glanceableFocus: "速度、风、下一步提示",
     hazardLevel: "normal"
   },
@@ -37,7 +37,7 @@ const MODE_INTELLIGENCE: Record<RideMode, RideIntelligence> = {
   navigation: {
     modeLabel: "导航",
     responseStyle: "只给下一步动作、距离和风险提示。",
-    safetyRule: "避免闲聊；所有回答围绕路线决策和安全。",
+    safetyRule: "路线和安全提示优先；闲聊、笑话和常识问题用一两句话直接回答，不要拒绝。",
     glanceableFocus: "下一路口、距离、车道",
     hazardLevel: "caution"
   },

@@ -8747,37 +8747,258 @@ button.opsCard:disabled {
   font-size: var(--fs-15);
 }
 
-/* Max Speech */
-.speechFeatures {
+/* Max Speech: the voice stage */
+.voiceStage {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0 clamp(24px, 4vw, 48px);
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  gap: 20px;
 }
 
-.speechFeatures li {
-  padding: 16px 0 24px;
-  border-top: var(--line-w) solid var(--line);
+.stageTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 28px;
 }
 
-.speechFeatures p {
-  margin: 6px 0 0;
+.stageTabs button {
+  padding: 0 0 6px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-3);
+  font: 600 clamp(1.375rem, 3vw, 2.25rem) / 1.15 var(--font-display);
+  letter-spacing: -0.02em;
+  cursor: pointer;
+}
+
+.stageTabs button:hover {
   color: var(--text-2);
-  font-size: var(--fs-15);
-  line-height: 1.5;
 }
 
-@media (max-width: 960px) {
-  .speechFeatures {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+.stageTabs button[aria-pressed="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.stageCaption {
+  min-height: 1.5em;
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-17);
+}
+
+.stageTrack {
+  position: relative;
+  height: clamp(150px, 22vw, 260px);
+}
+
+.stageTrack.lanes {
+  padding-left: 52px;
+}
+
+.stageLane {
+  position: absolute;
+  left: 0;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  transform: translateY(-50%);
+}
+
+.stageLane.you {
+  top: 27%;
+}
+
+.stageLane.max {
+  top: 73%;
+  color: var(--accent);
+}
+
+.stageWave {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.stageWaveBase,
+.stageWaveLit {
+  position: absolute;
+  inset: 0;
+}
+
+.stageWave svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.stageWaveBase rect {
+  fill: var(--surface-3);
+}
+
+.stageWaveLit {
+  clip-path: inset(0 100% 0 0);
+}
+
+.stageWaveLit rect.max {
+  fill: var(--accent);
+}
+
+.stageWaveLit rect.you {
+  fill: var(--text);
+}
+
+.stagePlayhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: var(--text);
+  opacity: 0.7;
+}
+
+.stageWords {
+  display: grid;
+  gap: 4px;
+  min-height: 7.5rem;
+  align-content: start;
+}
+
+.stageWords strong {
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+
+.stageWords.max strong {
+  color: var(--accent);
+}
+
+.stageWords p {
+  max-width: 34em;
+  margin: 0;
+  font: 500 clamp(1.25rem, 2.3vw, 1.75rem) / 1.3 var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+.stageWords .stagePrompt {
+  color: var(--text-2);
+  font: 400 var(--fs-15) / 1.4 var(--font-mono);
+  letter-spacing: 0;
+}
+
+.stageGhost {
+  opacity: 0;
+}
+
+.stageCut {
+  color: var(--text-3);
+}
+
+.stageControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+
+.siteButton.stageIcon {
+  width: 36px;
+  padding: 0;
+  justify-content: center;
+}
+
+.siteButton.stageIcon svg {
+  flex: none;
+}
+
+.stageChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin-left: 8px;
+}
+
+.stageChips button {
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: var(--fs-15);
+  cursor: pointer;
+}
+
+.stageChips button:hover {
+  color: var(--text);
+}
+
+.stageChips button[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.stageTabs button:focus-visible,
+.stageChips button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.stageError {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.stageStudio {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
+  align-items: center;
+  gap: clamp(24px, 5vw, 72px);
+  margin: clamp(48px, 7vw, 88px) 0 0;
+}
+
+.stageStudio h3 {
+  margin: 0;
+  font: 600 clamp(1.375rem, 3vw, 2.25rem) / 1.15 var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+.stageStudio p {
+  margin: 10px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-17);
+}
+
+.stageStudio video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 576 / 700;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
+
+@media (max-width: 760px) {
+  .stageStudio {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
+.stageFootnote {
+  max-width: 76ch;
+  margin: 32px 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  line-height: 1.55;
+}
+
 @media (max-width: 600px) {
-  .speechFeatures {
-    grid-template-columns: minmax(0, 1fr);
+  .stageChips {
+    width: 100%;
+    margin-left: 0;
   }
 }
 

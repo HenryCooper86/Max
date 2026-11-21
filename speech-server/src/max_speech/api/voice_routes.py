@@ -16,6 +16,7 @@ from max_speech.api.errors import OpenAIError
 from max_speech.api.openai_routes import _pcm_chunks, _read_upload, require_ready
 from max_speech.audio import INPUT_RATE, OUTPUT_RATE, float_to_pcm16, resample, wav_bytes
 from max_speech.engines.base import UnknownVoiceError
+from max_speech.engines.router import speech_engine_id
 from max_speech.voices.candidates import expires_iso
 from max_speech.voices.lexicon import LexiconError
 from max_speech.voices.store import (
@@ -230,7 +231,9 @@ async def preview_voice(voice_id: str, request: Request, body: PreviewRequest | 
         except UnknownVoiceError as exc:
             raise _not_found(voice_id) from exc
     return Response(
-        wav_bytes(pcm, OUTPUT_RATE), media_type="audio/wav", headers={"X-Max-Speech-Engine": tts.id}
+        wav_bytes(pcm, OUTPUT_RATE),
+        media_type="audio/wav",
+        headers={"X-Max-Speech-Engine": speech_engine_id(tts, voice_id)},
     )
 
 

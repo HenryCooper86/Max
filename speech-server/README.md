@@ -138,7 +138,8 @@ Max Speech needs Python 3.12 exactly (`>=3.12,<3.13`). misaki, the Chinese G2P, 
 - `stream_format`: optional. `audio` streams raw PCM as it is produced (requires `response_format: "pcm"`). `sse`
   streams server-sent events, each carrying base64 PCM in `speech.audio.delta`, ending with `speech.audio.done`.
 
-Responses carry an `X-Max-Speech-Engine` header. When the client disconnects, synthesis stops.
+Responses carry an `X-Max-Speech-Engine` header naming the engine that spoke: the cloning engine for a custom voice,
+otherwise the preset engine. When the client disconnects, synthesis stops.
 
 ### Transcription (`POST /v1/audio/transcriptions`)
 

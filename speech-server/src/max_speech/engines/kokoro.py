@@ -40,10 +40,14 @@ _LANG_BY_LETTER = {
 #   male:   zm_009 0.000, zm_010/011/013/014 0.005, zm_015/016 0.010, zm_012 0.050
 # For comparison the v1.0 espeak voices scored 0.676 (zf_xiaobei) and 0.394 (zm_yunjian).
 _ZH_DEFAULTS = {"female": "zf_002", "male": "zm_009"}
+# Japanese defaults, by the same speak-then-transcribe check on 20 assistant sentences, compared by reading.
+# jf_gongitsune, jf_nezumi, jf_tebukuro and jm_kumo read all 20 correctly; jf_alpha read 19.
 _DEFAULT_VOICES = {
     ("female", "en"): "af_heart",
+    ("female", "ja"): "jf_gongitsune",
     ("female", "zh"): "zf_xiaobei",
     ("male", "en"): "am_michael",
+    ("male", "ja"): "jm_kumo",
     ("male", "zh"): "zm_yunjian",
 }
 # Language names a client may pass, mapped to the espeak code to use regardless of the voice.

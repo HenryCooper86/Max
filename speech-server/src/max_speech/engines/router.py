@@ -18,6 +18,13 @@ def speakable(text: str) -> bool:
     return any(c.isalnum() for c in text)
 
 
+def speech_engine_id(tts: TtsEngine, voice: str) -> str:
+    """The engine that speaks `voice`, for the X-Max-Speech-Engine header: `tts.id` is always the preset's."""
+    if isinstance(tts, VoiceRouter) and tts.cloning is not None and is_custom_id(voice):
+        return tts.cloning.id
+    return tts.id
+
+
 class VoiceRouter:
     """Implements `TtsEngine`, so every caller of `slots.tts` works unchanged.
 

@@ -532,7 +532,7 @@ async def test_custom_voice_works_through_speech(make_app, tmp_path):
                 "stream_format": "audio",
             },
         )
-    assert r.status_code == 200 and r.headers["x-max-speech-engine"] == "fake"
+    assert r.status_code == 200 and r.headers["x-max-speech-engine"] == "fake-cloning"
     assert len(r.content) == 2 * round(0.2 * 24000) * 2  # cloned audio comes back at 24 kHz
     assert streamed.status_code == 200 and len(streamed.content) == round(0.2 * 24000) * 2
     assert [call[1] for call in cloning.calls] == [voice.id] * 3  # one call per sentence

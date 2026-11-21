@@ -150,6 +150,15 @@ def test_the_real_japanese_g2p_reads_kanji_as_words():
     assert "letter" not in phonemes and "(en)" not in phonemes
 
 
+def test_japanese_defaults_are_the_voices_that_read_every_benchmark_sentence():
+    engine, _ = _engine()
+    for voice in ("jf_gongitsune", "jm_kumo"):
+        engine._voices.append(_voice_info(voice))
+        engine._ids.add(voice)
+    assert engine.default_voice("female", "ja") == "jf_gongitsune"
+    assert engine.default_voice("male", "ja") == "jm_kumo"
+
+
 def test_speed_is_clamped_to_the_range_kokoro_accepts():
     engine, fake = _engine()
     seen = []

@@ -99,6 +99,8 @@ describe("landing page", () => {
   it("presents Max Speech as self-hosted, with its consent and hardware limits", () => {
     const html = render(false);
     expect(html).toContain("Max Speech");
+    expect(html).toContain("七种语言");
+    expect(html).not.toContain("日语和葡萄牙语");
     expect(html).toContain("同意声明");
     expect(html).toContain("24 GB");
     expect(html).toContain("不包含在 Max Cloud 中");

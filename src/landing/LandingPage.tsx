@@ -312,10 +312,10 @@ function LocalSpeech() {
       )
     },
     {
-      title: say("八种语言的语音", "Speech in eight languages"),
+      title: say("七种语言的语音", "Speech in seven languages"),
       text: say(
-        "中文、英语、西班牙语、法语、印地语、意大利语、日语和葡萄牙语。中文由专门的模型朗读。",
-        "English, Chinese, Spanish, French, Hindi, Italian, Japanese and Portuguese, with a dedicated model for Chinese."
+        "中文、英语、西班牙语、法语、印地语、意大利语和葡萄牙语。中文由专门的模型朗读。",
+        "English, Chinese, Spanish, French, Hindi, Italian and Portuguese, with a dedicated model for Chinese."
       )
     },
     {

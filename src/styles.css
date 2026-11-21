@@ -8747,6 +8747,40 @@ button.opsCard:disabled {
   font-size: var(--fs-15);
 }
 
+/* Max Speech */
+.speechFeatures {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 clamp(24px, 4vw, 48px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.speechFeatures li {
+  padding: 16px 0 24px;
+  border-top: var(--line-w) solid var(--line);
+}
+
+.speechFeatures p {
+  margin: 6px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-15);
+  line-height: 1.5;
+}
+
+@media (max-width: 960px) {
+  .speechFeatures {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .speechFeatures {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Look and sound */
 .lookGrid {
   display: grid;

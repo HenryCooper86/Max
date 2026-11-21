@@ -319,7 +319,7 @@ describe("local open-weight backends", () => {
     for (const key of KEYS) delete process.env[key];
     const defaults = localPipelineSettings();
     expect(defaults.stt.baseUrl).toBe("http://localhost:8000/v1");
-    expect(defaults.llm).toMatchObject({ baseUrl: "http://localhost:11434/v1", apiKey: "" });
+    expect(defaults.llm).toMatchObject({ baseUrl: "http://localhost:11434/v1", apiKey: "", model: "qwen3:8b" });
     expect(defaults.tts).toMatchObject({ baseUrl: "http://localhost:8880/v1", model: "kokoro", format: "wav" });
     expect(defaults.tts.voice("male")).toBe("am_michael");
     process.env.LOCAL_TTS_BASE_URL = "http://voicebox.local:5002/v1/";

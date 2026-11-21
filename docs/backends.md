@@ -159,7 +159,7 @@ LOCAL_VOICE=on
 | Step           | Variables                                 | Default                                                    |
 | -------------- | ----------------------------------------- | ---------------------------------------------------------- |
 | Speech-to-text | `LOCAL_STT_BASE_URL`, `LOCAL_STT_MODEL`   | `http://localhost:8000/v1`, `Systran/faster-whisper-small` |
-| Chat model     | `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`   | `http://localhost:11434/v1`, `qwen2.5:7b`                  |
+| Chat model     | `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`   | `http://localhost:11434/v1`, `qwen3:8b`                    |
 | Text-to-speech | `LOCAL_TTS_BASE_URL`, `LOCAL_TTS_MODEL`   | `http://localhost:8880/v1`, `kokoro`                       |
 | Voices         | `LOCAL_TTS_VOICE`, `LOCAL_TTS_VOICE_MALE` | `af_heart`, `am_michael`                                   |
 
@@ -173,7 +173,7 @@ A self-hosted server that implements the OpenAI Realtime WebSocket protocol.
 ```dotenv
 VOICE_PROVIDER=local-realtime
 LOCAL_REALTIME_URL=ws://localhost:8000/v1/realtime
-LOCAL_REALTIME_MODEL=qwen2.5:7b
+LOCAL_REALTIME_MODEL=qwen3:8b
 ```
 
 Optional: `LOCAL_REALTIME_TRANSCRIBE_MODEL` (default `Systran/faster-whisper-small`), `LOCAL_REALTIME_VOICE` (`af_heart`),
@@ -187,7 +187,7 @@ runs the chat model and tools exactly as for `local`.
 ```dotenv
 VOICE_PROVIDER=max-speech
 MAX_SPEECH_URL=ws://localhost:8790/v1/speech/session
-LOCAL_LLM_MODEL=qwen2.5:7b
+LOCAL_LLM_MODEL=qwen3:8b
 ```
 
 Optional: `MAX_SPEECH_API_KEY` (when the server sets `SPEECH_API_KEY`; required for a Docker server) and

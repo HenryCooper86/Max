@@ -73,7 +73,7 @@ export const BACKEND_FIELDS: Record<VoiceProviderId, BackendField[]> = {
     { env: "LOCAL_STT_BASE_URL", label: "Speech-to-text server", kind: "url", placeholder: "http://localhost:8000/v1" },
     { env: "LOCAL_STT_MODEL", label: "Speech-to-text model", placeholder: "Systran/faster-whisper-small" },
     { env: "LOCAL_LLM_BASE_URL", label: "Chat model server", kind: "url", placeholder: "http://localhost:11434/v1" },
-    { env: "LOCAL_LLM_MODEL", label: "Chat model", placeholder: "qwen2.5:7b" },
+    { env: "LOCAL_LLM_MODEL", label: "Chat model", placeholder: "qwen3:8b" },
     { env: "LOCAL_TTS_BASE_URL", label: "Text-to-speech server", kind: "url", placeholder: "http://localhost:8880/v1" },
     { env: "LOCAL_TTS_MODEL", label: "Text-to-speech model", placeholder: "kokoro" },
     ...voices("LOCAL_TTS_VOICE", "af_heart", "am_michael")
@@ -99,7 +99,7 @@ export const BACKEND_FIELDS: Record<VoiceProviderId, BackendField[]> = {
     { env: "MAX_SPEECH_API_KEY", label: "API key", secret: true },
     { env: "MAX_SPEECH_VOICE", label: "Voice", placeholder: "af_heart" },
     { env: "LOCAL_LLM_BASE_URL", label: "Chat model server", kind: "url", placeholder: "http://localhost:11434/v1" },
-    { env: "LOCAL_LLM_MODEL", label: "Chat model", placeholder: "qwen2.5:7b" }
+    { env: "LOCAL_LLM_MODEL", label: "Chat model", placeholder: "qwen3:8b" }
   ]
 };
 

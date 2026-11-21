@@ -3,7 +3,7 @@
 #
 #   echo "SPEECH_API_KEY=$(openssl rand -hex 24)" >> .env
 #   docker compose -f docker-compose.local-voice.yml up -d --build
-#   docker compose -f docker-compose.local-voice.yml exec ollama ollama pull qwen2.5:7b
+#   docker compose -f docker-compose.local-voice.yml exec ollama ollama pull qwen3:8b
 #
 # Max Speech (speech-server/) does speech-to-text and text-to-speech; Ollama is
 # the chat model. The first start downloads about 1.5 GB of speech models into
@@ -33,7 +33,7 @@
 #    chat stage defaults to http://localhost:11434/v1, which inside the relay's own
 #    container is the relay itself, so point it at the ollama service:
 #      LOCAL_LLM_BASE_URL=http://ollama:11434/v1
-#      LOCAL_LLM_MODEL=qwen2.5:7b                   # the model you pulled
+#      LOCAL_LLM_MODEL=qwen3:8b                   # the model you pulled
 #    then either
 #      VOICE_PROVIDER=max-speech
 #      MAX_SPEECH_URL=ws://max-speech:8790/v1/speech/session

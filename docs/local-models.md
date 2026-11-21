@@ -84,7 +84,7 @@ design is in [docs/superpowers/specs/2026-11-20-max-speech-server-design.md](sup
 ```bash
 echo "SPEECH_API_KEY=$(openssl rand -hex 24)" >> .env
 docker compose -f docker-compose.local-voice.yml up -d --build
-docker compose -f docker-compose.local-voice.yml exec ollama ollama pull qwen2.5:7b
+docker compose -f docker-compose.local-voice.yml exec ollama ollama pull qwen3:8b
 ```
 
 This builds the CPU image of Max Speech on `127.0.0.1:8790` and starts Ollama on `127.0.0.1:11434` (both bound to
@@ -108,7 +108,7 @@ or, with the `local` pipeline, `LOCAL_VOICE=on`, `LOCAL_TTS_FORMAT=pcm`, `LOCAL_
 
 ```dotenv
 LOCAL_LLM_BASE_URL=http://ollama:11434/v1
-LOCAL_LLM_MODEL=qwen2.5:7b
+LOCAL_LLM_MODEL=qwen3:8b
 LOCAL_LLM_API_KEY=ollama   # any value; the local pipeline needs a key on every stage that is not localhost
 
 VOICE_PROVIDER=max-speech
@@ -127,7 +127,7 @@ LOCAL_TTS_FORMAT=pcm
 LOCAL_STT_API_KEY=<the same value as SPEECH_API_KEY>
 LOCAL_TTS_API_KEY=<the same value as SPEECH_API_KEY>
 LOCAL_LLM_BASE_URL=http://ollama:11434/v1
-LOCAL_LLM_MODEL=qwen2.5:7b
+LOCAL_LLM_MODEL=qwen3:8b
 LOCAL_LLM_API_KEY=ollama
 ```
 
@@ -140,7 +140,7 @@ Speech via `host.docker.internal`; see the [deployment guide](speech-server-depl
 
 Double-click `start-speech.command` in the repo root (it needs [uv](https://docs.astral.sh/uv/)). It starts Max Speech
 on `http://localhost:8790` with the MLX models, cloning and (with 24 GB or more) voice design. Without an API key it
-answers loopback clients only. Run Ollama yourself (`ollama pull qwen2.5:7b`), then use `VOICE_PROVIDER=max-speech`
+answers loopback clients only. Run Ollama yourself (`ollama pull qwen3:8b`), then use `VOICE_PROVIDER=max-speech`
 with `MAX_SPEECH_URL=ws://localhost:8790/v1/speech/session`, or the `local` settings above with `localhost`.
 
 ## The `local` pipeline
@@ -151,7 +151,7 @@ third-party servers listed later; with Max Speech you set the speech stages to `
 | Stage          | Variables                                                    | Default                                                    |
 | -------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
 | Speech-to-text | `LOCAL_STT_BASE_URL`, `LOCAL_STT_MODEL`                      | `http://localhost:8000/v1`, `Systran/faster-whisper-small` |
-| Chat model     | `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`                      | `http://localhost:11434/v1`, `qwen2.5:7b`                  |
+| Chat model     | `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`                      | `http://localhost:11434/v1`, `qwen3:8b`                    |
 | Text-to-speech | `LOCAL_TTS_BASE_URL`, `LOCAL_TTS_MODEL`                      | `http://localhost:8880/v1`, `kokoro`                       |
 | Voices         | `LOCAL_TTS_VOICE`, `LOCAL_TTS_VOICE_MALE`                    | `af_heart`, `am_michael`                                   |
 | Speech format  | `LOCAL_TTS_FORMAT` (`wav` or `pcm`), `LOCAL_TTS_SAMPLE_RATE` | `wav`                                                      |
@@ -234,7 +234,7 @@ For a self-hosted server that implements the OpenAI Realtime protocol (Speaches 
 ```dotenv
 VOICE_PROVIDER=local-realtime
 LOCAL_REALTIME_URL=ws://localhost:8000/v1/realtime
-LOCAL_REALTIME_MODEL=qwen2.5:7b
+LOCAL_REALTIME_MODEL=qwen3:8b
 # optional
 LOCAL_REALTIME_TRANSCRIBE_MODEL=Systran/faster-whisper-small
 LOCAL_REALTIME_VOICE=af_heart

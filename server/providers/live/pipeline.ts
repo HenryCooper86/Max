@@ -104,7 +104,7 @@ export function localPipelineSettings(): PipelineSettings {
     "LOCAL",
     {
       stt: { baseUrl: "http://localhost:8000/v1", model: "Systran/faster-whisper-small" },
-      llm: { baseUrl: "http://localhost:11434/v1", model: "qwen2.5:7b" },
+      llm: { baseUrl: "http://localhost:11434/v1", model: "qwen3:8b" },
       tts: { baseUrl: "http://localhost:8880/v1", model: "kokoro" },
       voice: ["af_heart", "am_michael"],
       // WAV carries its own sample rate, so it works with servers that do not

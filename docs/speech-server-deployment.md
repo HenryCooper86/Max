@@ -88,7 +88,7 @@ beyond loopback unless something in front of it authenticates; with the relay in
 `ports` entry. The relay settings depend on where the relay runs.
 
 **Relay on the host** (Max Speech at `localhost:8790`, Ollama at `localhost:11434`, which is the relay's default chat
-endpoint). Set `LOCAL_LLM_MODEL` if you pulled something other than `qwen2.5:7b`:
+endpoint). Set `LOCAL_LLM_MODEL` if you pulled something other than `qwen3:8b`:
 
 ```dotenv
 VOICE_PROVIDER=local
@@ -109,7 +109,7 @@ send the speech key to Ollama.
 
 ```dotenv
 LOCAL_LLM_BASE_URL=http://ollama:11434/v1
-LOCAL_LLM_MODEL=qwen2.5:7b
+LOCAL_LLM_MODEL=qwen3:8b
 # then either the live session backend:
 VOICE_PROVIDER=max-speech
 MAX_SPEECH_URL=ws://max-speech:8790/v1/speech/session

@@ -1,4 +1,5 @@
 import type { Logger } from "../../logger";
+import { forFastLocalModel } from "../../prompts";
 import type { ToolSpec } from "../../tools";
 import type { EngineEvents } from "./engine";
 
@@ -10,7 +11,13 @@ import type { EngineEvents } from "./engine";
  * engine's own, supplied as a `Speaker`.
  */
 
-export type ChatStage = { baseUrl: string; apiKey: string; model: string };
+export type ChatStage = {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  /** Sent as `reasoning_effort`. Local voice replies use "none": a hidden thinking step delays every answer. */
+  reasoningEffort?: string;
+};
 
 /** Where one reply's text goes. Created per reply, so it can hold that reply's state.
  *  Only `delta` is gated on the reply still being current; `sentence` and `say`
@@ -110,6 +117,8 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   let generation = 0;
   let abort: AbortController | undefined;
   let replyActive = false;
+  /** Cleared when the server refuses `reasoning_effort`, so later requests do not pay for the retry. */
+  let sendReasoningEffort = true;
 
   function stop(): void {
     generation += 1;
@@ -134,24 +143,40 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   ): Promise<{ text: string; toolCalls: ChatToolCall[] }> {
     const stage = options.stage();
     const tools = offerTools ? options.tools() : [];
-    const response = await request(`${stage.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(stage) },
-      body: JSON.stringify({
-        model: stage.model,
-        messages,
-        stream: true,
-        ...(tools.length
-          ? {
-              tools: tools.map((tool) => ({
-                type: "function",
-                function: { name: tool.name, description: tool.description, parameters: tool.parameters }
-              }))
-            }
-          : {})
-      }),
-      signal
-    });
+    const send = (reasoningEffort: string | undefined) =>
+      request(`${stage.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeaders(stage) },
+        body: JSON.stringify({
+          model: stage.model,
+          messages,
+          stream: true,
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+          ...(tools.length
+            ? {
+                tools: tools.map((tool) => ({
+                  type: "function",
+                  function: { name: tool.name, description: tool.description, parameters: tool.parameters }
+                }))
+              }
+            : {})
+        }),
+        signal
+      });
+    const reasoningEffort = sendReasoningEffort ? stage.reasoningEffort : undefined;
+    let response = await send(reasoningEffort);
+    if (reasoningEffort && (response.status === 400 || response.status === 422)) {
+      // Not every OpenAI-compatible server or model accepts the field: answer without it.
+      const detail = await response
+        .clone()
+        .text()
+        .catch(() => "");
+      if (/reasoning|think/i.test(detail)) {
+        sendReasoningEffort = false;
+        log.warn(`${options.label} chat model refused reasoning_effort; continuing without it`);
+        response = await send(undefined);
+      }
+    }
     if (!response.ok || !response.body) throw await failure("Chat model", response);
     const decoder = new TextDecoder();
     let buffered = "";
@@ -258,7 +283,17 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
           // The last round offers no tools, so the model has to answer in words.
           const offerTools = round < MAX_TOOL_ROUNDS;
           const result = await streamChat(
-            [{ role: "system", content: options.instructions() }, ...history, ...turn],
+            [
+              {
+                role: "system",
+                content:
+                  options.stage().reasoningEffort === "none"
+                    ? forFastLocalModel(options.instructions())
+                    : options.instructions()
+              },
+              ...history,
+              ...turn
+            ],
             controller.signal,
             (delta) => {
               if (!current()) return;

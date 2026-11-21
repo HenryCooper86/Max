@@ -100,7 +100,7 @@ function pipelineSettings(): PipelineSettings {
  * openedai-speech, …). See docs/local-models.md.
  */
 export function localPipelineSettings(): PipelineSettings {
-  return settingsFrom(
+  const settings = settingsFrom(
     "LOCAL",
     {
       stt: { baseUrl: "http://localhost:8000/v1", model: "Systran/faster-whisper-small" },
@@ -113,6 +113,10 @@ export function localPipelineSettings(): PipelineSettings {
     },
     []
   );
+  // Thinking models spend a second or more on hidden reasoning before each spoken reply.
+  // LOCAL_LLM_REASONING_EFFORT=default leaves the model's own behavior alone.
+  const reasoningEffort = env("LOCAL_LLM_REASONING_EFFORT")?.toLowerCase() ?? "none";
+  return reasoningEffort === "default" ? settings : { ...settings, llm: { ...settings.llm, reasoningEffort } };
 }
 
 // Speaker labels and timestamps that diarizing speech servers (MOSS-Transcribe-Diarize:

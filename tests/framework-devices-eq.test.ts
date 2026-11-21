@@ -328,6 +328,21 @@ describe("local open-weight backends", () => {
     expect(localPipelineSettings().llm.model).toBe("gemma3:12b");
   });
 
+  it("turns off hidden reasoning for local replies unless told otherwise", () => {
+    const saved = process.env.LOCAL_LLM_REASONING_EFFORT;
+    try {
+      delete process.env.LOCAL_LLM_REASONING_EFFORT;
+      expect(localPipelineSettings().llm.reasoningEffort).toBe("none");
+      process.env.LOCAL_LLM_REASONING_EFFORT = "LOW";
+      expect(localPipelineSettings().llm.reasoningEffort).toBe("low");
+      process.env.LOCAL_LLM_REASONING_EFFORT = "default";
+      expect(localPipelineSettings().llm).not.toHaveProperty("reasoningEffort");
+    } finally {
+      if (saved === undefined) delete process.env.LOCAL_LLM_REASONING_EFFORT;
+      else process.env.LOCAL_LLM_REASONING_EFFORT = saved;
+    }
+  });
+
   it("reads WAV speech at any rate, channel count or sample type", () => {
     // 16 kHz mono int16 → 24 kHz.
     const mono = speechToPcm(wav(new Array(160).fill(1000), 16_000), 24_000);

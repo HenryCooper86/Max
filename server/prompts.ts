@@ -2,6 +2,24 @@
 // because the original helmet was tuned in Chinese; every supported model
 // follows them regardless of the language it answers in.
 
+// Small local models with thinking off repeat a scripted refusal whenever they are unsure, so ordinary
+// questions came back as "I only support Chinese and English". They get the same limit without the script.
+const SCRIPTED_REFUSALS: ReadonlyArray<readonly [string, string]> = [
+  ["如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。", ""],
+  ["如果听到中文和英文以外的语言、或骑手要求使用其他语言，只用中文简短拒绝：我只支持中文和 English。", ""],
+  ["意图指导：语言规则。只支持中文和 English；其他语言用中文简短拒绝。", "意图指导：一般问题。直接简短回答。"]
+];
+const ANSWER_LANGUAGE_RULE =
+  "\n\n[回答语言] 只用中文或 English 回答。对方说中文就用中文回答；对方说其他任何语言，或要求你改用其他语言，都用 English 回答。";
+
+/** The instructions for a local model replying without a thinking step. A customised assistant,
+ *  whose persona has no scripted refusal, is left exactly as written. */
+export function forFastLocalModel(instructions: string): string {
+  if (!instructions.includes("我只支持中文和 English")) return instructions;
+  const rewritten = SCRIPTED_REFUSALS.reduce((text, [line, next]) => text.replaceAll(line, next), instructions);
+  return rewritten + ANSWER_LANGUAGE_RULE;
+}
+
 export function buildLanguageInteractionPrompt(): string {
   return (
     "[语言与交互规则] 默认先用中文回应；只有当骑手明确使用 English 或要求 English 时才切换英文。" +

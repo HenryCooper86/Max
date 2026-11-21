@@ -159,6 +159,12 @@ third-party servers listed later; with Max Speech you set the speech stages to `
 `LOCAL_BASE_URL` sets all three stages at once (a single gateway such as LocalAI). `LOCAL_API_KEY` or
 `LOCAL_<STAGE>_API_KEY` adds a bearer token for servers that want one.
 
+`LOCAL_LLM_REASONING_EFFORT` defaults to `none`, so a thinking model such as `qwen3:8b` starts speaking without a hidden
+reasoning step. On an M5 Max this cut the median time from the end of speech to the first reply audio from 3.75 s to
+about 0.6 s. Set it to `default` to leave the model's thinking on. A server or model that refuses the field is retried
+without it. With `none`, the stock assistant is told to answer only in Chinese or English instead of being given a
+scripted refusal, which small models repeated for ordinary questions.
+
 What each stage needs from its server:
 
 - **Speech-to-text** — `POST /audio/transcriptions` (multipart `file`, `model`), JSON `{ "text": … }` back.

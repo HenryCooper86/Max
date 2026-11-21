@@ -13,7 +13,11 @@ const sseOf = (chunks: unknown[]) =>
 const text = (content: string) => ({ choices: [{ delta: { content } }] });
 const toolPiece = (piece: Record<string, unknown>) => ({ choices: [{ delta: { tool_calls: [piece] } }] });
 
-function setup(replies: Array<() => Response>, speakerParts: Partial<Speaker> = {}) {
+function setup(
+  replies: Array<() => Response>,
+  speakerParts: Partial<Speaker> = {},
+  stageParts: { reasoningEffort?: string } = {}
+) {
   const chats: any[] = [];
   const seen: string[] = [];
   const deltas: string[] = [];
@@ -34,7 +38,7 @@ function setup(replies: Array<() => Response>, speakerParts: Partial<Speaker> = 
     log,
     request: request as never,
     label: "test",
-    stage: () => ({ baseUrl: "https://llm.example/v1", apiKey: "k", model: "m" }),
+    stage: () => ({ baseUrl: "https://llm.example/v1", apiKey: "k", model: "m", ...stageParts }),
     events: () => events,
     tools: () => [{ name: "lookup", description: "d", parameters: { type: "object", properties: {} } } as never],
     instructions: () => "Be brief.",
@@ -63,6 +67,42 @@ describe("chat loop", () => {
       { role: "system", content: "Be brief." },
       { role: "user", content: "hello" }
     ]);
+  });
+
+  it("sends reasoning_effort only for a stage that sets it", async () => {
+    const plain = setup([() => sseOf([text("Hi.")])]);
+    await plain.loop.reply("x");
+    expect(plain.chats[0]).not.toHaveProperty("reasoning_effort");
+
+    const local = setup([() => sseOf([text("Hi.")])], {}, { reasoningEffort: "none" });
+    await local.loop.reply("x");
+    expect(local.chats[0].reasoning_effort).toBe("none");
+  });
+
+  it("answers without reasoning_effort when the server refuses it, and stops sending it", async () => {
+    const refused = () =>
+      new Response(JSON.stringify({ error: { message: '"m" does not support thinking' } }), { status: 400 });
+    const { loop, chats, sentences, seen } = setup(
+      [refused, () => sseOf([text("First.")]), () => sseOf([text("Second.")])],
+      {},
+      { reasoningEffort: "low" }
+    );
+    await loop.reply("one");
+    await loop.reply("two");
+    expect(chats.map((chat) => chat.reasoning_effort)).toEqual(["low", undefined, undefined]);
+    expect(sentences).toEqual(["First.", "Second."]);
+    expect(seen.some((entry) => entry.startsWith("error:"))).toBe(false);
+  });
+
+  it("does not retry a 400 that has nothing to do with reasoning", async () => {
+    const { loop, chats, seen } = setup(
+      [() => new Response(JSON.stringify({ error: { message: "model not found" } }), { status: 400 })],
+      {},
+      { reasoningEffort: "none" }
+    );
+    await loop.reply("x");
+    expect(chats).toHaveLength(1);
+    expect(seen.some((entry) => entry.startsWith("error:"))).toBe(true);
   });
 
   it("does not split sentences for a speaker that only wants deltas", async () => {

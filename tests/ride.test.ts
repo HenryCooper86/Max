@@ -23,6 +23,15 @@ describe("ride intelligence", () => {
     expect(describeRideMode("emergency").safetyRule).toContain("生命安全");
   });
 
+  it("lets the assistant answer small talk while riding or navigating, but not in an emergency", () => {
+    for (const mode of ["ride", "navigation"] as const) {
+      expect(describeRideMode(mode).safetyRule).toContain("闲聊、笑话和常识问题用一两句话直接回答");
+      expect(describeRideMode(mode).safetyRule).not.toContain("避免闲聊");
+    }
+    expect(describeRideMode("ride").safetyRule).toContain("改为建议停车后继续");
+    expect(describeRideMode("emergency").safetyRule).not.toContain("闲聊");
+  });
+
   it("builds a concise ride context summary", () => {
     const summary = buildRideContextSummary({
       mode: "navigation",

@@ -716,6 +716,20 @@ describe("session memory and safety policy", () => {
     expect(buildIntentGuidancePrompt(undefined)).toContain("语言规则");
   });
 
+  it("tells the assistant to answer small talk briefly instead of turning it down", () => {
+    const casual = buildIntentGuidancePrompt("casual");
+    expect(casual).toContain("用一两句话直接给出对方要的内容");
+    expect(casual).toContain("不要拒绝");
+    const riding = buildSafetyPrompt({ mode: "ride", scenario: "wind" }, createSessionMemory("ride"));
+    expect(riding).toContain("每次最多两句");
+    expect(riding).toContain("闲聊、笑话、短故事和常识问题用一两句话直接回答");
+    // Long, screen-bound tasks still wait for a stop, and an emergency stays an emergency.
+    expect(riding).toContain("把需要看屏幕或多步操作的长任务推迟到停车后");
+    const emergency = buildSafetyPrompt({ mode: "emergency", scenario: "crash" }, createSessionMemory("emergency"));
+    expect(emergency).toContain("紧急模式");
+    expect(emergency).not.toContain("笑话");
+  });
+
   it("adds the high-speed policy and telemetry above 60 km/h", () => {
     const memory = createSessionMemory("ride");
     const prompt = buildSafetyPrompt(

@@ -152,7 +152,7 @@ export function buildSafetyPrompt(context: RideContext, memory: SessionMemory): 
     mode === "emergency"
       ? "紧急模式：用命令式短句。先让骑手减速、靠边、打开警示并寻求帮助。不要展开复杂排障。"
       : mode === "concise"
-        ? "骑行模式：每次最多两句，只给下一步动作、距离、风险或确认。把长任务推迟到停车后。"
+        ? "骑行模式：每次最多两句。导航和安全问题只给下一步动作、距离、风险或确认；闲聊、笑话、短故事和常识问题用一两句话直接回答。把需要看屏幕或多步操作的长任务推迟到停车后。"
         : "停车模式：可以稍微完整，但仍保持清晰简短。";
   const speedPolicy = isFast ? "高速/较快移动：每次只问一个必要问题，不提供复杂菜单或长列表。" : "";
 
@@ -181,7 +181,7 @@ export function buildIntentGuidancePrompt(intent: RiderIntent | undefined): stri
     case "group":
       return "意图指导：小队。准备消息但避免骑行中发送需要确认的内容。";
     case "casual":
-      return "意图指导：闲聊。保持简短，不把注意力从骑行上拉走。";
+      return "意图指导：闲聊。用一两句话直接给出对方要的内容（笑话、短故事、常识、建议都可以），不要拒绝，不要转移话题，也不要让对方停车后再问。";
     default:
       return "意图指导：语言规则。只支持中文和 English；其他语言用中文简短拒绝。";
   }

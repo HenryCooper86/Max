@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 
 from max_speech.engines.kokoro import KokoroTts, _script_language, _voice_info
@@ -13,10 +15,12 @@ class _FakeKokoro:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str]] = []
 
-    def create(self, text, voice, speed, lang):
+    tokenizer = SimpleNamespace(phonemize=lambda text, lang: f"{lang}<{text}>")
+
+    def create(self, text, voice, speed, lang=None, is_phonemes=False):
         import numpy as np
 
-        self.calls.append((text, voice, lang))
+        self.calls.append((text, voice, "phonemes" if is_phonemes else lang))
         return np.zeros(240, dtype=np.float32), 24000
 
 
@@ -24,6 +28,7 @@ def _engine() -> tuple[KokoroTts, _FakeKokoro]:
     engine = object.__new__(KokoroTts)
     fake = _FakeKokoro()
     engine._kokoro = fake
+    engine._ja_g2p = lambda text: (f"ja<{text}>", None)
     engine._voices = [_voice_info(v) for v in VOICE_IDS]
     engine._ids = set(VOICE_IDS)
     engine.model_id = "kokoro-v1.0"
@@ -100,10 +105,49 @@ def test_prolonged_sound_mark_and_middle_dot_alone_are_not_japanese():
 def test_ja_hint_with_han_only_text_uses_the_japanese_voice():
     engine, fake = _engine()
     list(engine.synthesize("東京大学。", "af_heart", language="ja"))
-    assert fake.calls == [("東京大学。", "jf_alpha", "ja")]
+    assert fake.calls == [("ja<東京大学。>", "jf_alpha", "phonemes")]
     fake.calls.clear()
     list(engine.synthesize("東京大学。", "af_heart"))
     assert fake.calls == [("東京大学。", "zf_xiaobei", "cmn")]
+
+
+def test_kana_text_uses_the_japanese_g2p_and_voice():
+    engine, fake = _engine()
+    list(engine.synthesize("こんにちは。", "af_heart"))
+    assert fake.calls == [("ja<こんにちは。>", "jf_alpha", "phonemes")]
+
+
+def test_latin_words_inside_japanese_go_through_the_english_phonemizer():
+    engine, fake = _engine()
+    list(engine.synthesize("GPSをオンにして、Wi-Fiも。", "jf_alpha"))
+    assert fake.calls == [("en-us<GPS> ja<をオンにして、> en-us<Wi-Fi> ja<も。>", "jf_alpha", "phonemes")]
+
+
+def test_the_assistants_name_is_read_in_katakana_inside_japanese():
+    engine, fake = _engine()
+    list(engine.synthesize("MAXさん、Maximumです。", "jf_alpha"))
+    assert fake.calls == [("ja<マックスさん、> en-us<Maximum> ja<です。>", "jf_alpha", "phonemes")]
+
+
+def test_full_width_latin_inside_japanese_is_normalised_first():
+    engine, fake = _engine()
+    list(engine.synthesize("ＧＰＳです。", "jf_alpha"))
+    assert fake.calls == [("en-us<GPS> ja<です。>", "jf_alpha", "phonemes")]
+
+
+def test_japanese_with_nothing_to_say_produces_no_audio():
+    engine, fake = _engine()
+    engine._ja_g2p = lambda text: ("", None)
+    assert list(engine.synthesize("・", "jf_alpha", language="ja")) == []
+    assert fake.calls == []
+
+
+def test_the_real_japanese_g2p_reads_kanji_as_words():
+    engine, _ = _engine()
+    engine._ja_g2p = None
+    phonemes = engine._phonemize_ja("東京へ行きます。")
+    assert "toːkʲoː" in phonemes
+    assert "letter" not in phonemes and "(en)" not in phonemes
 
 
 def test_speed_is_clamped_to_the_range_kokoro_accepts():

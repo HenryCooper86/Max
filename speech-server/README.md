@@ -131,8 +131,9 @@ Max Speech needs Python 3.12 exactly (`>=3.12,<3.13`). misaki, the Chinese G2P, 
   `coral`, `sage` map to a default female voice; `onyx`, `echo`, `ash`, `ballad`, `fable`, `verse` map to a default
   male voice.
 - `speed`: 0.25 to 4.0, default 1.0. Kokoro supports 0.5 to 2.0, so values outside that range are clamped for Kokoro.
-- `language`: optional. Kokoro speaks English, Chinese, Spanish, French, Hindi, Italian and Portuguese. Japanese is
-  not usable yet: the espeak path reads kanji aloud as the words "Chinese letter".
+- `language`: optional. Kokoro speaks English, Chinese, Spanish, French, Hindi, Italian, Japanese and Portuguese.
+  Japanese uses misaki's Japanese G2P with the UniDic Lite dictionary, because espeak reads kanji aloud as the words
+  "Chinese letter". Pass `language: "ja"` for text written only in kanji, which otherwise reads as Chinese.
 - `response_format`: `wav` (default) or `pcm`. Both are 24 kHz, mono, 16-bit. MP3, Opus, AAC and FLAC return `400`.
 - `stream_format`: optional. `audio` streams raw PCM as it is produced (requires `response_format: "pcm"`). `sse`
   streams server-sent events, each carrying base64 PCM in `speech.audio.delta`, ending with `speech.audio.done`.

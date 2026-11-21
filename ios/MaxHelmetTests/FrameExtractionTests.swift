@@ -1,4 +1,3 @@
-import AVFoundation
 import UIKit
 import XCTest
 @testable import MaxHelmet
@@ -13,76 +12,14 @@ final class FrameExtractionTests: XCTestCase {
         return image.jpegData(compressionQuality: 0.9)!
     }
 
-    /// Writes a ~2 s solid-color .mov via AVAssetWriter; returns its URL.
-    private func syntheticMov() throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("synthetic-\(UUID().uuidString).mov")
-
-        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
-        let outputSettings: [String: Any] = [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: 320,
-            AVVideoHeightKey: 240,
-        ]
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: outputSettings)
-        input.expectsMediaDataInRealTime = false
-
-        let pixelBufferAttributes: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
-            kCVPixelBufferWidthKey as String: 320,
-            kCVPixelBufferHeightKey as String: 240,
-        ]
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
-            assetWriterInput: input,
-            sourcePixelBufferAttributes: pixelBufferAttributes
+    /// A 2 s, 320x240 H.264 clip checked in beside the tests. The test used to
+    /// encode one at run time, and on CI simulators the encoder's first start
+    /// sometimes took longer than the test would wait.
+    private func fixtureMov() throws -> URL {
+        try XCTUnwrap(
+            Bundle(for: FrameExtractionTests.self).url(forResource: "two-second-clip", withExtension: "mov"),
+            "two-second-clip.mov is missing from the test bundle"
         )
-
-        writer.add(input)
-        writer.startWriting()
-        writer.startSession(atSourceTime: .zero)
-
-        let frameCount = 20
-        let fps: Int32 = 10
-
-        let queue = DispatchQueue(label: "synthetic-mov-writer")
-        let expectation = XCTestExpectation(description: "finishWriting")
-
-        // Declared outside the closure: `requestMediaDataWhenReady`'s block can
-        // fire more than once as the input drains, and resetting this per-call
-        // would resubmit frames with non-monotonic presentation times (the
-        // writer then fails silently and `finishWriting` never completes).
-        var frame = 0
-        input.requestMediaDataWhenReady(on: queue) {
-            while input.isReadyForMoreMediaData && frame < frameCount {
-                guard let pool = adaptor.pixelBufferPool else { break }
-                var pixelBufferOut: CVPixelBuffer?
-                CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixelBufferOut)
-                guard let pixelBuffer = pixelBufferOut else { break }
-
-                CVPixelBufferLockBaseAddress(pixelBuffer, [])
-                if let base = CVPixelBufferGetBaseAddress(pixelBuffer) {
-                    let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-                    let height = CVPixelBufferGetHeight(pixelBuffer)
-                    // Fill with a solid opaque color (ARGB).
-                    memset(base, 0xFF, bytesPerRow * height)
-                }
-                CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
-
-                let presentationTime = CMTime(value: CMTimeValue(frame), timescale: fps)
-                adaptor.append(pixelBuffer, withPresentationTime: presentationTime)
-                frame += 1
-            }
-
-            if frame >= frameCount {
-                input.markAsFinished()
-                writer.finishWriting {
-                    expectation.fulfill()
-                }
-            }
-        }
-
-        wait(for: [expectation], timeout: 10)
-        return url
     }
 
     func testPhotoBase64UnderCap() {
@@ -97,9 +34,7 @@ final class FrameExtractionTests: XCTestCase {
     }
 
     func testVideoFramesCountAndCap() throws {
-        let url = try syntheticMov()
-        defer { try? FileManager.default.removeItem(at: url) }
-        let frames = FrameExtraction.videoFramesBase64(from: url)
+        let frames = FrameExtraction.videoFramesBase64(from: try fixtureMov())
         XCTAssertEqual(frames?.count, FrameExtraction.videoFrameCount)
         for frame in frames ?? [] {
             XCTAssertLessThanOrEqual(frame.count, FrameExtraction.maxBase64Chars)

@@ -57,11 +57,11 @@ when it starts. The protocol, turn-taking rules and the session benchmark are in
 
 ### What it does
 
-- Text-to-speech with Kokoro preset voices, in English, Chinese and five more languages (Spanish, French, Hindi,
-  Italian, Portuguese). Chinese is spoken by Kokoro v1.1-zh with misaki's Chinese G2P, which cut the
+- Text-to-speech with Kokoro preset voices, in English, Chinese and six more languages (Spanish, French, Hindi,
+  Italian, Japanese, Portuguese). Chinese is spoken by Kokoro v1.1-zh with misaki's Chinese G2P, which cut the
   character error rate on a speak-then-transcribe check from about 0.4-0.7 to under 0.05; other languages use v1.0.
-  `SPEECH_TTS_ZH_MODEL=off` turns the Chinese model off. Max Speech needs Python 3.12 because misaki does not support 3.13.
-  Japanese is not usable yet: the espeak path reads kanji aloud as the words "Chinese letter".
+  Japanese uses misaki's Japanese G2P. `SPEECH_TTS_ZH_MODEL=off` turns the Chinese model off. Max Speech needs Python
+  3.12 because misaki does not support 3.13.
 - Transcription with Whisper, and live partial transcripts while the wearer speaks (streaming X-ASR, Chinese and
   English).
 - Turn detection on the server: Silero VAD and Smart Turn, with a `low`, `normal` or `high` eagerness.

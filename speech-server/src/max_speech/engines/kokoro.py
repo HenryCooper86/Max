@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+import threading
+import unicodedata
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -11,6 +14,12 @@ from max_speech.chunker import split_sentences
 from max_speech.engines.base import UnknownVoiceError, VoiceInfo
 
 _MIN_SPEED, _MAX_SPEED = 0.5, 2.0
+# Latin words inside Japanese text. The Japanese G2P passes them through as letters Kokoro cannot say.
+_LATIN_WORD = re.compile(r"[A-Za-z][A-Za-z0-9'’-]*")
+# The assistant's own name, which it says often: English phonemes in a Japanese voice do not sound like マックス.
+_JA_MAX = re.compile(r"(?<![A-Za-z0-9])max(?![A-Za-z0-9])", re.IGNORECASE)
+# Guards building the Japanese G2P on first use and its tagger, which is not documented as thread-safe.
+_JA_LOCK = threading.Lock()
 
 # Kokoro voice ids start with a language letter; kokoro-onnx wants an espeak language code.
 _LANG_BY_LETTER = {
@@ -83,6 +92,7 @@ class KokoroTts:
     extra_model_ids: tuple[str, ...] = ()
     _zh = None  # the Kokoro v1.1-zh instance, when the zh model is loaded
     _zh_g2p = None
+    _ja_g2p = None  # built on the first Japanese sentence: its dictionary is only needed then
     _zh_ids: frozenset[str] = frozenset()
     _legacy_zh_ids: frozenset[str] = frozenset()  # v1.0 Chinese voice ids, accepted but not listed
 
@@ -158,6 +168,8 @@ class KokoroTts:
             # Yielding per sentence lets the caller send the first one before the rest are synthesized.
             if self._zh is not None and lang == "cmn":
                 samples = self._create_zh(sentence, sentence_voice, info, speed)
+            elif lang == "ja":
+                samples = self._create_ja(sentence, sentence_voice, speed)
             else:
                 samples, _ = self._kokoro.create(sentence, voice=sentence_voice, speed=speed, lang=lang)
             if len(samples):
@@ -171,6 +183,38 @@ class KokoroTts:
         phonemes, _ = self._g2p_zh()(sentence)
         samples, _ = self._zh.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
         return samples
+
+    def _create_ja(self, sentence: str, voice: str, speed: float) -> np.ndarray:
+        """One Japanese sentence through misaki's G2P: espeak reads kanji as the words "Chinese letter"."""
+        phonemes = self._phonemize_ja(sentence)
+        if not phonemes:
+            return np.zeros(0, dtype=np.float32)
+        samples, _ = self._kokoro.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
+        return samples
+
+    def _phonemize_ja(self, sentence: str) -> str:
+        text = _JA_MAX.sub("マックス", unicodedata.normalize("NFKC", sentence))
+        pieces: list[str] = []
+        at = 0
+        with _JA_LOCK:
+            g2p = self._g2p_ja()
+            for word in _LATIN_WORD.finditer(text):
+                if word.start() > at:
+                    pieces.append(g2p(text[at : word.start()])[0])
+                pieces.append(self._kokoro.tokenizer.phonemize(word.group(), "en-us"))
+                at = word.end()
+            if at < len(text):
+                pieces.append(g2p(text[at:])[0])
+        return " ".join(piece.strip() for piece in pieces if piece.strip())
+
+    def _g2p_ja(self):
+        if self._ja_g2p is None:
+            # misaki.cutlet, not misaki.ja: this is the phoneme set the v1.0 voices use, and misaki.ja would
+            # import pyopenjtalk, which has to be compiled and downloads a dictionary at run time.
+            from misaki.cutlet import Cutlet
+
+            self._ja_g2p = Cutlet()
+        return self._ja_g2p
 
     def _g2p_zh(self):
         if self._zh_g2p is None:

@@ -238,7 +238,10 @@ export function createWebRtcSocket(options: WebRtcSocketOptions): WebRtcSocket {
     get readyState() {
       return state;
     },
-    bufferedAmount: 0,
+    // What waits in the events channel: live video holds its frames back when it grows.
+    get bufferedAmount() {
+      return channel?.bufferedAmount ?? 0;
+    },
     binaryType: "arraybuffer",
     send(data) {
       // Audio does not travel this way: the microphone is a track.

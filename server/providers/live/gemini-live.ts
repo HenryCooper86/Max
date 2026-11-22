@@ -16,6 +16,9 @@ import { CLIENT_INPUT_RATE, env, type EngineConfig, type EngineEvents, type Voic
 const DEFAULT_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
+/** Gemini Live documents a frame a second; a timer that fires at 990 ms is still that. */
+const MIN_GEMINI_FRAME_GAP_MS = 900;
+
 type ServerMessage = {
   setupComplete?: unknown;
   serverContent?: {
@@ -336,9 +339,10 @@ export function createGeminiLiveEngine(
       sendMessage({ realtimeInput: { text } });
     },
     sendVideoFrame(image) {
-      // Gemini Live takes video itself, a frame a second: it sees each one as it comes.
+      // Gemini Live takes video itself, a frame a second: it sees each one as it comes. A client's
+      // "every second" is a few milliseconds early as often as late, and those frames are not too many.
       const at = Date.now();
-      if (!ready || !image || at - lastVideoAt < 1_000) return;
+      if (!ready || !image || at - lastVideoAt < MIN_GEMINI_FRAME_GAP_MS) return;
       lastVideoAt = at;
       sendMessage({ realtimeInput: { video: { data: image.data, mimeType: image.mimeType } } });
     },

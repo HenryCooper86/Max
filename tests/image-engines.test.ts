@@ -273,6 +273,15 @@ describe("Gemini Live video", () => {
       { realtimeInput: { video: { data: "F1", mimeType: "image/jpeg" } } },
       { realtimeInput: { video: { data: "F3", mimeType: "image/jpeg" } } }
     ]);
+    // A browser's "every second" comes a few milliseconds early as often as late: still a frame a second.
+    vi.advanceTimersByTime(990);
+    engine.sendVideoFrame!(frame("F4"));
+    vi.advanceTimersByTime(1_010);
+    engine.sendVideoFrame!(frame("F5"));
+    expect(socket.sent.slice(setup + 2)).toEqual([
+      { realtimeInput: { video: { data: "F4", mimeType: "image/jpeg" } } },
+      { realtimeInput: { video: { data: "F5", mimeType: "image/jpeg" } } }
+    ]);
   });
 });
 

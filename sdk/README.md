@@ -225,8 +225,7 @@ agent.on("video", ({ active }) => {
   It rejects with a `VoiceAgentError` whose `code` is `video` when the camera or the screen cannot be opened, which is
   also what the user's "no" looks like. Call it from a click: browsers ask for a camera or a screen only then.
 - The video stops with `stopVideo()`, when the conversation ends, and when the user stops sharing in the browser's own
-  controls. The `video` event (`{ active, source? }`) fires each time. Across a reconnect it stays on and frames go out
-  again once the new session is ready.
+  controls. The `video` event (`{ active, source? }`) fires each time. Across a reconnect it stays on and frames go out again once the new session is ready; if that session takes no video, it is turned off.
 
 Each frame is a small JPEG sent to the relay, which keeps the newest only; the model sees it with the user's next turn
 (on Gemini Live, as it arrives). Frames go to the model's vendor and are not written to conversation records, logs,

@@ -68,12 +68,19 @@ export const openVideoInBrowser: VideoOpener = async (source, options) => {
     release();
     throw new Error("the stream has no video");
   }
-  const element = document.createElement("video");
-  element.muted = true;
-  element.playsInline = true;
-  element.srcObject = stream;
-  // A video that cannot play yet has no frames, and frame() says so.
-  void element.play().catch(() => undefined);
+  let element: HTMLVideoElement;
+  try {
+    element = document.createElement("video");
+    element.muted = true;
+    element.playsInline = true;
+    element.srcObject = stream;
+    // A video that cannot play yet has no frames, and frame() says so.
+    void element.play().catch(() => undefined);
+  } catch (error) {
+    // A camera that is on with nothing reading it would stay on: let it go.
+    release();
+    throw error;
+  }
   let ended: (() => void) | undefined;
   return {
     stream,

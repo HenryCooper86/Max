@@ -715,6 +715,35 @@ describe("chat loop live video", () => {
     ]);
   });
 
+  it("leaves no note where an older frame was, and does where a picture the user chose was", async () => {
+    const { loop, chats } = setup([
+      () => sseOf([text("One.")]),
+      () => sseOf([text("Two.")]),
+      () => sseOf([text("Three.")]),
+      () => sseOf([text("Four.")])
+    ]);
+    loop.addImage(pic("A"));
+    loop.setFrame(pic("F1"));
+    await loop.reply("first");
+    loop.setFrame(pic("F2"));
+    await loop.reply("second");
+    loop.setFrame(pic("F3"));
+    await loop.reply("third");
+    loop.setFrame(pic("F4"));
+    await loop.reply("fourth");
+    const users = chats[3].messages.filter((message: { role: string }) => message.role === "user");
+    expect(users.map((message: { content: unknown }) => message.content)).toEqual([
+      // The picture is said to have been there; the frames that went with those turns are just gone.
+      [
+        { type: "text", text: "first" },
+        { type: "text", text: "[a picture the user showed earlier]" }
+      ],
+      [{ type: "text", text: "second" }],
+      [{ type: "text", text: "third" }, imagePart("F3")],
+      [{ type: "text", text: "fourth" }, imagePart("F4")]
+    ]);
+  });
+
   it("forgets the frame when the video stops", async () => {
     const { loop, chats } = setup([() => sseOf([text("Ok.")])]);
     loop.setFrame(pic("F"));

@@ -1476,4 +1476,43 @@ describe("startVideo", () => {
     expect(next.ofType("video.frame").length).toBeGreaterThanOrEqual(1);
     agent.stop();
   });
+
+  it("turns the camera off when a reconnect lands on a session that takes no video", async () => {
+    const { agent, socket, video, events } = await watching();
+    await agent.startVideo();
+    await vi.advanceTimersByTimeAsync(0);
+    socket.serverCloses(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = FakeSocket.instances.at(-1)!;
+    next.open();
+    next.serverSends({ ...STARTED, capabilities: { imageInput: false } });
+    expect(video.closed).toBe(1);
+    expect(agent.videoSource).toBeUndefined();
+    expect(events.at(-1)).toEqual({ active: false });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(next.ofType("video.frame")).toEqual([]);
+    agent.stop();
+  });
+
+  it("lets the camera go when the connection was lost while the browser was asking", async () => {
+    const video = fakeVideo();
+    let answer!: () => void;
+    const asked = new Promise<void>((resolve) => (answer = resolve));
+    const { agent, socket } = await started({
+      internals: {
+        video: async (source, options) => {
+          await asked;
+          return video.opener(source, options);
+        }
+      }
+    });
+    socket.serverSends({ ...STARTED, capabilities: { videoInput: true } });
+    const pending = agent.startVideo();
+    socket.serverCloses(1006);
+    answer();
+    await expect(pending).resolves.toBeNull();
+    expect(video.closed).toBe(1);
+    expect(agent.videoSource).toBeUndefined();
+    agent.stop();
+  });
 });

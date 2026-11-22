@@ -150,6 +150,12 @@ const MAX_UPSTREAM_RETRIES = 3;
 const REPLY_BYTES_PER_MS = 48;
 // The conversation the relay can restore after a dropped connection.
 const MAX_HISTORY_TURNS = 40;
+/** What the history says when live video goes on and off: Chinese, English. */
+const VIDEO_ON_NOTES: readonly [string, string] = [
+  "[用户打开了实时画面：摄像头或屏幕上的内容会随用户说的话一起给你看]",
+  "[the user turned on live video: you see what their camera or screen shows along with what they say]"
+];
+const VIDEO_OFF_NOTES: readonly [string, string] = ["[用户关闭了实时画面]", "[the user turned the live video off]"];
 const MAX_HISTORY_TURN_CHARS = 600;
 // How long an `end_session` waits for the model's goodbye before ending anyway.
 const END_GRACE_MS = 8_000;
@@ -2125,18 +2131,55 @@ export function createLiveProvider(
   let lastFrameAt: number | undefined;
   let frameTimer: NodeJS.Timeout | undefined;
 
+  /** What the conversation was last told about the video: on, or not. A
+   *  resumed conversation brings its history, so this is read from there. */
+  function historySaysVideoOn(): boolean {
+    for (let index = pictureNotesWaiting.length - 1; index >= 0; index -= 1) {
+      const text = pictureNotesWaiting[index]!;
+      if (VIDEO_ON_NOTES.includes(text)) return true;
+      if (VIDEO_OFF_NOTES.includes(text)) return false;
+    }
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+      const turn = history[index]!;
+      if (turn.speaker !== "user") continue;
+      if (VIDEO_ON_NOTES.includes(turn.text)) return true;
+      if (VIDEO_OFF_NOTES.includes(turn.text)) return false;
+    }
+    return false;
+  }
+
+  /** Writes that the video went on or off, when that is news to the conversation. */
+  function noteVideo(on: boolean): void {
+    if (!general || closed || historySaysVideoOn() === on) return;
+    const last = history[history.length - 1];
+    // Frames that stopped for a while and came back with nothing said in between (a tab in the
+    // background, a bad connection): the video was not off as far as the conversation goes.
+    if (on && pictureNotesWaiting.length === 0 && last?.speaker === "user" && VIDEO_OFF_NOTES.includes(last.text)) {
+      history.pop();
+      if (historySaysVideoOn()) {
+        saveResume();
+        return;
+      }
+    }
+    pictureNotesWaiting.push(on ? t(VIDEO_ON_NOTES[0], VIDEO_ON_NOTES[1]) : t(VIDEO_OFF_NOTES[0], VIDEO_OFF_NOTES[1]));
+    flushPictureNotes(true);
+  }
+
+  function watchForFrames(): void {
+    if (frameTimer) clearTimeout(frameTimer);
+    // A client that went quiet without saying so: the last frame is no longer what the user is showing.
+    frameTimer = setTimeout(endVideo, VIDEO_FRAME_FRESH_MS);
+    frameTimer.unref?.();
+  }
+
   /** The video is over: said by the client, or no frame has come for a while. */
   function endVideo(): void {
     if (frameTimer) clearTimeout(frameTimer);
     frameTimer = undefined;
     lastFrameAt = undefined;
-    if (!videoOn) return;
+    if (videoOn) engine?.sendVideoFrame?.(undefined);
     videoOn = false;
-    engine?.sendVideoFrame?.(undefined);
-    if (general && !closed) {
-      pictureNotesWaiting.push(t("[用户关闭了实时画面]", "[the user turned the live video off]"));
-      flushPictureNotes(true);
-    }
+    noteVideo(false);
   }
 
   /** Takes a frame for the model. Not an answer of the user's, and it does not
@@ -2147,21 +2190,9 @@ export function createLiveProvider(
     if (lastFrameAt !== undefined && at - lastFrameAt < MIN_VIDEO_FRAME_INTERVAL_MS) return;
     lastFrameAt = at;
     engine?.sendVideoFrame?.(image);
-    if (frameTimer) clearTimeout(frameTimer);
-    // A client that went quiet without saying so: the last frame is no longer what the user is showing.
-    frameTimer = setTimeout(endVideo, VIDEO_FRAME_FRESH_MS);
-    frameTimer.unref?.();
-    if (videoOn) return;
+    watchForFrames();
     videoOn = true;
-    if (general) {
-      pictureNotesWaiting.push(
-        t(
-          "[用户打开了实时画面：摄像头或屏幕上的内容会随用户说的话一起给你看]",
-          "[the user turned on live video: you see what their camera or screen shows along with what they say]"
-        )
-      );
-      flushPictureNotes(true);
-    }
+    noteVideo(true);
   }
 
   /** Says a line of the relay's own in the assistant's voice: the greeting, a
@@ -2569,6 +2600,8 @@ export function createLiveProvider(
       resumed = Boolean(context?.resume) && !startOwed;
       if (general && context?.resume && !startOwed) {
         history = context.resume.history.slice(-MAX_HISTORY_TURNS);
+        // The video was on when the connection went. If this one brings no frames, it is over.
+        if (historySaysVideoOn()) watchForFrames();
         const resumedAgent = context.resume.agent;
         if (resumedAgent && roster.some((agent) => agent.id === resumedAgent)) activeAgent = resumedAgent;
         for (const [name, value] of Object.entries(context.resume.values ?? {})) keepValue(name, value);

@@ -5,6 +5,7 @@ type Handler = (event: never) => void;
 
 class FakeChannel {
   readyState = "connecting";
+  bufferedAmount = 0;
   sent: string[] = [];
   private handlers = new Map<string, Handler[]>();
   send = (data: string) => void this.sent.push(data);
@@ -174,6 +175,13 @@ describe("createWebRtcSocket connecting", () => {
     socket.send('{"type":"x"}');
     socket.send(new ArrayBuffer(8));
     expect(peer().channel.sent).toEqual(['{"type":"x"}']);
+  });
+
+  it("says how much is waiting in the events channel, so live video can hold its frames back", async () => {
+    const { socket } = await opened();
+    expect(socket.bufferedAmount).toBe(0);
+    peer().channel.bufferedAmount = 300_000;
+    expect(socket.bufferedAmount).toBe(300_000);
   });
 
   it("does not send before the channel is open", async () => {

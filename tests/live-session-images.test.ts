@@ -40,6 +40,7 @@ async function setup(
     engine?: Partial<VoiceEngine>;
     config?: Record<string, unknown>;
     endSession?: (reason: string) => void;
+    resume?: Pick<ResumeState, "history">;
   } = {}
 ) {
   const client = new FakeClient();
@@ -74,7 +75,12 @@ async function setup(
   );
   await provider.start(
     { type: "session.start", sampleRate: 16000, channels: 1, language: "en" },
-    { sessionId: "sess-1", saveResume: (state) => saved.push(state), endSession: options.endSession }
+    {
+      sessionId: "sess-1",
+      saveResume: (state) => saved.push(state),
+      endSession: options.endSession,
+      ...(options.resume ? { resume: options.resume as ResumeState } : {})
+    }
   );
   await provider.startAudio();
   const playSaid = () => {
@@ -322,9 +328,9 @@ describe("a silent picture's note keeps history in the order the model saw", () 
 describe("live session video", () => {
   const frame = (name: string): EngineImage => ({ data: `RlJBTUUt${name}`.repeat(6), mimeType: "image/jpeg" });
 
-  async function video(config?: Record<string, unknown>) {
+  async function video(config?: Record<string, unknown>, resume?: Pick<ResumeState, "history">) {
     const frames: Array<EngineImage | undefined> = [];
-    const session = await setup({ engine: { sendVideoFrame: (image) => void frames.push(image) }, config });
+    const session = await setup({ engine: { sendVideoFrame: (image) => void frames.push(image) }, config, resume });
     return { ...session, frames };
   }
 
@@ -419,6 +425,58 @@ describe("live session video", () => {
     const everything = JSON.stringify([saved, client.json, serverEvent.mock.calls]);
     expect(everything).not.toContain(frame("A").data.slice(0, 24));
     await provider.close();
+  });
+
+  it("does not fill the history when frames stop for a while and come back with nothing said", async () => {
+    const { provider, saved } = await video();
+    const on = {
+      speaker: "user",
+      text: "[the user turned on live video: you see what their camera or screen shows along with what they say]"
+    };
+    const off = { speaker: "user", text: "[the user turned the live video off]" };
+    await provider.videoFrame!(frame("A"));
+    // A tab in the background: no frame for a long while.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(saved.at(-1)!.history).toEqual([on, off]);
+    for (let round = 0; round < 3; round += 1) {
+      await provider.videoFrame!(frame(`B${round}`));
+      expect(saved.at(-1)!.history).toEqual([on]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(saved.at(-1)!.history).toEqual([on, off]);
+    }
+    await provider.close();
+  });
+
+  it("goes on in a resumed conversation without saying again that the video is on", async () => {
+    const on = {
+      speaker: "user" as const,
+      text: "[the user turned on live video: you see what their camera or screen shows along with what they say]"
+    };
+    const history = [
+      on,
+      { speaker: "user" as const, text: "what is this?" },
+      { speaker: "agent" as const, text: "A cup." }
+    ];
+    const first = await video({}, { history });
+    for (let second = 0; second < 3; second += 1) {
+      await first.provider.videoFrame!(frame(`A${second}`));
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(first.frames).toHaveLength(3);
+    // Nothing new to say, so nothing was written.
+    expect(first.saved).toEqual([]);
+    await first.provider.close();
+
+    // The connection came back and the video did not: after a while the conversation is told.
+    const second = await video({}, { history });
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(second.saved).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(second.saved.at(-1)!.history).toEqual([
+      ...history,
+      { speaker: "user", text: "[the user turned the live video off]" }
+    ]);
+    await second.provider.close();
   });
 
   it("does not keep a silent conversation alive", async () => {

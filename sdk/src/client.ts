@@ -641,8 +641,15 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
       const what = source === "camera" ? "the camera" : source === "screen" ? "the screen" : "the video";
       throw new VoiceAgentError("video", `Could not open ${what}: ${errorMessage(error)}`, { cause: error });
     }
-    // Stopped, or asked again, while the browser was asking the user.
-    if (this.destroyed || generation !== this.generation || ask !== this.videoAsk) {
+    // Stopped, or asked again, while the browser was asking the user; or the session that would have
+    // taken the video is gone. A camera is not left on with nowhere for its frames to go.
+    if (
+      this.destroyed ||
+      generation !== this.generation ||
+      ask !== this.videoAsk ||
+      !this.isReady() ||
+      this.caps?.videoInput !== true
+    ) {
       opened.close();
       return null;
     }
@@ -1097,6 +1104,8 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     switch (event.type) {
       case "session.started": {
         this.caps = event.capabilities ?? {};
+        // A reconnect that landed on a session without video: the camera goes off rather than stay on unseen.
+        if (this.video && this.caps.videoInput !== true) this.stopVideo();
         this.provider = event.provider;
         this.socketReady = true;
         this.attempts = 0;

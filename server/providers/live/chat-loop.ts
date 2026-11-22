@@ -147,9 +147,14 @@ function hasPicture(message: ChatMessage): boolean {
   );
 }
 
-/** The messages with only the newest `keep` pictures left in; the others become a note.
+/** The messages with only the newest `keep` pictures left in; the others become a note, and an
+ *  older frame of live video goes without one (the conversation already says the video was on).
  *  Returns new objects where it changes anything and never touches the input. */
-function withPictures(messages: ChatMessage[], keep: number): ChatMessage[] {
+function withPictures(
+  messages: ChatMessage[],
+  keep: number,
+  isFrame: (part: ChatPart) => boolean = () => false
+): ChatMessage[] {
   let seen = 0;
   const result = [...messages];
   for (let index = result.length - 1; index >= 0; index -= 1) {
@@ -161,7 +166,7 @@ function withPictures(messages: ChatMessage[], keep: number): ChatMessage[] {
       const part = message.content[at]!;
       if (part.type !== "image_url") parts.unshift(part);
       else if ((seen += 1) <= keep) parts.unshift(part);
-      else parts.unshift({ type: "text", text: OLD_PICTURE_NOTE });
+      else if (!isFrame(part)) parts.unshift({ type: "text", text: OLD_PICTURE_NOTE });
     }
     result[index] = { role: "user", content: parts };
   }
@@ -205,6 +210,9 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   let pendingImages: EngineImage[] = [];
   /** The newest frame of live video, until a turn takes it or a newer one comes. */
   let frame: EngineImage | undefined;
+  /** The parts of messages that are frames of live video, not pictures the user chose to show. */
+  const frameParts = new WeakSet<ChatPart>();
+  const isFrame = (part: ChatPart) => frameParts.has(part);
   /** Tool calls waiting for `sendToolResult`, by call id. */
   const toolWaiters = new Map<string, (output: string) => void>();
   /** For each call being waited for: how the reply it belongs to speaks a line of the relay's own. */
@@ -423,18 +431,15 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
           waited = shown.length - 1;
           frame = undefined;
         }
+        const pictureParts: ChatPart[] = shown.map((image) => ({
+          type: "image_url" as const,
+          image_url: { url: `data:${image.mimeType};base64,${image.data}` }
+        }));
+        for (const part of pictureParts.slice(waited)) frameParts.add(part);
         const userMessage: ChatMessage | undefined = userText
           ? {
               role: "user",
-              content: shown.length
-                ? [
-                    { type: "text", text: userText },
-                    ...shown.map((image) => ({
-                      type: "image_url" as const,
-                      image_url: { url: `data:${image.mimeType};base64,${image.data}` }
-                    }))
-                  ]
-                : userText
+              content: shown.length ? [{ type: "text", text: userText }, ...pictureParts] : userText
             }
           : undefined;
         const turn: ChatMessage[] = userMessage ? [userMessage] : [];
@@ -514,7 +519,7 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
                   ? forFastLocalModel(options.instructions())
                   : options.instructions()
             },
-            ...withPictures([...history, ...turn], MAX_PICTURES_IN_HISTORY)
+            ...withPictures([...history, ...turn], MAX_PICTURES_IN_HISTORY, isFrame)
           ];
           carriedPicture ||= messages.some(hasPicture);
           const result = await streamChat(
@@ -595,7 +600,7 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
         if (userMessage) history.push(userMessage);
         settled = true;
         if (full.trim()) history.push({ role: "assistant", content: full.trim() });
-        history = withPictures(history, MAX_PICTURES_IN_HISTORY);
+        history = withPictures(history, MAX_PICTURES_IN_HISTORY, isFrame);
         if (history.length > MAX_HISTORY_MESSAGES) history = history.slice(-MAX_HISTORY_MESSAGES);
       }
       await speaker.finish();
@@ -607,7 +612,7 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
       log.warn(`${options.label} reply failed`, { message });
       // A model that cannot take pictures would refuse every later request
       // while one is in the history. The failed turn never reached it.
-      if (carriedPicture) history = withPictures(history, 0);
+      if (carriedPicture) history = withPictures(history, 0, isFrame);
       options.events()?.onError(message);
       // The speaker winds down what it already has (its audio may still arrive
       // while it does), then the reply is made stale so nothing later plays.

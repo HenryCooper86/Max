@@ -107,6 +107,11 @@
 - `guardrails.toolRules` are rules for what the assistant does: a chat model reads each tool call before the tool
   runs, and a call that breaks a rule is not run. `checkedTools` limits the check to the tools you name. A call that
   cannot be judged is not run either.
+- `guardrails.resultRules` are rules for what a tool returns: a chat model reads each result before the assistant
+  does, and a result that breaks a rule (a page that carries instructions for the assistant, say) is withheld.
+  `checkedResults` limits the check to the tools you name. A result that cannot be judged is withheld too. Tried
+  with a local 8B model as assistant and judge: an injected page was withheld three times of three, and obeyed three
+  times of three without the rule.
 - `guardrails.hold` has the judge read every sentence before it is spoken or shown, on the pipeline, local and Max
   Speech backends: an answer that breaks a rule is stopped at that sentence and nobody hears or sees it. It adds one
   check to the wait for the first words (about 0.27 s with a local 8B model).

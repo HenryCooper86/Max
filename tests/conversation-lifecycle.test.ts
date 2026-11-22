@@ -181,6 +181,15 @@ describe("conversation delivery", () => {
     converse(observer);
     observer.event({ type: "guardrail", speaker: "assistant", kind: "term", rule: "Acme", at: 1234, stopped: true });
     observer.event({ type: "guardrail", speaker: "user", kind: "rule", rule: "No threats.", at: 2345, stopped: false });
+    observer.event({
+      type: "guardrail",
+      speaker: "assistant",
+      kind: "result",
+      rule: "Instructions addressed to the assistant.",
+      tool: "fetch_page",
+      at: 3456,
+      stopped: true
+    });
     // Not something a session sends: ignored rather than recorded half-read.
     observer.event({ type: "guardrail", speaker: "nobody", kind: "term", rule: "x", at: 1 });
     observer.end("client");
@@ -191,7 +200,15 @@ describe("conversation delivery", () => {
     const [first, second] = h.hooks();
     expect(first!.guardrails).toEqual([
       { speaker: "assistant", kind: "term", rule: "Acme", at: 1234, stopped: true },
-      { speaker: "user", kind: "rule", rule: "No threats.", at: 2345, stopped: false }
+      { speaker: "user", kind: "rule", rule: "No threats.", at: 2345, stopped: false },
+      {
+        speaker: "assistant",
+        kind: "result",
+        rule: "Instructions addressed to the assistant.",
+        tool: "fetch_page",
+        at: 3456,
+        stopped: true
+      }
     ]);
     expect("guardrails" in second!).toBe(false);
   });

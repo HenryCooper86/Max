@@ -113,13 +113,13 @@ const MAX_GUARDRAIL_FINDINGS = 100;
 function guardrailFindingFrom(payload: Record<string, unknown>): GuardrailFinding | undefined {
   const { speaker, kind, rule, tool, at, stopped } = payload;
   if (speaker !== "assistant" && speaker !== "user") return undefined;
-  if (kind !== "term" && kind !== "rule" && kind !== "tool") return undefined;
+  if (kind !== "term" && kind !== "rule" && kind !== "tool" && kind !== "result") return undefined;
   if (typeof rule !== "string" || typeof at !== "number") return undefined;
   return {
     speaker,
     kind,
     rule,
-    ...(kind === "tool" && typeof tool === "string" ? { tool: tool.slice(0, 64) } : {}),
+    ...((kind === "tool" || kind === "result") && typeof tool === "string" ? { tool: tool.slice(0, 64) } : {}),
     at,
     stopped: stopped === true
   };

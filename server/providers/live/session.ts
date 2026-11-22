@@ -71,6 +71,7 @@ import {
   blockedTermsFrom,
   createGuardrailJudge,
   guardrailModelFromEnv,
+  resultIsChecked,
   toolIsChecked,
   type BlockedTerms,
   type GuardrailJudge,
@@ -1180,7 +1181,10 @@ export function createLiveProvider(
     guardFor = config;
     guardTerms = config ? blockedTermsFrom(config.blockedTerms) : undefined;
     guardJudge = undefined;
-    if (config && config.rules.length + config.userRules.length + config.toolRules.length > 0) {
+    if (
+      config &&
+      config.rules.length + config.userRules.length + config.toolRules.length + config.resultRules.length > 0
+    ) {
       const model = options.guardrailModel ?? guardrailModelFromEnv();
       if (model) {
         guardJudge = createGuardrailJudge(config, model, {
@@ -1263,11 +1267,15 @@ export function createLiveProvider(
    * when the tool is not covered. Otherwise a promise of why the call is
    * refused, or of nothing when it may run. A call that cannot be judged is
    * refused: an action is not taken on the strength of a check that did not happen.
+   * A tool whose result the rules cover is not run either while there is no
+   * judge to read the result: its work would be done and nobody told of it.
    */
   function toolRefusal(call: EngineToolCall): Promise<string | undefined> | undefined {
     const config = guard();
     // The relay's own tools for the conversation itself (ending it, handing over) are not actions of the owner's.
-    if (!toolIsChecked(config, call.name) || builtinTools.some((tool) => tool.name === call.name)) return undefined;
+    if (builtinTools.some((tool) => tool.name === call.name)) return undefined;
+    const callChecked = toolIsChecked(config, call.name);
+    if (!callChecked && !resultIsChecked(config, call.name)) return undefined;
     // A name that is no tool, or not one of the agent the conversation is with: the broker refuses it itself.
     if (!tools?.specs().some((tool) => tool.name === call.name)) return undefined;
     if (!guardJudge || config?.toolsUnchecked) {
@@ -1275,6 +1283,8 @@ export function createLiveProvider(
         "this action cannot be checked against the rules of this service, so it was not done. Tell the user you cannot do that right now."
       );
     }
+    // Only what the tool returns is covered: that is read when it comes.
+    if (!callChecked) return undefined;
     const description = offeredTools().find((tool) => tool.name === call.name)?.description;
     return guardJudge
       .checkTool({ name: call.name, description, arguments: call.arguments, before: riderText })
@@ -1298,6 +1308,55 @@ export function createLiveProvider(
         }
         return undefined;
       });
+  }
+
+  /**
+   * Has the judge read what a tool returned, when the rules for results cover
+   * the tool, before the model is given it. A result that breaks a rule, or
+   * that could not be judged, is withheld: the model is told that much and
+   * nothing of what the result said.
+   */
+  function checkedResult(
+    name: string,
+    outcome: Awaited<ReturnType<ToolBroker["run"]>>
+  ): Promise<Awaited<ReturnType<ToolBroker["run"]>>> {
+    const config = guard();
+    if (!resultIsChecked(config, name) || builtinTools.some((tool) => tool.name === name)) {
+      return Promise.resolve(outcome);
+    }
+    const unread = {
+      ok: false,
+      output: toolErrorText(
+        `what ${name} returned could not be checked against the rules of this service just now, so it is withheld. Do not guess what it said. Tell the user you could not get that right now.`
+      )
+    };
+    if (!guardJudge || config?.toolsUnchecked) return Promise.resolve(unread);
+    const description = offeredTools().find((tool) => tool.name === name)?.description;
+    return guardJudge.checkResult({ name, description, result: outcome.output }).then((verdict) => {
+      if (verdict.broken) {
+        log.warn("guardrail", { speaker: "assistant", kind: "result", tool: name });
+        telemetry?.relayEvent?.({
+          type: "guardrail",
+          speaker: "assistant",
+          kind: "result",
+          rule: verdict.rule,
+          tool: name,
+          at: now(),
+          stopped: true
+        });
+        return {
+          ok: false,
+          output: toolErrorText(
+            `what ${name} returned is withheld: it breaks a rule of this service: "${verdict.rule}" Do not guess what it said. If you cannot help without it, tell the user so.`
+          )
+        };
+      }
+      if ("unchecked" in verdict) {
+        log.warn("a tool's result was withheld: it could not be checked", { tool: name, problem: verdict.unchecked });
+        return unread;
+      }
+      return outcome;
+    });
   }
 
   /** Looks for a blocked term in the reply. True when one was found: the reply is stopped. */
@@ -1855,7 +1914,9 @@ export function createLiveProvider(
       // A background tool answers the model at once with "started" and does
       // its work on the side. What the user says next does not cancel it.
       const run = (): ReturnType<ToolBroker["run"]> => {
-        if (!broker.runsInBackground(call.name)) return broker.run(call);
+        if (!broker.runsInBackground(call.name)) {
+          return broker.run(call).then((outcome) => checkedResult(call.name, outcome));
+        }
         if (backgroundRunning >= MAX_BACKGROUND_TOOLS) {
           return Promise.resolve({
             ok: false,
@@ -1864,12 +1925,15 @@ export function createLiveProvider(
         }
         backgroundRunning += 1;
         const name = call.name;
-        void broker.run(call).then((outcome) => {
-          backgroundRunning = Math.max(0, backgroundRunning - 1);
-          if (closed) return;
-          backgroundResults.push({ name, ok: outcome.ok, output: outcome.output });
-          scheduleBackgroundReport(0);
-        });
+        void broker
+          .run(call)
+          .then((outcome) => checkedResult(name, outcome))
+          .then((outcome) => {
+            backgroundRunning = Math.max(0, backgroundRunning - 1);
+            if (closed) return;
+            backgroundResults.push({ name, ok: outcome.ok, output: outcome.output });
+            scheduleBackgroundReport(0);
+          });
         return Promise.resolve({ ok: true, output: BACKGROUND_STARTED });
       };
       // A tool the owner's rules cover is read by the judge first, and runs only if no rule is broken.

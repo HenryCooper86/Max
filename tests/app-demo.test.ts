@@ -190,4 +190,21 @@ describe("app demo provider with rules for tools", () => {
     await vi.waitFor(() => expect(client.agentLines()).toHaveLength(2));
     expect(ran).toEqual(["find"]);
   });
+
+  it("does not run a tool whose result the rules cover either: nothing here could read it", async () => {
+    const ran: string[] = [];
+    const find: ToolDefinition = { name: "find_order", description: "Finds an order", handler: () => ran.push("find") };
+    setAssistantProfileForTests(
+      assistantProfileFrom({
+        name: "Ava",
+        device: "app",
+        guardrails: { resultRules: ["Another customer's personal details."] }
+      })
+    );
+    const { client, provider } = await setup([find]);
+    await provider.textInput!("find order");
+    await vi.waitFor(() => expect(client.agentLines()).toHaveLength(1));
+    expect(client.agentLines()[0]).toContain("Demo mode does not run find_order");
+    expect(ran).toEqual([]);
+  });
 });

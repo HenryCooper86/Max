@@ -1768,13 +1768,24 @@ if (assistant().variants.length > 0) {
     );
 }
 if (assistant().guardrails) {
-  const { blockedTerms, rules, userRules, toolRules, checkedTools, endConversation, hold } = assistant().guardrails!;
+  const {
+    blockedTerms,
+    rules,
+    userRules,
+    toolRules,
+    checkedTools,
+    resultRules,
+    checkedResults,
+    endConversation,
+    hold
+  } = assistant().guardrails!;
   log.info("guardrails on", {
     blockedTerms: blockedTerms.length,
     rules: rules.length,
     userRules: userRules.length,
     ...(toolRules.length > 0 ? { toolRules: toolRules.length, checkedTools: checkedTools ?? "all" } : {}),
-    ...(rules.length + userRules.length + toolRules.length > 0
+    ...(resultRules.length > 0 ? { resultRules: resultRules.length, checkedResults: checkedResults ?? "all" } : {}),
+    ...(rules.length + userRules.length + toolRules.length + resultRules.length > 0
       ? { model: guardrailModelFromEnv()?.model ?? "none" }
       : {}),
     ...(hold ? { hold: true } : {}),
@@ -2212,14 +2223,16 @@ authSessionSweepTimer.unref();
 await installServerTools(assistant().tools);
 // The config the relay starts with is part of its history, also when it was edited by hand.
 recordStartupConfig();
-// A name in guardrails.checkedTools that is no tool is most likely a tool that is not being checked.
+// A name in guardrails.checkedTools or checkedResults that is no tool is most likely a tool that is not being checked.
 for (const profile of [assistant(), ...assistant().variants.map((variant) => variant.profile)]) {
   const known = new Set([...installedServerTools().map((tool) => tool.name), "transfer_call"]);
-  const strangers = (profile.guardrails?.checkedTools ?? []).filter((name) => !known.has(name));
-  if (strangers.length === 0) continue;
-  log.warn(
-    `${profile.variant ? `variants: ${profile.variant}: ` : ""}guardrails.checkedTools names ${strangers.join(", ")}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the tool you meant is not checked.`
-  );
+  for (const key of ["checkedTools", "checkedResults"] as const) {
+    const strangers = (profile.guardrails?.[key] ?? []).filter((name) => !known.has(name));
+    if (strangers.length === 0) continue;
+    log.warn(
+      `${profile.variant ? `variants: ${profile.variant}: ` : ""}guardrails.${key} names ${strangers.join(", ")}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the tool you meant is not checked.`
+    );
+  }
 }
 // Max Cloud sessions a crash or restart left unbooked are charged up to their last checkpoint, and
 // bookings that failed are retried: now, and from then on every 15 seconds.

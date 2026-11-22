@@ -1,7 +1,7 @@
 import type { WebSocket } from "ws";
 import { APP_DEMO_CAPABILITIES } from "../../shared/agent";
 import { assistant, promptsInChinese } from "../assistant";
-import { toolIsChecked } from "../guardrails";
+import { resultIsChecked, toolIsChecked } from "../guardrails";
 import type { Logger } from "../logger";
 import { sessionLanguage } from "../prompts";
 import { createToolBroker, type ToolBroker } from "../tools/broker";
@@ -127,12 +127,17 @@ export function createAppDemoProvider(
     send(transcriptEvent(createTranscriptDelivery(), "rider", text, { final: true }));
     status("thinking", t(`${assistant().name} 正在思考`, `${assistant().name} is thinking`));
     const request = tools ? toolRequestFrom(text, tools.specs()) : undefined;
-    if (request && tools && toolIsChecked(assistant().guardrails, request.tool.name)) {
+    if (
+      request &&
+      tools &&
+      (toolIsChecked(assistant().guardrails, request.tool.name) ||
+        resultIsChecked(assistant().guardrails, request.tool.name))
+    ) {
       // Demo mode has no judge to read the call, and a tool the owner's rules cover runs only when one has.
       say(
         t(
-          `演示模式不会运行 ${request.tool.name}：它受 guardrails.toolRules 约束，而演示模式无法检查这些规则。`,
-          `Demo mode does not run ${request.tool.name}: guardrails.toolRules cover it, and demo mode cannot check them.`
+          `演示模式不会运行 ${request.tool.name}：它受 guardrails 里针对工具的规则约束，而演示模式无法检查这些规则。`,
+          `Demo mode does not run ${request.tool.name}: the rules for tools in guardrails cover it, and demo mode cannot check them.`
         )
       );
       listening();

@@ -226,6 +226,7 @@ function database(): DatabaseSync {
       (db.prepare("PRAGMA table_info(conversations)").all() as { name: string }[]).map((column) => column.name)
     );
     if (!conversationColumns.has("analysis")) db.exec("ALTER TABLE conversations ADD COLUMN analysis TEXT NULL");
+    if (!conversationColumns.has("answer_ms")) db.exec("ALTER TABLE conversations ADD COLUMN answer_ms INTEGER NULL");
   } catch (error) {
     db.close();
     throw error;
@@ -908,14 +909,16 @@ export type ConversationRow = {
   turns: string;
   /** JSON of the conversation's analysis (server/cloud/analysis.ts), once there is one. */
   analysis?: string | null;
+  /** How long the user waited for an answer to begin, in ms: the median over the conversation. */
+  answer_ms?: number | null;
 };
 
 export function insertConversation(row: ConversationRow): void {
   database()
     .prepare(
       `INSERT OR IGNORE INTO conversations
-         (id, customer_id, project_id, started_at, ended_at, seconds, source, preview, turns)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, customer_id, project_id, started_at, ended_at, seconds, source, preview, turns, answer_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       row.id,
@@ -926,7 +929,8 @@ export function insertConversation(row: ConversationRow): void {
       row.seconds,
       row.source,
       row.preview,
-      row.turns
+      row.turns,
+      row.answer_ms ?? null
     );
 }
 
@@ -938,7 +942,7 @@ export function projectConversations(
 ): Omit<ConversationRow, "turns">[] {
   return database()
     .prepare(
-      `SELECT id, customer_id, project_id, started_at, ended_at, seconds, source, preview, analysis FROM conversations
+      `SELECT id, customer_id, project_id, started_at, ended_at, seconds, source, preview, analysis, answer_ms FROM conversations
        WHERE project_id = ? AND customer_id = ? ORDER BY started_at DESC LIMIT ?`
     )
     .all(projectId, customerId, limit) as Omit<ConversationRow, "turns">[];

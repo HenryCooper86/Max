@@ -6,9 +6,11 @@ import { LanguageProvider } from "../src/components/LanguageToggle";
 import type { ConversationAnalysis, Project } from "../src/console/api";
 import { AnalysisMarks, AnalysisSetting, AnalysisView, analysisProblem } from "../src/console/studio/AnalysisSetting";
 import {
+  answerSummary,
   countSummary,
   deliveryLine,
   formatDuration,
+  formatWait,
   HistoryTab,
   sourceLabel,
   toolLine
@@ -41,6 +43,28 @@ describe("history helpers", () => {
     expect(toolLine({ text: "check_order", ok: true, ms: 412 }, en)).toBe("✓ check_order · 412 ms");
     expect(toolLine({ text: "check_order", ok: false }, en)).toBe("✗ check_order failed");
     expect(toolLine({ text: "check_order: timeout", ok: false }, en)).toBe("✗ check_order failed: timeout");
+  });
+});
+
+describe("how fast the project answers", () => {
+  it("is said in seconds, with one decimal", () => {
+    expect(formatWait(812)).toBe("0.8");
+    expect(formatWait(12_449)).toBe("12.4");
+    expect(formatWait(0)).toBe("0.0");
+    expect(formatWait(-3)).toBe("0.0");
+  });
+
+  it("is the median over the conversations that were timed", () => {
+    expect(answerSummary([], en)).toBe("");
+    expect(answerSummary([{}, {}], en)).toBe("");
+    expect(answerSummary([{ answerMs: 900 }], en)).toBe(
+      "An answer usually begins 0.9 s after the visitor's turn ends (the median of 1 conversation)"
+    );
+    // One slow conversation does not move it.
+    expect(answerSummary([{ answerMs: 700 }, {}, { answerMs: 9_000 }, { answerMs: 800 }], en)).toContain(
+      "begins 0.8 s after"
+    );
+    expect(answerSummary([{ answerMs: 700 }, { answerMs: 900 }], en)).toContain("begins 0.8 s after");
   });
 });
 

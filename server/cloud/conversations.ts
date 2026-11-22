@@ -28,7 +28,20 @@ export type ConversationTurn = {
   /** Tool turns: whether the call worked, and how long it took. */
   ok?: boolean;
   ms?: number;
+  /** Agent turns: how long the user waited, from the end of their turn (their words final on the relay) to the
+   *  first sound of this answer. */
+  answerMs?: number;
 };
+
+/** The middle one of the times a conversation's answers took to begin; none when no answer was timed. */
+export function medianAnswerMs(turns: readonly ConversationTurn[]): number | undefined {
+  const times = turns
+    .flatMap((turn) => (turn.speaker === "agent" && typeof turn.answerMs === "number" ? [turn.answerMs] : []))
+    .sort((a, b) => a - b);
+  if (times.length === 0) return undefined;
+  const middle = Math.floor(times.length / 2);
+  return times.length % 2 ? times[middle]! : Math.round((times[middle - 1]! + times[middle]!) / 2);
+}
 
 export type ConversationSummary = {
   id: string;
@@ -38,6 +51,8 @@ export type ConversationSummary = {
   source: string;
   /** The first thing the user said, as a title. */
   preview: string;
+  /** How long the user waited for an answer to begin: the median over the conversation's answers. */
+  answerMs?: number;
   /** What the analysis made of it, for a mark in the list: present once it has been analysed. */
   sentiment?: AnalysisResult["sentiment"];
   success?: boolean;
@@ -74,11 +89,19 @@ export function conversationRecorder(clock: () => number = now) {
   // Speech arrives as growing partial lines per turn; keep the latest final text of each.
   const spoken = new Map<string, number>();
   const startedAt = clock();
+  /** How long the answer now being spoken took to begin: it belongs to the agent's next line. */
+  let waited: number | undefined;
 
   return {
     startedAt,
     event(payload: unknown): void {
       if (!isRecord(payload) || turns.length >= MAX_TURNS) return;
+      if (payload.type === "metric") {
+        // Sent with the first sound of an answer: the time from the user's last word to it.
+        const ms = payload.latencyMs;
+        if (typeof ms === "number" && Number.isFinite(ms) && ms >= 0) waited = Math.min(Math.round(ms), 600_000);
+        return;
+      }
       if (payload.type === "transcript" && payload.final === true && typeof payload.text === "string") {
         const text = payload.text.trim().slice(0, MAX_TEXT);
         if (!text) return;
@@ -90,7 +113,10 @@ export function conversationRecorder(clock: () => number = now) {
           return;
         }
         spoken.set(key, turns.length);
-        turns.push({ at: clock(), speaker, text });
+        // An answer that was cut off before it had words leaves its time with nobody.
+        const answerMs = speaker === "agent" ? waited : undefined;
+        waited = undefined;
+        turns.push({ at: clock(), speaker, text, ...(answerMs !== undefined ? { answerMs } : {}) });
         return;
       }
       if (payload.type === "tool.activity" && typeof payload.name === "string") {
@@ -136,7 +162,8 @@ export function saveConversation(input: {
     seconds: Math.max(0, Math.round(input.seconds)),
     source: input.source,
     preview: (turns.find((turn) => turn.speaker === "user") ?? turns[0])?.text.slice(0, 120) ?? "",
-    turns: JSON.stringify(turns)
+    turns: JSON.stringify(turns),
+    answer_ms: medianAnswerMs(turns) ?? null
   };
   insertConversation(row);
   return id;
@@ -159,6 +186,7 @@ export function listConversations(
     seconds: row.seconds,
     source: row.source,
     preview: row.preview,
+    ...(typeof row.answer_ms === "number" ? { answerMs: row.answer_ms } : {}),
     ...marksOf(row.analysis)
   }));
   return { ok: true, value: { conversations } };
@@ -195,6 +223,7 @@ export function readConversation(
         seconds: row.seconds,
         source: row.source,
         preview: row.preview,
+        ...(typeof row.answer_ms === "number" ? { answerMs: row.answer_ms } : {}),
         ...marksOf(row.analysis),
         turns,
         ...(analysisOf(row.analysis) ? { analysis: analysisOf(row.analysis) } : {})

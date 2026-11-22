@@ -69,6 +69,29 @@ export function toolLine(
 
 type Say = (zh: string, en: string) => string;
 
+/** Milliseconds as seconds with one decimal: "0.8", "12.4". */
+export function formatWait(ms: number): string {
+  return (Math.max(0, ms) / 1000).toFixed(1);
+}
+
+/**
+ * How fast the project answers, over the conversations listed: the median of
+ * their own medians, which one slow conversation does not move. Nothing when
+ * none of them was timed.
+ */
+export function answerSummary(list: ReadonlyArray<Pick<ConversationSummary, "answerMs">>, say: Say): string {
+  const times = list
+    .flatMap((item) => (typeof item.answerMs === "number" ? [item.answerMs] : []))
+    .sort((a, b) => a - b);
+  if (times.length === 0) return "";
+  const middle = Math.floor(times.length / 2);
+  const median = times.length % 2 ? times[middle]! : (times[middle - 1]! + times[middle]!) / 2;
+  return say(
+    `访客一轮说完后，回答通常在 ${formatWait(median)} 秒内开始（${times.length} 段对话的中位数）`,
+    `An answer usually begins ${formatWait(median)} s after the visitor's turn ends (the median of ${times.length} ${times.length === 1 ? "conversation" : "conversations"})`
+  );
+}
+
 function Turn({ turn, language, say }: { turn: ConversationTurn; language: string; say: Say }) {
   if (turn.speaker === "tool") {
     return (
@@ -81,6 +104,9 @@ function Turn({ turn, language, say }: { turn: ConversationTurn; language: strin
     <li className={`cxsHistoryBubble ${turn.speaker}`}>
       <span className="cxsHistoryWho">
         {turn.speaker === "user" ? say("访客", "Visitor") : say("助手", "Agent")} · {formatClock(turn.at, language)}
+        {turn.speaker === "agent" && typeof turn.answerMs === "number"
+          ? say(` · 等了 ${formatWait(turn.answerMs)} 秒`, ` · after ${formatWait(turn.answerMs)} s`)
+          : ""}
       </span>
       <p>{turn.text}</p>
     </li>
@@ -321,6 +347,12 @@ export function HistoryTab(props: StudioTabProps) {
           <AnalysisMarks sentiment={open.sentiment} success={open.success} />
           <span className="cxMuted">
             {formatWhen(open.startedAt, language)} · {formatDuration(open.seconds)}
+            {typeof open.answerMs === "number"
+              ? say(
+                  ` · 回答通常在 ${formatWait(open.answerMs)} 秒内开始`,
+                  ` · answers usually began after ${formatWait(open.answerMs)} s`
+                )
+              : ""}
           </span>
         </div>
         {open.analysis ? <AnalysisView analysis={open.analysis} /> : null}
@@ -348,6 +380,7 @@ export function HistoryTab(props: StudioTabProps) {
       <div aria-live="polite" aria-busy={loading}>
         {loading && !list ? <p className="cxMuted">{say("加载中…", "Loading…")}</p> : null}
         {list ? <p className="cxMuted">{countSummary(list.length, say)}</p> : null}
+        {list && answerSummary(list, say) ? <p className="cxMuted">{answerSummary(list, say)}</p> : null}
       </div>
       <p className="cxError" role="alert">
         {error}
@@ -374,6 +407,11 @@ export function HistoryTab(props: StudioTabProps) {
                 <span className="cxsHistoryMeta">
                   <span>{formatWhen(item.startedAt, language)}</span>
                   <span className="cxsHistoryDuration">{formatDuration(item.seconds)}</span>
+                  {typeof item.answerMs === "number" ? (
+                    <span title={say("回答开始前的等待时间（中位数）", "How long answers took to begin (median)")}>
+                      {say(`应答 ${formatWait(item.answerMs)} 秒`, `answers in ${formatWait(item.answerMs)} s`)}
+                    </span>
+                  ) : null}
                   <span className="cxsHistoryBadge">{sourceLabel(item.source, say)}</span>
                   <AnalysisMarks sentiment={item.sentiment} success={item.success} />
                   {opening === item.id ? <span className="cxMuted">{say("打开中…", "Opening…")}</span> : null}

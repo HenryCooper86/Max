@@ -22,6 +22,7 @@ import { setCloudClock } from "../server/cloud/context";
 import {
   conversationRecorder,
   listConversations,
+  medianAnswerMs,
   readConversation,
   saveConversation
 } from "../server/cloud/conversations";
@@ -501,6 +502,87 @@ describe("projects with Studio settings", () => {
     expect(
       createProject(owner, { name: "Second", studio: { flow: [{ id: "main", handoffs: [{ to: "nowhere" }] }] } })
     ).toMatchObject({ ok: false, status: 400 });
+  });
+
+  it("keeps how long each answer took to begin, and the conversation's median", async () => {
+    const owner = await customer();
+    const created = project(owner);
+    const recorder = conversationRecorder(() => clock);
+    const say = (speaker: "rider" | "agent", text: string, turnId: string) =>
+      recorder.event({ type: "transcript", turnId, speaker, text, final: true });
+    // The greeting answers nobody.
+    say("agent", "Hello! How can I help?", "t0");
+    say("rider", "Where is my order?", "t1");
+    // Sent with the first sound of the answer, before its words are final.
+    recorder.event({ type: "metric", latencyMs: 812.4 });
+    say("agent", "It ships today.", "t2");
+    say("agent", "It ships today, by 5 pm.", "t2");
+    say("rider", "And the other one?", "t3");
+    // An answer cut off before it had words: its time belongs to nobody, least of all the next answer.
+    recorder.event({ type: "metric", latencyMs: 300 });
+    say("rider", "The blue one.", "t4");
+    say("agent", "That one ships Friday.", "t5");
+    say("rider", "Thanks.", "t6");
+    recorder.event({ type: "metric", latencyMs: 1500 });
+    // Not times.
+    recorder.event({ type: "metric", latencyMs: -5 });
+    recorder.event({ type: "metric", latencyMs: "fast" });
+    recorder.event({ type: "metric" });
+    say("agent", "You're welcome.", "t7");
+    say("rider", "Bye.", "t8");
+    recorder.event({ type: "metric", latencyMs: 400 });
+    say("agent", "Goodbye!", "t9");
+    expect(recorder.turns().map((turn) => [turn.speaker, turn.answerMs])).toEqual([
+      ["agent", undefined],
+      ["user", undefined],
+      ["agent", 812],
+      ["user", undefined],
+      ["user", undefined],
+      ["agent", undefined],
+      ["user", undefined],
+      ["agent", 1500],
+      ["user", undefined],
+      ["agent", 400]
+    ]);
+    expect(medianAnswerMs(recorder.turns())).toBe(812);
+    expect(medianAnswerMs(recorder.turns().slice(0, 8))).toBe(1156);
+    expect(medianAnswerMs(recorder.turns().slice(0, 2))).toBeUndefined();
+
+    const id = saveConversation({ customerId: owner, projectId: created.id, source: "embed", seconds: 30, recorder });
+    const list = listConversations(owner, created.id);
+    expect(list.ok && list.value.conversations[0]).toMatchObject({ id, answerMs: 812 });
+    const read = readConversation(owner, id!);
+    expect(read.ok && read.value.conversation.answerMs).toBe(812);
+    expect(read.ok && read.value.conversation.turns[2]).toMatchObject({ speaker: "agent", answerMs: 812 });
+    // The project's server is sent the same turns.
+    const sent: Array<{ turns: Array<{ answerMs?: number }> }> = [];
+    patch(owner, created.id, { studio: { conversationWebhook: "https://shop.example.com/hook" } });
+    cloudConversationEnded(
+      {
+        customerId: owner,
+        projectId: created.id,
+        source: "embed",
+        sessionId: "s",
+        seconds: 30,
+        endedAt: clock,
+        keep: false,
+        recorder
+      },
+      { ended: (input: never) => void sent.push(input) } as never
+    );
+    expect(sent[0]!.turns[2]!.answerMs).toBe(812);
+    // A conversation nobody was answered in has no time to show.
+    const quiet = conversationRecorder(() => clock);
+    quiet.event({ type: "transcript", turnId: "t1", speaker: "rider", text: "Hello?", final: true });
+    const quietId = saveConversation({
+      customerId: owner,
+      projectId: created.id,
+      source: "embed",
+      seconds: 3,
+      recorder: quiet
+    });
+    const again = listConversations(owner, created.id);
+    expect(again.ok && again.value.conversations.find((one) => one.id === quietId)).not.toHaveProperty("answerMs");
   });
 
   it("keeps conversations, newest first, and deletes them with the project", async () => {

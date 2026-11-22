@@ -112,6 +112,10 @@
 - iOS and Android: a picture for the assistant. When the backend takes pictures, the typing field has a button
   that opens the system photo picker and sends the photo as `image.input`, upright, scaled and small enough for the
   relay, with what is typed as one turn.
+- How long each answer took to begin, kept with the conversation. An agent line that answered the user carries
+  `answerMs` (the end of the user's turn to the first sound of the answer) in the conversation webhook and the
+  conversation log, on the relay's own assistant and on Max Cloud projects. The Max Cloud console shows it on each
+  answer, as a median per conversation, and as a median over the conversations listed.
 - Max Cloud: conversation analysis for projects. A project can have each conversation analysed when it ends: a
   summary, how the visitor felt, a pass or fail against the owner's own rule, and fields to find in what was said.
   The result is shown with the conversation in the console and sent with it to the project's server. It runs on the

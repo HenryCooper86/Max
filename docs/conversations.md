@@ -680,7 +680,7 @@ The URL must be HTTPS, or plain HTTP to a local or private host (the same rule a
     { "at": 1763452803000, "speaker": "agent", "text": "Hi, I'm Ava. How can I help?" },
     { "at": 1763452811000, "speaker": "user", "text": "Where is order A-1042?" },
     { "at": 1763452812000, "speaker": "tool", "text": "get_order_status", "ok": true, "ms": 412 },
-    { "at": 1763452815000, "speaker": "agent", "text": "It shipped yesterday and arrives Friday." }
+    { "at": 1763452815000, "speaker": "agent", "text": "It shipped yesterday and arrives Friday.", "answerMs": 840 }
   ],
   "analysis": {
     "summary": "The user asked where order A-1042 was. The assistant said it shipped and arrives on Friday.",
@@ -700,6 +700,10 @@ The URL must be HTTPS, or plain HTTP to a local or private host (the same rule a
   it says how the connection ended: `client` for a normal close and `disconnected` for any other, for a web session;
   and `caller` or `transfer` for a phone call.
 - Speakers are `user`, `agent` and `tool`. A tool line carries `ok` and `ms` and, for a failure, the error text.
+- An agent line that answered the user carries `answerMs`: how long the user waited for it, from the end of their
+  turn (the moment their words were final on the relay) to the first sound of the answer. It is the `latencyMs` of
+  the [`metric` event](protocol.md) the client is sent. A greeting, a line the relay itself speaks and an answer
+  with no audio have none.
 - `id` is unique per conversation and the same across retries, so you can use it to ignore a repeat.
 - `analysis` appears only when `analysis` is configured and succeeded; `analysisError` replaces it when it failed.
 - `recording`, as in `"recording": { "file": "4b1e….wav", "durationMs": 88400 }`, appears only when the relay

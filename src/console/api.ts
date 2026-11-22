@@ -57,6 +57,8 @@ export type ConversationSummary = {
   seconds: number;
   source: "test" | "embed" | "api" | string;
   preview: string;
+  /** How long the visitor waited for an answer to begin, in ms: the median over the conversation. */
+  answerMs?: number;
   /** From the conversation's analysis, when it has one. */
   sentiment?: AnalysisResult["sentiment"];
   success?: boolean;
@@ -69,6 +71,8 @@ export type ConversationTurn = {
   text: string;
   ok?: boolean;
   ms?: number;
+  /** Agent turns: how long the visitor waited for this answer to begin, in ms. */
+  answerMs?: number;
 };
 export type Conversation = ConversationSummary & {
   projectId: string;

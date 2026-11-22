@@ -541,12 +541,34 @@ describe("a database from before there was analysis", () => {
       // As an older relay left it: no such column.
       const old = new DatabaseSync(file);
       old.exec("ALTER TABLE conversations DROP COLUMN analysis");
+      old.exec("ALTER TABLE conversations DROP COLUMN answer_ms");
       old.close();
       resetCloudDatabase(file);
       const listed = listConversations(owner, created.id);
       expect(listed.ok && listed.value.conversations).toMatchObject([{ preview: "Hello" }]);
       const one = readConversation(owner, (listed.ok ? listed.value.conversations[0] : undefined)!.id);
       expect(one.ok && one.value.conversation.analysis).toBeUndefined();
+      expect(one.ok && one.value.conversation).not.toHaveProperty("answerMs");
+      // And a new conversation is kept with both.
+      const next = conversationRecorder(() => clock);
+      next.event({ type: "transcript", speaker: "rider", text: "Hi", final: true, turnId: "t1" });
+      next.event({ type: "metric", latencyMs: 640 });
+      next.event({ type: "transcript", speaker: "agent", text: "Hello!", final: true, turnId: "t2" });
+      cloudConversationEnded(
+        {
+          customerId: owner,
+          projectId: created.id,
+          source: "test",
+          sessionId: "s2",
+          seconds: 3,
+          endedAt: clock,
+          keep: true,
+          recorder: next
+        },
+        { ended: () => undefined } as never
+      );
+      const both = listConversations(owner, created.id);
+      expect(both.ok && both.value.conversations.some((item) => item.answerMs === 640)).toBe(true);
     } finally {
       resetCloudDatabase();
       rmSync(dir, { recursive: true, force: true });

@@ -1406,7 +1406,8 @@ export function createLiveProvider(
         send({
           type: "telemetry",
           asrMs: Math.max(0, riderFinalAt - speechStartedAt),
-          thinkMs: Math.max(0, replyStartedAt - riderFinalAt),
+          // A reply that began before the turn it follows was settled has no thinking time to tell.
+          thinkMs: riderFinalAt ? Math.max(0, replyStartedAt - riderFinalAt) : 0,
           firstAudioMs: Math.max(0, now() - replyStartedAt),
           totalMs: Math.max(0, now() - (speechStartedAt || reference))
         });

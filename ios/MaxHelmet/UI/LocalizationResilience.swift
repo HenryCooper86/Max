@@ -31,6 +31,16 @@ extension LocalizationTable {
         ("picture.tooFast", "每秒最多发一张图片。", "One picture a second at most."),
         ("picture.tooMany", "这次对话的图片已达上限。", "This conversation has had as many pictures as it can take."),
         ("picture.unreadable", "这张图片打不开，或者太大，发不了。", "That picture could not be opened, or is too large to send."),
+        // live video for the assistant
+        ("video.show", "让 {name} 看你的摄像头", "Show {name} your camera"),
+        ("video.off", "关闭摄像头", "Turn the camera off"),
+        ("video.switch", "切换前后摄像头", "Switch between front and back camera"),
+        ("video.live", "{name} 正在看这个画面", "{name} can see this"),
+        ("video.preview", "摄像头画面", "Camera picture"),
+        ("video.starting", "正在打开摄像头…", "Opening the camera…"),
+        ("video.denied", "没有相机权限。请在系统设置里允许使用相机。", "Camera access is off. Allow it in Settings."),
+        ("video.unavailable", "这台设备没有可用的相机。", "This device has no camera to use."),
+        ("video.notReady", "现在打不开摄像头，请稍后再试。", "The camera can't be turned on right now. Try again in a moment."),
         // unconfigured relay
         ("relay.unset.title", "未配置语音中继", "Relay not configured"),
         ("relay.unset.body", "这个版本没有中继地址。请在「设置 › 连接」里填写你的中继地址，或在 ios/Config/Secrets.xcconfig 中设置 MAX_RELAY_HOST 后重新构建。", "This build has no relay address. Enter your relay's address under Settings › Connection, or set MAX_RELAY_HOST in ios/Config/Secrets.xcconfig and rebuild."),

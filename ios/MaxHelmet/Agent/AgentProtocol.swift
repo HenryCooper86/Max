@@ -246,6 +246,9 @@ struct ProviderCapabilities: Equatable {
     /// The backend takes pictures (`image.input`). Absent on relays older
     /// than image input, so it reads as false there.
     var imageInput: Bool = false
+    /// The session takes live video (`video.frame`). Absent on relays older
+    /// than live video, so it reads as false there.
+    var videoInput: Bool = false
 }
 
 /// Mirror of the ride.context event payload / DEFAULT_RIDE_CONTEXT in src/main.tsx.
@@ -442,7 +445,8 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
                 emergencyMode: caps["emergencyMode"] as? Bool ?? false,
                 tools: caps["tools"] as? Bool ?? false,
                 textInput: caps["textInput"] as? Bool ?? false,
-                imageInput: caps["imageInput"] as? Bool ?? false
+                imageInput: caps["imageInput"] as? Bool ?? false,
+                videoInput: caps["videoInput"] as? Bool ?? false
             )
         )
 

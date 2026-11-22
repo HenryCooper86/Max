@@ -57,7 +57,7 @@
 	<key>NSAppleMusicUsageDescription</key>
 	<string>Max 需要访问音乐库，才能在骑行时控制播放。</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Max 需要使用相机，才能在你说出指令时拍照和录像。</string>
+	<string>Max 需要使用相机，才能在你说出指令时拍照和录像，并在你打开摄像头时让助手看到画面。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Max 需要把你导出的拍摄内容保存到系统相册。</string>
 	<key>NSLocalNetworkUsageDescription</key>

@@ -106,6 +106,11 @@
   with the user's next turn (on Gemini Live, as it arrives). The widget has camera and screen buttons with a preview
   (`video-input`), the React hook `startVideo`, `stopVideo` and `video`. It works wherever pictures do
   (`capabilities.videoInput`).
+- Live video in the iOS and Android clients. Where the session takes video, the typing field has a camera button: the
+  assistant is sent what the phone's camera shows, a frame a second (768 pixels on the longer side), with a small
+  preview and a control for the front or the back camera. The camera goes off with the conversation, with a lost
+  connection and when the app leaves the screen, and like the field it is not turned on while the bike is moving.
+  Built and unit-tested on both; the camera itself has not been run on a phone yet.
 - Max Cloud: flows for projects. A Flow tab in the Studio holds the relay's flow builder: several agents with their
   own instructions and tools, handovers along the arrows drawn, values, and what a step does by rule, with the
   project's webhook tools as the only tools.

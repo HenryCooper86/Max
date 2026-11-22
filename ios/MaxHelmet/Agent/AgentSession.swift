@@ -20,6 +20,10 @@ final class AgentSession: NSObject, ObservableObject {
         /// ProviderCapabilities in shared/agent.ts). Defaults match the web's
         /// DEFAULT_CAPABILITIES (all off) until the relay reports the real set.
         var capabilities = ProviderCapabilities()
+        /// The camera is on and the assistant is being sent what it shows.
+        var liveVideo = false
+        /// Live video comes from the back camera, not the front one.
+        var liveVideoBackCamera = false
         var turnState: TurnState = .idle
         /// Mic muted mid-session: the relay stays open and Max can keep speaking,
         /// but rider audio frames are withheld (ChatGPT-style mute).
@@ -230,6 +234,13 @@ final class AgentSession: NSObject, ObservableObject {
     private var socketOpen = false
     /// The relay's limits on pictures, counted per connection. Main thread.
     fileprivate var imageLimiter = ImageInputLimiter()
+    /// Live video: pacing and when it stops (VideoInput.swift), the camera, and
+    /// the once-a-second tick. Frames are not pictures and use none of the
+    /// imageLimiter's budget. Main thread.
+    fileprivate var liveVideoState = LiveVideoState()
+    let videoCamera = VideoCamera()
+    fileprivate var videoTimer: Timer?
+    fileprivate var videoEncoding = false
     private let micSendLock = NSLock()
     private var micSendsInFlight = 0
     private static let maxMicSendsInFlight = 4
@@ -635,6 +646,8 @@ final class AgentSession: NSObject, ObservableObject {
         guard lifecycle.stop() else { return }
         invalidateDeviceCommands()
         stopCameraForSession()
+        // Before the socket goes: the relay is told the video is over.
+        MainActor.assumeIsolated { stopLiveVideo() }
         locationProvider.stop()
         location = nil
         withTransportLock {
@@ -949,6 +962,7 @@ final class AgentSession: NSObject, ObservableObject {
 
     private func restartSession() {
         invalidateDeviceCommands()
+        MainActor.assumeIsolated { stopLiveVideo() }
         let socket = webSocket
         withTransportLock {
             webSocket = nil
@@ -1124,6 +1138,8 @@ final class AgentSession: NSObject, ObservableObject {
             socketOpen = false
             webSocket = nil
         }
+        // The socket is gone, so there is no one to tell: the camera goes off.
+        MainActor.assumeIsolated { stopLiveVideo() }
         rideSpeed.relayConnectionLost()
         publishRideSpeed()
         // This socket is gone — whatever nav.request it might have carried
@@ -1237,6 +1253,11 @@ final class AgentSession: NSObject, ObservableObject {
         case let .sessionStarted(provider, mode, capabilities):
             withTransportLock { socketOpen = true }
             imageLimiter.reset()
+            // A session that takes no video ends what is on; one that does starts its pacing afresh.
+            if liveVideoState.sessionStarted(videoInput: capabilities.videoInput) {
+                webSocket?.send(.string(videoStopEvent)) { _ in }
+                liveVideoEnded()
+            }
             // Only the mock demo's ride.context speed is a real scenario value;
             // a live relay just echoes the phone's own earlier GPS speed.
             rideSpeed.sessionStarted(mock: mode == "mock")
@@ -1961,6 +1982,98 @@ extension AgentSession {
             // With words it is a turn of the user's, which supersedes whatever the agent was still saying.
             if !(text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { stopAgentSpeech() }
             webSocket.send(.string(json)) { _ in }
+            return .success(())
+        case let .failure(reason):
+            return .failure(reason)
+        }
+    }
+
+    /// Turns the camera on and sends the assistant a frame a second until
+    /// `stopLiveVideo`. The assistant sees the newest frame with the user's
+    /// next turn; a frame starts nothing. Says why when it could not start.
+    @MainActor
+    func startLiveVideo() async -> VideoStartResult {
+        guard !liveVideoState.active else { return .started }
+        guard liveVideoReady() else { return .notReady }
+        let result = await videoCamera.start(position: .front)
+        guard result == .started else { return result }
+        // The session may have ended while the user was asked for the camera.
+        guard liveVideoState.begin(supported: state.capabilities.videoInput, ready: liveVideoReadyNow()) else {
+            videoCamera.stop()
+            return .notReady
+        }
+        update {
+            $0.liveVideo = true
+            $0.liveVideoBackCamera = false
+        }
+        videoTimer = Timer.scheduledTimer(withTimeInterval: videoInputInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sendLiveVideoFrame() }
+        }
+        // The first frame as soon as the camera has one, not a whole second later.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            MainActor.assumeIsolated { self?.sendLiveVideoFrame() }
+        }
+        return .started
+    }
+
+    /// Turns the camera off and tells the relay (`video.stop`). Also on session
+    /// end, a lost connection and the app going to the background.
+    @MainActor
+    func stopLiveVideo() {
+        guard liveVideoState.active else { return }
+        if liveVideoState.end(ready: liveVideoReadyNow()) {
+            webSocket?.send(.string(videoStopEvent)) { _ in }
+        }
+        liveVideoEnded()
+    }
+
+    /// Switches between the front and the back camera.
+    @MainActor
+    func switchLiveVideoCamera() async {
+        guard liveVideoState.active, await videoCamera.switchCamera() else { return }
+        update { $0.liveVideoBackCamera = self.videoCamera.position == .back }
+    }
+
+    private func liveVideoEnded() {
+        videoTimer?.invalidate()
+        videoTimer = nil
+        videoCamera.stop()
+        update { $0.liveVideo = false }
+    }
+
+    private func liveVideoReadyNow() -> Bool { socketOpen && state.connection == .ready }
+
+    @MainActor private func liveVideoReady() -> Bool { state.capabilities.videoInput && liveVideoReadyNow() }
+
+    /// Takes the newest frame, makes its JPEG off the main thread (one at a
+    /// time) and sends it. A frame that cannot be made to fit is skipped; the
+    /// next is a second away.
+    @MainActor private func sendLiveVideoFrame() {
+        guard liveVideoState.active else { return }
+        videoCamera.keepLevel()
+        guard !videoEncoding, let buffer = videoCamera.takeNewestFrame() else { return }
+        videoEncoding = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let jpeg = jpegBase64ForVideoFrame(buffer)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.videoEncoding = false
+                guard let jpeg else { return }
+                self.sendVideoFrame(jpegBase64: jpeg)
+            }
+        }
+    }
+
+    @MainActor @discardableResult
+    func sendVideoFrame(jpegBase64: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Result<Void, VideoInputRejection> {
+        switch liveVideoState.frameEvent(
+            jpegBase64: jpegBase64,
+            supported: state.capabilities.videoInput,
+            ready: liveVideoReadyNow(),
+            now: now
+        ) {
+        case let .success(json):
+            webSocket?.send(.string(json)) { _ in }
             return .success(())
         case let .failure(reason):
             return .failure(reason)

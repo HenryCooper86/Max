@@ -288,7 +288,15 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
   longer side, and sends it as `image.input`, a JPEG that fits the relay's limit (quality and then
   size are lowered until it does, like the web SDK's `sendImage`). What is typed goes with the
   picture as one turn; with nothing typed the assistant sees it with the next thing said. The
-  relay's limits (one picture a second, 50 per connection) are kept on the phone too. `tool.activity` shows “Looking that
+  relay's limits (one picture a second, 50 per connection) are kept on the phone too. When the session also reports
+  `capabilities.videoInput`, the field has a camera button for live video: the assistant is sent what
+  the camera shows, one `video.frame` a second (768 pixels on the longer side, JPEG quality 0.6 and then
+  0.45; a frame that still does not fit is skipped), until it is turned off, the conversation ends, the
+  connection drops or the app goes to the background, each with a `video.stop`. Frames use none of the
+  50-picture budget. The front camera is used first, with a button for the back one and a small preview
+  of what is being shown; frames and preview stay upright when the phone is turned. Like the field, the
+  camera is not turned on while the bike is moving (turning it off always works). Without camera permission, or on the simulator (which has no camera), a short
+  note says so. A frame starts no reply: the assistant sees the newest with the next thing said. `tool.activity` shows “Looking that
   up…” while a relay-side tool runs. The app declares no client tools; an unexpected `tool.call` gets
   one `tool.result` error at once so the model does not wait out the timeout.
 - Ride speed comes from the phone's own GPS (`CLLocation.speed` from the session's existing location

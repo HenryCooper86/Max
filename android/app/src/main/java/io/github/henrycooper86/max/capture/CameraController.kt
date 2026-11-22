@@ -47,7 +47,7 @@ class CameraController(private val context: Context, val store: CaptureStore, pr
     }
     fun stopForSession() { if (recording != null) recording?.stop() else unbind() }
 
-    private fun unbind() { bindingGeneration++; provider?.unbindAll(); photo = null; video = null; boundCamera = null }
+    private fun unbind() { bindingGeneration++; provider?.let { p -> listOfNotNull(photo, video).takeIf { it.isNotEmpty() }?.let { p.unbind(*it.toTypedArray()) } }; photo = null; video = null; boundCamera = null }
 
     suspend fun setTorch(on: Boolean): Boolean? {
         val camera = boundCamera ?: return null

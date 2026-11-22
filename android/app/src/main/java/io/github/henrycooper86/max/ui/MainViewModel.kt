@@ -39,6 +39,11 @@ import io.github.henrycooper86.max.agent.VoicePersonality
 import io.github.henrycooper86.max.security.SecureTokenStore
 import io.github.henrycooper86.max.service.VoiceAgentService
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import android.graphics.Bitmap
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -321,6 +326,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         session.setVoiceProvider(voiceProviderId)
         session.selectTranscriptOwner(authUserId.takeIf { isLoggedIn && it.isNotEmpty() })
         refreshHealth()
+        // The session can end the video by itself (it ends, a reconnect takes none): the camera goes off too.
+        viewModelScope.launch {
+            session.state.map { it.videoActive }.distinctUntilChanged().collect { active ->
+                if (!active) { videoCamera.stop(); _videoPreview.value = null }
+            }
+        }
     }
 
     /** Best-effort GET /health: applies optional assistant branding and the voice backend list. */
@@ -569,6 +580,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             done(if (jpeg == null) ImageRefusal.TOO_LARGE else session.sendImageInput(jpeg, text.ifBlank { null }))
         }
+    }
+
+    // ---- live video: the camera, and the newest frame it showed, as the preview ----
+    val videoCamera = io.github.henrycooper86.max.capture.LiveVideoCamera(application)
+    private val _videoPreview = MutableStateFlow<Bitmap?>(null)
+    val videoPreview: StateFlow<Bitmap?> = _videoPreview.asStateFlow()
+    private val _videoNote = MutableStateFlow<Str?>(null)
+    /** What became of the last try to turn the camera on, said under the field. */
+    val videoNote: StateFlow<Str?> = _videoNote.asStateFlow()
+    /** Front camera first; the control switches to the back one. */
+    var videoFront by mutableStateOf(true)
+        private set
+
+    /** Turns the camera on and shows the assistant what it sees. The permission is the screen's to ask. */
+    fun startVideo() {
+        _videoNote.value = null
+        val granted = ContextCompat.checkSelfPermission(getApplication(), Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (!granted) { _videoNote.value = Str.VIDEO_PERMISSION_DENIED; return }
+        if (!session.startVideo()) { _videoNote.value = Str.VIDEO_NOT_READY; return }
+        openVideoCamera()
+    }
+
+    private fun openVideoCamera() {
+        videoCamera.start(
+            front = videoFront,
+            onFrame = { frame -> session.offerVideoFrame(frame); _videoPreview.value = frame },
+            onFailed = { stopVideo(); _videoNote.value = Str.VIDEO_CAMERA_FAILED }
+        )
+    }
+
+    fun switchVideoCamera() {
+        videoFront = !videoFront
+        if (session.state.value.videoActive) openVideoCamera()
+    }
+
+    fun videoPermissionDenied() { _videoNote.value = Str.VIDEO_PERMISSION_DENIED }
+
+    /** Turns the camera off: the user's control, the app going to the background. */
+    fun stopVideo() {
+        session.stopVideo()
+        videoCamera.stop()
+        _videoPreview.value = null
     }
 
     /** Mutes/unmutes the mic mid-session (bottom mute control). */

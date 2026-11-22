@@ -29,6 +29,7 @@ struct MaxHelmetApp: App {
                     if phase == .background {
                         session.music.setAppInBackground(true)
                         session.stopCameraForSession()
+                        session.stopLiveVideo()
                     }
                     else if phase == .active { session.music.setAppInBackground(false) }
                 }

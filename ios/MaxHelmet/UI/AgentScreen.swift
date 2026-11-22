@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import AVFoundation
 
 // MARK: - presentation helpers
 
@@ -276,7 +277,14 @@ struct AgentScreen: View {
             onSendPicture: { jpegBase64, text in
                 if case let .failure(reason) = session.sendImageInput(jpegBase64: jpegBase64, text: text) { return reason }
                 return nil
-            }
+            },
+            videoEnabled: liveVideoVisible(capabilities: state.capabilities, connection: state.connection),
+            videoOn: state.liveVideo,
+            videoBack: state.liveVideoBackCamera,
+            videoCamera: session.videoCamera,
+            onStartVideo: { await session.startLiveVideo() },
+            onStopVideo: { session.stopLiveVideo() },
+            onSwitchVideoCamera: { await session.switchLiveVideoCamera() }
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
@@ -534,6 +542,13 @@ private struct CaptionsOverlay: View {
     var picturesEnabled = false
     /// Sends a picture with the words typed so far; nil when it went, else why not.
     var onSendPicture: (String, String) -> ImageInputRejection? = { _, _ in .notReady }
+    var videoEnabled = false
+    var videoOn = false
+    var videoBack = false
+    var videoCamera: VideoCamera?
+    var onStartVideo: () async -> VideoStartResult = { .notReady }
+    var onStopVideo: () -> Void = {}
+    var onSwitchVideoCamera: () async -> Void = {}
 
     private let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -554,7 +569,14 @@ private struct CaptionsOverlay: View {
                     locked: typingLocked,
                     onSend: onSendText,
                     pictures: picturesEnabled,
-                    onSendPicture: onSendPicture
+                    onSendPicture: onSendPicture,
+                    video: videoEnabled,
+                    videoOn: videoOn,
+                    videoBack: videoBack,
+                    videoCamera: videoCamera,
+                    onStartVideo: onStartVideo,
+                    onStopVideo: onStopVideo,
+                    onSwitchVideoCamera: onSwitchVideoCamera
                 )
             }
         }
@@ -620,6 +642,16 @@ private struct TypedInputBar: View {
     let onSend: (String) -> Bool
     var pictures = false
     var onSendPicture: (String, String) -> ImageInputRejection? = { _, _ in .notReady }
+    var video = false
+    var videoOn = false
+    var videoBack = false
+    var videoCamera: VideoCamera?
+    var onStartVideo: () async -> VideoStartResult = { .notReady }
+    var onStopVideo: () -> Void = {}
+    var onSwitchVideoCamera: () async -> Void = {}
+    @State private var startingVideo = false
+    /// Why the camera did not come on, said under the field until the next try.
+    @State private var videoNote: String?
     @State private var text = ""
     @FocusState private var focused: Bool
     @State private var picked: PhotosPickerItem?
@@ -631,7 +663,16 @@ private struct TypedInputBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Visor.Space.s1) {
+            if videoOn, let videoCamera {
+                liveVideoRow(videoCamera)
+            }
             bar
+            if let videoNote, !videoOn {
+                Text(videoNote)
+                    .visorFont(.caption)
+                    .foregroundStyle(Visor.textSecondary)
+                    .padding(.horizontal, Visor.Space.s3)
+            }
             if let pictureNote {
                 Text(pictureNote)
                     .visorFont(.caption)
@@ -674,6 +715,19 @@ private struct TypedInputBar: View {
                 .disabled(locked || sendingPicture)
                 .accessibilityLabel(L("picture.show", ("name", assistantName)))
             }
+            if video {
+                Button(action: toggleVideo) {
+                    Image(systemName: videoOn ? "video.fill" : "video")
+                        .hudIcon(20, .semibold, relativeTo: .title3, maximum: 32)
+                        .foregroundStyle(videoOn ? Visor.accent : (locked || startingVideo ? Visor.textTertiary : Visor.textSecondary))
+                        .frame(minWidth: Visor.hit, minHeight: Visor.hit)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                // Like the field and the picture button, it is not turned on while the bike moves; off always works.
+                .disabled(startingVideo || (locked && !videoOn))
+                .accessibilityLabel(videoOn ? L("video.off") : L("video.show", ("name", assistantName)))
+            }
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill")
                     .hudIcon(24, .semibold, relativeTo: .title3, maximum: 36)
@@ -691,6 +745,57 @@ private struct TypedInputBar: View {
     private func send() {
         guard sendable, onSend(text) else { return }
         text = ""
+    }
+
+    /// What the assistant is being shown, with the ways to switch camera and to turn it off.
+    private func liveVideoRow(_ camera: VideoCamera) -> some View {
+        HStack(spacing: Visor.Space.s2) {
+            CameraPreview(camera: camera, back: videoBack)
+                .frame(width: 72, height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous))
+                .accessibilityLabel(L("video.preview"))
+            Text(L("video.live", ("name", assistantName)))
+                .visorFont(.caption)
+                .foregroundStyle(Visor.textSecondary)
+            Spacer(minLength: 0)
+            Button {
+                Task { await onSwitchVideoCamera() }
+            } label: {
+                Image(systemName: "arrow.triangle.2.circlepath.camera")
+                    .hudIcon(20, .semibold, relativeTo: .title3, maximum: 32)
+                    .foregroundStyle(Visor.textSecondary)
+                    .frame(minWidth: Visor.hit, minHeight: Visor.hit)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L("video.switch"))
+            Button(action: onStopVideo) {
+                Image(systemName: "xmark.circle.fill")
+                    .hudIcon(20, .semibold, relativeTo: .title3, maximum: 32)
+                    .foregroundStyle(Visor.textSecondary)
+                    .frame(minWidth: Visor.hit, minHeight: Visor.hit)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L("video.off"))
+        }
+        .padding(.horizontal, Visor.Space.s3)
+    }
+
+    private func toggleVideo() {
+        if videoOn {
+            onStopVideo()
+            return
+        }
+        guard !locked else { return }
+        startingVideo = true
+        videoNote = L("video.starting")
+        Task {
+            let result = await onStartVideo()
+            startingVideo = false
+            videoNote = videoNoteText(result)
+            if let videoNote { UIAccessibility.post(notification: .announcement, argument: videoNote) }
+        }
     }
 
     /// Reads and scales the picture off the main thread, then sends it with what is typed, as one turn.
@@ -877,4 +982,48 @@ private struct ActivityView: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+/// What the camera sees, as the assistant is being shown it.
+private struct CameraPreview: UIViewRepresentable {
+    let camera: VideoCamera
+    /// Which camera is on: a change makes the preview follow the other one.
+    let back: Bool
+
+    final class PreviewView: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+        private var rotation: AVCaptureDevice.RotationCoordinator?
+        private var watching: NSKeyValueObservation?
+
+        /// Keeps the picture upright as the phone is turned (the app runs in landscape too), like the frames sent.
+        func follow(_ device: AVCaptureDevice?) {
+            watching = nil
+            guard let device else { return }
+            let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+            rotation = coordinator
+            watching = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { [weak self] coordinator, _ in
+                let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+                DispatchQueue.main.async { self?.turn(to: angle) }
+            }
+        }
+
+        private func turn(to angle: CGFloat) {
+            guard let connection = previewLayer.connection, connection.isVideoRotationAngleSupported(angle) else { return }
+            connection.videoRotationAngle = angle
+        }
+    }
+
+    func makeUIView(context: Context) -> PreviewView {
+        let view = PreviewView()
+        view.previewLayer.session = camera.session
+        view.previewLayer.videoGravity = .resizeAspectFill
+        view.isAccessibilityElement = true
+        view.follow(camera.current)
+        return view
+    }
+
+    func updateUIView(_ view: PreviewView, context: Context) {
+        view.follow(camera.current)
+    }
 }

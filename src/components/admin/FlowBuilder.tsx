@@ -252,7 +252,8 @@ function SaveRows({
   const twice = new Set(names).size < names.length;
   const change = (next: Array<[string, string]>) => {
     setRows(next);
-    // A row without a name yet is kept here and not in the step: the step is told of it once it has one.
+    // An empty row is kept here and not in the step. One with only a place is in the step, where saving says it
+    // needs a name.
     onChange(Object.fromEntries(next.filter(([name, path]) => name.trim() || path.trim())));
   };
   return (
@@ -313,7 +314,7 @@ function SaveRows({
         <button
           type="button"
           className="studioButton"
-          disabled={rows.length >= 8}
+          disabled={rows.length >= 8 || rows.some(([name, path]) => !name.trim() && !path.trim())}
           onClick={() => setRows([...rows, ["", ""]])}
         >
           <Plus size={14} aria-hidden="true" /> {say("保存一个值", "Keep a value")}
@@ -419,8 +420,11 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
   const [skipped, setSkipped] = useState<string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  /** For the start: whether the editor shows what is done when a conversation starts, or when one is handed back. */
-  const [atStart, setAtStart] = useState(true);
+  /**
+   * For the start: which of the two things it does by rule the editor shows, once that was chosen or one was
+   * edited. Until then it is what is done when a conversation starts, unless only the other is written.
+   */
+  const [when, setWhen] = useState<{ step: string; key: EntryKey } | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [showProblems, setShowProblems] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -549,6 +553,14 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
           `${step}: a value's name is lower-case letters, digits and _, starting with a letter, and not channel, agent or values.`
         ),
         twice: say(`${step}：有两个值用了同一个名字。`, `${step}: two values have the same name.`),
+        kept: say(
+          `${step}：先问的一个值，名字和某一步从工具答复里保存的值相同。一个值要么问用户，要么从工具保存，不能两样都是。`,
+          `${step}: a value asked for first has the name of one a step keeps from a tool's answer. A value is asked of the user or kept from a tool, not both.`
+        ),
+        types: say(
+          `${step}：有一个值在前面的一步里是另一种类型。同一个名字只能是一种类型。`,
+          `${step}: a value is of another type in an earlier step. One name is one type.`
+        ),
         description: say(
           `${step}：每个值都要写明它是什么（最多 200 个字符），助手按它来问。`,
           `${step}: every value needs a few words on what it is (200 characters at most): the assistant asks by them.`
@@ -557,6 +569,12 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
       return texts[problem.kind] ?? `${step}: collect`;
     }
     if (problem.field === "onEnter" || problem.field === "onStart") {
+      // The start does two things by rule, and only one of them is on the screen: say which this is about.
+      const step = !isStart(problem.step)
+        ? nameOf(problem.step)
+        : problem.field === "onStart"
+          ? say("开始（对话开始时）", "Start (when a conversation starts)")
+          : say("开始（对话被转交回来时）", "Start (when a conversation is handed back)");
       const texts: Record<string, string> = {
         notStart: say(
           `${step}：只有“开始”有对话开始时做的事。`,
@@ -733,7 +751,14 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
     : [];
   const toolChoices = current ? [...new Set([...tools, ...(current.tools ?? [])])] : [];
   // The start has two things it does by rule: on a conversation starting, and on one being handed back to it.
-  const entryKey: EntryKey = current && isStart(current.id) && atStart ? "onStart" : "onEnter";
+  const entryKey: EntryKey =
+    !current || !isStart(current.id)
+      ? "onEnter"
+      : when?.step === current.id
+        ? when.key
+        : current.onStart || !current.onEnter
+          ? "onStart"
+          : "onEnter";
   const entry: FlowEntry = current?.[entryKey] ?? {};
   const branches = entry.next ?? [];
   // The call is made as this step, with the tools this step may use.
@@ -742,7 +767,10 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
     : [];
   const others = current ? steps.filter((step) => step.id !== current.id).map((step) => step.id) : [];
   const patchEntry = (values: Partial<FlowEntry>) => {
-    if (current) patch(current.id, { [entryKey]: { ...entry, ...values } });
+    if (!current) return;
+    // What is being edited stays on the screen, whatever becomes of the other.
+    if (isStart(current.id)) setWhen({ step: current.id, key: entryKey });
+    patch(current.id, { [entryKey]: { ...entry, ...values } });
   };
   const collect: FlowCollected[] = current?.collect ?? [];
   const patchCollect = (index: number, values: Partial<FlowCollected>) => {
@@ -1261,7 +1289,12 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
                       id="flow-entry-when"
                       className="studioInput"
                       value={entryKey}
-                      onChange={(event) => setAtStart(event.currentTarget.value === "onStart")}
+                      onChange={(event) =>
+                        setWhen({
+                          step: current.id,
+                          key: event.currentTarget.value === "onStart" ? "onStart" : "onEnter"
+                        })
+                      }
                     >
                       <option value="onStart">{say("对话开始时", "A conversation starts")}</option>
                       <option value="onEnter">

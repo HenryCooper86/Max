@@ -1415,6 +1415,104 @@ describe("what the relay does itself when a conversation starts", () => {
     await provider.close();
   });
 
+  it("shows its sentence to a user who types before the microphone is ever on", async () => {
+    const { client, said, configs, provider } = await setup({
+      config: config(START),
+      serverTools: [FIND],
+      context: { userId: "user-7" },
+      audio: false
+    });
+    // Nothing has been said, and nothing shown yet.
+    expect(said).toEqual([]);
+    expect(client.ofType("transcript")).toEqual([]);
+    expect(configs[0]!.instructions).toContain('"saidToTheUser":"I am checking your account."');
+    await provider.textInput("Hi, what do I get?");
+    const lines = client.ofType("transcript").map((event) => [event.speaker, event.text]);
+    expect(lines[0]).toEqual(["agent", "I am checking your account."]);
+    // Once: a second message does not bring it back, and the microphone coming on says only the greeting.
+    await provider.textInput("And delivery?");
+    await provider.startAudio();
+    expect(client.ofType("transcript").filter((event) => event.text === "I am checking your account.")).toHaveLength(1);
+    expect(said).toEqual(["Hello, this is Ava."]);
+    await provider.close();
+  });
+
+  it("does not wait for a tool past ten seconds, and starts the conversation without its answer", async () => {
+    let answer!: (value: unknown) => void;
+    const slow: ToolDefinition = {
+      ...FIND,
+      timeoutMs: 60_000,
+      handler: () => new Promise((resolve) => (answer = resolve))
+    };
+    const starting = setup({
+      config: config({ ...START, next: [...START.next, { to: "vip", if: { failed: true } }] }),
+      serverTools: [slow],
+      context: { userId: "user-7" }
+    });
+    await vi.advanceTimersByTimeAsync(9_900);
+    let started = false;
+    void starting.then(() => (started = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(started).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    const { configs, client, provider } = await starting;
+    expect(configs).toHaveLength(1);
+    expect(configs[0]!.instructions).toContain(
+      "find_customer did not answer in time for the start of the conversation"
+    );
+    // The time is up: the branch for a failed call is not begun either.
+    expect(client.ofType("agent.changed")).toEqual([]);
+    // An answer that comes now changes nothing.
+    answer({ plan: "business" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.ofType("agent.changed")).toEqual([]);
+    await provider.close();
+  });
+
+  it("gives the model a share of a long answer, and nothing a reader would not see", async () => {
+    customer = { plan: "free", note: `Call\u{E0049}\u{E0047} back. ${"x".repeat(9000)}` };
+    const { configs, provider } = await setup({
+      config: config(START),
+      serverTools: [FIND],
+      context: { userId: "user-7" }
+    });
+    const note = configs[0]!.instructions.slice(configs[0]!.instructions.indexOf("[Start of this conversation]"));
+    expect(note.length).toBeLessThan(7500);
+    expect(note).not.toMatch(/[\u{E0000}-\u{E007F}]/u);
+    // The value kept from it is whole all the same.
+    expect(note).toContain('"values":{"plan":"free"}');
+    await provider.close();
+  });
+
+  it("is still what the model goes by when the conversation is carried on", async () => {
+    const saved: Array<Record<string, any>> = [];
+    const first = await setup({
+      config: config(START),
+      serverTools: [FIND],
+      context: { userId: "user-7", saveResume: (state) => void saved.push(state) },
+      audio: false
+    });
+    // Kept with the conversation: what was done, and the sentence nobody has had yet.
+    expect(saved.at(-1)!.start.note).toContain('"doneOnStarting"');
+    expect(saved.at(-1)!.start.unsaid).toEqual(["I am checking your account."]);
+    expect(saved.at(-1)!.agent).toBe("vip");
+    await first.provider.close();
+    calls.length = 0;
+    const second = await setup({
+      config: config(START),
+      serverTools: [FIND],
+      context: { userId: "user-7", resume: saved.at(-1) as never, saveResume: (state) => void saved.push(state) }
+    });
+    // Not looked up a second time, and the model still has the answer.
+    expect(calls).toEqual([]);
+    expect(second.configs[0]!.instructions).toContain('"result":{"plan":"business","name":"Dana"}');
+    expect(second.configs[0]!.instructions).toContain("Help a business customer first.");
+    // The greeting and the sentence were still owed, and are said now.
+    expect(second.said).toEqual(["Hello, this is Ava. I am checking your account."]);
+    expect(saved.at(-1)!.start.unsaid).toBeUndefined();
+    await second.provider.close();
+  });
+
   it("is not done again for a conversation that is carried on", async () => {
     const { configs, said, client, provider } = await setup({
       config: config(START),

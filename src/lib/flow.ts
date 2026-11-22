@@ -426,7 +426,7 @@ export function flowProblems(steps: readonly FlowStep[]): FlowProblem[] {
     if (step.handoffs?.some((handoff) => (handoff.when?.trim().length ?? 0) > 300)) {
       problems.push({ step: step.id, field: "handoffs", kind: "long" });
     }
-    const asked = collectProblem(step);
+    const asked = collectProblem(step, steps);
     if (asked) problems.push({ step: step.id, field: "collect", kind: asked });
     for (const key of ENTRY_KEYS) {
       const unknown = unknownValue(step[key], steps);
@@ -482,7 +482,7 @@ function entryProblem(step: FlowStep, key: EntryKey): string | undefined {
 const nameable = (name: string): boolean => VALUE_NAME.test(name) || SESSION_VALUES.includes(name);
 
 /** What is wrong with what a step asks for first, if anything is. */
-function collectProblem(step: FlowStep): string | undefined {
+function collectProblem(step: FlowStep, steps: readonly FlowStep[]): string | undefined {
   const collect = step.collect ?? [];
   if (collect.length === 0) return undefined;
   if (same(step.id, START)) return "start";
@@ -492,6 +492,23 @@ function collectProblem(step: FlowStep): string | undefined {
   }
   if (new Set(collect.map((value) => value.name.trim())).size < collect.length) return "twice";
   if (collect.some((value) => !value.description.trim() || value.description.trim().length > 200)) return "description";
+  // One name is one value: asked of the user or kept from a tool, and of one type wherever it is asked for.
+  const kept = new Set(
+    steps.flatMap((other) =>
+      ENTRY_KEYS.flatMap((key) => Object.keys(other[key]?.save ?? {}).map((name) => name.trim()))
+    )
+  );
+  if (collect.some((value) => kept.has(value.name.trim()))) return "kept";
+  const types = new Map<string, string>();
+  for (const other of steps) {
+    for (const value of other.collect ?? []) {
+      const name = value.name.trim();
+      const type = types.get(name) ?? value.type ?? "text";
+      types.set(name, type);
+      if (other === step && type !== (value.type ?? "text")) return "types";
+    }
+    if (other === step) break;
+  }
   return undefined;
 }
 

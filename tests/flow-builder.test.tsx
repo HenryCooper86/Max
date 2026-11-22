@@ -608,6 +608,58 @@ describe("flow builder", () => {
       expect(root().findAll((node) => node.props.id === "flow-entry-when")).toEqual([]);
     });
 
+    it("has one name be one value: asked of the user or kept from a tool, and of one type", async () => {
+      await mount(fakeApi(flow(withEntry())));
+      const refusedWith = async (text: RegExp) => {
+        await act(async () => button(/保存流程/).props.onClick());
+        expect(
+          root()
+            .findAll((node) => node.props.role === "alert")
+            .map(textOf)
+            .join(" ")
+        ).toMatch(text);
+      };
+      // Orders keeps "status" from its tool. Refunds cannot ask the user for it too.
+      await select("orders");
+      await act(async () => button(/保存一个值/).props.onClick());
+      await type(labelled("名字")[0]!, "status");
+      await type(labelled("在答复里的位置")[0]!, "order.status");
+      await select("refunds");
+      await act(async () => button(/添加一个值/).props.onClick());
+      await type(labelled("名字")[0]!, "status");
+      await type(labelled("它是什么")[0]!, "The status");
+      await refusedWith(/要么问用户，要么从工具保存/);
+      // Nor can a value be a text for one step and a number for another.
+      await type(labelled("名字")[0]!, "order_number");
+      await type(labelled("类型")[0]!, "number");
+      await select("orders");
+      await act(async () => button(/添加一个值/).props.onClick());
+      await type(labelled("名字")[0]!, "order_number");
+      await type(labelled("它是什么")[0]!, "The number of the order");
+      await refusedWith(/同一个名字只能是一种类型/);
+    });
+
+    it("opens the start on what is written for it, and says which of the two a problem is with", async () => {
+      const steps = withEntry();
+      await mount(fakeApi(flow([{ ...steps[0]!, onEnter: { say: "Back with me." } }, ...steps.slice(1)])));
+      await select("main");
+      // Only "handed back" is written: that is what is shown.
+      expect(field("flow-entry-when").props.value).toBe("onEnter");
+      expect(field("flow-entry-say").props.value).toBe("Back with me.");
+      // Emptying it does not flip the editor to the other while it is being typed in.
+      await type(field("flow-entry-say"), "");
+      expect(field("flow-entry-when").props.value).toBe("onEnter");
+      await type(field("flow-entry-say"), "Back {{Nobody}}.");
+      await type(field("flow-entry-when"), "onStart");
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(
+        root()
+          .findAll((node) => node.props.role === "alert")
+          .map(textOf)
+          .join(" ")
+      ).toMatch(/开始（对话被转交回来时）：\{\{Nobody\}\} 不是一个值的写法/);
+    });
+
     it("will not save a branch with a condition and no call, or a tool the step may not use", async () => {
       const { api } = await mount(fakeApi(flow(withEntry())));
       await select("orders");

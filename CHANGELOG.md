@@ -90,6 +90,10 @@
 - Flows: a step at the start of a conversation. `main`'s `onStart` is done by the relay before the model is
   connected: a tool call, values kept from its answer, a move to the agent that fits, and a sentence said after the
   greeting. See [at the start of a conversation](docs/conversations.md#at-the-start-of-a-conversation).
+- The start of a conversation, after review: the start has ten seconds in all and does not wait longer for a tool;
+  a user who types first is shown its sentence; a resumed conversation keeps what the start found out; a value
+  keeps the joiners of emoji and of Persian, Arabic and Indic words; the builder says which of the two things Start
+  does a problem is with, and knows that one name is one value.
 - Values in flows, after review: a `next` branch does not lead to an agent that has to be told something first; a
   value cannot be called `channel`, `agent` or `values`, is kept as one clean line, and is either asked of the user
   or kept from a tool; `{{…}}` around what is no name is refused; a `number` is no identifier.

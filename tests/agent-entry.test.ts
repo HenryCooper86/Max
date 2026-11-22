@@ -499,6 +499,14 @@ describe("values, after review", () => {
     expect(filled("Order {{a}}.", (name) => ({ a: "{{b}}", b: "secret" })[name]).text).toBe("Order {{b}}.");
   });
 
+  it("keeps what joins letters: of an emoji, of Persian and Hindi words, a soft hyphen", () => {
+    for (const text of ["👨‍👩‍👧 family", "می‌خواهم", "क्‍ष", "co\u00ADoperate"]) {
+      expect(collected(text, "text")).toBe(text);
+    }
+    // What hides or turns text goes, with no space left where it was.
+    expect(collected("AB\u200BC\u2060D\uFEFF \u{E0041}\u{E0042}E\u061C", "text")).toBe("ABCD E");
+  });
+
   it("takes as a number only what a number writes the same way", () => {
     expect(collected("00123", "number")).toBeUndefined();
     expect(collected("12345678901234567890", "number")).toBeUndefined();

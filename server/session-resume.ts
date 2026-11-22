@@ -20,6 +20,11 @@ export type ResumeState = {
   agent?: string;
   /** What the conversation's flow has collected and saved so far (see server/agent-entry.ts). */
   values?: Record<string, string | number | boolean>;
+  /**
+   * What the flow did when the conversation started, as the model was told it, and the sentences of it the user
+   * has not been given yet.
+   */
+  start?: { note: string; unsaid?: string[] };
 };
 
 const RESUME_TTL_MS = 10 * 60_000;

@@ -1,7 +1,7 @@
 import type { Backend, Project, ProjectStudio } from "../api";
 import type { Session } from "../hooks";
 
-export type StudioTab = "agent" | "knowledge" | "tools" | "test" | "install" | "history" | "settings";
+export type StudioTab = "agent" | "knowledge" | "tools" | "flow" | "test" | "install" | "history" | "settings";
 
 /** Everything the Studio edits before it is saved. `modelKey` is "" unless the person typed a new one. */
 export type StudioDraft = {

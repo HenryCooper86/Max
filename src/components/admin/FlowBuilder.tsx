@@ -32,7 +32,7 @@ import {
   type FlowStep
 } from "../../lib/flow";
 import { localized } from "../../lib/i18n";
-import { SECTION_LEAVE_EVENT } from "./AssistantStudio";
+import { SECTION_LEAVE_EVENT } from "../../lib/section-leave";
 import { fetchStudioFlow, saveStudioFlow } from "../../lib/studio-api";
 import { useLanguage } from "../LanguageToggle";
 

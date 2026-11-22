@@ -25,11 +25,9 @@ import { useLanguage } from "../LanguageToggle";
 import { DeviceFields, IdentityFields, LookFields, SoundFields, type LogoControls } from "../studio/AssistantFields";
 import { AssistantPreview } from "../studio/AssistantPreview";
 import { VoicesPanel } from "../studio/VoicesPanel";
+import { SECTION_LEAVE_EVENT } from "../../lib/section-leave";
 import { BackendSetup } from "./BackendSetup";
 import { ConfigHistory } from "./ConfigHistory";
-
-/** Cancelable event the workspace sends before switching section. */
-export const SECTION_LEAVE_EVENT = "admin:beforesection";
 
 /** The draft an admin starts from. A relay on its defaults has an empty
  *  stored config; the draft then shows what is running (its name, device and

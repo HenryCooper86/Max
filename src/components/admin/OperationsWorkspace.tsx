@@ -38,7 +38,8 @@ import { useWorkspaceLocation } from "./workspace-location";
 import { AccountManagement } from "./AccountManagement";
 import { CloudInvites } from "./CloudInvites";
 import { AdminOverview } from "./AdminOverview";
-import { AssistantStudio, SECTION_LEAVE_EVENT } from "./AssistantStudio";
+import { mayLeaveSection } from "../../lib/section-leave";
+import { AssistantStudio } from "./AssistantStudio";
 import { FlowBuilder } from "./FlowBuilder";
 import { QualityOverview } from "./QualityOverview";
 import { EvidenceWorkspace } from "./EvidenceWorkspace";
@@ -249,11 +250,7 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
                       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                       event.preventDefault();
                       // A section with unsaved edits (the Studio) may veto the switch.
-                      if (
-                        item !== active &&
-                        !window.dispatchEvent(new Event(SECTION_LEAVE_EVENT, { cancelable: true }))
-                      )
-                        return;
+                      if (item !== active && !mayLeaveSection()) return;
                       navigate(item, {}, false, workspace);
                     }}
                   >

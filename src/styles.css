@@ -10500,6 +10500,17 @@ button.opsCard:disabled {
   margin-bottom: 20px;
 }
 
+/* A list to choose from among the flow's fields looks like the fields beside it. */
+.flowBuilder select.studioInput {
+  min-height: 44px;
+  padding: 0 12px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-15);
+}
+
 .flowFieldset {
   display: grid;
   min-width: 0;

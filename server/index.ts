@@ -2085,7 +2085,8 @@ wss.on("connection", (client, request) => {
               instructions: runtime.instructions,
               greeting: runtime.greeting,
               language: runtime.studio.language,
-              knowledge: runtime.studio.knowledge
+              knowledge: runtime.studio.knowledge,
+              flow: runtime.studio.flow
             }),
             // Only the project's own webhook tools: never the relay's.
             serverTools: () => projectServerTools(runtime.studio, runtime.webhookSecret),

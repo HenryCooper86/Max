@@ -29,6 +29,7 @@ import {
   type ProjectChanges,
   type ProjectRow
 } from "./store";
+import { checkedProjectFlow } from "./flow";
 import {
   decryptModelKey,
   encryptModelKey,
@@ -302,6 +303,9 @@ export function createProject(
   const requested = body.studio && typeof body.studio === "object" ? (body.studio as Record<string, unknown>) : {};
   const studio = parseStudio({ ...requested, keepConversations: requested.keepConversations !== false }, "openai");
   if (studio.error !== undefined) return fail(400, studio.error);
+  const startFlow = checkedProjectFlow(studio.value);
+  if ("error" in startFlow) return fail(400, startFlow.error);
+  studio.value.flow = startFlow.flow;
   const id = newId("prj_");
   const key = newApiKey();
   const row: ProjectRow = {
@@ -364,6 +368,10 @@ export function patchProject(
       studio = parseStudio({ ...(raw as object), voice: "" }, backend);
     }
     if (studio.error !== undefined) return fail(400, studio.error);
+    // The flow goes by the tools as they are saved with it: a tool a step names cannot be taken away under it.
+    const flow = checkedProjectFlow(studio.value);
+    if ("error" in flow) return fail(400, flow.error);
+    studio.value.flow = flow.flow;
     changes.studio = JSON.stringify(studio.value);
     const next = JSON.parse(changes.studio) as ProjectStudio;
     if (needsSigningSecret(next) && !current.webhook_secret_enc) {

@@ -90,6 +90,9 @@
 - Flows: a step at the start of a conversation. `main`'s `onStart` is done by the relay before the model is
   connected: a tool call, values kept from its answer, a move to the agent that fits, and a sentence said after the
   greeting. See [at the start of a conversation](docs/conversations.md#at-the-start-of-a-conversation).
+- Max Cloud: flows for projects. A Flow tab in the Studio holds the relay's flow builder: several agents with their
+  own instructions and tools, handovers along the arrows drawn, values, and what a step does by rule, with the
+  project's webhook tools as the only tools.
 - iOS and Android: a picture for the assistant. When the backend takes pictures, the typing field has a button
   that opens the system photo picker and sends the photo as `image.input`, upright, scaled and small enough for the
   relay, with what is typed as one turn.

@@ -392,6 +392,104 @@ describe("projects with Studio settings", () => {
     expect(grokDialect("k", "leo").voice("male")).toBe("leo");
   });
 
+  const FLOW = [
+    { id: "main", handoffs: [{ to: "refunds", when: "The user wants money back." }] },
+    {
+      id: "refunds",
+      description: "Refunds.",
+      instructions: "Refund politely.",
+      tools: ["check_order"],
+      onEnter: { call: { tool: "check_order", arguments: { orderId: "A-1042" } } },
+      handoffs: [{ to: "main" }]
+    }
+  ];
+
+  it("keeps a flow, and gives a session its agents", async () => {
+    const owner = await customer();
+    const created = project(owner);
+    expect(created.studio.flow).toEqual([]);
+    const saved = patch(owner, created.id, { modelKey: "sk-test", studio: { tools: [ORDER_TOOL], flow: FLOW } });
+    expect(saved.studio.flow).toEqual(FLOW);
+    // A later save of something else leaves it as it is.
+    expect(patch(owner, created.id, { studio: { ...saved.studio, voice: "cedar" } }).studio.flow).toEqual(FLOW);
+
+    const runtime = projectRuntime(created.id)!;
+    const profile = projectAssistantProfile({
+      name: "Ava",
+      instructions: "Be brief.",
+      knowledge: "We open at 9.",
+      flow: runtime.studio.flow
+    });
+    expect(profile.configProblems).toEqual([]);
+    expect(profile.agents.map((agent) => agent.id)).toEqual(["main", "refunds"]);
+    expect(profile.agents[1]).toMatchObject({
+      instructions: "Refund politely.",
+      tools: ["check_order"],
+      onEnter: { call: { tool: "check_order" } }
+    });
+    // The project's instructions and knowledge stay what every step starts from.
+    expect(profile.instructions).toContain("Be brief.");
+    expect(profile.instructions).toContain("We open at 9.");
+    // One agent again: an empty flow, or the start alone with nothing written in it.
+    expect(
+      patch(owner, created.id, { studio: { ...saved.studio, flow: [{ id: "main", at: [40, 40] }] } }).studio.flow
+    ).toEqual([]);
+    expect(projectAssistantProfile({ name: "Ava", flow: [] }).agents).toEqual([]);
+  });
+
+  it("refuses a flow that would not work, in words for the person drawing it", async () => {
+    const owner = await customer();
+    const created = project(owner);
+    patch(owner, created.id, { studio: { tools: [ORDER_TOOL] } });
+    const refused = (studio: Record<string, unknown>) => {
+      const result = patchProject(owner, created.id, { studio: { tools: [ORDER_TOOL], ...studio } });
+      return result.ok ? "saved" : result.error;
+    };
+    expect(refused({ flow: "main" })).toBe("The flow must be a list of steps.");
+    expect(refused({ flow: ["main"] })).toBe("The flow must be a list of steps.");
+    expect(refused({ flow: Array.from({ length: 13 }, (_, index) => ({ id: `step_${index}` })) })).toBe(
+      "A flow has at most 12 steps."
+    );
+    expect(refused({ flow: [FLOW[0], { ...FLOW[1], instructions: "x".repeat(70_000) }] })).toBe(
+      "The flow is too long."
+    );
+    // The relay's own rules for a flow.
+    expect(refused({ flow: [{ id: "main", handoffs: [{ to: "nowhere" }] }] })).toContain(
+      "there is no agent nowhere to hand over to"
+    );
+    expect(refused({ flow: [FLOW[0], { ...FLOW[1], colour: "red" }] })).toContain('a step has no "colour"');
+    // What a step does by rule is done here, with a tool of the project's.
+    expect(
+      refused({ flow: [FLOW[0], { ...FLOW[1], tools: ["find_order"], onEnter: { call: { tool: "find_order" } } }] })
+    ).toBe(
+      "refunds: when the conversation is handed to it it calls find_order, and this project has no tool by that name. Add it under Tools and save, or take the call out of the step."
+    );
+    // The same when the tool is taken away under the flow.
+    expect(refused({ tools: [], flow: FLOW })).toContain("this project has no tool by that name");
+    // A step's own list may name a tool the app declares when it connects.
+    expect(
+      refused({
+        flow: [
+          FLOW[0],
+          { id: "refunds", description: "Refunds.", instructions: "Refund politely.", tools: ["open_page"] }
+        ]
+      })
+    ).toBe("saved");
+    // The conversation's own tools cannot be replaced by a project's.
+    expect(
+      refused({
+        tools: [{ ...ORDER_TOOL, name: "transfer_to_agent" }],
+        flow: [FLOW[0], { id: "refunds", description: "Refunds.", instructions: "Refund politely." }]
+      })
+    ).toBe("A project with a flow cannot have a tool called transfer_to_agent: the conversation has one of its own.");
+    // Without a flow that name is an ordinary one.
+    expect(refused({ tools: [{ ...ORDER_TOOL, name: "transfer_to_agent" }], flow: [] })).toBe("saved");
+    // A new project can start with one.
+    expect(
+      createProject(owner, { name: "Second", studio: { flow: [{ id: "main", handoffs: [{ to: "nowhere" }] }] } })
+    ).toMatchObject({ ok: false, status: 400 });
+  });
+
   it("keeps conversations, newest first, and deletes them with the project", async () => {
     const owner = await customer();
     const created = project(owner);

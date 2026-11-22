@@ -107,6 +107,64 @@ async function createProject(token: string, name = "Shop") {
   return response.body as { project: { id: string; keyPrefix: string }; apiKey: string };
 }
 
+describe("a project's flow over HTTP", () => {
+  it("is read and saved as the flow builder draws it, by its owner alone", async () => {
+    await startApp();
+    const owner = await signupCustomer();
+    const { project } = await createProject(owner.token);
+    const route = `/cloud/api/projects/${project.id}/flow`;
+    const tool = {
+      name: "check_order",
+      description: "Look up an order's status by its number.",
+      url: "https://api.example.com/tools/order",
+      parameters: []
+    };
+    await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: owner.token,
+      json: { studio: { tools: [tool] } }
+    });
+    // One agent: the start alone, and the tools a step could be limited to.
+    expect((await call("GET", route, { token: owner.token })).body).toEqual({
+      ok: true,
+      steps: [{ id: "main" }],
+      problems: [],
+      tools: ["check_order"]
+    });
+    const steps = [
+      { id: "main", handoffs: [{ to: "refunds", when: "Money back." }], at: [40, 40] },
+      {
+        id: "refunds",
+        description: "Refunds.",
+        instructions: "Refund politely.",
+        tools: ["check_order"],
+        at: [440, 40]
+      }
+    ];
+    const saved = await call("PUT", route, { token: owner.token, json: { steps } });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({ ok: true, steps, tools: ["check_order"], problems: [] });
+    // The project comes back too, for the rest of the Studio: its other settings are as they were.
+    expect(saved.body.project.studio.flow).toEqual(steps);
+    expect(saved.body.project.studio.tools).toEqual([tool]);
+    expect((await call("GET", route, { token: owner.token })).body.steps).toEqual(steps);
+
+    const refused = await call("PUT", route, {
+      token: owner.token,
+      json: { steps: [{ id: "main", handoffs: [{ to: "nowhere" }] }] }
+    });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toContain("there is no agent nowhere to hand over to");
+    expect((await call("GET", route, { token: owner.token })).body.steps).toEqual(steps);
+
+    const other = await signupCustomer();
+    expect((await call("GET", route, { token: other.token })).status).toBe(404);
+    expect((await call("PUT", route, { token: other.token, json: { steps: [] } })).status).toBe(404);
+    expect((await call("GET", route)).status).toBe(401);
+    expect((await call("PUT", route, { json: { steps: [] } })).status).toBe(401);
+    expect((await call("GET", route, { token: owner.token })).body.steps).toEqual(steps);
+  });
+});
+
 describe("a project's conversation webhook over HTTP", () => {
   it("tests the saved address, shows how the last delivery went, and is the owner's alone", async () => {
     await startApp();

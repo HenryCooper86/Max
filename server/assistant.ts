@@ -468,6 +468,8 @@ export function projectAssistantProfile(input: {
   language?: string;
   /** Reference facts the agent answers from (up to 20,000 characters). */
   knowledge?: string;
+  /** The project's flow: the agents a conversation can be handed between. */
+  flow?: unknown[];
 }): AssistantProfile {
   const savedProblem = logoProblem;
   try {
@@ -477,7 +479,8 @@ export function projectAssistantProfile(input: {
       wakeWord: false,
       ...(input.language ? { languages: [input.language], strictLanguages: false } : {}),
       ...(input.instructions ? { instructions: input.instructions } : {}),
-      ...(input.greeting ? { greeting: input.greeting } : {})
+      ...(input.greeting ? { greeting: input.greeting } : {}),
+      ...(input.flow?.length ? { agents: input.flow } : {})
     });
     const knowledge = input.knowledge?.trim();
     if (!knowledge) return profile;

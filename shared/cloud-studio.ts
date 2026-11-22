@@ -67,7 +67,9 @@ export const STUDIO_LIMITS = {
   enumValues: 12,
   origins: 10,
   label: 40,
-  url: 500
+  url: 500,
+  flowSteps: 12,
+  flowChars: 60_000
 } as const;
 
 type StudioParameterType = "string" | "number" | "boolean";
@@ -112,6 +114,12 @@ export type ProjectStudio = {
    * nowhere. Signed with the project's signing secret, like its tools.
    */
   conversationWebhook: string;
+  /**
+   * The agent's flow: the steps a conversation can be handed between, each with its own instructions and
+   * tools, as the relay's `agents` (docs/conversations.md). Empty: one agent. The relay checks it when the
+   * project is saved (server/cloud/flow.ts); here it is only a list of steps of a bounded size.
+   */
+  flow: Record<string, unknown>[];
 };
 
 export const DEFAULT_STUDIO: ProjectStudio = {
@@ -123,7 +131,8 @@ export const DEFAULT_STUDIO: ProjectStudio = {
   publicEmbed: { enabled: false, origins: [] },
   widget: { label: "", accent: "", position: "bottom-right" },
   keepConversations: false,
-  conversationWebhook: ""
+  conversationWebhook: "",
+  flow: []
 };
 
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
@@ -369,6 +378,15 @@ export function parseStudio(raw: unknown, backend: CloudBackend): Outcome<Projec
   const webhookProblem = webhook.value ? toolUrlProblem(webhook.value) : undefined;
   if (webhookProblem) return { error: `The conversation webhook's address ${webhookProblem}` };
 
+  const rawFlow = raw.flow ?? [];
+  if (!Array.isArray(rawFlow) || rawFlow.some((step) => !isRecord(step))) {
+    return { error: "The flow must be a list of steps." };
+  }
+  if (rawFlow.length > STUDIO_LIMITS.flowSteps)
+    return { error: `A flow has at most ${STUDIO_LIMITS.flowSteps} steps.` };
+  const flowText = JSON.stringify(rawFlow);
+  if (flowText.length > STUDIO_LIMITS.flowChars) return { error: "The flow is too long." };
+
   return {
     value: {
       template: template.value,
@@ -379,7 +397,8 @@ export function parseStudio(raw: unknown, backend: CloudBackend): Outcome<Projec
       publicEmbed: { enabled, origins },
       widget: { label: label.value, accent: accent.value.toLowerCase(), position },
       keepConversations: raw.keepConversations === true,
-      conversationWebhook: webhook.value
+      conversationWebhook: webhook.value,
+      flow: JSON.parse(flowText) as Record<string, unknown>[]
     }
   };
 }

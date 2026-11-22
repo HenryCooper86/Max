@@ -120,11 +120,11 @@ In rough order of how much they would matter to most users:
    calls are judged before they run (`guardrails.toolRules`) and what tools return before the assistant reads it
    (`guardrails.resultRules`), on every backend that runs tools with a model. The demo backend has no judge and
    does not run a tool the rules cover.
-6. **Fixed sentences on the speech-to-speech backends, and flows for Max Cloud projects.** A step can say a fixed
-   sentence, call a tool and branch on its answer by rule, on a handover (`onEnter`) or when a conversation starts
-   (`onStart`), with values collected from the user or saved from a tool's answer. On OpenAI Realtime, Gemini Live
-   and Grok a sentence said on a handover is spoken by the vendor's model, which is told the words; the sentence at
-   the start of a conversation is said by the relay on every backend. Max Cloud projects have no agents or flows.
+6. **Fixed sentences on the speech-to-speech backends.** A step can say a fixed sentence, call a tool and branch on
+   its answer by rule, on a handover (`onEnter`) or when a conversation starts (`onStart`), with values collected
+   from the user or saved from a tool's answer. On OpenAI Realtime, Gemini Live and Grok a sentence said on a
+   handover is spoken by the vendor's model, which is told the words; the sentence at the start of a conversation is
+   said by the relay on every backend.
 7. **Warm transfers in which the assistant talks to the person first, and warm transfers on Telnyx.** On Twilio the
    person who picks up hears a summary the assistant wrote, and the caller comes back when nobody takes the call. The
    assistant does not hold a conversation with that person before connecting the two.
@@ -132,5 +132,5 @@ In rough order of how much they would matter to most users:
 9. **Avatars.**
 
 Conversation analysis, traces and phone calls currently apply to the relay's own assistant. Max Cloud projects have
-their own conversation history in the console and a [conversation webhook](cloud.md#the-studio) of their own, and do
-not have the others yet.
+their own conversation history in the console, a [conversation webhook](cloud.md#the-studio) of their own and the
+same [flows](cloud.md#the-studio) of several agents, drawn in the console, and do not have the others yet.

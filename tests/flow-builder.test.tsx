@@ -1,7 +1,7 @@
 import { act } from "react";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SECTION_LEAVE_EVENT } from "../src/components/admin/AssistantStudio";
+import { SECTION_LEAVE_EVENT } from "../src/lib/section-leave";
 import { FlowBuilder } from "../src/components/admin/FlowBuilder";
 import type { ApiResult } from "../src/lib/api-client";
 import type { FlowStep } from "../src/lib/flow";

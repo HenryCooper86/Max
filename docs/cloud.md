@@ -54,6 +54,14 @@ their website in a few minutes, without writing a backend:
   [webhook tools](tools.md#webhook-tools). "Send test request" calls it with sample values. Addresses must be public
   https: the relay resolves each host and refuses private, loopback and link-local addresses, connects to the address
   it checked, follows no redirects and gives a tool 10 seconds.
+- **Flow.** Most agents are one agent, and the tab can stay empty. To split a conversation between several agents
+  with a job each (orders, refunds, a person), draw it: steps with their own instructions and tools, and arrows that
+  say when one hands over to another. It is the relay's [flow builder](conversations.md#flows) and the
+  same [agents and handoffs](conversations.md#several-agents-and-handing-over), with the project's tools as the
+  only tools: values asked of the user, a fixed sentence, a tool called by rule and a branch on its answer all work
+  as they do there. The project's instructions and knowledge are what every step starts from. A flow is saved with
+  its own button and checked when saved: a step cannot call, by rule, a tool the project does not have, and a tool
+  cannot be removed while a step calls it that way.
 - **Test.** Talk to the agent in the browser (or type), with its tools running, before anyone else does. Test minutes
   count like any others.
 - **Install.** The one-line embed (below), the widget's label, colour and side, and copyable code for a backend in

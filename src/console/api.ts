@@ -2,6 +2,7 @@
 // the bearer token (when the endpoint needs one) and an optional fetch, so
 // tests can inject both.
 
+import type { FlowStep } from "../lib/flow";
 import type { ProjectStudio } from "../../shared/cloud-studio";
 
 export type { ProjectStudio } from "../../shared/cloud-studio";
@@ -61,6 +62,8 @@ export type ConversationTurn = {
   ms?: number;
 };
 export type Conversation = ConversationSummary & { projectId: string; turns: ConversationTurn[] };
+/** A project's flow as the flow builder edits it: the steps, the starting step first, and the tools a step can name. */
+export type ProjectFlow = { ok: true; steps: FlowStep[]; tools: string[]; problems: string[] };
 /** How the last delivery of a conversation to the project's server went. */
 export type WebhookDelivery = { at: number; ok: boolean; attempts: number; status?: number; error?: string };
 export type WebhookTestResult = { ok: boolean; status?: number; error?: string; ms: number };
@@ -170,6 +173,9 @@ export function createCloudApi(fetcher?: FetchLike) {
       get<{ secret: string }>(token, `/projects/${id(projectId)}/webhook-secret`),
     rotateWebhookSecret: (token: string, projectId: string) =>
       send<{ secret: string }>(token, "POST", `/projects/${id(projectId)}/webhook-secret/rotate`),
+    projectFlow: (token: string, projectId: string) => get<ProjectFlow>(token, `/projects/${id(projectId)}/flow`),
+    saveProjectFlow: (token: string, projectId: string, steps: FlowStep[]) =>
+      send<ProjectFlow & { project: Project }>(token, "PUT", `/projects/${id(projectId)}/flow`, { steps }),
     conversationWebhook: (token: string, projectId: string) =>
       get<{ url: string; last: WebhookDelivery | null }>(token, `/projects/${id(projectId)}/conversation-webhook`),
     testConversationWebhook: (token: string, projectId: string) =>

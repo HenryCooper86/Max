@@ -8,6 +8,7 @@ import { checkAuthRateLimit, clientAddress, withLoginBackoff } from "../auth";
 import { createLogger } from "../logger";
 import { PACKS } from "./billing";
 import { cloudEnabled, cloudPaymentProvider, cloudPaymentProviders, now } from "./context";
+import { flowFrom } from "../flow";
 import { projectWebhooks } from "./conversation-webhook";
 import { listConversations, readConversation } from "./conversations";
 import {
@@ -217,6 +218,41 @@ export function registerCloudRoutes(app: express.Express): void {
           args ? (input.arguments as Record<string, unknown>) : {}
         )
       );
+    })
+  );
+  // The flow builder: the project's flow as steps, the starting step first, and the tools a step can name.
+  const flowOf = (row: Parameters<typeof projectStudio>[0]) => {
+    const studio = projectStudio(row);
+    return { ok: true, ...flowFrom(studio.flow), tools: studio.tools.map((tool) => tool.name).sort() };
+  };
+  api.get(
+    "/projects/:id/flow",
+    handle((req, res) => {
+      const row = liveProject(param(req, "id"), customerOf(res).id);
+      if (!row) {
+        res.status(404).json({ error: "Project not found." });
+        return;
+      }
+      res.json(flowOf(row));
+    })
+  );
+  api.put(
+    "/projects/:id/flow",
+    handle((req, res) => {
+      const customer = customerOf(res);
+      const row = liveProject(param(req, "id"), customer.id);
+      if (!row) {
+        res.status(404).json({ error: "Project not found." });
+        return;
+      }
+      // Saved like any other setting, with the rest of the project's settings as they are.
+      const saved = patchProject(customer.id, row.id, { studio: { ...projectStudio(row), flow: body(req).steps } });
+      if (!saved.ok) {
+        send(res, saved);
+        return;
+      }
+      const after = liveProject(row.id, customer.id);
+      res.json({ ...(after ? flowOf(after) : { ok: true, steps: [], problems: [], tools: [] }), ...saved.value });
     })
   );
   // The conversation webhook: how the last delivery went, and one test request to the saved address.

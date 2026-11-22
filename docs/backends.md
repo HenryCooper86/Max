@@ -75,6 +75,25 @@ Pictures go to the model's vendor (or to your own model server) and the relay do
 paths were built to the vendors' documentation and have not been run against their servers. The `local` backend was run
 against Ollama with `gemma3:4b`.
 
+### Live video
+
+A user can also show the assistant their camera or their screen while they talk (`video.frame`, see the
+[protocol](protocol.md#videoframe-and-videostop); `startVideo` in the [web SDK](../sdk/README.md#live-video), buttons
+in the widget). It works wherever pictures do, with the same settings: `session.started.capabilities.videoInput` is
+true exactly where `imageInput` is. The client sends about a frame a second, and the relay keeps the newest only.
+
+| Backend                           | What the model sees                                                                                                                                                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gemini`                          | Every frame as it arrives, at most one a second: Gemini Live takes video itself.                                                                                                                                        |
+| `openai`                          | The newest frame, put into the conversation when the user begins to speak or sends a typed turn. The conversation keeps the last two frames; older ones are taken out, because each is paid for again with every reply. |
+| `pipeline`, `local`, `max-speech` | The newest frame, attached to the user's turn when it is answered. Like pictures, only the two most recent are sent again with later requests.                                                                          |
+
+So this is a model that looks when it is spoken to, a frame a turn (Gemini: a frame a second), not one that watches a
+film: it does not see motion between two frames, and it does not speak up about what it sees unless the user says
+something. Frames are not kept or recorded by the relay. The `local` backend was run with live video against Ollama
+with `gemma3:4b`, from a script and from the widget in Chrome with a camera; the OpenAI and Gemini paths were built to
+the vendors' documentation and have not been run against their servers.
+
 ## Backend reference
 
 ### mock
@@ -313,6 +332,7 @@ bookkeeping) lives once in `server/providers/live/session.ts` and is shared.
      sendToolResult?(callId: string, output: string): void; // the result of a tool call
      sendText?(text: string): void; // a typed turn
      sendImage?(image: { data: string; mimeType: string }, text?: string): void; // a picture, with or without words
+     sendVideoFrame?(image: { data: string; mimeType: string } | undefined): void; // the newest frame of live video; undefined when it stops
      close(): void;
    };
    ```

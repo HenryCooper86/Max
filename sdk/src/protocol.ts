@@ -28,6 +28,8 @@ export const MAX_TEXT_CHARS = 2000;
 export const MAX_IMAGE_BASE64_CHARS = 240_000;
 /** The relay refuses a picture less than this long after the last one. */
 export const MIN_IMAGE_INTERVAL_MS = 1_000;
+/** The relay drops a frame of live video that comes less than this long after the last one. */
+export const MIN_VIDEO_FRAME_INTERVAL_MS = 500;
 /** Most client tools a session may declare. */
 export const MAX_TOOLS = 32;
 /** Reconnect attempts before the client gives up. */
@@ -60,6 +62,8 @@ export type AgentCapabilities = {
   textInput?: boolean;
   /** The relay accepts pictures via `image.input` and the model can see them. */
   imageInput?: boolean;
+  /** The relay takes live video (`video.frame`): the model sees what a camera or a shared screen shows. */
+  videoInput?: boolean;
 };
 
 /** Who said a transcript line, as the relay names it. */
@@ -106,6 +110,8 @@ export type ClientMessage =
   | { type: "audio.stop" }
   | { type: "text.input"; text: string }
   | { type: "image.input"; image: string; mimeType: "image/jpeg"; text?: string }
+  | { type: "video.frame"; image: string; mimeType: "image/jpeg" }
+  | { type: "video.stop" }
   | { type: "tool.result"; callId: string; output?: unknown; error?: string };
 
 /** Relay to client: a transcript line or partial. */

@@ -162,10 +162,12 @@ export function voiceProvider(id: VoiceProviderId): VoiceProviderEntry {
 }
 
 /** What a session on this backend reports: the static set, with `imageInput`
- *  true only where pictures will actually work under the current settings. */
+ *  true only where pictures will actually work under the current settings.
+ *  Live video is frames of the same kind, so it works wherever pictures do. */
 export function voiceCapabilities(id: VoiceProviderId): ProviderCapabilities {
   const entry = voiceProvider(id);
-  return { ...entry.capabilities, imageInput: entry.imageInput?.() === true };
+  const pictures = entry.imageInput?.() === true;
+  return { ...entry.capabilities, imageInput: pictures, videoInput: pictures };
 }
 
 export function voiceProviderSummaries(): VoiceProviderSummary[] {

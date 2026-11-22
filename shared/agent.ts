@@ -120,6 +120,10 @@ export type ProviderCapabilities = {
    *  Chat-model backends turn this on with a setting, because the relay cannot
    *  tell whether a model is multimodal. */
   imageInput?: boolean;
+  /** The session takes live video (`video.frame`): what a camera or a shared
+   *  screen shows, which the model sees with what the user says. On wherever
+   *  pictures are. */
+  videoInput?: boolean;
 };
 
 export type TesterStats = {
@@ -341,6 +345,21 @@ type ImageInputEvent = {
   text?: string;
 };
 
+/** Client → server: one frame of live video, from a camera or a shared screen.
+ *  A picture by the rules of `image.input`, without words. The relay keeps the
+ *  newest frame only: the model sees it with the user's next turn (or, where
+ *  the backend takes video itself, as it arrives). Frames that come faster
+ *  than `MIN_VIDEO_FRAME_INTERVAL_MS` apart are dropped without an error. */
+type VideoFrameEvent = { type: "video.frame"; image: string; mimeType: "image/jpeg" | "image/png" };
+
+/** Client → server: the video has stopped. The relay forgets the last frame. */
+type VideoStopEvent = { type: "video.stop" };
+
+/** Shortest time between two video frames the relay takes. */
+export const MIN_VIDEO_FRAME_INTERVAL_MS = 500;
+/** A frame older than this is not what the user is showing any more. */
+export const VIDEO_FRAME_FRESH_MS = 10_000;
+
 /** Longest `image.input` picture, in base64 characters. Keeps the whole JSON
  *  message under the relay's 256 KiB limit, which the WebRTC data channel shares. */
 export const MAX_IMAGE_BASE64_CHARS = 240_000;
@@ -396,6 +415,8 @@ export type ClientEvent =
   | ToolResultEvent
   | TextInputEvent
   | ImageInputEvent
+  | VideoFrameEvent
+  | VideoStopEvent
   // A hazard the embedded board detected and already announced. Upward only:
   // the board plays the audio itself from a local clip, so the relay must never
   // echo this back as `hazard.alert` — Max would speak the warning a second

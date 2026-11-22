@@ -126,20 +126,24 @@ const IMAGE_MAGIC = {
 } as const;
 
 /** Throws unless `image` is base64 of a real JPEG or PNG matching `mimeType`. */
-function assertImage(image: unknown, mimeType: unknown): asserts mimeType is keyof typeof IMAGE_MAGIC {
+function assertImage(
+  image: unknown,
+  mimeType: unknown,
+  event = "image.input"
+): asserts mimeType is keyof typeof IMAGE_MAGIC {
   if (mimeType !== "image/jpeg" && mimeType !== "image/png") {
-    throw new Error("Invalid image.input mimeType: use image/jpeg or image/png");
+    throw new Error(`Invalid ${event} mimeType: use image/jpeg or image/png`);
   }
-  if (typeof image !== "string" || !image) throw new Error("Invalid image.input image");
+  if (typeof image !== "string" || !image) throw new Error(`Invalid ${event} image`);
   if (image.length > MAX_IMAGE_BASE64_CHARS) {
-    throw new Error(`image.input image is too large (at most ${MAX_IMAGE_BASE64_CHARS} base64 characters)`);
+    throw new Error(`${event} image is too large (at most ${MAX_IMAGE_BASE64_CHARS} base64 characters)`);
   }
-  if (image.length % 4 !== 0 || !BASE64.test(image)) throw new Error("Invalid image.input image: not base64");
+  if (image.length % 4 !== 0 || !BASE64.test(image)) throw new Error(`Invalid ${event} image: not base64`);
   const magic = IMAGE_MAGIC[mimeType];
   // The first 12 base64 characters are the first 9 bytes, enough for both signatures.
   const head = Buffer.from(image.slice(0, 12), "base64");
   if (!head.subarray(0, magic.length).equals(magic)) {
-    throw new Error(`Invalid image.input image: the bytes are not a ${mimeType === "image/png" ? "PNG" : "JPEG"}`);
+    throw new Error(`Invalid ${event} image: the bytes are not a ${mimeType === "image/png" ? "PNG" : "JPEG"}`);
   }
 }
 
@@ -644,6 +648,17 @@ export function parseClientEvent(data: RawData): ClientEvent {
     };
   }
 
+  if (value.type === "video.frame") {
+    assertImage(value.image, value.mimeType, "video.frame");
+    return {
+      type: "video.frame",
+      image: value.image as string,
+      mimeType: value.mimeType as "image/jpeg" | "image/png"
+    };
+  }
+
+  if (value.type === "video.stop") return { type: "video.stop" };
+
   if (value.type === "tool.result") {
     if (typeof value.callId !== "string" || !value.callId || value.callId.length > MAX_TOOL_CALL_ID) {
       throw new Error("Invalid tool.result callId");
@@ -805,6 +820,8 @@ export class AgentSessionController {
   private silenceFiller?: SilenceFiller;
   private noiseSuppressor?: NoiseSuppressor;
   private sessionStartReceived = false;
+  /** Whether this connection was already told that the backend takes no video. */
+  private videoRefused = false;
   private providerStarted = false;
   private audioActive = false;
   private acceptingMessages = true;
@@ -1120,6 +1137,17 @@ export class AgentSessionController {
           this.send({ type: "error", message: "This voice backend does not take pictures." });
         }
       }
+      if (event.type === "video.frame") {
+        const accepted = this.provider.videoFrame
+          ? await this.provider.videoFrame({ data: event.image, mimeType: event.mimeType })
+          : false;
+        // Said once: a client that did not look at the capabilities sends a frame a second.
+        if (accepted === false && !this.videoRefused) {
+          this.videoRefused = true;
+          this.send({ type: "error", message: "This voice backend does not take video." });
+        }
+      }
+      if (event.type === "video.stop") await this.provider.videoStop?.();
       // The FIRST consumer of hazard.report (see parseClientEvent's "never
       // echo back" comment above): forwarded so the vision governor can gate
       // watching on a hazard the board already announced, never echoed to

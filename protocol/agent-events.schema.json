@@ -428,6 +428,34 @@
             }
           },
           "required": ["type", "image", "mimeType"]
+        },
+        {
+          "title": "VideoFrame",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "video.frame"
+            },
+            "image": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240000
+            },
+            "mimeType": {
+              "enum": ["image/jpeg", "image/png"]
+            }
+          },
+          "required": ["type", "image", "mimeType"]
+        },
+        {
+          "title": "VideoStop",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "video.stop"
+            }
+          },
+          "required": ["type"]
         }
       ]
     },

@@ -46,7 +46,31 @@ vi.mock("../sdk/src/client", async (importOriginal) => {
     stop() {
       this.calls.push("stop");
       this.muted = false;
+      this.stopVideo();
       this.setStatus("idle");
+    }
+    videoSource: string | undefined;
+    videoStream: MediaStream | undefined;
+    /** What the next startVideo does: the user's no, when it is an Error. */
+    videoError: Error | undefined;
+    /** Holds a startVideo back, as the browser's question to the user does. */
+    videoGate: Promise<void> | undefined;
+    videos: string[] = [];
+    async startVideo(source: string) {
+      this.videos.push(source);
+      if (this.videoGate) await this.videoGate;
+      if (this.videoError) throw this.videoError;
+      this.stopVideo();
+      this.videoSource = source;
+      this.videoStream = new MediaStream();
+      this.emit("video", { active: true, source });
+      return this.videoStream;
+    }
+    stopVideo() {
+      if (!this.videoSource) return;
+      this.videoSource = undefined;
+      this.videoStream = undefined;
+      this.emit("video", { active: false });
     }
     mute() {
       this.muted = true;
@@ -58,7 +82,7 @@ vi.mock("../sdk/src/client", async (importOriginal) => {
       this.calls.push(`text:${text}`);
       return true;
     }
-    capabilities: { imageInput?: boolean } | undefined;
+    capabilities: { imageInput?: boolean; videoInput?: boolean } | undefined;
     /** What the next sendImage does: resolve to this, or reject when it is an Error. */
     imageResult: boolean | Error = true;
     images: Array<{ source: unknown; options: { text?: string; maxSide?: number } }> = [];
@@ -94,7 +118,12 @@ interface Fake {
   destroyed: boolean;
   calls: string[];
   startError: Error | undefined;
-  capabilities: { imageInput?: boolean } | undefined;
+  capabilities: { imageInput?: boolean; videoInput?: boolean } | undefined;
+  videoSource: string | undefined;
+  videoStream: MediaStream | undefined;
+  videoError: Error | undefined;
+  videoGate: Promise<void> | undefined;
+  videos: string[];
   imageResult: boolean | Error;
   imageGate: Promise<void> | undefined;
   images: Array<{ source: unknown; options: { text?: string; maxSide?: number } }>;
@@ -539,6 +568,137 @@ describe("showing a picture", () => {
     const shown = q<HTMLImageElement>(el, ".lines li[data-picture] img");
     expect(shown.getAttribute("src")).toBe("data:image/png;base64,iVBORw0KGgo=");
     expect(shown.alt).toBe("你发送的图片");
+  });
+});
+
+describe("showing the camera or the screen", () => {
+  const watch = (el: Element) => q<HTMLElement>(el, ".watch");
+  const camera = (el: Element) => q<HTMLButtonElement>(el, ".camera");
+  const screen = (el: Element) => q<HTMLButtonElement>(el, ".screen");
+  const preview = (el: Element) => q<HTMLVideoElement>(el, ".preview");
+
+  /** Opens a conversation on a relay whose model takes live video, in a browser that can share a screen. */
+  async function openWatching(el: VoiceAgentElement) {
+    vi.stubGlobal("navigator", { mediaDevices: { getDisplayMedia: () => undefined } });
+    const agent = await open(el);
+    agent.capabilities = { imageInput: true, videoInput: true };
+    agent.setStatus("listening");
+    return agent;
+  }
+
+  it("offers the buttons only when the page asks for them, in a conversation, with a model that takes video", async () => {
+    const plain = mount({ relay: "https://r.example.com", "image-input": "" });
+    await openWatching(plain);
+    expect(watch(plain).hidden).toBe(true);
+    plain.remove();
+    vi.unstubAllGlobals();
+
+    const el = mount({ relay: "https://r.example.com", "video-input": "" });
+    expect(watch(el).hidden).toBe(true);
+    const agent = await open(el);
+    agent.capabilities = { imageInput: true };
+    agent.setStatus("listening");
+    // Pictures alone are not video.
+    expect(watch(el).hidden).toBe(true);
+    agent.capabilities = { imageInput: true, videoInput: true };
+    agent.setStatus("listening");
+    expect(watch(el).hidden).toBe(false);
+    expect(camera(el).textContent).toBe("Show my camera");
+    expect(camera(el).getAttribute("aria-pressed")).toBe("false");
+    // This browser cannot share a screen: no button for it.
+    expect(screen(el).hidden).toBe(true);
+    expect(preview(el).hidden).toBe(true);
+  });
+
+  it("turns the camera on with a preview of what the assistant sees, and off again", async () => {
+    const el = mount({ relay: "https://r.example.com", "video-input": "" });
+    const agent = await openWatching(el);
+    const events: unknown[] = [];
+    el.addEventListener("voice-agent:video", (event) => events.push((event as CustomEvent).detail));
+    camera(el).click();
+    await flush();
+    expect(agent.videos).toEqual(["camera"]);
+    expect(camera(el).getAttribute("aria-pressed")).toBe("true");
+    expect(screen(el).getAttribute("aria-pressed")).toBe("false");
+    expect(preview(el).hidden).toBe(false);
+    expect(preview(el).srcObject).toBe(agent.videoStream);
+    expect(agent.videoStream).toBeInstanceOf(MediaStream);
+    expect(preview(el).getAttribute("aria-label")).toBe("What the assistant sees");
+    expect(events).toEqual([{ active: true, source: "camera" }]);
+    camera(el).click();
+    await flush();
+    expect(agent.videoSource).toBeUndefined();
+    expect(camera(el).getAttribute("aria-pressed")).toBe("false");
+    expect(preview(el).hidden).toBe(true);
+    expect(preview(el).srcObject).toBeNull();
+    expect(events.at(-1)).toEqual({ active: false });
+  });
+
+  it("goes from the camera to the screen, and stops when the user stops sharing in the browser", async () => {
+    const el = mount({ relay: "https://r.example.com", "video-input": "" });
+    const agent = await openWatching(el);
+    expect(screen(el).hidden).toBe(false);
+    expect(screen(el).textContent).toBe("Share my screen");
+    camera(el).click();
+    await flush();
+    screen(el).click();
+    await flush();
+    expect(agent.videos).toEqual(["camera", "screen"]);
+    expect(screen(el).getAttribute("aria-pressed")).toBe("true");
+    expect(camera(el).getAttribute("aria-pressed")).toBe("false");
+    expect(preview(el).srcObject).toBe(agent.videoStream);
+    // The browser's own "Stop sharing": the client says the video is off.
+    agent.stopVideo();
+    expect(screen(el).getAttribute("aria-pressed")).toBe("false");
+    expect(preview(el).hidden).toBe(true);
+  });
+
+  it("says so when the camera could not be opened, and takes that back at the next try", async () => {
+    const el = mount({ relay: "https://r.example.com", "video-input": "" });
+    const agent = await openWatching(el);
+    agent.videoError = new VoiceAgentError("video", "Could not open the camera: Permission denied");
+    camera(el).click();
+    await flush();
+    expect(note(el).textContent).toBe(
+      "The camera or the screen could not be opened. Allow it in the browser and try again."
+    );
+    expect(camera(el).getAttribute("aria-pressed")).toBe("false");
+    expect(preview(el).hidden).toBe(true);
+    agent.videoError = undefined;
+    camera(el).click();
+    await flush();
+    expect(note(el).textContent).toBe("");
+    expect(camera(el).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("asks the browser once while it is still asking the user", async () => {
+    const el = mount({ relay: "https://r.example.com", "video-input": "" });
+    const agent = await openWatching(el);
+    let answer!: () => void;
+    agent.videoGate = new Promise<void>((resolve) => (answer = resolve));
+    camera(el).click();
+    camera(el).click();
+    screen(el).click();
+    await flush();
+    expect(agent.videos).toEqual(["camera"]);
+    answer();
+    await flush();
+    expect(camera(el).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("takes the preview away with the conversation, and speaks Chinese", async () => {
+    const el = mount({ relay: "https://r.example.com", "video-input": "", language: "zh" });
+    const agent = await openWatching(el);
+    expect(camera(el).textContent).toBe("打开摄像头");
+    expect(screen(el).textContent).toBe("共享屏幕");
+    camera(el).click();
+    await flush();
+    expect(preview(el).hidden).toBe(false);
+    fab(el).click();
+    await flush();
+    expect(agent.calls).toContain("stop");
+    expect(preview(el).hidden).toBe(true);
+    expect(watch(el).hidden).toBe(true);
   });
 });
 

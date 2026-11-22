@@ -36,7 +36,8 @@ const MIN_SIDE = 64;
 export async function encodeImage(
   source: ImageSource,
   maxSide: number | undefined,
-  open: ImageEncoder = openInBrowser
+  open: ImageEncoder = openInBrowser,
+  qualities: readonly number[] = QUALITIES
 ): Promise<string> {
   const limit =
     Number.isFinite(maxSide) && (maxSide as number) >= MIN_SIDE
@@ -52,7 +53,7 @@ export async function encodeImage(
       const scale = side / longest;
       const width = Math.max(1, Math.round(image.width * scale));
       const height = Math.max(1, Math.round(image.height * scale));
-      for (const quality of QUALITIES) {
+      for (const quality of qualities) {
         const data = await image.encode(width, height, quality);
         if (data.length <= MAX_IMAGE_BASE64_CHARS) return data;
       }

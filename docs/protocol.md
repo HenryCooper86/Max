@@ -254,6 +254,39 @@ Pictures go to the model's vendor. The relay does not write picture bytes to con
 state or memory; a conversation record or a resumed session only holds the text "[the user showed a picture]" where one
 was shown.
 
+### video.frame and video.stop
+
+Live video: what the user's camera or a shared screen shows, a frame at a time, while the conversation goes on.
+
+```json
+{ "type": "video.frame", "image": "<base64>", "mimeType": "image/jpeg" }
+```
+
+```json
+{ "type": "video.stop" }
+```
+
+A frame is a picture by the rules of `image.input` (`image` and `mimeType`, the same size limit and checks), without
+`text`. Send one about every second while the video is on, and `video.stop` when it goes off.
+
+A frame starts nothing: no reply, no transcript, no interruption, and it does not count as the user being present for
+the idle check-in (a camera left on is not somebody talking). The relay keeps the newest frame only, and the model sees
+it with the user's next spoken or typed turn: "what am I holding?" is answered about the frame of that moment. On Gemini
+Live, which takes video itself, each frame is passed on as it arrives, at most one a second. How each backend takes
+frames is in [Voice backends](backends.md#live-video).
+
+Frames have no count limit and do not use up the 50 pictures of `image.input`. A frame that comes less than 500 ms
+after the last one is dropped without an error; the next is as good. When no frame has come for 10 seconds the relay
+takes the video to be over, as if `video.stop` had been sent.
+
+`session.started.capabilities.videoInput` says in advance whether the session takes video: it is true wherever
+`imageInput` is, and absent on relays older than live video. On a session that does not, the first frame is answered
+with one `error` event ("This voice backend does not take video.") and later ones with nothing. An invalid frame is
+answered with an `error` event like an invalid picture.
+
+Frames go to the model's vendor. The relay does not write them to conversation records, logs, traces, resume state or
+memory; a record only holds the lines "[the user turned on live video: …]" and "[the user turned the live video off]".
+
 ### tool.result
 
 The answer to a `tool.call`. Send exactly one per call, within 15 seconds.
@@ -298,13 +331,13 @@ The answer to a `tool.call`. Send exactly one per call, within 15 seconds.
 
 `session.started` fields:
 
-| Field          | Meaning                                                                                                                                                                                                                                                                                                  |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider`     | The backend id actually used: `mock`, `openai`, and so on.                                                                                                                                                                                                                                               |
-| `mode`         | `mock` or `live`.                                                                                                                                                                                                                                                                                        |
-| `capabilities` | `serverVad`, `synthesizedAudio`, `transcriptEvents`, `bargeIn`, `voiceSelection`, `weatherContext`, `sessionMemory`, `emergencyMode`, `tools`, `textInput`, `imageInput`. `tools` and `textInput` are absent on relays older than tool support; `imageInput` is absent on relays older than image input. |
-| `audio`        | The audio plan: `wakeGate`, `silenceFill`, `bargeIn`. See the audio contract.                                                                                                                                                                                                                            |
-| `resume`       | An id to send back as `session.start.resume` when you reconnect, so the conversation carries on. Absent from relays older than resumption. See [Resuming](#resuming).                                                                                                                                    |
+| Field          | Meaning                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `provider`     | The backend id actually used: `mock`, `openai`, and so on.                                                                                                                                                                                                                                                                                                               |
+| `mode`         | `mock` or `live`.                                                                                                                                                                                                                                                                                                                                                        |
+| `capabilities` | `serverVad`, `synthesizedAudio`, `transcriptEvents`, `bargeIn`, `voiceSelection`, `weatherContext`, `sessionMemory`, `emergencyMode`, `tools`, `textInput`, `imageInput`, `videoInput`. `tools` and `textInput` are absent on relays older than tool support; `imageInput` is absent on relays older than image input, and `videoInput` on relays older than live video. |
+| `audio`        | The audio plan: `wakeGate`, `silenceFill`, `bargeIn`. See the audio contract.                                                                                                                                                                                                                                                                                            |
+| `resume`       | An id to send back as `session.start.resume` when you reconnect, so the conversation carries on. Absent from relays older than resumption. See [Resuming](#resuming).                                                                                                                                                                                                    |
 
 `synthesizedAudio: false` means the backend sends text only (the mock). The page should speak the text itself. See
 [`useBrowserSpeech`](#usebrowserspeech).

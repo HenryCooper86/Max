@@ -124,6 +124,11 @@ export type AgentProvider = {
   /** A picture the user showed, with or without words. Resolves `false` when
    *  the backend cannot take pictures. Providers without image input omit this. */
   imageInput?(image: { data: string; mimeType: string }, text?: string): Promise<boolean | void>;
+  /** A frame of the user's live video. Resolves `false` when the backend
+   *  cannot take video. Providers without it omit this. */
+  videoFrame?(image: { data: string; mimeType: string }): Promise<boolean | void>;
+  /** The user's video has stopped: the last frame is forgotten. */
+  videoStop?(): Promise<void>;
   /** A client's answer to a `tool.call`. Providers without tools omit this. */
   toolResult?(event: ToolResultEvent): Promise<void>;
 };

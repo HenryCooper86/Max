@@ -12,12 +12,25 @@ import { createBrowserAudio } from "./audio.js";
 import type { AudioIO } from "./audio.js";
 import { PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
 import { DEFAULT_IMAGE_MAX_SIDE, encodeImage } from "./image.js";
+import {
+  DEFAULT_VIDEO_INTERVAL_MS,
+  DEFAULT_VIDEO_MAX_SIDE,
+  VIDEO_QUALITIES,
+  openVideoInBrowser,
+  videoKind,
+  type OpenedVideo,
+  type VideoKind,
+  type VideoOpener,
+  type VideoOptions,
+  type VideoSource
+} from "./video.js";
 import type { ImageEncoder, ImageSource } from "./image.js";
 import { WEBRTC_UNAVAILABLE_CODE, createWebRtcSocket, webRtcSupported } from "./webrtc.js";
 import type { WebRtcSocket, WebRtcSocketOptions } from "./webrtc.js";
 import {
   MAX_TEXT_CHARS,
   MIN_IMAGE_INTERVAL_MS,
+  MIN_VIDEO_FRAME_INTERVAL_MS,
   TOOL_NAME_PATTERN,
   buildSessionStart,
   mergeTranscript,
@@ -81,6 +94,8 @@ export type VoiceAgentErrorCode =
   | "audio"
   /** {@link VoiceAgent.sendImage} could not turn the source into a small enough JPEG. */
   | "image"
+  /** {@link VoiceAgent.startVideo} could not open the camera, the screen or the stream: often the user said no. */
+  | "video"
   /** The relay closed with 4003: this account's voice minutes are used up. Retrying will not help. */
   | "usage_limit"
   /** The relay closed with 1008: it refused the credentials, even after a fresh token where one could be fetched. */
@@ -157,6 +172,10 @@ export interface VoiceAgentEvents {
   ended: { reason: string };
   /** The conversation moved to another of the assistant's agents. */
   agentchange: { agent: string };
+  /** Live video for the agent went on or off: by {@link VoiceAgent.startVideo} and
+   *  {@link VoiceAgent.stopVideo}, when the session ended, or when the user stopped
+   *  sharing in the browser's own controls. */
+  video: { active: boolean; source?: VideoKind };
   /** A connection ended. */
   close: CloseInfo;
 }
@@ -246,6 +265,8 @@ interface VoiceAgentInternals {
   connectTimeoutMs?: number;
   /** Reads and encodes a picture, instead of the browser's canvas. */
   imageEncoder?: ImageEncoder;
+  /** Opens a camera, a screen or a stream, instead of the browser's. */
+  video?: VideoOpener;
 }
 
 /**
@@ -257,6 +278,19 @@ export function defineClientTool<Args extends Record<string, unknown> = Record<s
 ): ClientTool {
   return tool as ClientTool;
 }
+
+/** A video being shown to the agent. */
+type LiveVideo = {
+  opened: OpenedVideo;
+  kind: VideoKind;
+  maxSide: number;
+  /** A frame is being made: the next tick does not start another. */
+  encoding: boolean;
+  timer: ReturnType<typeof setInterval>;
+};
+
+/** A frame is not sent while this much is still waiting to go out. */
+const MAX_VIDEO_BUFFERED_BYTES = 256 * 1024;
 
 type Lifecycle = "idle" | "connecting" | "active" | "error" | "closed";
 
@@ -357,6 +391,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private imageEncoding = false;
   /** When and on which socket the last picture went out, for the relay's one-second gap. */
   private lastImage: { socket: WebSocketLike; at: number } | undefined;
+  /** The live video being shown to the agent. */
+  private video: LiveVideo | undefined;
+  /** Counts `startVideo` calls, so that one overtaken while the browser asked the user lets its video go. */
+  private videoAsk = 0;
   private provider: string | undefined;
 
   /**
@@ -567,6 +605,79 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     return sent;
   }
 
+  /** What is being shown to the agent as live video, if anything. */
+  get videoSource(): VideoKind | undefined {
+    return this.video?.kind;
+  }
+
+  /** The stream being shown to the agent, for a preview. Undefined when no video is on. */
+  get videoStream(): MediaStream | undefined {
+    return this.video?.opened.stream;
+  }
+
+  /**
+   * Shows the agent live video: the camera, the screen (the browser asks the
+   * user which), or a `MediaStream` the page already has. A frame goes to the
+   * relay every `intervalMs` (a second by default) as a small JPEG, and the
+   * model sees what is shown along with what the user says next. Frames go to
+   * the model's vendor; the relay keeps the newest only, and none after the
+   * conversation. Call it from a click: browsers ask for the camera or the
+   * screen only then. A second call replaces the first video.
+   *
+   * @returns the stream, for a preview (`video.srcObject = stream`), or null
+   * when there is no ready session, the relay takes no video (see
+   * `capabilities.videoInput`), or the session ended while the browser asked.
+   * @throws {VoiceAgentError} with code `video` when the camera or the screen
+   * cannot be opened, which is what a user's "no" looks like.
+   */
+  async startVideo(source: VideoSource = "camera", options: VideoOptions = {}): Promise<MediaStream | null> {
+    if (!this.isReady() || this.caps?.videoInput !== true) return null;
+    const ask = (this.videoAsk += 1);
+    const generation = this.generation;
+    let opened: OpenedVideo;
+    try {
+      opened = await (this.options.internals?.video ?? openVideoInBrowser)(source, options);
+    } catch (error) {
+      const what = source === "camera" ? "the camera" : source === "screen" ? "the screen" : "the video";
+      throw new VoiceAgentError("video", `Could not open ${what}: ${errorMessage(error)}`, { cause: error });
+    }
+    // Stopped, or asked again, while the browser was asking the user.
+    if (this.destroyed || generation !== this.generation || ask !== this.videoAsk) {
+      opened.close();
+      return null;
+    }
+    this.stopVideo();
+    const interval = Number.isFinite(options.intervalMs)
+      ? Math.max(MIN_VIDEO_FRAME_INTERVAL_MS, options.intervalMs as number)
+      : DEFAULT_VIDEO_INTERVAL_MS;
+    const video: LiveVideo = {
+      opened,
+      kind: videoKind(source),
+      maxSide: options.maxSide ?? DEFAULT_VIDEO_MAX_SIDE,
+      encoding: false,
+      timer: setInterval(() => void this.sendVideoFrame(video), interval)
+    };
+    this.video = video;
+    opened.onEnded(() => {
+      if (this.video === video) this.stopVideo();
+    });
+    this.emit("video", { active: true, source: video.kind });
+    // The first frame as soon as there is one, not a whole interval later.
+    void this.sendVideoFrame(video);
+    return opened.stream;
+  }
+
+  /** Stops showing live video. A camera or screen `startVideo` opened is turned off. */
+  stopVideo(): void {
+    const video = this.video;
+    if (!video) return;
+    this.video = undefined;
+    clearInterval(video.timer);
+    video.opened.close();
+    this.sendIfReady({ type: "video.stop" });
+    this.emit("video", { active: false });
+  }
+
   /**
    * Replaces the context string sent with `session.start`. It takes effect at
    * the next session (the next {@link start} or automatic reconnect); a
@@ -680,7 +791,31 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     this.reportError(wrapped);
   }
 
+  /** Sends the newest frame, unless the one before is still being made or the relay cannot take one now. */
+  private async sendVideoFrame(video: LiveVideo): Promise<void> {
+    const socket = this.socket;
+    // Between two sessions (a reconnect) the video stays open and its frames wait.
+    if (this.video !== video || video.encoding || !socket || !this.isReady() || this.caps?.videoInput !== true) return;
+    // Audio comes first: a connection that is behind gets no frames on top.
+    if (socket.bufferedAmount >= MAX_VIDEO_BUFFERED_BYTES) return;
+    const source = video.opened.frame();
+    if (!source) return;
+    video.encoding = true;
+    try {
+      const image = await encodeImage(source, video.maxSide, this.options.internals?.imageEncoder, VIDEO_QUALITIES);
+      if (this.video === video && this.socket === socket) {
+        this.sendIfReady({ type: "video.frame", image, mimeType: "image/jpeg" });
+      }
+    } catch {
+      // A frame that could not be read is not an error of the conversation: the next is a moment away.
+    } finally {
+      video.encoding = false;
+    }
+  }
+
   private teardown(final: "idle" | "closed", keepPlayback = false): void {
+    // Before the socket goes: a camera must not stay on after the conversation.
+    this.stopVideo();
     this.resumeId = undefined;
     this.endedByRelay = false;
     this.activeAgent = undefined;

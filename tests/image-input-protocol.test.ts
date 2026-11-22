@@ -195,3 +195,89 @@ describe("image.input dispatch", () => {
     expect(sent.filter((event) => event.type === "error")).toHaveLength(1);
   });
 });
+
+describe("live video: video.frame and video.stop", () => {
+  const frame = (event: Record<string, unknown>) =>
+    parseClientEvent(Buffer.from(JSON.stringify({ type: "video.frame", ...event })));
+
+  it("are known client events", () => {
+    expect(CLIENT_EVENT_TYPES).toContain("video.frame");
+    expect(CLIENT_EVENT_TYPES).toContain("video.stop");
+    expect(parseClientEvent(Buffer.from('{"type":"video.stop","extra":1}'))).toEqual({ type: "video.stop" });
+  });
+
+  it("a frame is a picture by the rules of image.input, and carries no words", () => {
+    expect(frame({ image: jpeg, mimeType: "image/jpeg", text: "look" })).toEqual({
+      type: "video.frame",
+      image: jpeg,
+      mimeType: "image/jpeg"
+    });
+    expect(frame({ image: png, mimeType: "image/png" })).toMatchObject({ mimeType: "image/png" });
+    expect(() => frame({ image: jpeg, mimeType: "image/webp" })).toThrow(/video\.frame mimeType/);
+    expect(() => frame({ image: png, mimeType: "image/jpeg" })).toThrow(/video\.frame image: the bytes are not a JPEG/);
+    expect(() => frame({ image: "", mimeType: "image/jpeg" })).toThrow(/video\.frame image/);
+    const longest = Buffer.concat([JPEG_HEAD, Buffer.alloc(180_000 - JPEG_HEAD.length)]).toString("base64");
+    expect(frame({ image: longest, mimeType: "image/jpeg" })).toHaveProperty("image");
+    expect(() => frame({ image: `${longest}AAAA`, mimeType: "image/jpeg" })).toThrow(/video\.frame image is too large/);
+  });
+
+  it("is taken wherever pictures are, and nowhere else", () => {
+    const saved = { local: process.env.LOCAL_LLM_IMAGES, model: process.env.OPENAI_REALTIME_MODEL };
+    try {
+      delete process.env.LOCAL_LLM_IMAGES;
+      delete process.env.OPENAI_REALTIME_MODEL;
+      expect(voiceCapabilities("gemini")).toMatchObject({ imageInput: true, videoInput: true });
+      expect(voiceCapabilities("openai")).toMatchObject({ imageInput: true, videoInput: true });
+      expect(voiceCapabilities("grok")).toMatchObject({ imageInput: false, videoInput: false });
+      expect(voiceCapabilities("local").videoInput).toBe(false);
+      process.env.LOCAL_LLM_IMAGES = "on";
+      expect(voiceCapabilities("local").videoInput).toBe(true);
+      expect(voiceCapabilities("max-speech").videoInput).toBe(true);
+    } finally {
+      if (saved.local === undefined) delete process.env.LOCAL_LLM_IMAGES;
+      else process.env.LOCAL_LLM_IMAGES = saved.local;
+      if (saved.model === undefined) delete process.env.OPENAI_REALTIME_MODEL;
+      else process.env.OPENAI_REALTIME_MODEL = saved.model;
+    }
+  });
+
+  async function run(provider: Partial<AgentProvider>, events: Record<string, unknown>[]) {
+    const send = vi.fn();
+    const client = { readyState: 1, OPEN: 1, send, close: vi.fn() } as never;
+    const controller = new AgentSessionController(client, () => ({
+      start: async () => undefined,
+      startAudio: async () => undefined,
+      sendAudio: async () => undefined,
+      stopAudio: async () => undefined,
+      close: async () => undefined,
+      ...provider
+    }));
+    const message = (value: unknown) => controller.handleMessage(Buffer.from(JSON.stringify(value)), false);
+    await message({ type: "session.start", sampleRate: 16000, channels: 1 });
+    for (const event of events) await message(event);
+    await controller.close();
+    return send.mock.calls.map(([payload]) => JSON.parse(String(payload)) as Record<string, unknown>);
+  }
+  const FRAME = { type: "video.frame", image: jpeg, mimeType: "image/jpeg" };
+
+  it("hands the provider each frame, and the end of the video", async () => {
+    const videoFrame = vi.fn(async () => undefined);
+    const videoStop = vi.fn(async () => undefined);
+    const sent = await run({ videoFrame, videoStop }, [FRAME, FRAME, { type: "video.stop" }]);
+    expect(videoFrame.mock.calls).toEqual([
+      [{ data: jpeg, mimeType: "image/jpeg" }],
+      [{ data: jpeg, mimeType: "image/jpeg" }]
+    ]);
+    expect(videoStop).toHaveBeenCalledTimes(1);
+    expect(sent.filter((event) => event.type === "error")).toEqual([]);
+  });
+
+  it("says once that the backend takes no video, however many frames come", async () => {
+    for (const provider of [{}, { videoFrame: async () => false as const }]) {
+      const sent = await run(provider, [FRAME, FRAME, FRAME, { type: "video.stop" }]);
+      expect(sent.filter((event) => event.type === "error")).toEqual([
+        { type: "error", message: "This voice backend does not take video." }
+      ]);
+    }
+  });
+});

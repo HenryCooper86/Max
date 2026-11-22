@@ -30,7 +30,8 @@ const OBSERVED = [
   "accent",
   "position",
   "text-input",
-  "image-input"
+  "image-input",
+  "video-input"
 ] as const;
 /** `lang` only picks the widget's text language; it never reaches the relay. */
 const WATCHED = [...OBSERVED, "lang"];
@@ -118,6 +119,12 @@ const TEMPLATE = `
   .sound { margin: 0 12px 8px; align-self: flex-start; }
   .picture { margin: 0 12px 8px; align-self: flex-start; }
   .picture[aria-disabled="true"] { opacity: 0.55; cursor: default; }
+  .watch { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 12px 8px; }
+  .watch[hidden], .preview[hidden] { display: none; }
+  .preview {
+    display: block; margin: 0 12px 8px; width: 160px; max-height: 120px; object-fit: contain;
+    border: 1px solid var(--va-line); border-radius: 8px; background: #000;
+  }
   input[type="file"] { display: none; }
   .lines li[data-picture] { padding: 4px; }
   .lines li img { display: block; max-width: 160px; max-height: 120px; border-radius: 8px; }
@@ -159,6 +166,11 @@ const TEMPLATE = `
     <ul class="lines" part="lines" role="log" aria-live="polite" aria-relevant="additions text"></ul>
     <button class="small sound" part="sound" type="button" hidden></button>
     <button class="small picture" part="picture" type="button" hidden></button>
+    <div class="watch" part="watch" hidden>
+      <button class="small camera" part="camera" type="button" aria-pressed="false"></button>
+      <button class="small screen" part="screen" type="button" aria-pressed="false"></button>
+    </div>
+    <video class="preview" part="preview" muted playsinline hidden></video>
     <p class="note" part="note" role="alert"></p>
     <form hidden>
       <input type="text" part="input" maxlength="2000" autocomplete="off" />
@@ -199,10 +211,11 @@ async function fetchToken(url: string): Promise<string> {
  * `transport` (`webrtc` to send audio over WebRTC where the relay offers it),
  * `context` (facts about the page, for the assistant), `label`, `accent`, `position` (`bottom-right` by default,
  * `bottom-left`, or `inline` to place it in the flow), `text-input`, `image-input` (a button for showing the
- * assistant a picture, on relays whose model can see one).
+ * assistant a picture, on relays whose model can see one), `video-input` (buttons that show the assistant the
+ * camera or the screen while the conversation goes on, with a small preview of what it sees).
  * Set the `tools` property to give the agent client tools, and `strings` to override any of its text (built-in English and
  * Simplified Chinese, chosen from `language`, then `lang`). Dispatches `voice-agent:status`, `:transcript`, `:toolcall`,
- * `:error`, `:warning` and `:image` events.
+ * `:error`, `:warning`, `:image` and `:video` events.
  */
 export class VoiceAgentElement extends ElementBase {
   static readonly observedAttributes = WATCHED;
@@ -215,7 +228,9 @@ export class VoiceAgentElement extends ElementBase {
   #strings: WidgetStringOverrides = {};
   #error: VoiceAgentError | undefined;
   /** Why the last picture did not go out, until the next one does or a session starts. */
-  #notice: "pictureNotSent" | "pictureUnusable" | undefined;
+  #notice: "pictureNotSent" | "pictureUnusable" | "videoUnavailable" | undefined;
+  /** The session the browser is being asked for a camera or a screen for. */
+  #openingVideoFor: VoiceAgent | undefined;
   /** The session a picture is being prepared and sent for. */
   #sendingFor: VoiceAgent | undefined;
   /** Object URLs of the thumbnails shown, to release with the list. */
@@ -236,6 +251,10 @@ export class VoiceAgentElement extends ElementBase {
     close: HTMLButtonElement;
     sound: HTMLButtonElement;
     picture: HTMLButtonElement;
+    watch: HTMLElement;
+    camera: HTMLButtonElement;
+    screen: HTMLButtonElement;
+    preview: HTMLVideoElement;
     file: HTMLInputElement;
     send: HTMLButtonElement;
     live: HTMLElement;
@@ -289,6 +308,10 @@ export class VoiceAgentElement extends ElementBase {
       close: select(root, ".close"),
       sound: select(root, ".sound"),
       picture: select(root, ".picture"),
+      watch: select(root, ".watch"),
+      camera: select(root, ".camera"),
+      screen: select(root, ".screen"),
+      preview: select(root, ".preview"),
       file: select(root, ".file"),
       send: select(root, 'button[type="submit"]'),
       live: select(root, ".sr")
@@ -310,6 +333,8 @@ export class VoiceAgentElement extends ElementBase {
       // Not `disabled` while a picture is on its way: that would throw the keyboard's focus away.
       if (ui.picture.getAttribute("aria-disabled") !== "true") ui.file.click();
     });
+    ui.camera.addEventListener("click", () => void this.#toggleVideo("camera"));
+    ui.screen.addEventListener("click", () => void this.#toggleVideo("screen"));
     ui.file.addEventListener("change", () => {
       const file = ui.file.files?.[0];
       // The same file can be chosen again next time.
@@ -337,6 +362,9 @@ export class VoiceAgentElement extends ElementBase {
     this.#releaseThumbnails();
     this.#notice = undefined;
     this.#sendingFor = undefined;
+    this.#openingVideoFor = undefined;
+    // Nobody is listening any more when the client lets the camera go.
+    if (this.#ui) this.#renderPreview(undefined);
     this.#agent?.destroy();
     this.#agent = undefined;
   }
@@ -417,6 +445,39 @@ export class VoiceAgentElement extends ElementBase {
     return this.#pictureDone(sent);
   }
 
+  /** The camera or the screen button: on, off, or from one to the other. */
+  async #toggleVideo(source: "camera" | "screen"): Promise<void> {
+    const agent = this.#agent;
+    // One question to the user at a time.
+    if (!agent || this.#openingVideoFor === agent) return;
+    if (agent.videoSource === source) {
+      agent.stopVideo();
+      return;
+    }
+    this.#openingVideoFor = agent;
+    this.#notice = undefined;
+    this.#renderNote();
+    try {
+      await agent.startVideo(source);
+    } catch {
+      // The user's "no" looks the same as a camera that is missing: one thing to say for both.
+      if (this.#agent === agent && this.#active()) this.#notice = "videoUnavailable";
+    } finally {
+      if (this.#openingVideoFor === agent) this.#openingVideoFor = undefined;
+    }
+    if (this.#agent !== agent) return;
+    this.#renderNote();
+    this.#renderStatus();
+  }
+
+  /** Shows what the assistant sees, or takes the preview away. */
+  #renderPreview(stream: MediaStream | undefined): void {
+    const preview = this.#ui.preview;
+    preview.srcObject = stream ?? null;
+    preview.hidden = !stream;
+    if (stream) void preview.play?.()?.catch(() => undefined);
+  }
+
   #pictureDone(sent: boolean): boolean {
     this.dispatchEvent(new CustomEvent("voice-agent:image", { detail: { sent }, bubbles: true, composed: true }));
     return sent;
@@ -489,6 +550,9 @@ export class VoiceAgentElement extends ElementBase {
     ui.close.setAttribute("aria-label", t.close);
     ui.sound.textContent = t.enableSound;
     ui.picture.textContent = t.picture;
+    ui.camera.textContent = t.camera;
+    ui.screen.textContent = t.screen;
+    ui.preview.setAttribute("aria-label", t.videoPreview);
     ui.send.textContent = t.send;
     ui.input.setAttribute("aria-label", t.typeMessage);
     ui.input.setAttribute("placeholder", t.typeMessage);
@@ -548,6 +612,11 @@ export class VoiceAgentElement extends ElementBase {
         emit("warning", { warning });
       }),
       agent.on("audioresume", () => this.#renderStatus()),
+      agent.on("video", ({ active, source }) => {
+        this.#renderPreview(active ? agent.videoStream : undefined);
+        this.#renderStatus();
+        emit("video", { active, ...(source ? { source } : {}) });
+      }),
       agent.on("level", ({ mic, output }) => this.#ui.fab.style.setProperty("--level", String(Math.max(mic, output))))
     ];
     this.#agent = agent;
@@ -582,6 +651,17 @@ export class VoiceAgentElement extends ElementBase {
       "aria-disabled",
       String(this.#sendingFor !== undefined && this.#sendingFor === this.#agent)
     );
+    // The same for live video, with a model that takes it. No screen button where the browser cannot share one.
+    ui.watch.hidden = !(
+      this.hasAttribute("video-input") &&
+      active &&
+      status !== "connecting" &&
+      this.#agent?.capabilities?.videoInput === true
+    );
+    const showing = this.#agent?.videoSource;
+    ui.camera.setAttribute("aria-pressed", String(showing === "camera"));
+    ui.screen.setAttribute("aria-pressed", String(showing === "screen"));
+    ui.screen.hidden = typeof navigator === "undefined" || !navigator.mediaDevices?.getDisplayMedia;
     if (!active) ui.fab.style.setProperty("--level", "0");
   }
 

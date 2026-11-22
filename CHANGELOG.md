@@ -90,6 +90,11 @@
 - Flows: a step at the start of a conversation. `main`'s `onStart` is done by the relay before the model is
   connected: a tool call, values kept from its answer, a move to the agent that fits, and a sentence said after the
   greeting. See [at the start of a conversation](docs/conversations.md#at-the-start-of-a-conversation).
+- Live video. A user can show the assistant their camera or their screen while they talk: the web SDK's `startVideo`
+  sends a frame a second (`video.frame`, a new protocol event), the relay keeps the newest only, and the model sees it
+  with the user's next turn (on Gemini Live, as it arrives). The widget has camera and screen buttons with a preview
+  (`video-input`), the React hook `startVideo`, `stopVideo` and `video`. It works wherever pictures do
+  (`capabilities.videoInput`).
 - Max Cloud: flows for projects. A Flow tab in the Studio holds the relay's flow builder: several agents with their
   own instructions and tools, handovers along the arrows drawn, values, and what a step does by rule, with the
   project's webhook tools as the only tools.

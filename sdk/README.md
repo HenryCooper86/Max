@@ -107,6 +107,8 @@ stopButton.onclick = () => agent.stop();
 - `sendText(text)`: send a typed turn; returns `false` if there is no live session.
 - `sendImage(source, { text?, maxSide? })`: show the agent a picture; resolves to `false` if there is no live session or
   the relay does not take pictures. See [Pictures](#pictures).
+- `startVideo(source?, { intervalMs?, maxSide?, facingMode? })` / `stopVideo()`, `videoSource`, `videoStream`: show the
+  agent the camera or the screen while the conversation goes on. See [Live video](#live-video).
 - `setContext(text)`: replaces the context for the **next** session (next `start()` or reconnect). It does not change a running session.
 - `interrupt()`: silence the agent immediately.
 - `resumeAudio()`: resume audio the browser blocked; call it from a click. Resolves to whether audio is running. `audioBlocked` tells you if it is needed.
@@ -195,23 +197,58 @@ await agent.sendImage(video, { text: "What is this?" }); // this frame only; it 
 
 The picture goes to the model's vendor and the relay does not write it to conversation records, logs, traces, resume state or memory. Which backends take pictures, and the settings
 that turn it on for chat-model backends, are in [voice backends](../docs/backends.md#pictures).
-The widget has a button for it: see [`image-input`](#script-tag). Native iOS and Android clients can send the
-`image.input` event themselves.
+The widget has a button for it: see [`image-input`](#script-tag). The iOS and Android clients have one too.
+
+## Live video
+
+`agent.startVideo(source?, options?)` shows the agent what the camera or the screen shows while the conversation goes
+on, so the user can ask "what am I holding?" or "why is this page not loading?" without sending anything by hand.
+
+```ts
+cameraButton.onclick = async () => {
+  if (agent.videoSource) return agent.stopVideo();
+  const stream = await agent.startVideo("camera"); // or "screen", or a MediaStream you already have
+  if (stream) preview.srcObject = stream; // a <video muted playsinline autoplay>, so the user sees what the agent sees
+};
+agent.on("video", ({ active }) => {
+  if (!active) preview.srcObject = null;
+});
+```
+
+- `source`: `"camera"` (the default), `"screen"` (the browser asks the user what to share), or a `MediaStream` of your
+  own, for example `canvas.captureStream()`. A stream you pass in is left running when the video stops; a camera or a
+  screen the SDK opened is turned off.
+- `intervalMs`: the time between two frames, 1000 by default and never under 500. `maxSide`: the longer side of a
+  frame, 768 pixels by default. `facingMode`: `"user"` (the default) or `"environment"` for a phone's back camera.
+- It resolves to the stream, or to `null` when there is no ready session, the relay does not take video
+  (`agent.capabilities?.videoInput` is not `true`), or the conversation ended while the browser was asking the user.
+  It rejects with a `VoiceAgentError` whose `code` is `video` when the camera or the screen cannot be opened, which is
+  also what the user's "no" looks like. Call it from a click: browsers ask for a camera or a screen only then.
+- The video stops with `stopVideo()`, when the conversation ends, and when the user stops sharing in the browser's own
+  controls. The `video` event (`{ active, source? }`) fires each time. Across a reconnect it stays on and frames go out
+  again once the new session is ready.
+
+Each frame is a small JPEG sent to the relay, which keeps the newest only; the model sees it with the user's next turn
+(on Gemini Live, as it arrives). Frames go to the model's vendor and are not written to conversation records, logs,
+traces, resume state or memory. The model looks when it is spoken to: it does not watch for motion or speak up by
+itself. Details per backend are in [voice backends](../docs/backends.md#live-video). The widget has buttons for it:
+see [`video-input`](#script-tag).
 
 ## Errors and reconnecting
 
 `start()` rejects with, and the `error` event delivers, a `VoiceAgentError`. Branch on `error.code`:
 
-| `code`         | When                                                                                      | `closeCode` |
-| -------------- | ----------------------------------------------------------------------------------------- | ----------- |
-| `microphone`   | The browser refused the microphone or there is none. The original error is `error.cause`. |             |
-| `token`        | Your token function (or the public-agent request) failed.                                 |             |
-| `connection`   | The relay could not be reached, timed out, or closed the connection for any other reason. | when closed |
-| `unauthorized` | The relay closed with 1008: it does not accept the credentials.                           | `1008`      |
-| `usage_limit`  | The relay closed with 4003: this account's voice minutes are used up.                     | `4003`      |
-| `relay`        | The relay sent an `error` event. The session may continue.                                |             |
-| `audio`        | Decoding or playing the agent's audio failed.                                             |             |
-| `image`        | `sendImage` could not read the picture or make it small enough. Rejects that call only.   |             |
+| `code`         | When                                                                                                  | `closeCode` |
+| -------------- | ----------------------------------------------------------------------------------------------------- | ----------- |
+| `microphone`   | The browser refused the microphone or there is none. The original error is `error.cause`.             |             |
+| `token`        | Your token function (or the public-agent request) failed.                                             |             |
+| `connection`   | The relay could not be reached, timed out, or closed the connection for any other reason.             | when closed |
+| `unauthorized` | The relay closed with 1008: it does not accept the credentials.                                       | `1008`      |
+| `usage_limit`  | The relay closed with 4003: this account's voice minutes are used up.                                 | `4003`      |
+| `relay`        | The relay sent an `error` event. The session may continue.                                            |             |
+| `audio`        | Decoding or playing the agent's audio failed.                                                         |             |
+| `image`        | `sendImage` could not read the picture or make it small enough. Rejects that call only.               |             |
+| `video`        | `startVideo` could not open the camera or the screen (often the user's "no"). Rejects that call only. |             |
 
 `unauthorized` and `usage_limit` are new in 0.2.0. Before, both surfaced as `connection`, and a microphone refusal also
 surfaced as `connection`. The old codes keep their meaning for everything else. If your code treats `connection` as "the
@@ -315,6 +352,9 @@ function Assistant() {
   );
 }
 ```
+
+The hook also returns `startVideo`, `stopVideo` and `video` (`"camera"`, `"screen"`, `"stream"` or `undefined`): see
+[Live video](#live-video).
 
 The client is created on mount and recreated when a connection option changes: `url`, `token` (a string),
 `project`, `language`, `voice`, `backend`, `autoReconnect`, `speakFallback`, or the names, descriptions and parameters
@@ -453,6 +493,7 @@ the element yourself:
 | `position`                        | Bottom right by default; `bottom-left`, or `inline` to place it in the page flow.                                           |
 | `text-input`                      | Show a text box in the panel.                                                                                               |
 | `image-input`                     | Show a "Show a picture" button in the panel, on relays whose model can see one. See below.                                  |
+| `video-input`                     | Show "Show my camera" and "Share my screen" buttons in the panel, on relays whose model takes video. See below.             |
 
 The element has a Shadow DOM, a labelled toggle button (`aria-pressed`) with a
 visible focus ring, a live transcript region, light and dark themes
@@ -463,7 +504,8 @@ DOM events (bubbling, composed): `voice-agent:status` (`{ status }`),
 `voice-agent:transcript` (`{ transcript, item }`), `voice-agent:toolcall`
 (`{ callId, name, arguments }`), `voice-agent:error` (`{ error }`),
 `voice-agent:warning` (`{ warning }`, for example blocked audio),
-`voice-agent:image` (`{ sent }`, after a picture was sent or was not).
+`voice-agent:image` (`{ sent }`, after a picture was sent or was not),
+`voice-agent:video` (`{ active, source? }`, when the camera or the screen went on or off).
 
 With `image-input` the panel has a "Show a picture" button during a conversation. The user chooses a JPEG or PNG; the
 widget sends it with [`sendImage`](#pictures) and shows it in the transcript. What is typed in the text box at that
@@ -476,6 +518,13 @@ read as a picture) is said in the panel. To send a picture from your own code, s
 call `el.sendImage(source, { text?, maxSide? })` on the element: it does what the button does. It resolves to whether the
 picture was sent, and `voice-agent:image` fires with the same answer every time, also when there was no conversation
 to send it in.
+
+With `video-input` the panel has "Show my camera" and "Share my screen" buttons during a conversation, on relays whose
+model takes video (`capabilities.videoInput`), and no screen button in a browser that cannot share one. A button stays
+pressed while its video is on, and a small preview in the panel shows the user what the assistant sees. The video goes
+off with the button, with the conversation, and when the user stops sharing in the browser. If the camera or the screen
+cannot be opened, the panel says so. It is [`startVideo`](#live-video) underneath: for anything else, call it on
+`el.agent`.
 
 The error note names the problem: no microphone permission, a used-up allowance (`usage_limit`), refused credentials
 (`unauthorized`), and so on. A code the widget does not know shows the error's own message before any generic text.

@@ -318,3 +318,136 @@ describe("a silent picture's note keeps history in the order the model saw", () 
     await provider.close();
   });
 });
+
+describe("live session video", () => {
+  const frame = (name: string): EngineImage => ({ data: `RlJBTUUt${name}`.repeat(6), mimeType: "image/jpeg" });
+
+  async function video(config?: Record<string, unknown>) {
+    const frames: Array<EngineImage | undefined> = [];
+    const session = await setup({ engine: { sendVideoFrame: (image) => void frames.push(image) }, config });
+    return { ...session, frames };
+  }
+
+  it("gives the model each frame, and starts nothing", async () => {
+    const { client, provider, frames, sent, texts, calls } = await video();
+    const before = client.json.length;
+    expect(await provider.videoFrame!(frame("A"))).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await provider.videoFrame!(frame("B"));
+    expect(frames).toEqual([frame("A"), frame("B")]);
+    // Not a picture shown, not a turn, not an interruption.
+    expect(sent).toEqual([]);
+    expect(texts).toEqual([]);
+    expect(calls).toEqual({ cancel: 0, respond: 0 });
+    expect(client.json.slice(before).filter((event) => event.type !== "session.resume")).toEqual([]);
+    await provider.close();
+  });
+
+  it("drops frames that come faster than two a second, without an error", async () => {
+    const { client, provider, frames } = await video();
+    await provider.videoFrame!(frame("A"));
+    await vi.advanceTimersByTimeAsync(200);
+    await provider.videoFrame!(frame("B"));
+    await vi.advanceTimersByTimeAsync(299);
+    await provider.videoFrame!(frame("C"));
+    await vi.advanceTimersByTimeAsync(1);
+    await provider.videoFrame!(frame("D"));
+    expect(frames).toEqual([frame("A"), frame("D")]);
+    expect(client.ofType("error")).toEqual([]);
+    await provider.close();
+  });
+
+  it("is not limited to fifty, as pictures are", async () => {
+    const { client, provider, frames } = await video();
+    for (let index = 0; index < MAX_IMAGES_PER_SESSION + 10; index += 1) {
+      await provider.videoFrame!(frame(String(index)));
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    expect(frames).toHaveLength(MAX_IMAGES_PER_SESSION + 10);
+    expect(client.ofType("error")).toEqual([]);
+    // And it does not use up the pictures.
+    await provider.imageInput!(PICTURE);
+    expect(client.ofType("error")).toEqual([]);
+    await provider.close();
+  });
+
+  it("forgets the frame when the video stops, and when the frames stop coming", async () => {
+    const { provider, frames } = await video();
+    await provider.videoFrame!(frame("A"));
+    await provider.videoStop!();
+    expect(frames).toEqual([frame("A"), undefined]);
+    // Stopped twice: said once.
+    await provider.videoStop!();
+    expect(frames).toHaveLength(2);
+    // A client that went quiet without saying so.
+    await provider.videoFrame!(frame("B"));
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(frames).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(frames).toEqual([frame("A"), undefined, frame("B"), undefined]);
+    // A frame keeps it alive.
+    await provider.videoFrame!(frame("C"));
+    await vi.advanceTimersByTimeAsync(6_000);
+    await provider.videoFrame!(frame("D"));
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(frames.at(-1)).toEqual(frame("D"));
+    await provider.close();
+  });
+
+  it("writes into the history when the video went on and off, and never a frame", async () => {
+    const { client, provider, events, saved, serverEvent } = await video();
+    await provider.videoFrame!(frame("A"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await provider.videoFrame!(frame("B"));
+    events().onSpeechStarted();
+    events().onRiderTranscript("what am I holding?", true);
+    events().onResponseStarted();
+    events().onAgentText("A red cup.");
+    events().onAgentAudio(Buffer.alloc(960));
+    // While the assistant answers: written after the answer, in the order the model saw it.
+    await provider.videoStop!();
+    events().onResponseDone({ cancelled: false });
+    expect(saved.at(-1)!.history).toEqual([
+      {
+        speaker: "user",
+        text: "[the user turned on live video: you see what their camera or screen shows along with what they say]"
+      },
+      { speaker: "user", text: "what am I holding?" },
+      { speaker: "agent", text: "A red cup." },
+      { speaker: "user", text: "[the user turned the live video off]" }
+    ]);
+    const everything = JSON.stringify([saved, client.json, serverEvent.mock.calls]);
+    expect(everything).not.toContain(frame("A").data.slice(0, 24));
+    await provider.close();
+  });
+
+  it("does not keep a silent conversation alive", async () => {
+    const { provider, events, said, frames } = await video({
+      conversation: { idleReminderSeconds: 10, maxIdleReminders: 2, idleReminders: ["Still with me?"] }
+    });
+    events().onSpeechStarted();
+    events().onRiderTranscript("hello", true);
+    events().onResponseStarted();
+    events().onAgentAudio(Buffer.alloc(960));
+    events().onResponseDone({ cancelled: false });
+    // A camera left on, a frame a second, and nobody saying anything.
+    for (let second = 0; second < 9; second += 1) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      await provider.videoFrame!(frame(String(second)));
+    }
+    expect(said).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(said).toEqual(["Still with me?"]);
+    expect(frames).toHaveLength(9);
+    await provider.close();
+  });
+
+  it("is refused by a backend that cannot see, and waits while one is still connecting", async () => {
+    const { provider, client } = await setup();
+    expect(await provider.videoFrame!(frame("A"))).toBe(false);
+    expect(client.ofType("error")).toEqual([]);
+    await provider.close();
+    // Closed: nothing more, and no claim about what the backend can do.
+    expect(await provider.videoFrame!(frame("B"))).toBeUndefined();
+  });
+});

@@ -31,6 +31,14 @@ export interface WidgetStrings {
   pictureNotSent: string;
   /** A picture could not be read or made small enough. */
   pictureUnusable: string;
+  /** Button that shows the assistant the camera (the `video-input` attribute). Pressed while it is on. */
+  camera: string;
+  /** Button that shows the assistant the screen. Pressed while it is shared. */
+  screen: string;
+  /** Name of the small preview of what the assistant sees. */
+  videoPreview: string;
+  /** The camera or the screen could not be opened: often the user, or the browser, said no. */
+  videoUnavailable: string;
   status: Record<VoiceAgentStatus, string>;
   errors: Record<WidgetErrorKey, string>;
 }
@@ -55,6 +63,10 @@ const en: WidgetStrings = {
   pictureSent: "A picture you sent",
   pictureNotSent: "The picture was not sent. Wait a moment and try again.",
   pictureUnusable: "This picture could not be used. Choose a JPEG or PNG photo or screenshot.",
+  camera: "Show my camera",
+  screen: "Share my screen",
+  videoPreview: "What the assistant sees",
+  videoUnavailable: "The camera or the screen could not be opened. Allow it in the browser and try again.",
   status: {
     idle: "Idle",
     connecting: "Connecting",
@@ -90,6 +102,10 @@ const zh: WidgetStrings = {
   pictureSent: "你发送的图片",
   pictureNotSent: "图片没有发出去，请稍等片刻再试。",
   pictureUnusable: "这张图片无法使用，请选择 JPEG 或 PNG 格式的照片或截图。",
+  camera: "打开摄像头",
+  screen: "共享屏幕",
+  videoPreview: "助手看到的画面",
+  videoUnavailable: "无法打开摄像头或屏幕。请在浏览器中允许后重试。",
   status: {
     idle: "空闲",
     connecting: "正在连接",

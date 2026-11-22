@@ -1255,3 +1255,225 @@ describe("sendImage", () => {
     expect(socket.ofType("image.input")).toEqual([]);
   });
 });
+
+describe("startVideo", () => {
+  type FakeVideo = {
+    opener: NonNullable<NonNullable<VoiceAgentOptions["internals"]>["video"]>;
+    opened: Array<{ source: unknown; options: unknown }>;
+    closed: number;
+    /** What the next frame is read from; undefined: the video has no pixels yet. */
+    showing: string | undefined;
+    end(): void;
+    fail?: Error;
+  };
+
+  function fakeVideo(): FakeVideo {
+    const stream = { id: "stream" } as unknown as MediaStream;
+    let ended: (() => void) | undefined;
+    const video: FakeVideo = {
+      opened: [],
+      closed: 0,
+      showing: "frame-1",
+      end: () => ended?.(),
+      opener: async (source, options) => {
+        if (video.fail) throw video.fail;
+        video.opened.push({ source, options });
+        return {
+          stream,
+          frame: () => video.showing,
+          onEnded: (listener) => void (ended = listener),
+          close: () => void (video.closed += 1)
+        };
+      }
+    };
+    return video;
+  }
+
+  /** Encodes a frame to its own name, at the size and quality asked for. */
+  const encoder =
+    (log: Array<[unknown, number, number]> = []): ImageEncoder =>
+    async (source) => ({
+      width: 1280,
+      height: 720,
+      async encode(width, _height, quality) {
+        log.push([source, width, quality]);
+        return `JPEG(${String(source)})`;
+      }
+    });
+
+  async function watching(capabilities: Record<string, unknown> = { imageInput: true, videoInput: true }) {
+    const video = fakeVideo();
+    const log: Array<[unknown, number, number]> = [];
+    const made = await started({ internals: { video: video.opener, imageEncoder: encoder(log) } });
+    made.socket.serverSends({ ...STARTED, capabilities });
+    const events: unknown[] = [];
+    made.agent.on("video", (event) => events.push(event));
+    return { ...made, video, log, events };
+  }
+
+  it("opens the camera and sends a frame at once, then one a second, small and as JPEG", async () => {
+    const { agent, socket, video, log, events } = await watching();
+    const stream = await agent.startVideo();
+    expect(stream).toEqual({ id: "stream" });
+    expect(video.opened).toEqual([{ source: "camera", options: {} }]);
+    expect(agent.videoSource).toBe("camera");
+    expect(agent.videoStream).toBe(stream);
+    expect(events).toEqual([{ active: true, source: "camera" }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.ofType("video.frame")).toEqual([
+      { type: "video.frame", image: "JPEG(frame-1)", mimeType: "image/jpeg" }
+    ]);
+    // 768 pixels on the longer side, at a lower quality than a picture.
+    expect(log).toEqual([["frame-1", 768, 0.6]]);
+    video.showing = "frame-2";
+    await vi.advanceTimersByTimeAsync(999);
+    expect(socket.ofType("video.frame")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(socket.ofType("video.frame").at(-1)).toMatchObject({ image: "JPEG(frame-2)" });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(socket.ofType("video.frame")).toHaveLength(5);
+    agent.stop();
+  });
+
+  it("takes the screen, a stream of the page's own, and the options", async () => {
+    const { agent, socket, video, log } = await watching();
+    await agent.startVideo("screen", { intervalMs: 2000, maxSide: 1024 });
+    expect(agent.videoSource).toBe("screen");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(log).toEqual([["frame-1", 1024, 0.6]]);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(socket.ofType("video.frame")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(socket.ofType("video.frame")).toHaveLength(2);
+    // A second video replaces the first: the screen is let go, and the relay hears of one video ending.
+    const own = { id: "mine" } as unknown as MediaStream;
+    await agent.startVideo(own, { intervalMs: 100 });
+    expect(video.closed).toBe(1);
+    expect(agent.videoSource).toBe("stream");
+    expect(video.opened.at(-1)).toEqual({ source: own, options: { intervalMs: 100 } });
+    // Never faster than the relay takes them.
+    const before = socket.ofType("video.frame").length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(socket.ofType("video.frame").length - before).toBe(3);
+    agent.stop();
+  });
+
+  it("stops: the camera is let go, the relay is told, and no frame follows", async () => {
+    const { agent, socket, video, events } = await watching();
+    await agent.startVideo();
+    await vi.advanceTimersByTimeAsync(0);
+    agent.stopVideo();
+    expect(video.closed).toBe(1);
+    expect(agent.videoSource).toBeUndefined();
+    expect(agent.videoStream).toBeUndefined();
+    expect(socket.json().at(-1)).toEqual({ type: "video.stop" });
+    expect(events.at(-1)).toEqual({ active: false });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(socket.ofType("video.frame")).toHaveLength(1);
+    // Stopping what is not on does nothing.
+    agent.stopVideo();
+    expect(socket.ofType("video.stop")).toHaveLength(1);
+    expect(events).toHaveLength(2);
+  });
+
+  it("stops when the user stops sharing in the browser, and when the conversation ends", async () => {
+    const first = await watching();
+    await first.agent.startVideo("screen");
+    first.video.end();
+    expect(first.agent.videoSource).toBeUndefined();
+    expect(first.video.closed).toBe(1);
+    expect(first.socket.ofType("video.stop")).toHaveLength(1);
+
+    const second = await watching();
+    await second.agent.startVideo();
+    second.agent.stop();
+    // A camera never stays on after the conversation.
+    expect(second.video.closed).toBe(1);
+    expect(second.events.at(-1)).toEqual({ active: false });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(second.socket.ofType("video.frame").length).toBeLessThanOrEqual(1);
+  });
+
+  it("opens nothing without a ready session or a relay that takes video", async () => {
+    const video = fakeVideo();
+    const idle = new VoiceAgent({ url: "https://relay.example.com", internals: { video: video.opener } });
+    expect(await idle.startVideo()).toBeNull();
+    // Pictures alone are not video: an older relay.
+    const { agent } = await watching({ imageInput: true });
+    expect(await agent.startVideo()).toBeNull();
+    expect(video.opened).toEqual([]);
+    expect(agent.videoSource).toBeUndefined();
+  });
+
+  it("says so when the camera cannot be opened, which is what the user's no looks like", async () => {
+    const { agent, video, events } = await watching();
+    video.fail = new Error("Permission denied");
+    await expect(agent.startVideo()).rejects.toMatchObject({
+      code: "video",
+      message: "Could not open the camera: Permission denied"
+    });
+    await expect(agent.startVideo("screen")).rejects.toMatchObject({ message: expect.stringContaining("the screen") });
+    expect(agent.videoSource).toBeUndefined();
+    expect(events).toEqual([]);
+  });
+
+  it("lets the camera go when the conversation ended while the browser was asking", async () => {
+    const { agent, video } = await watching();
+    const pending = agent.startVideo();
+    agent.stop();
+    expect(await pending).toBeNull();
+    expect(video.closed).toBe(1);
+    expect(agent.videoSource).toBeUndefined();
+  });
+
+  it("skips a frame while there are no pixels, the last one is still being made, or the connection is behind", async () => {
+    const waiting: Array<() => void> = [];
+    const video = fakeVideo();
+    const slow: ImageEncoder = async (source) => ({
+      width: 100,
+      height: 100,
+      encode: () => new Promise<string>((resolve) => waiting.push(() => resolve(`JPEG(${String(source)})`)))
+    });
+    const { agent, socket } = await started({ internals: { video: video.opener, imageEncoder: slow } });
+    socket.serverSends({ ...STARTED, capabilities: { videoInput: true } });
+    video.showing = undefined;
+    await agent.startVideo();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(waiting).toHaveLength(0);
+    video.showing = "frame-1";
+    await vi.advanceTimersByTimeAsync(3000);
+    // Three ticks, one frame in the making.
+    expect(waiting).toHaveLength(1);
+    waiting.splice(0).forEach((done) => done());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.ofType("video.frame")).toHaveLength(1);
+    // Audio comes first.
+    socket.bufferedAmount = 300 * 1024;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(waiting).toHaveLength(0);
+    socket.bufferedAmount = 0;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(waiting).toHaveLength(1);
+    agent.stop();
+  });
+
+  it("keeps the video across a reconnect, and sends frames again to a session that takes them", async () => {
+    const { agent, socket, video } = await watching();
+    await agent.startVideo();
+    await vi.advanceTimersByTimeAsync(0);
+    socket.serverCloses(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = FakeSocket.instances.at(-1)!;
+    expect(next).not.toBe(socket);
+    // Not ready yet: nothing goes out, and the camera stays open.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(next.ofType("video.frame")).toEqual([]);
+    expect(video.closed).toBe(0);
+    expect(agent.videoSource).toBe("camera");
+    next.open();
+    next.serverSends({ ...STARTED, capabilities: { videoInput: true } });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(next.ofType("video.frame").length).toBeGreaterThanOrEqual(1);
+    agent.stop();
+  });
+});

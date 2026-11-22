@@ -76,6 +76,9 @@ export type ChatLoop = {
   addContext(text: string): void;
   /** Holds a picture for the next user turn; it starts nothing and stops nothing. */
   addImage(image: EngineImage): void;
+  /** The newest frame of live video, in place of the one before: the next user
+   *  turn takes it as what the user is showing. `undefined`: the video stopped. */
+  setFrame(image: EngineImage | undefined): void;
   sendToolResult(callId: string, output: string): void;
   /** A line to speak as it is while this call is waited for, before the model carries on with its result. */
   sayDuringTool(callId: string, line: string): void;
@@ -200,6 +203,8 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   let history: ChatMessage[] = [];
   /** Pictures shown without words, waiting for the next user turn. */
   let pendingImages: EngineImage[] = [];
+  /** The newest frame of live video, until a turn takes it or a newer one comes. */
+  let frame: EngineImage | undefined;
   /** Tool calls waiting for `sendToolResult`, by call id. */
   const toolWaiters = new Map<string, (output: string) => void>();
   /** For each call being waited for: how the reply it belongs to speaks a line of the relay's own. */
@@ -400,6 +405,8 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
     let carriedPicture = false;
     /** Pictures taken for this turn, until the turn is in history or has failed. */
     let shown: EngineImage[] = [];
+    /** How many of them were shown as pictures: the rest is the frame of live video this turn took. */
+    let waited = 0;
     let settled = false;
 
     try {
@@ -408,7 +415,14 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
       } else {
         // Pictures shown earlier go with the next turn that has words.
         shown = userText ? pendingImages.slice(-MAX_PICTURES_IN_HISTORY) : [];
+        waited = shown.length;
         if (userText) pendingImages = [];
+        // With live video on, the turn also carries what the camera or the screen shows as it starts.
+        if (userText && frame) {
+          shown = [...shown, frame].slice(-MAX_PICTURES_IN_HISTORY);
+          waited = shown.length - 1;
+          frame = undefined;
+        }
         const userMessage: ChatMessage | undefined = userText
           ? {
               role: "user",
@@ -612,8 +626,11 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
       endReply(false);
     } finally {
       // A turn that was superseded (barge-in) before it reached history: its
-      // pictures were never seen, so they wait for the next turn.
-      if (!settled && shown.length) pendingImages = [...shown, ...pendingImages].slice(-MAX_PICTURES_IN_HISTORY);
+      // pictures were never seen, so they wait for the next turn. A frame of
+      // live video does not: by then it is no longer what the user is showing.
+      if (!settled && waited > 0) {
+        pendingImages = [...shown.slice(0, waited), ...pendingImages].slice(-MAX_PICTURES_IN_HISTORY);
+      }
     }
   }
 
@@ -632,6 +649,9 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
     },
     addImage(image) {
       pendingImages = [...pendingImages, image].slice(-MAX_PICTURES_IN_HISTORY);
+    },
+    setFrame(image) {
+      frame = image;
     },
     sendToolResult(callId, output) {
       const waiter = toolWaiters.get(callId);

@@ -18,7 +18,9 @@ export const CLIENT_EVENT_TYPES = [
   "vision.frames",
   "tool.result",
   "text.input",
-  "image.input"
+  "image.input",
+  "video.frame",
+  "video.stop"
 ] as const;
 
 export const SERVER_EVENT_TYPES = [

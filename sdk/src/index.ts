@@ -17,5 +17,6 @@ export type {
   VoiceAgentWarning
 } from "./client.js";
 export type { ImageSource } from "./image.js";
+export type { VideoKind, VideoOptions, VideoSource } from "./video.js";
 export type { AgentCapabilities, JsonSchema, ToolActivityEvent, TranscriptItem, VoiceGender } from "./protocol.js";
 export { PROTOCOL_VERSION, SDK_VERSION } from "./version.js";

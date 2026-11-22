@@ -3,6 +3,8 @@ import {
   IDLE_CLOSE_CODE,
   MAX_IMAGES_PER_SESSION,
   MIN_IMAGE_INTERVAL_MS,
+  MIN_VIDEO_FRAME_INTERVAL_MS,
+  VIDEO_FRAME_FRESH_MS,
   type ProviderCapabilities
 } from "../../../shared/agent";
 import { type AdasSeverity } from "../../../shared/adas";
@@ -726,15 +728,15 @@ export function createLiveProvider(
     saveResume();
   }
 
-  /** Notes for silent pictures that arrived while a user turn was open or a
-   *  reply was running. They are written after that turn's own entry. */
-  let pictureNotesWaiting = 0;
+  /** Notes for silent pictures, and for live video going on or off, that came
+   *  while a user turn was open or a reply was running. They are written after
+   *  that turn's own entry. */
+  let pictureNotesWaiting: string[] = [];
 
   function flushPictureNotes(save: boolean): void {
-    if (pictureNotesWaiting === 0 || !riderFinal || responseActive) return;
-    for (; pictureNotesWaiting > 0; pictureNotesWaiting -= 1) {
-      history.push({ speaker: "user", text: pictureNote() });
-    }
+    if (pictureNotesWaiting.length === 0 || !riderFinal || responseActive) return;
+    for (const text of pictureNotesWaiting) history.push({ speaker: "user", text });
+    pictureNotesWaiting = [];
     if (save) {
       if (history.length > MAX_HISTORY_TURNS) history = history.slice(-MAX_HISTORY_TURNS);
       saveResume();
@@ -2108,12 +2110,58 @@ export function createLiveProvider(
     // History order must match what the model saw, so while a user turn is
     // still open or a reply is running the note waits for that turn's own entry.
     if (general) {
-      pictureNotesWaiting += 1;
+      pictureNotesWaiting.push(pictureNote());
       flushPictureNotes(true);
     }
     // The silence clock starts over, unless a reply, a tool or a goodbye is
     // under way: the end of that restarts it.
     if (!responseActive && toolsRunning === 0 && !pendingEnd && !pendingFarewell) armIdle();
+  }
+
+  // ---- live video: what a camera or a shared screen shows -----------------
+
+  /** Whether frames are arriving. The history says when that began and ended. */
+  let videoOn = false;
+  let lastFrameAt: number | undefined;
+  let frameTimer: NodeJS.Timeout | undefined;
+
+  /** The video is over: said by the client, or no frame has come for a while. */
+  function endVideo(): void {
+    if (frameTimer) clearTimeout(frameTimer);
+    frameTimer = undefined;
+    lastFrameAt = undefined;
+    if (!videoOn) return;
+    videoOn = false;
+    engine?.sendVideoFrame?.(undefined);
+    if (general && !closed) {
+      pictureNotesWaiting.push(t("[用户关闭了实时画面]", "[the user turned the live video off]"));
+      flushPictureNotes(true);
+    }
+  }
+
+  /** Takes a frame for the model. Not an answer of the user's, and it does not
+   *  restart the silence clock: a camera left on is not somebody talking. */
+  function acceptVideoFrame(image: EngineImage): void {
+    const at = now();
+    // A stream, not a request: what comes too fast is dropped, and the next frame is as good.
+    if (lastFrameAt !== undefined && at - lastFrameAt < MIN_VIDEO_FRAME_INTERVAL_MS) return;
+    lastFrameAt = at;
+    engine?.sendVideoFrame?.(image);
+    if (frameTimer) clearTimeout(frameTimer);
+    // A client that went quiet without saying so: the last frame is no longer what the user is showing.
+    frameTimer = setTimeout(endVideo, VIDEO_FRAME_FRESH_MS);
+    frameTimer.unref?.();
+    if (videoOn) return;
+    videoOn = true;
+    if (general) {
+      pictureNotesWaiting.push(
+        t(
+          "[用户打开了实时画面：摄像头或屏幕上的内容会随用户说的话一起给你看]",
+          "[the user turned on live video: you see what their camera or screen shows along with what they say]"
+        )
+      );
+      flushPictureNotes(true);
+    }
   }
 
   /** Says a line of the relay's own in the assistant's voice: the greeting, a
@@ -2664,11 +2712,22 @@ export function createLiveProvider(
       if (text) acceptTypedTurn(text, image);
       else acceptSilentImage(image);
     },
+    async videoFrame(image: EngineImage) {
+      if (closed) return;
+      // Still connecting: the next frame is a moment away.
+      if (!engineReady) return;
+      if (!engine?.sendVideoFrame) return false;
+      acceptVideoFrame(image);
+    },
+    async videoStop() {
+      if (!closed) endVideo();
+    },
     async toolResult(event) {
       tools?.clientResult(event);
     },
     async close() {
       closed = true;
+      endVideo();
       closing.abort();
       audioActive = false;
       engineReady = false;

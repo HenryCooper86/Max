@@ -430,7 +430,9 @@ export function createMaxSpeechEngine(
       chat.sayDuringTool(callId, line);
     },
     // Only when the owner said the chat model sees pictures (LOCAL_LLM_IMAGES).
-    ...(chatStage().images ? { sendImage } : {}),
+    ...(chatStage().images
+      ? { sendImage, sendVideoFrame: (image: EngineImage | undefined) => chat.setFrame(image) }
+      : {}),
     sendText(text) {
       if (closed) return;
       pendingUser = undefined;

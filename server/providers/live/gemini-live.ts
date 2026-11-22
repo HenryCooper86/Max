@@ -116,6 +116,7 @@ export function createGeminiLiveEngine(
   let events: EngineEvents | undefined;
   let closedByRelay = false;
   let ready = false;
+  let lastVideoAt = 0;
   let replying = false;
   let riderText = "";
   let riderOpen = false;
@@ -333,6 +334,13 @@ export function createGeminiLiveEngine(
       riderOpen = false;
       riderText = "";
       sendMessage({ realtimeInput: { text } });
+    },
+    sendVideoFrame(image) {
+      // Gemini Live takes video itself, a frame a second: it sees each one as it comes.
+      const at = Date.now();
+      if (!ready || !image || at - lastVideoAt < 1_000) return;
+      lastVideoAt = at;
+      sendMessage({ realtimeInput: { video: { data: image.data, mimeType: image.mimeType } } });
     },
     sendImage(image, text) {
       if (!ready) return;

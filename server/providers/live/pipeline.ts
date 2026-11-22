@@ -542,7 +542,9 @@ export function createPipelineEngine(
       chat.sayDuringTool(callId, line);
     },
     // Only when the owner said the chat model sees pictures (PIPELINE_LLM_IMAGES / LOCAL_LLM_IMAGES).
-    ...(settings.llm.images ? { sendImage } : {}),
+    ...(settings.llm.images
+      ? { sendImage, sendVideoFrame: (image: EngineImage | undefined) => chat.setFrame(image) }
+      : {}),
     sendText(text) {
       if (closed) return;
       pendingUser = undefined;

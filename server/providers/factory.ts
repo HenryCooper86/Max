@@ -153,6 +153,8 @@ export function createSelectableProvider(create: (requested: string | undefined)
     speakNavPrompt: (speech) => chosen?.speakNavPrompt?.(speech),
     textInput: async (text) => (chosen?.textInput ? chosen.textInput(text) : false),
     imageInput: async (image, text) => (chosen?.imageInput ? chosen.imageInput(image, text) : false),
+    videoFrame: async (image) => (chosen?.videoFrame ? chosen.videoFrame(image) : false),
+    videoStop: async () => chosen?.videoStop?.(),
     toolResult: async (event) => chosen?.toolResult?.(event)
   };
 }

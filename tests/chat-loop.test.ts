@@ -681,3 +681,65 @@ describe("chat loop pictures", () => {
     expect(reported).not.toMatch(/[A-Za-z0-9+/=_-]{40,}/);
   });
 });
+
+describe("chat loop live video", () => {
+  const pic = (name: string) => ({ data: name, mimeType: "image/jpeg" });
+  const imagePart = (name: string) => ({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${name}` } });
+
+  it("gives a turn the newest frame, once", async () => {
+    const { loop, chats } = setup([() => sseOf([text("A cup.")]), () => sseOf([text("Still a cup.")])]);
+    loop.setFrame(pic("F1"));
+    loop.setFrame(pic("F2"));
+    // A line of the relay's own takes no frame.
+    await loop.reply(undefined, "Welcome.");
+    await loop.reply("what is this?");
+    expect(chats[0].messages.at(-1)).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "what is this?" }, imagePart("F2")]
+    });
+    // No new frame since: the next turn carries none of its own.
+    await loop.reply("and now?");
+    expect(chats[1].messages.at(-1)).toEqual({ role: "user", content: "and now?" });
+  });
+
+  it("carries a frame after a picture that was shown, and never more than two pictures", async () => {
+    const { loop, chats } = setup([() => sseOf([text("Ok.")])]);
+    loop.addImage(pic("A"));
+    loop.addImage(pic("B"));
+    loop.setFrame(pic("F"));
+    await loop.reply("compare them");
+    expect(chats[0].messages.at(-1).content).toEqual([
+      { type: "text", text: "compare them" },
+      imagePart("B"),
+      imagePart("F")
+    ]);
+  });
+
+  it("forgets the frame when the video stops", async () => {
+    const { loop, chats } = setup([() => sseOf([text("Ok.")])]);
+    loop.setFrame(pic("F"));
+    loop.setFrame(undefined);
+    await loop.reply("what do you see?");
+    expect(chats[0].messages.at(-1)).toEqual({ role: "user", content: "what do you see?" });
+  });
+
+  it("does not bring a frame back when its turn was cut off, but does a picture that was shown", async () => {
+    const { loop, chats, request } = setup([() => sseOf([text("Red.")])]);
+    request.mockImplementationOnce(async (_url: unknown, init?: RequestInit) => {
+      const body = new ReadableStream({
+        start(controller) {
+          init!.signal!.addEventListener("abort", () => controller.error(new Error("aborted")));
+        }
+      });
+      return new Response(body, { status: 200 });
+    });
+    loop.addImage(pic("A"));
+    loop.setFrame(pic("F"));
+    const first = loop.reply("what colour?");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    loop.stop();
+    await first;
+    await loop.reply("I mean the picture");
+    expect(chats[0].messages.at(-1).content).toEqual([{ type: "text", text: "I mean the picture" }, imagePart("A")]);
+  });
+});

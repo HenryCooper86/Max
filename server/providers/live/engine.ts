@@ -120,6 +120,11 @@ export type VoiceEngine = {
    *  conversation and the model sees it with the next turn. Engines whose
    *  upstream or model cannot see pictures omit this. */
   sendImage?(image: EngineImage, text?: string): void;
+  /** The newest frame of the user's live video. It starts nothing: the model
+   *  sees it with the user's next turn, or as it arrives where the upstream
+   *  takes video itself. `undefined`: the video has stopped. Engines that
+   *  take pictures take these. */
+  sendVideoFrame?(image: EngineImage | undefined): void;
   /** Replace the tools the model may call (the conversation moved to another
    *  agent). Engines whose upstream fixes the tools at connect omit this; the
    *  session then offers every tool up front and refuses the ones out of turn. */

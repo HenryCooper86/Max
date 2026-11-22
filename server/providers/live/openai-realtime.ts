@@ -245,6 +245,11 @@ export function createRealtimeEngine(
   let closedByRelay = false;
   let ready = false;
   let responseActive = false;
+  /** The newest frame of live video, until a turn of the user's begins. */
+  let frame: EngineImage | undefined;
+  /** The frames the conversation holds, oldest first, by the item ids given to them. */
+  const frameItems: string[] = [];
+  let framesShown = 0;
   // Transcript of the wearer's turn in progress, by upstream item.
   let riderItem: string | undefined;
   let riderText = "";
@@ -269,6 +274,30 @@ export function createRealtimeEngine(
   function createResponse(): void {
     createPending = true;
     sendEvent({ type: "response.create" });
+  }
+
+  /**
+   * Puts the newest frame of live video into the conversation, ahead of the
+   * turn that is beginning. The conversation keeps the last two: an older
+   * frame is no longer what the user is showing, and every one is paid for
+   * again with each reply.
+   */
+  function showFrame(): void {
+    if (!ready || !frame) return;
+    framesShown += 1;
+    const id = `frame_${framesShown}`;
+    sendEvent({
+      type: "conversation.item.create",
+      item: {
+        id,
+        type: "message",
+        role: "user",
+        content: [{ type: "input_image", image_url: `data:${frame.mimeType};base64,${frame.data}` }]
+      }
+    });
+    frame = undefined;
+    frameItems.push(id);
+    while (frameItems.length > 2) sendEvent({ type: "conversation.item.delete", item_id: frameItems.shift() });
   }
 
   function requestResponse(): void {
@@ -348,6 +377,8 @@ export function createRealtimeEngine(
       riderPending = false;
       riderText = "";
       riderItem = undefined;
+      // With live video on, the turn that begins is about what the camera or the screen shows now.
+      showFrame();
       events?.onSpeechStarted();
       return;
     }
@@ -472,6 +503,7 @@ export function createRealtimeEngine(
       if (!ready) return;
       continueAfterTools = false;
       awaitingCalls.clear();
+      showFrame();
       sendEvent({
         type: "conversation.item.create",
         item: { type: "message", role: "user", content: [{ type: "input_text", text }] }
@@ -501,6 +533,9 @@ export function createRealtimeEngine(
               }
             });
             if (text) requestResponse();
+          },
+          sendVideoFrame(image: EngineImage | undefined) {
+            frame = image;
           }
         }
       : {}),

@@ -52,7 +52,11 @@ function slowTool(name = "make_report") {
   return { tool, finish, fail, signals };
 }
 
-async function setup(serverTools: ToolDefinition[], engineExtra: Partial<VoiceEngine> = {}) {
+async function setup(
+  serverTools: ToolDefinition[],
+  engineExtra: Partial<VoiceEngine> = {},
+  pageTools: Array<{ name: string; description: string; background?: boolean }> = []
+) {
   const client = new FakeClient();
   let events!: EngineEvents;
   const toolResults: Array<[string, any]> = [];
@@ -80,7 +84,7 @@ async function setup(serverTools: ToolDefinition[], engineExtra: Partial<VoiceEn
     { wakeWord: false, fetchWeather: async () => Promise.reject(new Error("offline")), serverTools: () => serverTools }
   );
   await provider.start(
-    { type: "session.start", sampleRate: 16000, channels: 1, language: "en" },
+    { type: "session.start", sampleRate: 16000, channels: 1, language: "en", tools: pageTools },
     { sessionId: "sess-1", userId: "u-1" }
   );
   await provider.startAudio();
@@ -131,6 +135,37 @@ describe("background tools", () => {
     finishReply("Your report is ready: twelve pages.");
     expect(client.ofType("transcript").at(-1)).toMatchObject({ speaker: "agent", final: true });
     expect(client.ofType("transcript").at(-1)!.text).toContain("twelve pages");
+    await provider.close();
+  });
+
+  it("does the same for a tool the page runs, when the page marks it so", async () => {
+    const { client, provider, events, toolResults, texts, openReply, finishReply } = await setup([], {}, [
+      { name: "export_page", description: "Exports the page as a PDF", background: true },
+      { name: "scroll", description: "Scrolls the page" }
+    ]);
+    openReply("export this page");
+    events().onToolCall!({ callId: "c1", name: "export_page", arguments: "{}" });
+    await vi.waitFor(() => expect(toolResults).toHaveLength(1));
+    // The model is answered at once; the page has the call and is working on it.
+    expect(toolResults[0]).toEqual(["c1", expect.objectContaining({ status: "started" })]);
+    expect(client.ofType("tool.call")).toEqual([expect.objectContaining({ callId: "c1", name: "export_page" })]);
+    finishReply("I have started the export.");
+    await flush();
+    expect(texts).toEqual([]);
+
+    await provider.toolResult!({ type: "tool.result", callId: "c1", output: { file: "page.pdf" } });
+    await vi.waitFor(() => expect(texts).toHaveLength(1));
+    expect(texts[0]).toContain('"export_page"');
+    expect(texts[0]).toContain('{"file":"page.pdf"}');
+
+    // A page tool without the mark is waited for, as before.
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c2", name: "scroll", arguments: "{}" });
+    await flush();
+    expect(toolResults).toHaveLength(1);
+    await provider.toolResult!({ type: "tool.result", callId: "c2", output: { done: true } });
+    await vi.waitFor(() => expect(toolResults).toHaveLength(2));
+    expect(toolResults[1]).toEqual(["c2", { done: true }]);
     await provider.close();
   });
 

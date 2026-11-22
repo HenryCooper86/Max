@@ -55,9 +55,16 @@ export interface ClientTool<Args extends Record<string, unknown> = Record<string
   /** JSON Schema object for the arguments. Omit for a tool without arguments. */
   parameters?: JsonSchema;
   /**
+   * For work that takes a while. The agent is told at once that it has
+   * started and carries on talking; the result is reported to the user when
+   * the handler finishes. Such a call may run for up to ~110 s.
+   */
+  background?: boolean;
+  /**
    * Runs the tool. The return value (anything JSON-serializable) goes back to
    * the agent; a thrown error or rejected promise is reported as a tool error.
-   * Calls that run longer than ~14 s are abandoned with a "timeout" error.
+   * Calls that run longer than ~14 s (~110 s for a background tool) are
+   * abandoned with a "timeout" error.
    */
   handler(args: Args): unknown;
 }
@@ -1041,7 +1048,9 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("timeout")), this.options.internals?.toolTimeoutMs ?? 14000);
+        // Just under the relay's own limit for the call, so the page's answer is the one that counts.
+        const limit = this.options.internals?.toolTimeoutMs ?? (tool.background ? 110_000 : 14_000);
+        timer = setTimeout(() => reject(new Error("timeout")), limit);
       });
       const output = await Promise.race([Promise.resolve().then(() => tool.handler(call.arguments)), timeout]);
       reply(output === undefined ? {} : { output });

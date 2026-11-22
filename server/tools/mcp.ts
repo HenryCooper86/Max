@@ -44,10 +44,17 @@ export type McpServerConfig = {
   prefix?: string;
   /** Per request. */
   timeoutMs: number;
+  /** MCP tool names the conversation does not wait for (see `background` on a tool). */
+  backgroundTools?: string[];
+  /** Per call of a background tool. Two minutes when absent. */
+  backgroundTimeoutMs?: number;
 };
 
 const PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_TIMEOUT_MS = 15_000;
+/** A background tool is not holding the conversation up, so it may take longer. */
+const DEFAULT_BACKGROUND_TIMEOUT_MS = 120_000;
+const MAX_BACKGROUND_TIMEOUT_MS = 600_000;
 const MAX_TIMEOUT_MS = 60_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_LIST_PAGES = 10;
@@ -106,7 +113,22 @@ export function mcpServerFrom(raw: unknown): { server?: McpServerConfig; problem
       };
     prefix = raw.prefix;
   }
+  let backgroundTools: string[] | undefined;
+  if (raw.backgroundTools !== undefined) {
+    if (
+      !Array.isArray(raw.backgroundTools) ||
+      !raw.backgroundTools.every((item) => typeof item === "string" && item.trim() !== "")
+    )
+      return { problem: `mcp server ${name}: backgroundTools must be a list of tool names` };
+    backgroundTools = (raw.backgroundTools as string[]).map((item) => item.trim());
+    const hidden = backgroundTools.filter((item) => allowedTools && !allowedTools.includes(item));
+    if (hidden.length > 0)
+      return {
+        problem: `mcp server ${name}: backgroundTools names ${hidden.join(", ")}, which allowedTools leaves out`
+      };
+  }
   const timeout = Number(raw.timeoutMs);
+  const backgroundTimeout = Number(raw.backgroundTimeoutMs);
   return {
     server: {
       name,
@@ -114,7 +136,16 @@ export function mcpServerFrom(raw: unknown): { server?: McpServerConfig; problem
       headers,
       ...(allowedTools ? { allowedTools } : {}),
       ...(prefix ? { prefix } : {}),
-      timeoutMs: Number.isFinite(timeout) && timeout > 0 ? Math.min(timeout, MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS
+      timeoutMs: Number.isFinite(timeout) && timeout > 0 ? Math.min(timeout, MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS,
+      ...(backgroundTools
+        ? {
+            backgroundTools,
+            backgroundTimeoutMs:
+              Number.isFinite(backgroundTimeout) && backgroundTimeout > 0
+                ? Math.min(backgroundTimeout, MAX_BACKGROUND_TIMEOUT_MS)
+                : DEFAULT_BACKGROUND_TIMEOUT_MS
+          }
+        : {})
     }
   };
 }
@@ -239,7 +270,8 @@ export async function loadMcpTools(
   async function post(
     body: Record<string, unknown>,
     expect: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    timeoutMs = server.timeoutMs
   ): Promise<Posted> {
     const url = expandEnv(server.url, env);
     const missing = new Set(url.missing);
@@ -259,7 +291,7 @@ export async function loadMcpTools(
     }
     if (!urlAllowed(target))
       throw new McpError(`${label} URL must be https (plain http only to local or private hosts)`);
-    const timeout = AbortSignal.timeout(server.timeoutMs);
+    const timeout = AbortSignal.timeout(timeoutMs);
     const combined = signal ? AbortSignal.any([timeout, signal]) : timeout;
     try {
       const response = await request(target.href, {
@@ -284,7 +316,7 @@ export async function loadMcpTools(
       return { status: response.status, headers: response.headers, message };
     } catch (error) {
       if (error instanceof McpError) throw new McpError(`${label}: ${error.message}`);
-      if (timeout.aborted) throw new McpError(`${label} did not answer within ${server.timeoutMs / 1000} s`);
+      if (timeout.aborted) throw new McpError(`${label} did not answer within ${timeoutMs / 1000} s`);
       if (signal?.aborted) throw new McpError(`call to the ${label} was cancelled`);
       throw new McpError(`could not reach the ${label}`);
     }
@@ -339,11 +371,16 @@ export async function loadMcpTools(
     return handshaking;
   };
 
-  async function rpc(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+  async function rpc(
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+    timeoutMs?: number
+  ): Promise<unknown> {
     for (let attempt = 0; ; attempt++) {
       const usedSession = session.id;
       const id = nextId++;
-      const posted = await post({ id, method, params }, id, signal);
+      const posted = await post({ id, method, params }, id, signal, timeoutMs);
       // The session is gone: handshake once more and retry once.
       if (usedSession && (posted.status === 404 || posted.status === 400) && attempt === 0) {
         if (session.id === usedSession) await reconnect();
@@ -355,8 +392,13 @@ export async function loadMcpTools(
     }
   }
 
-  async function callTool(name: string, args: Record<string, unknown>, context: ToolContext): Promise<unknown> {
-    const result = await rpc("tools/call", { name, arguments: args }, context.signal);
+  async function callTool(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolContext,
+    timeoutMs: number
+  ): Promise<unknown> {
+    const result = await rpc("tools/call", { name, arguments: args }, context.signal, timeoutMs);
     if (!isRecord(result)) throw new McpError(`${label} sent an unreadable result for ${name}`);
     const { texts, parts } = textOf(result.content);
     if (result.isError === true) throw new Error(texts.join("\n") || `${name} failed on the ${label}`);
@@ -405,13 +447,20 @@ export async function loadMcpTools(
         continue;
       }
       seen.add(spec.name);
+      const background = server.backgroundTools?.includes(mcpName) === true;
+      const timeoutMs = background ? (server.backgroundTimeoutMs ?? DEFAULT_BACKGROUND_TIMEOUT_MS) : server.timeoutMs;
       tools.push({
         name: spec.name,
         description: spec.description,
         parameters: spec.parameters as ToolParameters,
-        timeoutMs: server.timeoutMs,
-        handler: (args, context) => callTool(mcpName, args, context)
+        timeoutMs,
+        ...(background ? { background: true } : {}),
+        handler: (args, context) => callTool(mcpName, args, context, timeoutMs)
       });
+    }
+    for (const name of server.backgroundTools ?? []) {
+      if (!listed.some((item) => isRecord(item) && item.name === name))
+        problems.push(`${label}: backgroundTools names ${name}, which the server does not have`);
     }
   } catch (error) {
     return {

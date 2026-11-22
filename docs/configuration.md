@@ -55,10 +55,10 @@ module path is code on the server's disk, so it is set by whoever deploys the re
 
 Two more keys add tools from other places:
 
-| Key          | Type                    | What it does                                                                                                                                                                  |
-| ------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mcpServers` | array (≤ 8)             | Remote MCP servers whose tools the assistant may use: `name`, `url`, `headers`, `allowedTools`, `prefix`, `timeoutMs`. See [remote MCP servers](tools.md#remote-mcp-servers). |
-| `knowledge`  | string, array or object | Documents the assistant searches with `search_knowledge`: `files`, `text`, `maxResults`, `chunkChars`. See [knowledge base](tools.md#knowledge-base).                         |
+| Key          | Type                    | What it does                                                                                                                                                                                                            |
+| ------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcpServers` | array (≤ 8)             | Remote MCP servers whose tools the assistant may use: `name`, `url`, `headers`, `allowedTools`, `prefix`, `timeoutMs`, `backgroundTools`, `backgroundTimeoutMs`. See [remote MCP servers](tools.md#remote-mcp-servers). |
+| `knowledge`  | string, array or object | Documents the assistant searches with `search_knowledge`: `files`, `text`, `maxResults`, `chunkChars`. See [knowledge base](tools.md#knowledge-base).                                                                   |
 
 ### Conversation, agents and records
 

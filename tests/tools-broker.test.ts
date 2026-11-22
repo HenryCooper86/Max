@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { ToolActivityEvent, ToolCallEvent } from "../shared/agent";
 import type { Logger } from "../server/logger";
 import { createToolBroker } from "../server/tools/broker";
-import type { ToolDefinition, ToolSpec } from "../server/tools";
+import type { ClientToolDeclaration, ToolDefinition, ToolSpec } from "../server/tools";
 
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
 
 function setup(
   options: {
     serverTools?: ToolDefinition[];
-    clientTools?: ToolSpec[];
+    clientTools?: ClientToolDeclaration[];
     clientTimeoutMs?: number;
     now?: () => number;
   } = {}
@@ -46,17 +46,55 @@ const clientSpec = (name = "cli"): ToolSpec => ({
 });
 
 describe("background tools", () => {
-  it("knows which tools the conversation does not wait for: server tools marked so, and no others", () => {
+  it("knows which tools the conversation does not wait for: the ones marked so, and no others", () => {
     const { broker } = setup({
       serverTools: [serverTool({ name: "slow", background: true }), serverTool({ name: "quick" })],
-      clientTools: [clientSpec("cli")]
+      clientTools: [clientSpec("cli"), { ...clientSpec("slow_cli"), background: true }]
     });
     expect(broker.runsInBackground("slow")).toBe(true);
     expect(broker.runsInBackground("quick")).toBe(false);
     expect(broker.runsInBackground("cli")).toBe(false);
+    expect(broker.runsInBackground("slow_cli")).toBe(true);
     expect(broker.runsInBackground("nothing")).toBe(false);
-    // The mark is the relay's business: the model's view of the tool does not carry it.
-    expect(Object.keys(broker.specs()[0]!).sort()).toEqual(["description", "name", "parameters"]);
+    // The mark is the relay's business: the model's view of a tool does not carry it.
+    for (const spec of broker.specs()) expect(Object.keys(spec).sort()).toEqual(["description", "name", "parameters"]);
+  });
+
+  it("goes by the server's tool when a page declares one of the same name", () => {
+    const { broker } = setup({
+      serverTools: [serverTool({ name: "same" })],
+      clientTools: [{ ...clientSpec("same"), background: true }]
+    });
+    expect(broker.runsInBackground("same")).toBe(false);
+  });
+
+  it("gives a background tool in the page two minutes, where another gets fifteen seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const { broker, sent } = setup({
+        clientTools: [clientSpec("cli"), { ...clientSpec("slow_cli"), background: true }]
+      });
+      const quick = broker.run({ callId: "c1", name: "cli", arguments: "{}" });
+      const slow = broker.run({ callId: "c2", name: "slow_cli", arguments: "{}" });
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(await quick).toEqual({
+        ok: false,
+        output: JSON.stringify({ error: "the app did not answer within 15 s" })
+      });
+      // The slow one is still waiting, and its answer still counts a minute and a half in.
+      await vi.advanceTimersByTimeAsync(74_000);
+      broker.clientResult({ type: "tool.result", callId: "c2", output: "report ready" });
+      expect(await slow).toEqual({ ok: true, output: "report ready" });
+      expect(sent.filter((event) => event.type === "tool.call")).toHaveLength(2);
+      const late = broker.run({ callId: "c3", name: "slow_cli", arguments: "{}" });
+      await vi.advanceTimersByTimeAsync(121_000);
+      expect(await late).toEqual({
+        ok: false,
+        output: JSON.stringify({ error: "the app did not answer within 120 s" })
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

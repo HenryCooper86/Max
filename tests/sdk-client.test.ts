@@ -336,6 +336,28 @@ describe("tool calls", () => {
     expect(calls).toEqual(["echo"]);
   });
 
+  it("declares a background tool as one, and gives its handler longer", async () => {
+    const slow = () => new Promise((resolve) => setTimeout(() => resolve("made"), 60_000));
+    const { socket } = await started({
+      tools: [
+        { name: "export_page", description: "d", background: true, handler: slow },
+        { name: "quick", description: "d", handler: slow }
+      ],
+      internals: { toolTimeoutMs: undefined }
+    });
+    expect(socket.json()[0].tools).toEqual([
+      { name: "export_page", description: "d", background: true },
+      { name: "quick", description: "d" }
+    ]);
+    socket.serverSends(call("export_page"));
+    socket.serverSends({ ...call("quick"), callId: "c2" });
+    await vi.advanceTimersByTimeAsync(15_000);
+    // The ordinary tool has run out of time; the background one is still at work.
+    expect(socket.ofType("tool.result")).toEqual([{ type: "tool.result", callId: "c2", error: "timeout" }]);
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(socket.ofType("tool.result")[1]).toEqual({ type: "tool.result", callId: "c1", output: "made" });
+  });
+
   it("awaits async handlers", async () => {
     const { socket } = await started({
       tools: [{ name: "slow", description: "d", handler: () => new Promise((r) => setTimeout(() => r("done"), 10)) }]

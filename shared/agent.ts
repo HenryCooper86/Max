@@ -311,6 +311,10 @@ type ClientToolSpec = {
   description: string;
   /** JSON Schema for the arguments (an object schema). Omitted → no arguments. */
   parameters?: Record<string, unknown>;
+  /** The conversation does not wait for this tool: the model is told at once
+   *  that it has started, and its result is reported when it arrives (within
+   *  two minutes). */
+  background?: boolean;
 };
 
 /** Client → server: the answer to one `tool.call`. Exactly one per call. */

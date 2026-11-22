@@ -42,7 +42,7 @@ it is not built; see [not built yet](#not-built-yet).
 | Client-side functions                  | Yes | The page or app runs the tool: scroll, fill a form, add to cart.                                                                                      |
 | Remote MCP servers                     | Yes | Streamable HTTP. Not stdio servers.                                                                                                                   |
 | Knowledge base                         | Yes | Search over your files, built in: keyword (BM25), or hybrid with any embeddings endpoint. Up to 100,000 passages, with the embeddings cached on disk. |
-| Tools that keep running while it talks | Yes | Mark a webhook or code tool `background`: the agent carries on and reports the result when it comes.                                                  |
+| Tools that keep running while it talks | Yes | Mark a tool `background`, wherever it runs (webhook, code, the page, an MCP server): the agent carries on and reports the result when it comes.       |
 
 ### Phone calls
 
@@ -112,12 +112,11 @@ In rough order of how much they would matter to most users:
    web SDK has a method for it; the iOS and Android clients and the widget do not, so a native client sends the
    `image.input` event itself. The OpenAI and Gemini paths were built to the vendors' documentation and not run against
    their servers.
-5. **Background tools for client tools and MCP servers.** They exist for webhook and code tools.
-6. **Guardrails beyond redaction**, such as moderation of what the agent says.
-7. **A visual flow builder, agent versions and A/B tests.**
-8. **Warm transfers and batch outbound campaigns.**
-9. **WebRTC in the native iOS and Android clients.** The web SDK has it; the native clients use the WebSocket.
-10. **Avatars.**
+5. **Guardrails beyond redaction**, such as moderation of what the agent says.
+6. **A visual flow builder, agent versions and A/B tests.**
+7. **Warm transfers and batch outbound campaigns.**
+8. **WebRTC in the native iOS and Android clients.** The web SDK has it; the native clients use the WebSocket.
+9. **Avatars.**
 
 Conversation analysis, the conversation webhook, traces and phone calls currently apply to the relay's own assistant.
 Max Cloud projects have their own conversation history in the console and do not have these yet.

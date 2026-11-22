@@ -44,6 +44,7 @@ export type ClientToolSpec = {
   name: string;
   description: string;
   parameters?: JsonSchema;
+  background?: boolean;
 };
 
 /** What the relay reports it can do, from `session.started`. */
@@ -276,12 +277,13 @@ export const TOOL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 
 /** Strips handlers (and anything else not on the wire) from tool definitions. */
 export function serializeTools(
-  tools: ReadonlyArray<{ name: string; description: string; parameters?: JsonSchema }>
+  tools: ReadonlyArray<{ name: string; description: string; parameters?: JsonSchema; background?: boolean }>
 ): ClientToolSpec[] {
   return tools.slice(0, MAX_TOOLS).map((tool) => ({
     name: tool.name,
     description: tool.description,
-    ...(tool.parameters ? { parameters: tool.parameters } : {})
+    ...(tool.parameters ? { parameters: tool.parameters } : {}),
+    ...(tool.background ? { background: true } : {})
   }));
 }
 
@@ -291,7 +293,7 @@ export type SessionStartInput = {
   voice?: VoiceGender;
   backend?: string;
   context?: string;
-  tools?: ReadonlyArray<{ name: string; description: string; parameters?: JsonSchema }>;
+  tools?: ReadonlyArray<{ name: string; description: string; parameters?: JsonSchema; background?: boolean }>;
   /** The previous session's resume id, when reconnecting. */
   resume?: string;
 };

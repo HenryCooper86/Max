@@ -57,6 +57,12 @@ export type ToolSpec = {
   parameters: ToolParameters;
 };
 
+/** A tool the client runs, as its `session.start` declared it. */
+export type ClientToolDeclaration = ToolSpec & {
+  /** The conversation does not wait for it: see `background` on {@link ToolDefinition}. */
+  background?: boolean;
+};
+
 /** What a code tool's handler gets besides its arguments. */
 export type ToolContext = {
   /** Unique id of this call. */

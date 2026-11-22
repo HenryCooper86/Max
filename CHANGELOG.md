@@ -71,9 +71,11 @@
 
 ### Tools and knowledge
 
-- Background tools. A webhook or code tool marked `"background": true` does not hold the conversation up: the
-  assistant says the work has started, carries on, and reports the result when it comes. Up to four at once in a
-  conversation, and a background webhook may take up to 10 minutes. See [tools](docs/tools.md#background-tools).
+- Background tools. A tool marked `"background": true` does not hold the conversation up: the assistant says the work
+  has started, carries on, and reports the result when it comes. It works for webhook and code tools, for tools the
+  page runs (`background: true` in `defineClientTool`, or in `session.start.tools`), and for tools of an MCP server
+  (`backgroundTools`). Up to four at once in a conversation. A background webhook or MCP tool may take up to 10
+  minutes, and one in the page two. See [tools](docs/tools.md#background-tools).
 - The knowledge base takes up to 100,000 passages with embeddings (it was 5,000), set with `KNOWLEDGE_MAX_PASSAGES`.
   Embeddings are cached on disk (`KNOWLEDGE_EMBEDDINGS_CACHE`), so a restart embeds nothing again and an edited file
   embeds only its changed passages. Embedding retries after a rate limit or a server error, and an interrupted start

@@ -38,6 +38,9 @@
                   },
                   "parameters": {
                     "type": "object"
+                  },
+                  "background": {
+                    "type": "boolean"
                   }
                 },
                 "required": ["name", "description"]

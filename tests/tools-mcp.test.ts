@@ -103,6 +103,23 @@ describe("mcpServerFrom", () => {
     expect(mcpServerFrom({ ...ok, timeoutMs: 5000 }).server?.timeoutMs).toBe(5000);
   });
 
+  it("reads the tools the conversation does not wait for, and how long they may take", () => {
+    expect(mcpServerFrom({ ...ok, backgroundTools: [" make_report "] }).server).toMatchObject({
+      backgroundTools: ["make_report"],
+      backgroundTimeoutMs: 120_000
+    });
+    const timed = (backgroundTimeoutMs: number) =>
+      mcpServerFrom({ ...ok, backgroundTools: ["make_report"], backgroundTimeoutMs }).server?.backgroundTimeoutMs;
+    expect(timed(30_000)).toBe(30_000);
+    expect(timed(9_999_999)).toBe(600_000);
+    expect(mcpServerFrom({ ...ok, backgroundTools: "make_report" }).problem).toContain("backgroundTools");
+    expect(mcpServerFrom({ ...ok, backgroundTools: ["a", ""] }).problem).toContain("backgroundTools");
+    // A tool that allowedTools hides cannot be a background tool: say so, rather than ignore it.
+    expect(mcpServerFrom({ ...ok, allowedTools: ["search"], backgroundTools: ["make_report"] }).problem).toContain(
+      "allowedTools leaves out"
+    );
+  });
+
   it("keeps placeholders, headers, allowedTools and prefix", () => {
     const { server } = mcpServerFrom({
       name: "crm",
@@ -282,6 +299,44 @@ describe.each([false, true])("loadMcpTools (sse: %s)", (sse) => {
     const { tools } = await loadMcpTools(config(url));
     await expect(tools[0].handler({}, context())).rejects.toThrow("HTTP 404");
     expect(calls).toBe(2);
+  });
+});
+
+describe("loadMcpTools background tools", () => {
+  const report = { name: "make_report", description: "Makes a long report" };
+
+  it("marks the listed tools, by the server's own names, and gives them the longer limit", async () => {
+    const { url } = await fake({ tools: [echo, report] });
+    const { tools, problems } = await loadMcpTools(
+      config(url, { prefix: "crm", backgroundTools: ["make_report"], backgroundTimeoutMs: 90_000 })
+    );
+    expect(problems).toEqual([]);
+    expect(find(tools, "crm_make_report")).toMatchObject({ background: true, timeoutMs: 90_000 });
+    expect(find(tools, "crm_echo").background).toBeUndefined();
+    expect(find(tools, "crm_echo").timeoutMs).toBe(2000);
+  });
+
+  it("says when a listed tool is not on the server", async () => {
+    const { url } = await fake({ tools: [echo] });
+    const { tools, problems } = await loadMcpTools(config(url, { backgroundTools: ["make_report"] }));
+    expect(tools.map((tool) => tool.name)).toEqual(["echo"]);
+    expect(problems).toEqual([expect.stringContaining("backgroundTools names make_report")]);
+  });
+
+  it("waits for a background tool beyond the server's ordinary limit", async () => {
+    const { url } = await fake({
+      tools: [echo, report],
+      intercept: (message, res) => {
+        if (message.method !== "tools/call") return false;
+        setTimeout(() => send(res, false, message.id, { content: [{ type: "text", text: "done" }] }), 400);
+        return true;
+      }
+    });
+    const { tools } = await loadMcpTools(
+      config(url, { timeoutMs: 150, backgroundTools: ["make_report"], backgroundTimeoutMs: 5000 })
+    );
+    await expect(find(tools, "make_report").handler({}, context())).resolves.toBe("done");
+    await expect(find(tools, "echo").handler({}, context())).rejects.toThrow("did not answer within 0.15 s");
   });
 });
 

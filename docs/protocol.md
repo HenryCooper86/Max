@@ -378,6 +378,7 @@ Send them in `session.start.tools`:
 | `name`        | Matches `^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$`. Unique in the list.                             |
 | `description` | Required, at most 1024 characters. The model reads it to decide when to call the tool.    |
 | `parameters`  | A JSON Schema object (`type` must be `"object"` or absent), at most 8 KiB. Default: none. |
+| `background`  | `true` for a tool the conversation does not wait for. See below. Default: `false`.        |
 
 At most 32 tools. A malformed list rejects the whole `session.start` with an `error` naming the problem, so you see
 your own bug. A tool whose name matches a relay tool is ignored: relay tools win.
@@ -393,6 +394,11 @@ When the model uses a client tool the relay sends:
 Run it and answer with one `tool.result` carrying the same `callId`. If you do not answer within 15 seconds the call
 fails with `"timeout"` and the model is told so. A late answer is ignored. A model may issue several calls in one turn,
 so your handler can be called again before an earlier call has finished.
+
+A tool declared with `"background": true` is for work that takes a while. The relay tells the model at once that the
+work has started, the conversation carries on, and you have 120 seconds to send the `tool.result`. The assistant
+reports it at the next quiet moment. See [background tools](tools.md#background-tools). A relay older than this
+ignores the field and waits 15 seconds.
 
 `tool.call` is sent only for tools you declared. Relay-side tools never reach the client as `tool.call`.
 

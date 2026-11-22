@@ -279,7 +279,10 @@ new VoiceAgent({ url, token, tools: [openPage] });
 
 Handlers may be async. A thrown error or rejected promise is reported to the
 agent as a tool error, and a handler that takes longer than about 14 seconds
-is abandoned with `"timeout"` (the relay allows 15). A call to an unknown tool
+is abandoned with `"timeout"` (the relay allows 15). A tool with
+`background: true` is for slower work: the agent tells the user it has started
+and carries on, the handler may take up to about 110 seconds, and the agent
+reports the result when it is done. A call to an unknown tool
 is answered with `"unknown tool"`. Nothing a handler does can crash the client.
 Tool names match `/^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/`; the constructor throws on
 invalid or duplicate names. Handlers are never sent to the relay, only the

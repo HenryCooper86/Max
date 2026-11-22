@@ -1,6 +1,6 @@
 import type { ToolActivityEvent, ToolCallEvent, ToolResultEvent } from "../../shared/agent";
 import type { Logger } from "../logger";
-import type { ToolDefinition, ToolSpec } from "./index";
+import type { ClientToolDeclaration, ToolDefinition, ToolSpec } from "./index";
 import { parseToolArguments, toolErrorText, toolOutputText } from "./schema";
 
 /**
@@ -14,6 +14,8 @@ import { parseToolArguments, toolErrorText, toolOutputText } from "./schema";
  */
 
 const DEFAULT_TOOL_TIMEOUT_MS = 15_000;
+/** A background tool in the client is not holding the conversation up, so it may take longer. */
+const BACKGROUND_CLIENT_TIMEOUT_MS = 120_000;
 
 type ToolCall = {
   /** The upstream's id for the call; echoed in the result. */
@@ -28,12 +30,14 @@ type ToolOutcome = { ok: boolean; output: string };
 export type ToolBrokerOptions = {
   sessionId: string;
   serverTools: () => readonly ToolDefinition[];
-  clientTools: readonly ToolSpec[];
+  clientTools: readonly ClientToolDeclaration[];
   send(event: ToolCallEvent | ToolActivityEvent): void;
   language?: () => string | undefined;
   userId?: string;
   log: Logger;
   clientTimeoutMs?: number;
+  /** For a client tool declared with `background: true`. */
+  clientBackgroundTimeoutMs?: number;
   now?: () => number;
   /** Whether the agent the conversation is with may use a tool right now.
    *  Absent: every tool. Read on every call, because the agent can change. */
@@ -69,7 +73,7 @@ export function createToolBroker(options: ToolBrokerOptions): ToolBroker {
     return options.serverTools().find((tool) => tool.name === name);
   }
 
-  function clientTool(name: string): ToolSpec | undefined {
+  function clientTool(name: string): ClientToolDeclaration | undefined {
     if (serverTool(name)) return undefined;
     return options.clientTools.find((tool) => tool.name === name);
   }
@@ -120,12 +124,15 @@ export function createToolBroker(options: ToolBrokerOptions): ToolBroker {
     }
   }
 
-  function runClient(call: ToolCall, args: Record<string, unknown>): Promise<ToolOutcome> {
+  function runClient(call: ToolCall, args: Record<string, unknown>, background: boolean): Promise<ToolOutcome> {
+    const timeoutMs = background
+      ? (options.clientBackgroundTimeoutMs ?? BACKGROUND_CLIENT_TIMEOUT_MS)
+      : clientTimeoutMs;
     return new Promise<ToolOutcome>((resolve) => {
       const timer = setTimeout(() => {
         pendingClient.delete(call.callId);
-        resolve({ ok: false, output: toolErrorText(`the app did not answer within ${clientTimeoutMs / 1000} s`) });
-      }, clientTimeoutMs);
+        resolve({ ok: false, output: toolErrorText(`the app did not answer within ${timeoutMs / 1000} s`) });
+      }, timeoutMs);
       pendingClient.set(call.callId, { name: call.name, resolve, timer });
       options.send({ type: "tool.call", callId: call.callId, name: call.name, arguments: args });
     });
@@ -138,7 +145,11 @@ export function createToolBroker(options: ToolBrokerOptions): ToolBroker {
       parameters: tool.parameters ?? { type: "object", properties: {} }
     }));
     const taken = new Set(specs.map((spec) => spec.name));
-    for (const tool of options.clientTools) if (!taken.has(tool.name)) specs.push(tool);
+    for (const tool of options.clientTools) {
+      // Only what the model is to see: how the relay runs a tool is not its business.
+      if (!taken.has(tool.name))
+        specs.push({ name: tool.name, description: tool.description, parameters: tool.parameters });
+    }
     return specs;
   }
 
@@ -150,7 +161,10 @@ export function createToolBroker(options: ToolBrokerOptions): ToolBroker {
 
     allSpecs: everySpec,
 
-    runsInBackground: (name) => serverTool(name)?.background === true,
+    runsInBackground: (name) => {
+      const server = serverTool(name);
+      return server ? server.background === true : clientTool(name)?.background === true;
+    },
 
     async run(call) {
       if (closed) return { ok: false, output: toolErrorText("the session ended") };
@@ -173,7 +187,9 @@ export function createToolBroker(options: ToolBrokerOptions): ToolBroker {
       let outcome: ToolOutcome;
       try {
         const args = parseToolArguments(call.arguments);
-        outcome = server ? await runServer(server, call, args) : await runClient(call, args);
+        outcome = server
+          ? await runServer(server, call, args)
+          : await runClient(call, args, client?.background === true);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         options.log.warn("tool failed", { tool: call.name, where, message });

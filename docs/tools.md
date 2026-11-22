@@ -205,25 +205,57 @@ system. Mark such a tool with `"background": true` and the conversation does not
 
 In a code tool it is the same field: `defineTool({ name, description, background: true, timeoutMs: 300_000, handler })`.
 
+A tool the page runs takes the same mark in its declaration, and in the web SDK it is one more field:
+
+```ts
+defineClientTool({
+  name: "export_page",
+  description: "Exports this page as a PDF. It takes a while.",
+  background: true,
+  handler: () => exportPdf()
+});
+```
+
+For a tool of a [remote MCP server](#remote-mcp-servers), name it in that server's `backgroundTools`:
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "reports",
+      "url": "https://reports.example.com/mcp",
+      "backgroundTools": ["make_sales_report"],
+      "backgroundTimeoutMs": 300000
+    }
+  ]
+}
+```
+
 What happens:
 
 1. The assistant calls the tool. The relay answers the model at once that the work has started, and the assistant
    tells the user so.
 2. The conversation carries on. The user can ask other things, and what they say does not cancel the work.
-3. When your webhook or handler returns, the relay gives the model the result, and the assistant tells the user at the
-   next quiet moment: not over the user, and not in the middle of another answer.
+3. When your webhook, handler or MCP server returns, the relay gives the model the result, and the assistant tells the
+   user at the next quiet moment: not over the user, and not in the middle of another answer.
 
 A failure is reported the same way. Things to know:
 
-- A background webhook may take up to 10 minutes (`timeoutMs`, default 2 minutes). A code tool keeps the default of 15
-  seconds unless you set `timeoutMs`.
+- A background webhook may take up to 10 minutes (`timeoutMs`, default 2 minutes), and so may a background MCP tool
+  (`backgroundTimeoutMs`, default 2 minutes). A code tool keeps the default of 15 seconds unless you set `timeoutMs`.
+- A background tool in the page has two minutes. The web SDK gives up on the handler a little earlier, after 110
+  seconds, so that its own answer is the one the model gets. A relay older than this feature ignores the mark and
+  waits 15 seconds for the tool, as for any other.
+- `backgroundTools` takes the names the MCP server gives its tools, before `prefix`. A name the server does not have,
+  or one that `allowedTools` leaves out, is reported as a problem.
 - One conversation can have four background tools running at once. A fifth call is refused, and the model is told why.
 - The work ends when the conversation does. The handler's `signal` is aborted, and a webhook request is cancelled. If
   the work must finish whatever happens, have your webhook start it and return, and deliver the outcome another way.
 - While a background tool runs, the assistant does not ask the user whether they are still there.
 - The page sees the usual [`tool.activity`](#showing-progress) events: `started` at once, `succeeded` or `failed` when
   the work ends.
-- Client tools and tools from MCP servers cannot be background tools yet.
+- A background tool in the page ends when the page goes: a reload or a closed tab loses the work, and the model is
+  told that the app did not answer.
 
 Tried with a local model (`qwen3:8b` through Ollama) and a webhook that takes six seconds: the assistant said the
 report had started after 1.5 seconds, answered another question in the meantime, and read the result out when the
@@ -285,14 +317,16 @@ without glue code.
 }
 ```
 
-| Key            | Type         | What it does                                                                                                                     |
-| -------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `name`         | string       | Required. Letters, digits, `_` and `-`, starting with a letter, at most 32 characters. Used in logs and problems.                |
-| `url`          | string       | Required. The server's MCP endpoint.                                                                                             |
-| `headers`      | object       | Headers sent on every request, usually the credential.                                                                           |
-| `allowedTools` | string array | The tools to offer, by the names the server gives them. Absent: all of the server's tools.                                       |
-| `prefix`       | string       | Letters, digits and `_`, starting with a letter or `_`, at most 24 characters. The tool `list_events` becomes `cal_list_events`. |
-| `timeoutMs`    | number       | How long each request may take. Default 15000, at most 60000.                                                                    |
+| Key                   | Type         | What it does                                                                                                                     |
+| --------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                | string       | Required. Letters, digits, `_` and `-`, starting with a letter, at most 32 characters. Used in logs and problems.                |
+| `url`                 | string       | Required. The server's MCP endpoint.                                                                                             |
+| `headers`             | object       | Headers sent on every request, usually the credential.                                                                           |
+| `allowedTools`        | string array | The tools to offer, by the names the server gives them. Absent: all of the server's tools.                                       |
+| `prefix`              | string       | Letters, digits and `_`, starting with a letter or `_`, at most 24 characters. The tool `list_events` becomes `cal_list_events`. |
+| `timeoutMs`           | number       | How long each request may take. Default 15000, at most 60000.                                                                    |
+| `backgroundTools`     | string array | Tools the conversation does not wait for, by the names the server gives them. See [background tools](#background-tools).         |
+| `backgroundTimeoutMs` | number       | How long a call of a background tool may take. Default 120000, at most 600000.                                                   |
 
 How it works:
 

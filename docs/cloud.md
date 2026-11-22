@@ -17,8 +17,9 @@ What a customer gets, and what stays private:
 Add to the relay's `.env` and restart:
 
 ```bash
-# 32 random bytes. Encrypts customers' model keys: back it up with the data folder.
-# If it is lost, saved model keys cannot be read and customers must enter them again.
+# 32 random bytes. Encrypts customers' model keys and webhook secrets: back it up with the data folder.
+# If it is lost, saved keys cannot be read and customers must enter them again. To change it, see
+# "Rotating CLOUD_SECRET_KEY" below.
 CLOUD_SECRET_KEY=   # openssl rand -base64 32
 # The public address of this relay, for payment notifications.
 CLOUD_PUBLIC_URL=https://max.example.com
@@ -74,10 +75,18 @@ plus `http://localhost:5173` while developing), save, and paste:
 
 The widget asks `POST /v1/public-session-tokens {"project":"pub_…"}` for a two-minute token. The relay gives one only
 when the browser's `Origin` is on the project's list, and the token opens a voice session only from that same origin.
-Like any public chat widget, anyone visiting a listed site can use it, so it is limited: 10 tokens a minute per visitor
-address, 120 a minute per project, at most 3 of the customer's 5 simultaneous sessions (so their own backend and tests
-always have room), 15 minutes per conversation, and their balance as always. Embed tokens can only push out other
-embed tokens. A project's public id is not a secret; its project key is.
+Like any public chat widget, anyone visiting a listed site can use it, and a script outside a browser can claim any
+`Origin` it likes, so it is limited: 10 tokens a minute per visitor address, 120 a minute per project, at most 3 of the
+customer's 5 simultaneous sessions (so their own backend and tests always have room) and at most 2 from one visitor
+address, 15 minutes per conversation, the project's monthly minutes limit if the owner set one, and their balance as
+always. Each embed token opens one session; the widget asks for a new one whenever it reconnects. Embed tokens can only
+push out other embed tokens. A project's public id is not a secret; its project key is.
+
+**Monthly minutes limit.** In the Studio's **Settings**, an owner can limit how many minutes a project may use per
+calendar month (UTC), counting every session of the project: the embed, their backend and the Test tab. Once it is
+reached, token requests are refused (`403`), new sessions are refused and open ones closed with code `4003` ("This Max
+Cloud agent has used its minutes for this month."), until the next month or until the owner raises the limit. It is
+off unless set; we suggest it to anyone who turns the public embed on.
 
 ### With their own backend
 
@@ -96,19 +105,59 @@ embed tokens. A project's public id is not a secret; its project key is.
 
 Limits that keep one account from affecting everyone else:
 
-- **Balance.** A session starts only when the customer has at least 15 seconds left, counting every session they have
-  open, and all their sessions are checked every 15 seconds. When the time is used up they are closed with code `4003`
+- **Balance.** A session starts only when the customer has at least 5 seconds left, counting every session they have
+  open, and all their sessions are checked every 5 seconds. When the time is used up they are closed with code `4003`
   ("Your Max Cloud balance is used up. Top up in the console."). A balance can go negative by at most one check
-  interval per open session.
+  interval (5 seconds) per open session. What is billed, and when, is in
+  [usage and billing](usage-and-billing.md#max-cloud-billing).
 - **5 simultaneous sessions** per customer; a sixth is refused with code `1013`.
 - **Session tokens:** at most 120 minted per minute per project, at most 200 live per project, and 1,000 characters of
   `context`. Cloud tokens are kept apart from the relay's own, so no customer can push them out.
-- **Keys:** rotating a project key or deleting the project closes its sessions within 15 seconds, and tokens minted
+- **Keys:** rotating a project key or deleting the project closes its sessions within 5 seconds, and tokens minted
   with the old key stop working.
 - A project without a model key is refused with code `1008`.
 
-Sessions are checkpointed while they run, so a crash or restart cannot lose their charge: on startup the relay books
-every session left open, up to its last checkpoint.
+Sessions are checkpointed every 5 seconds while they run, so a crash or restart cannot lose their charge: once the relay
+process that ran a session has not checkpointed it for a minute, the relay (the restarted one, or any other sharing the
+data folder) books it up to its last checkpoint. A relay never books a session another running relay is still
+checkpointing, so two relays on one data folder, or a rolling restart, are safe. If a session is booked this way while
+its relay was only stalled, the rest is booked when it closes, as a second ledger entry whose reference ends in
+`:rest:1`. A booking that fails (a full disk, a locked database) is kept and retried every 15 seconds; bookings are
+idempotent, so nothing is charged twice.
+
+The billed clock runs only while the voice backend is connected: it starts when the backend is ready and stops while
+the relay reconnects to it, whatever the client does meanwhile.
+
+## Rotating CLOUD_SECRET_KEY
+
+Customers' model keys and webhook secrets are encrypted with `CLOUD_SECRET_KEY`, and each one records which key it was
+written with. To change the key (it leaked, someone who knew it left, or as routine):
+
+1. Generate a new key: `openssl rand -base64 32`.
+2. In the relay's `.env`, set `CLOUD_SECRET_KEY` to the new key and `CLOUD_SECRET_KEY_PREVIOUS` to the old one, and
+   restart. New and changed secrets are written with the new key; existing ones still decrypt with the old one, so
+   nobody notices.
+3. On the relay host, in the app directory, with the same environment:
+
+   ```bash
+   npm run cloud:reencrypt -- --check   # how many secrets use each key
+   npm run cloud:reencrypt              # rewrite them all under the new key
+   ```
+
+   It is safe while the relay runs and safe to repeat. It says when every secret uses the new key.
+
+4. Remove `CLOUD_SECRET_KEY_PREVIOUS` and restart. Destroy the old key.
+
+Secrets of deleted projects are not re-encrypted; they become unreadable with the old key, which nothing needs.
+
+If the relay starts with a `CLOUD_SECRET_KEY` that decrypts none of the stored secrets, across more than one project
+(it was changed by mistake, or lost), it logs an error saying so and `/ready` answers `503` with the issue
+`cloud-secret-key-mismatch`, so a deploy with the wrong key does not take traffic. Put the old key back, or set it as
+`CLOUD_SECRET_KEY_PREVIOUS`. A `CLOUD_SECRET_KEY_PREVIOUS` that is not a valid key is reported as
+`cloud-secret-key-previous-invalid`. Unreadable secrets among readable ones, or in a single project, do not fail
+`/ready`: they are logged with their project ids, listed as the warning `cloud-secrets-unreadable` in `/ready`, and
+counted in the `max_cloud_secrets_unreadable` metric. Those customers must enter their model key again. If the old key
+is truly lost, every customer must.
 
 ## Getting paid
 

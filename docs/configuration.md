@@ -138,6 +138,26 @@ The most used ones. `.env.example` documents all of them, including each backend
 | `RELAY_TRUST_PROXY`     | `off`   | `on` behind a reverse proxy, so rate limits see the real client address (`RELAY_TRUSTED_PROXY_HOPS` hops). |
 | `AUTH_REGISTRATION`     | `on`    | Whether people may create accounts on the relay's own web app. The first account is the admin.             |
 
+Behind Caddy, nginx or any other proxy, `RELAY_TRUST_PROXY=on` is required: with it off, every visitor shares the proxy's
+address and one of them can use up the login and connection limits for everyone. See
+[deployment](deployment.md#reverse-proxy-with-tls).
+
+### Monitoring and logs
+
+| Variable        | Default | What it does                                                                                                      |
+| --------------- | ------- | ----------------------------------------------------------------------------------------------------------------- |
+| `METRICS_TOKEN` | none    | Turns on `GET /metrics` (Prometheus text format) for `Authorization: Bearer <token>`. Unset: the endpoint is 404. |
+| `LOG_FORMAT`    | `text`  | `json` writes one JSON object per line: `time`, `level`, `scope`, `message` and the event's fields.               |
+| `LOG_LEVEL`     | `info`  | `debug`, `info`, `warn` or `error`.                                                                               |
+
+`METRICS_TOKEN` is its own secret, separate from `RELAY_AUTH_TOKEN`, so a monitoring system can read counters without
+being able to open voice sessions. Use a long random value (`openssl rand -hex 32`). What `/metrics` exports is listed in
+[deployment](deployment.md#metrics).
+
+Code in the relay can add its own numbers to `/metrics` with `registerMetricsSource(() => ({ ... }))` from
+`server/prometheus.ts`. Each key becomes a metric name (camelCase is snake-cased and `max_` is prefixed). A name ending
+in `_total` is exposed as a counter, anything else as a gauge.
+
 ### Behaviour
 
 | Variable                                    | Default        | What it does                                                                              |

@@ -1,0 +1,59 @@
+name: Release draft
+
+# Pushing a tag prepares a draft GitHub release. Nothing is published from here:
+# a maintainer reviews the draft and publishes it, and publishes the SDK to npm
+# by hand (npm run pack:sdk && cd dist/sdk-package && npm publish).
+#
+#   v1.2.3      the kit; must match "version" in package.json
+#   sdk-v1.2.3  the web SDK; must match "version" in sdk/package.json
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "sdk-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Check the tag matches the package version
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" == sdk-v* ]]; then
+            manifest=sdk/package.json
+            expected="sdk-v$(node -p "require('./sdk/package.json').version")"
+            echo "kind=sdk" >> "$GITHUB_OUTPUT"
+          else
+            manifest=package.json
+            expected="v$(node -p "require('./package.json').version")"
+            echo "kind=kit" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "$tag" != "$expected" ]]; then
+            echo "Tag $tag does not match $manifest (expected $expected)." >&2
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run check
+      - name: Pack the SDK
+        if: steps.version.outputs.kind == 'sdk'
+        run: npm run pack:sdk
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=()
+          if [[ "${{ steps.version.outputs.kind }}" == "sdk" ]]; then
+            assets=(dist/max-voice-agent-*.tgz)
+          fi
+          gh release create "$GITHUB_REF_NAME" --draft --generate-notes --verify-tag "${assets[@]}"

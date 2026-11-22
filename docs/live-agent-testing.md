@@ -26,8 +26,8 @@ npm run dev:server          # relay only, for native clients
 ```
 
 The relay URL clients must use is exactly `ws://localhost:8787/agent` (any other
-path is rejected with HTTP 400). The shared test server is
-`wss://3.35.135.136/agent`.
+path is rejected with HTTP 400). To test against a relay you have deployed,
+use `wss://<your-relay-host>/agent` instead.
 
 For the iOS client end-to-end, build and run it on a simulator as described in
 the [iOS guide](../ios/README.md), grant microphone access, point it at the relay,
@@ -623,9 +623,8 @@ TESTING_GATE_REPORT=artifacts/release-gate.json \
 npm run test:release-gate
 ```
 
-GitLab CI is intentionally disabled until the project has an active runner.
 Before merging, reviewers must record the local `npm run check` and
-`npm audit --omit=dev` results in the MR. The live release-gate command remains
+`npm audit --omit=dev` results in the pull request. The live release-gate command remains
 available for an operator to run manually; set `TESTING_GATE_EXPECTED_BUILD` to
 the exact candidate SHA. It passes only after an administrator has approved that
 same build, so a passing metric snapshot without an audited release approval

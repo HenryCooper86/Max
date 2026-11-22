@@ -121,12 +121,10 @@ In rough order of how much they would matter to most users:
    calls are judged before they run (`guardrails.toolRules`) and what tools return before the assistant reads it
    (`guardrails.resultRules`), on every backend that runs tools with a model. The demo backend has no judge and
    does not run a tool the rules cover.
-6. **Flow steps without a model at the start of a conversation, and variables.** A step can say a fixed sentence,
-   call a tool and branch on its answer by rule (`onEnter`), but only when a conversation is handed to it: the
-   first step of a conversation is always a model. A tool called by rule takes fixed arguments: there are no
-   variables collected from the conversation to fill them or to branch on. On the speech-to-speech backends the
-   fixed sentence is spoken by the vendor's model, which is told the words. Max Cloud projects have no agents or
-   flows.
+6. **Flow steps without a model at the start of a conversation.** A step can say a fixed sentence, call a tool and
+   branch on its answer by rule (`onEnter`), with values collected from the user or saved from a tool's answer, but
+   only when a conversation is handed to it: the first step of a conversation is always a model. On the speech-to-speech backends the fixed
+   sentence is spoken by the vendor's model, which is told the words. Max Cloud projects have no agents or flows.
 7. **Warm transfers in which the assistant talks to the person first, and warm transfers on Telnyx.** On Twilio the
    person who picks up hears a summary the assistant wrote, and the caller comes back when nobody takes the call. The
    assistant does not hold a conversation with that person before connecting the two.

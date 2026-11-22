@@ -1,4 +1,11 @@
-import { agentEntryFrom, type AgentEntry } from "./agent-entry";
+import {
+  SESSION_VALUES,
+  agentEntryFrom,
+  collectFrom,
+  entryValues,
+  type AgentEntry,
+  type CollectedValue
+} from "./agent-entry";
 
 /**
  * How a conversation is run, beyond what the assistant says: when the relay
@@ -64,6 +71,8 @@ export type AgentStage = {
    * agent, on its description alone. Empty: none, the conversation stays here.
    */
   handoffs?: AgentHandoff[];
+  /** What the assistant has to find out from the user before it hands the conversation to this agent. */
+  collect?: CollectedValue[];
   /** What the relay does itself when the conversation is handed to this agent. */
   onEnter?: AgentEntry;
 };
@@ -214,6 +223,14 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
       problems.push(`agent ${id}: onEnter calls ${entered.entry.call.tool}, which is not one of the agent's tools`);
       delete entered.entry;
     }
+    // A mistake here costs the agent what it asks for first, not the agent.
+    const asked = collectFrom(entry.collect);
+    if (asked.problem) problems.push(`agent ${id}: ${asked.problem}`);
+    // Nobody hands a conversation to the agent it starts with: there is no handover to ask at.
+    if (asked.collect && key === MAIN_AGENT) {
+      problems.push("agent main: collect is asked for at a handover, and a conversation starts with main");
+      delete asked.collect;
+    }
     seen.add(key);
     agents.push({
       id: key === MAIN_AGENT ? MAIN_AGENT : id,
@@ -221,6 +238,7 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
       instructions: instructions ?? "",
       ...(tools ? { tools } : {}),
       ...(handoffs ? { handoffs } : {}),
+      ...(asked.collect ? { collect: asked.collect } : {}),
       ...(entered.entry ? { onEnter: entered.entry } : {})
     });
   }
@@ -263,6 +281,22 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
       .find(Boolean);
     if (wrong) {
       problems.push(`agent ${agent.id}: ${wrong}`);
+      delete agent.onEnter;
+    }
+  }
+  // A value that is read is one that some step can have set: a name nobody sets is a slip of the pen.
+  const set = new Set<string>(SESSION_VALUES);
+  for (const agent of agents) {
+    for (const value of agent.collect ?? []) set.add(value.name);
+    if (agent.onEnter) for (const name of entryValues(agent.onEnter).sets) set.add(name);
+  }
+  for (const agent of agents) {
+    if (!agent.onEnter) continue;
+    const unknown = entryValues(agent.onEnter).reads.find((name) => !set.has(name));
+    if (unknown) {
+      problems.push(
+        `agent ${agent.id}: onEnter reads {{${unknown}}}, which no agent collects or saves. The relay's own values are ${SESSION_VALUES.join(", ")}`
+      );
       delete agent.onEnter;
     }
   }

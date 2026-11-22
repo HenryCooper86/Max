@@ -456,7 +456,86 @@ describe("flow builder", () => {
       const names = root()
         .findAll((node) => node.type === "select" && String(node.props["aria-label"] ?? "").startsWith("分支"))
         .map((node) => node.props["aria-label"]);
-      expect(names).toEqual(["分支 1：转到哪一步", "分支 1：条件", "分支 2：转到哪一步", "分支 2：条件"]);
+      expect(names).toEqual([
+        "分支 1：转到哪一步",
+        "分支 1：看什么",
+        "分支 1：条件",
+        "分支 2：转到哪一步",
+        "分支 2：条件"
+      ]);
+    });
+
+    it("writes what a step asks for first, what it keeps, and a branch on a value", async () => {
+      const { api } = await mount(fakeApi(flow(withEntry())));
+      await select("orders");
+      await act(async () => button(/添加一个值/).props.onClick());
+      await type(labelled("名字")[0]!, "order_number");
+      await type(labelled("它是什么")[0]!, "  The number of the order ");
+      await act(async () => button(/添加一个值/).props.onClick());
+      await type(labelled("名字")[1]!, "amount");
+      await type(labelled("它是什么")[1]!, "How much back");
+      await type(labelled("类型")[1]!, "number");
+      await act(async () => labelled("必填")[1]!.props.onChange({ currentTarget: { checked: false } }));
+      // The sentence and the arguments use it.
+      await type(field("flow-entry-say"), "Looking up order {{order_number}}.");
+      await type(field("flow-entry-arguments"), '{"number":"{{order_number}}"}');
+      await act(async () => field("flow-entry-arguments").props.onBlur());
+      // Something of the answer is kept, and the first branch goes by it.
+      await act(async () => button(/保存一个值/).props.onClick());
+      await type(labelled("名字")[2]!, "status");
+      await type(labelled("在答复里的位置")[0]!, "order.status");
+      await type(labelled("看什么")[0]!, "value");
+      await type(labelled("值的名字")[0]!, "status");
+      await act(async () => button(/保存流程/).props.onClick());
+      const saved = api.saveStudioFlow.mock.calls[0]![0][1]!;
+      expect(saved.collect).toEqual([
+        { name: "order_number", description: "The number of the order", type: "text", required: true },
+        { name: "amount", description: "How much back", type: "number", required: false }
+      ]);
+      expect(saved.onEnter).toEqual({
+        say: "Looking up order {{order_number}}.",
+        call: { tool: "find_order", arguments: { number: "{{order_number}}" } },
+        save: { status: "order.status" },
+        next: [{ to: "refunds", if: { value: "status", is: "delivered" } }, { to: "main" }]
+      });
+      // And it comes back as it was saved.
+      expect(byClass("flowCondition").map(textOf)).toContain("{{status}} = delivered");
+    });
+
+    it("says what is wrong with a value before it is saved", async () => {
+      const { api } = await mount(fakeApi(flow(withEntry())));
+      await select("orders");
+      const refusedWith = async (text: RegExp) => {
+        await act(async () => button(/保存流程/).props.onClick());
+        expect(api.saveStudioFlow).not.toHaveBeenCalled();
+        expect(byClass("flowProblems").map(textOf).join(" ")).toMatch(text);
+      };
+      await act(async () => button(/添加一个值/).props.onClick());
+      await refusedWith(/值的名字用小写字母/);
+      await type(labelled("名字")[0]!, "order_number");
+      await refusedWith(/每个值都要写明它是什么/);
+      await type(labelled("它是什么")[0]!, "The number");
+      // A value nobody asks for or keeps.
+      await type(field("flow-entry-say"), "Order {{order_numbr}}.");
+      await refusedWith(/用到了一个没有哪一步先问或保存的值/);
+      await type(field("flow-entry-say"), "Order {{order_number}} for {{user.id}}.");
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(api.saveStudioFlow).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers nothing to ask for first at the start, and drops what was kept with the tool", async () => {
+      const { api } = await mount(fakeApi(flow(withEntry())));
+      await select("main");
+      expect(root().findAll((node) => node.type === "button" && /添加一个值/.test(textOf(node)))).toEqual([]);
+      await select("orders");
+      await act(async () => button(/保存一个值/).props.onClick());
+      await type(labelled("名字")[0]!, "status");
+      await type(labelled("在答复里的位置")[0]!, "status");
+      // No tool, no answer to keep from; the branch that read the answer goes too, by hand.
+      await type(field("flow-entry-tool"), "");
+      await act(async () => labelled("删除")[0]!.props.onClick());
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(api.saveStudioFlow.mock.calls[0]![0][1]!.onEnter).toEqual({ say: "One moment.", next: [{ to: "main" }] });
     });
 
     it("will not save a branch with a condition and no call, or a tool the step may not use", async () => {

@@ -1,4 +1,4 @@
-import type { AgentEntry } from "./agent-entry";
+import type { AgentEntry, CollectedValue } from "./agent-entry";
 import { agentStagesFrom, MAIN_AGENT, NO_HANDOFF_LEFT } from "./conversation-config";
 
 /**
@@ -17,6 +17,8 @@ export type FlowStep = {
   tools?: string[];
   /** The steps this one leads to. Absent: any step. Empty: none. */
   handoffs?: Array<{ to: string; when?: string }>;
+  /** What the assistant has to find out from the user before it hands the conversation to this step. */
+  collect?: CollectedValue[];
   /** What the relay does itself when a conversation comes to this step: a sentence, a tool call, where to next. */
   onEnter?: AgentEntry;
   /** Where the step sits on the canvas. The relay itself does not read it. */
@@ -32,6 +34,7 @@ const STEP_KEYS: ReadonlySet<string> = new Set([
   "instructions",
   "tools",
   "handoffs",
+  "collect",
   "onEnter",
   "at"
 ]);
@@ -69,6 +72,7 @@ export function flowFrom(raw: unknown): { steps: FlowStep[]; problems: string[] 
       ...(agent.instructions ? { instructions: agent.instructions } : {}),
       ...(agent.tools ? { tools: agent.tools } : {}),
       ...(agent.handoffs ? { handoffs: agent.handoffs } : {}),
+      ...(agent.collect ? { collect: agent.collect } : {}),
       ...(agent.onEnter ? { onEnter: agent.onEnter } : {}),
       ...(place ? { at: place } : {})
     };

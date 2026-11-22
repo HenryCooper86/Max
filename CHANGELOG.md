@@ -87,6 +87,10 @@
   window of 24 remembered turns into a short text, which the assistant is given with the latest turns. Written when
   a conversation ends and during long ones; deleted with the rest when a user is forgotten. See
   [a summary of older turns](docs/conversations.md#a-summary-of-older-turns).
+- Values in flows. An agent's `collect` names what the assistant has to get from the user before it hands the
+  conversation over (the handover is refused until it has); `onEnter.save` keeps parts of a tool's answer;
+  `{{name}}` fills a step's sentence and arguments, and a branch can test a value. See
+  [flows](docs/conversations.md#flows).
 - Flow steps, after review: an `onEnter` sentence is said before its tool is called (on the cascaded backends), not
   after; a tool that ran is told to the model even when the user talked over the reply; a second handover in the
   same reply gives up the first agent's `onEnter`; background tools, `end_session` and `transfer_to_agent` are

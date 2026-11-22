@@ -1070,3 +1070,214 @@ describe("what the relay does itself when a conversation comes to an agent", () 
     expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["orders"]);
   });
 });
+
+describe("what a conversation's flow knows: values collected from the user and saved from tools", () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const FIND: ToolDefinition = {
+    name: "find_order",
+    description: "Finds an order by its number",
+    parameters: { type: "object", properties: { number: { type: "string" } } },
+    handler: (args) => {
+      calls.push(args);
+      return { order: { status: "shipped", total: 140, carrier: "DHL" } };
+    }
+  };
+  const TRACK: ToolDefinition = {
+    name: "track",
+    description: "Tracks a parcel",
+    parameters: { type: "object", properties: {} },
+    handler: (args) => {
+      calls.push(args);
+      return { where: "Leipzig" };
+    }
+  };
+  const config = (orders: Record<string, unknown> = {}, tracking: Record<string, unknown> = {}) => ({
+    instructions: "You work for Acme.",
+    agents: [
+      {
+        id: "orders",
+        description: "Orders.",
+        instructions: "Help with the order.",
+        collect: [
+          { name: "order_number", description: "The number of the order, as the user said it" },
+          { name: "amount", description: "How much the user wants back", type: "number", required: false }
+        ],
+        onEnter: {
+          say: "One moment, I am looking up order {{order_number}}.",
+          call: {
+            tool: "find_order",
+            arguments: { number: "{{order_number}}", for: "{{user.id}}", via: "{{channel}}" }
+          },
+          save: { status: "order.status", total: "order.total", carrier: "order.carrier" },
+          next: [{ to: "tracking", if: { value: "status", is: "shipped" } }]
+        },
+        ...orders
+      },
+      {
+        id: "tracking",
+        description: "Where a parcel is.",
+        instructions: "Say where the parcel is.",
+        onEnter: {
+          call: { tool: "track", arguments: { carrier: "{{carrier}}", order: "{{order_number}}", worth: "{{total}}" } }
+        },
+        ...tracking
+      },
+      { id: "sales", description: "Buying.", instructions: "Sell." }
+    ]
+  });
+  async function start(options: Parameters<typeof setup>[0] = {}) {
+    const results: Array<Record<string, any>> = [];
+    const said: string[] = [];
+    const made = await setup({
+      config: config(),
+      serverTools: [FIND, TRACK],
+      context: { userId: "user-7" },
+      ...options,
+      engine: {
+        sayDuringTool: (_callId: string, line: string) => void said.push(line),
+        sendToolResult: (_callId, output) => results.push(JSON.parse(output) as Record<string, any>),
+        ...options.engine
+      }
+    });
+    let n = 0;
+    const handOver = async (args: Record<string, unknown>) => {
+      made.events().onSpeechStarted();
+      made.events().onRiderTranscript("Where is my order?", true);
+      made.events().onResponseStarted();
+      made.events().onToolCall!({ callId: `c${(n += 1)}`, name: "transfer_to_agent", arguments: JSON.stringify(args) });
+      await vi.advanceTimersByTimeAsync(0);
+      return results.at(-1)!;
+    };
+    return { ...made, results, said, handOver };
+  }
+
+  beforeEach(() => {
+    calls.length = 0;
+  });
+
+  it("tells the model what an agent has to be told", async () => {
+    const { configs, provider } = await start();
+    const transfer = configs[0]!.tools.find((tool) => tool.name === "transfer_to_agent")!;
+    const values = (transfer.parameters as any).properties.values;
+    expect(values.properties).toEqual({
+      order_number: { type: "string", description: "The number of the order, as the user said it" },
+      amount: { type: "number", description: "How much the user wants back" }
+    });
+    expect(values.description).toContain("orders needs: order_number, amount (if the user said).");
+    expect(values.description).toContain("never guess");
+    await provider.close();
+    // A flow that collects nothing asks for nothing.
+    const plain = await setup({
+      config: { agents: [{ id: "sales", description: "Buying.", instructions: "Sell." }] }
+    });
+    const tool = plain.configs[0]!.tools.find((one) => one.name === "transfer_to_agent")!;
+    expect((tool.parameters as any).properties.values).toBeUndefined();
+    await plain.provider.close();
+  });
+
+  it("does not hand over until the user has said what the agent needs", async () => {
+    const { handOver, client, provider } = await start();
+    const refused = await handOver({ agent: "orders" });
+    expect(refused.error).toContain(
+      "before the conversation goes to orders, the user has to say: order_number (The number of the order, as the user said it)"
+    );
+    expect(refused.error).toContain("Do not guess");
+    expect(client.ofType("agent.changed")).toEqual([]);
+    expect(calls).toEqual([]);
+    // Neither with something that is no value.
+    expect((await handOver({ agent: "orders", values: { order_number: "  " } })).error).toContain("order_number");
+    expect((await handOver({ agent: "orders", values: "A-1042" })).error).toContain("order_number");
+    expect(client.ofType("agent.changed")).toEqual([]);
+    await provider.close();
+  });
+
+  it("fills the sentence and the arguments, keeps what the tool answered, and moves on by a value", async () => {
+    const { handOver, said, client, provider } = await start();
+    const result = await handOver({ agent: "orders", values: { order_number: " A-1042 ", amount: "40" } });
+    expect(said).toEqual(["One moment, I am looking up order A-1042."]);
+    expect(calls).toEqual([
+      { number: "A-1042", for: "user-7", via: "web" },
+      // The next step uses what the first one saved, a number as a number.
+      { carrier: "DHL", order: "A-1042", worth: 140 }
+    ]);
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["orders", "tracking"]);
+    expect(result.agent).toBe("tracking");
+    expect(result.values).toEqual({
+      order_number: "A-1042",
+      amount: 40,
+      status: "shipped",
+      total: 140,
+      carrier: "DHL"
+    });
+    await provider.close();
+  });
+
+  it("takes a value the model put beside the agent, and hands over without one that is not required", async () => {
+    const { handOver, provider } = await start();
+    const result = await handOver({ agent: "orders", order_number: 1042 });
+    expect(result.error).toBeUndefined();
+    expect(result.values).toMatchObject({ order_number: "1042" });
+    expect(result.values.amount).toBeUndefined();
+    expect(calls[0]).toMatchObject({ number: "1042" });
+    await provider.close();
+  });
+
+  it("does not ask again for what the conversation already knows", async () => {
+    const { handOver, provider, events } = await start({ config: config({ onEnter: undefined }) });
+    await handOver({ agent: "orders", values: { order_number: "A-1042" } });
+    events().onResponseDone({ cancelled: false });
+    await handOver({ agent: "sales" });
+    events().onResponseDone({ cancelled: false });
+    const back = await handOver({ agent: "orders" });
+    expect(back.error).toBeUndefined();
+    expect(back.values).toEqual({ order_number: "A-1042" });
+    await provider.close();
+  });
+
+  it("neither says a sentence nor calls a tool with a hole in it", async () => {
+    // Tracking reads what orders saves: handed to directly, it has none of it.
+    const { handOver, said, provider } = await start({
+      config: config(
+        {},
+        {
+          onEnter: {
+            say: "Your parcel is with {{carrier}}.",
+            call: { tool: "track", arguments: { carrier: "{{carrier}}" } },
+            next: [{ to: "sales", if: { failed: true } }]
+          }
+        }
+      )
+    });
+    const result = await handOver({ agent: "tracking" });
+    expect(said).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(result.doneOnArriving).toEqual([
+      {
+        agent: "tracking",
+        tool: "track",
+        failed: { error: "onEnter did not call track: there is no value for carrier" }
+      }
+    ]);
+    // The step failed, and the branch for that took over.
+    expect(result.agent).toBe("sales");
+    await provider.close();
+  });
+
+  it("carries the values across a dropped connection", async () => {
+    const saved: Array<Record<string, any>> = [];
+    const first = await start({ context: { userId: "user-7", saveResume: (state) => void saved.push(state) } });
+    await first.handOver({ agent: "orders", values: { order_number: "A-1042" } });
+    expect(saved.at(-1)!.values).toMatchObject({ order_number: "A-1042", status: "shipped" });
+    expect(saved.at(-1)!.agent).toBe("tracking");
+    await first.provider.close();
+    const again = await start({
+      config: config({ onEnter: undefined }),
+      context: { userId: "user-7", resume: saved.at(-1) as never }
+    });
+    // Back with the agent it was with, and what it knew.
+    const back = await again.handOver({ agent: "orders" });
+    expect(back.error).toBeUndefined();
+    expect(back.values).toMatchObject({ order_number: "A-1042", carrier: "DHL" });
+    await again.provider.close();
+  });
+});

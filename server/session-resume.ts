@@ -18,6 +18,8 @@ export type ResumeState = {
   history: HistoryTurn[];
   /** The agent the conversation was with (see server/conversation-config.ts). */
   agent?: string;
+  /** What the conversation's flow has collected and saved so far (see server/agent-entry.ts). */
+  values?: Record<string, string | number | boolean>;
 };
 
 const RESUME_TTL_MS = 10 * 60_000;

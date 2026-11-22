@@ -6,6 +6,8 @@ type FlowHandoff = { to: string; when?: string };
 /** A test of what the tool called on arriving answered. One of the tests, and a path for all but `failed`. */
 type FlowCondition = {
   path?: string;
+  /** The name of a value of the conversation the test reads, in place of the tool's answer. */
+  value?: string;
   is?: string | number | boolean;
   in?: Array<string | number | boolean>;
   above?: number;
@@ -20,8 +22,24 @@ export type FlowBranch = { to: string; if?: FlowCondition };
 export type FlowEntry = {
   say?: string;
   call?: { tool: string; arguments?: Record<string, unknown> };
+  /** Parts of the tool's answer kept as values: the name of each, and its path in the answer. */
+  save?: Record<string, string>;
   next?: FlowBranch[];
 };
+
+/** Something the assistant has to get from the user before it hands a conversation to a step. */
+export type FlowCollected = {
+  name: string;
+  description: string;
+  type?: "text" | "number" | "boolean";
+  required?: boolean;
+};
+
+/** A value's name: what the relay takes, and what `{{name}}` can name. */
+const VALUE_NAME = /^[a-z][a-z0-9_]{0,39}$/;
+/** The values every conversation has without a step setting them. */
+const SESSION_VALUES = ["user.id", "session.id", "channel"];
+const PLACEHOLDER = /\{\{\s*([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?)\s*\}\}/g;
 
 /** The tests a branch can make, as the builder offers them. `always` is a branch without a condition. */
 export const BRANCH_TESTS = ["always", "is", "in", "above", "below", "exists", "missing", "failed"] as const;
@@ -56,11 +74,14 @@ function typed(text: string): string | number | boolean {
   return value !== "" && String(Number(value)) === value ? Number(value) : value;
 }
 
-/** The branch a test, a path and a value make. A number that is none makes a condition the relay will refuse. */
-export function branchOf(to: string, test: BranchTest, path: string, value: string): FlowBranch {
+/**
+ * The branch a test, a path and a value make. A number that is none makes a condition the relay will refuse.
+ * `ofValue`: the test reads the value of the conversation that `path` names, not the tool's answer.
+ */
+export function branchOf(to: string, test: BranchTest, path: string, value: string, ofValue = false): FlowBranch {
   if (test === "always") return { to };
   if (test === "failed") return { to, if: { failed: true } };
-  const where = path.trim() ? { path: path.trim() } : {};
+  const where = ofValue ? { value: path.trim() } : path.trim() ? { path: path.trim() } : {};
   if (test === "exists" || test === "missing") return { to, if: { ...where, exists: test === "exists" } };
   if (test === "in") {
     return {
@@ -84,7 +105,7 @@ function conditionText(branch: FlowBranch): string {
   const condition = branch.if;
   if (!condition) return "";
   if (condition.failed) return "call failed";
-  const what = condition.path ?? "answer";
+  const what = condition.value !== undefined ? `{{${condition.value}}}` : (condition.path ?? "answer");
   if (condition.exists !== undefined) return `${what} ${condition.exists ? "exists" : "missing"}`;
   if (condition.in) return `${what} in ${condition.in.join(", ")}`;
   if (condition.above !== undefined) return `${what} > ${condition.above}`;
@@ -100,6 +121,8 @@ export type FlowStep = {
   tools?: string[];
   /** Absent: any step. Empty: none. */
   handoffs?: FlowHandoff[];
+  /** What the assistant has to get from the user before it hands a conversation to this step. */
+  collect?: FlowCollected[];
   onEnter?: FlowEntry;
   at?: [number, number];
 };
@@ -353,7 +376,7 @@ export function connect(steps: readonly FlowStep[], from: string, to: string): F
 
 export type FlowProblem = {
   step: string;
-  field: "id" | "description" | "instructions" | "handoffs" | "onEnter" | "flow";
+  field: "id" | "description" | "instructions" | "handoffs" | "collect" | "onEnter" | "flow";
   kind: string;
 };
 
@@ -382,7 +405,9 @@ export function flowProblems(steps: readonly FlowStep[]): FlowProblem[] {
     if (step.handoffs?.some((handoff) => (handoff.when?.trim().length ?? 0) > 300)) {
       problems.push({ step: step.id, field: "handoffs", kind: "long" });
     }
-    const kind = entryProblem(step);
+    const asked = collectProblem(step);
+    if (asked) problems.push({ step: step.id, field: "collect", kind: asked });
+    const kind = entryProblem(step) ?? (unknownValue(step, steps) ? "unknownValue" : undefined);
     if (kind) problems.push({ step: step.id, field: "onEnter", kind });
   }
   return problems;
@@ -397,7 +422,13 @@ function entryProblem(step: FlowStep): string | undefined {
   if (entry.call && !tool) return "tool";
   if (tool && step.tools && !step.tools.includes(tool)) return "notOffered";
   const next = entry.next ?? [];
-  if (next.some((branch) => branch.if) && !tool) return "noCall";
+  // A branch that reads the tool's answer needs a tool to answer. One that reads a value does not.
+  if (next.some((branch) => branch.if && branch.if.value === undefined) && !tool) return "noCall";
+  if (next.some((branch) => branch.if?.value !== undefined && !nameable(branch.if.value))) return "valueName";
+  const save = Object.entries(entry.save ?? {});
+  if (save.length > 0 && !tool) return "saveNoCall";
+  if (save.length > 8) return "saves";
+  if (save.some(([name, path]) => !VALUE_NAME.test(name) || !path.trim())) return "save";
   if (next.slice(0, -1).some((branch) => !branch.if)) return "alwaysFirst";
   if (next.length > 8) return "branches";
   for (const branch of next) {
@@ -412,14 +443,52 @@ function entryProblem(step: FlowStep): string | undefined {
   return undefined;
 }
 
+const nameable = (name: string): boolean => VALUE_NAME.test(name) || SESSION_VALUES.includes(name);
+
+/** What is wrong with what a step asks for first, if anything is. */
+function collectProblem(step: FlowStep): string | undefined {
+  const collect = step.collect ?? [];
+  if (collect.length === 0) return undefined;
+  if (same(step.id, START)) return "start";
+  if (collect.length > 8) return "many";
+  if (collect.some((value) => !VALUE_NAME.test(value.name.trim()))) return "name";
+  if (new Set(collect.map((value) => value.name.trim())).size < collect.length) return "twice";
+  if (collect.some((value) => !value.description.trim() || value.description.trim().length > 200)) return "description";
+  return undefined;
+}
+
+function namesInside(value: unknown, into: Set<string>): void {
+  if (typeof value === "string") for (const match of value.matchAll(PLACEHOLDER)) into.add(match[1]!);
+  else if (Array.isArray(value)) for (const one of value) namesInside(one, into);
+  else if (value && typeof value === "object") for (const one of Object.values(value)) namesInside(one, into);
+}
+
+/** The first value a step reads that no step collects or saves: the relay would refuse the step for it. */
+function unknownValue(step: FlowStep, steps: readonly FlowStep[]): string | undefined {
+  const entry = step.onEnter;
+  if (!entry) return undefined;
+  const set = new Set(SESSION_VALUES);
+  for (const other of steps) {
+    for (const value of other.collect ?? []) set.add(value.name.trim());
+    for (const name of Object.keys(other.onEnter?.save ?? {})) set.add(name);
+  }
+  const reads = new Set<string>();
+  namesInside(entry.say, reads);
+  namesInside(entry.call?.arguments, reads);
+  for (const branch of entry.next ?? []) if (branch.if?.value) reads.add(branch.if.value);
+  return [...reads].find((name) => !set.has(name));
+}
+
 /** A step's `onEnter` as the relay takes it: nothing of it when nothing is written in it. */
 function entryToSave(entry: FlowEntry | undefined): FlowEntry | undefined {
   if (!entry) return undefined;
   const say = entry.say?.replace(/\s+/g, " ").trim();
   const tool = entry.call?.tool.trim();
+  const save = Object.entries(entry.save ?? {}).map(([name, path]) => [name.trim(), path.trim()] as const);
   const saved: FlowEntry = {
     ...(say ? { say } : {}),
     ...(tool ? { call: { tool, arguments: entry.call?.arguments ?? {} } } : {}),
+    ...(save.length > 0 ? { save: Object.fromEntries(save) } : {}),
     ...(entry.next?.length ? { next: entry.next } : {})
   };
   return Object.keys(saved).length > 0 ? saved : undefined;
@@ -463,6 +532,16 @@ export function flowToSave(steps: readonly FlowStep[]): FlowStep[] {
           handoffs: step.handoffs.map((handoff) => ({
             to: handoff.to,
             ...(handoff.when?.trim() ? { when: handoff.when.trim() } : {})
+          }))
+        }
+      : {}),
+    ...(step.collect?.length
+      ? {
+          collect: step.collect.map((value) => ({
+            name: value.name.trim(),
+            description: value.description.replace(/\s+/g, " ").trim(),
+            type: value.type ?? "text",
+            required: value.required !== false
           }))
         }
       : {}),

@@ -41,7 +41,15 @@ import {
   type AssistantProfile
 } from "../../assistant";
 import { config as appConfig } from "../../config";
-import { branchTaken, type AgentEntry } from "../../agent-entry";
+import {
+  branchTaken,
+  collected,
+  filled,
+  filledArguments,
+  savedFrom,
+  type AgentEntry,
+  type Plain
+} from "../../agent-entry";
 import { agentRoster, MAIN_AGENT, type AgentStage } from "../../conversation-config";
 import type { HistoryTurn } from "../../session-resume";
 import {
@@ -167,6 +175,7 @@ const END_SESSION_TOOL = "end_session";
 const TRANSFER_AGENT_TOOL = "transfer_to_agent";
 /** How many agents a conversation passes through by rule, one handover of the model's. */
 const MAX_ENTRY_MOVES = 4;
+const MAX_FLOW_VALUES = 32;
 /** What of a tool's answer the next agent is shown of a call made on the way. */
 const MAX_ENTRY_RESULT_CHARS = 4000;
 
@@ -536,6 +545,19 @@ export function createLiveProvider(
   /** Handovers whose target has an `onEnter` still to be done, by the id of the call that made them. */
   const arrivals = new Map<string, string>();
   let entryCalls = 0;
+  /** What the flow has collected from the user and saved from tools' answers, by name. */
+  const values = new Map<string, Plain>();
+  /** A value of the conversation by its name: the flow's own, or one the relay knows of every session. */
+  const valueOf = (name: string): Plain | undefined => {
+    if (name === "user.id") return sessionContext?.userId || undefined;
+    if (name === "session.id") return sessionContext?.sessionId || undefined;
+    if (name === "channel") return sessionContext?.channel ?? "web";
+    return values.get(name);
+  };
+  const keepValue = (name: string, value: Plain): void => {
+    // A flow has a handful of values: a conversation that somehow makes more keeps the ones it has.
+    if (values.has(name) || values.size < MAX_FLOW_VALUES) values.set(name, value);
+  };
   let sessionTools: readonly ToolDefinition[] = [];
   let builtinTools: ToolDefinition[] = [];
   let idleTimer: NodeJS.Timeout | undefined;
@@ -671,7 +693,11 @@ export function createLiveProvider(
   }
 
   function saveResume(): void {
-    sessionContext?.saveResume?.({ history: [...history], ...(roster.length ? { agent: activeAgent } : {}) });
+    sessionContext?.saveResume?.({
+      history: [...history],
+      ...(roster.length ? { agent: activeAgent } : {}),
+      ...(values.size > 0 ? { values: Object.fromEntries(values) } : {})
+    });
   }
 
   function remember(speaker: HistoryTurn["speaker"], text: string): void {
@@ -918,15 +944,43 @@ export function createLiveProvider(
         // Read each time the tools are offered: an upstream that takes new tools at a handover is
         // shown only the agents the active one leads to. One that cannot is shown them all, once.
         get parameters() {
-          const open = engine?.updateTools ? handoffTargets().map(({ agent }) => agent.id) : [];
+          const open = engine?.updateTools ? handoffTargets().map(({ agent }) => agent) : [];
+          const shown = open.length > 0 ? open : roster;
+          // What some of the agents have to be told at the handover: asked of the user first, never guessed.
+          const asking = shown.filter((agent) => agent.collect);
+          const wanted: Record<string, { type: string; description: string }> = {};
+          for (const agent of asking) {
+            for (const value of agent.collect ?? []) {
+              wanted[value.name] ??= {
+                type: value.type === "text" ? "string" : value.type,
+                description: value.description
+              };
+            }
+          }
           return {
             type: "object",
             properties: {
               agent: {
                 type: "string",
-                enum: open.length > 0 ? open : roster.map((agent) => agent.id),
+                enum: shown.map((agent) => agent.id),
                 description: "The agent to hand over to."
-              }
+              },
+              ...(asking.length > 0
+                ? {
+                    values: {
+                      type: "object",
+                      description: `What the agent has to be told, in the user's own words; ask the user for what you do not know, and never guess. ${asking
+                        .map(
+                          (agent) =>
+                            `${agent.id} needs: ${(agent.collect ?? [])
+                              .map((value) => `${value.name}${value.required ? "" : " (if the user said)"}`)
+                              .join(", ")}.`
+                        )
+                        .join(" ")}`,
+                      properties: wanted
+                    }
+                  }
+                : {})
             },
             required: ["agent"]
           };
@@ -950,6 +1004,29 @@ export function createLiveProvider(
                 ? `the ${activeAgent} agent cannot hand over to ${target.id}. From here the conversation can go to: ${ways}. Call ${TRANSFER_AGENT_TOOL} again with one of these if it fits what the user needs; otherwise carry on yourself`
                 : `the ${activeAgent} agent cannot hand the conversation over; finish what the user needs yourself`
             );
+          }
+          // What the agent needs to know is asked of the user before the conversation goes there.
+          if (target.collect) {
+            const given: Record<string, unknown> =
+              args.values && typeof args.values === "object" && !Array.isArray(args.values)
+                ? (args.values as Record<string, unknown>)
+                : {};
+            const told: Array<[string, Plain]> = [];
+            const missing: string[] = [];
+            for (const value of target.collect) {
+              // A model may also put a value beside `agent` and not inside `values`.
+              const read = collected(given[value.name] ?? args[value.name], value.type);
+              if (read !== undefined) told.push([value.name, read]);
+              else if (value.required && values.get(value.name) === undefined) {
+                missing.push(`${value.name} (${value.description})`);
+              }
+            }
+            if (missing.length > 0) {
+              throw new Error(
+                `before the conversation goes to ${target.id}, the user has to say: ${missing.join("; ")}. Ask the user, then call ${TRANSFER_AGENT_TOOL} again with ${missing.length > 1 ? "them" : "it"} in values. Do not guess, and do not hand over without ${missing.length > 1 ? "them" : "it"}`
+              );
+            }
+            for (const [name, value] of told) keepValue(name, value);
           }
           moveTo(target);
           // What the agent does on arriving is done once this call has answered: see `entered`.
@@ -984,6 +1061,7 @@ export function createLiveProvider(
       ...(target.tools ? { tools: target.tools } : {}),
       // Where the conversation can go from here: an upstream that keeps its first instructions
       // would otherwise go by the list of the agent it started as.
+      ...(values.size > 0 ? { values: Object.fromEntries(values) } : {}),
       ...(target.handoffs
         ? {
             canHandOverTo: handoffTargets(target).map(({ agent, when }) => ({
@@ -1053,13 +1131,36 @@ export function createLiveProvider(
         // The user has spoken, or a second handover in the same reply has taken the conversation elsewhere.
         const gone = (): boolean => cancelled() || activeAgent !== here;
         if (entry.say) {
-          lines.push(entry.say);
-          // Before the call, not after it: "one moment" is for the wait.
-          sayNow?.(entry.say);
+          const line = filled(entry.say, valueOf);
+          // A sentence with a hole in it is not said.
+          if (line.missing.length > 0) {
+            log.warn("onEnter did not say its sentence: a value it names has not been set", {
+              agent: here,
+              missing: line.missing
+            });
+          } else {
+            lines.push(line.text);
+            // Before the call, not after it: "one moment" is for the wait.
+            sayNow?.(line.text);
+          }
         }
         let result: Awaited<ReturnType<typeof entryCall>> | undefined;
         if (entry.call) {
-          result = await entryCall(entry.call, gone);
+          const args = filledArguments(entry.call.arguments, valueOf);
+          // Nor is a tool called with one: the step fails, and a branch for that can take over.
+          result =
+            args.missing.length > 0
+              ? {
+                  ok: false,
+                  output: toolErrorText(
+                    `onEnter did not call ${entry.call.tool}: there is no value for ${args.missing.join(", ")}`
+                  )
+                }
+              : await entryCall({ tool: entry.call.tool, arguments: args.arguments }, gone);
+          if (result.ok) {
+            for (const [name, value] of Object.entries(savedFrom(entry.save, result.output))) keepValue(name, value);
+            if (entry.save) saveResume();
+          }
           const stopped = gone();
           // A tool that ran is told to the model even when the user has spoken since: it must not run twice.
           if (!stopped || result.ran) {
@@ -1071,7 +1172,7 @@ export function createLiveProvider(
           }
           if (stopped) break;
         }
-        const to = branchTaken(entry.next, result);
+        const to = branchTaken(entry.next, result, valueOf);
         const target = to ? roster.find((one) => one.id === to) : undefined;
         if (!target) break;
         // A flow that leads back to where it has been would never stop of itself.
@@ -2267,6 +2368,7 @@ export function createLiveProvider(
         history = context.resume.history.slice(-MAX_HISTORY_TURNS);
         const resumedAgent = context.resume.agent;
         if (resumedAgent && roster.some((agent) => agent.id === resumedAgent)) activeAgent = resumedAgent;
+        for (const [name, value] of Object.entries(context.resume.values ?? {})) keepValue(name, value);
         // The conversation is under way: no second greeting.
         if (history.length > 0) greeted = true;
       }

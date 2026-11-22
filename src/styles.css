@@ -10583,6 +10583,21 @@ button.opsCard:disabled {
   padding-inline: 8px;
 }
 
+/* A value's rows: the words on what it is get the room, its name and type stay short. */
+.flowValues li .flowValueWide {
+  flex: 2 1 0;
+}
+
+.flowValues li select.studioInput {
+  flex: none;
+}
+
+.flowValues li .studioCheck {
+  flex: none;
+  margin: 0;
+  white-space: nowrap;
+}
+
 @media (max-width: 560px) {
   .flowBranches li {
     flex-wrap: wrap;

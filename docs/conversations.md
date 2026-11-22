@@ -281,8 +281,56 @@ without a path, the whole answer) and one test:
 - **A mistake in an `onEnter` drops the whole `onEnter`**, with a problem in the startup log, and keeps the agent:
   half of what was meant to happen by rule is worse than none of it. A tool name the relay does not have is
   warned about at startup.
-- Arguments are fixed text: there are no variables to fill them from. A webhook tool is sent the session, user
-  and caller with every call, which is usually what a lookup needs.
+- A webhook tool is sent the session, user and caller with every call, whatever its arguments.
+
+**Values: what the flow knows.** A flow often needs something the user said, an order number, a postcode, before a
+step can do its work, and something a tool answered in a later step. Both are values of the conversation, kept by
+name.
+
+```json
+{
+  "id": "orders",
+  "description": "Anything about an order the user placed.",
+  "instructions": "Help the user with their order.",
+  "tools": ["find_order"],
+  "collect": [{ "name": "order_number", "description": "The number of the order, as the user said it" }],
+  "onEnter": {
+    "say": "One moment, I am looking up order {{order_number}}.",
+    "call": { "tool": "find_order", "arguments": { "number": "{{order_number}}" } },
+    "save": { "status": "status", "paid": "order.total" },
+    "next": [
+      { "to": "tracking", "if": { "value": "status", "in": ["shipped", "packed"] } },
+      { "to": "human", "if": { "failed": true } }
+    ]
+  }
+}
+```
+
+| Key               | What it does                                                                                                                                                                                                                                                                                    |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collect`         | Up to 8 values the assistant has to get from the user before it hands the conversation to this agent. Each has a `name` (lower-case letters, digits, `_`), a `description` the model asks by, a `type` (`text`, `number` or `boolean`; text when left out) and `required` (true when left out). |
+| `onEnter.save`    | Up to 8 parts of the tool's answer to keep: a name, and the path of the part. Only texts, numbers and true/false are kept.                                                                                                                                                                      |
+| `{{name}}`        | In `say` and in the `arguments` of a call: the value of that name. An argument that is nothing but `"{{name}}"` gets the value as it is, a number as a number.                                                                                                                                  |
+| `"value": "name"` | In a condition, in place of `path`: the test reads that value, not the tool's answer. A branch on a value needs no call.                                                                                                                                                                        |
+
+- **The handover waits for what is required.** The handover tool tells the model what each agent needs. A handover
+  to `orders` without an order number is refused with what to ask the user; the model asks, and hands over with the
+  answer. A value the conversation already has is not asked for again. A value that is not required is passed when
+  the user said it.
+- **A value is what the model heard.** The relay checks its type and cuts it to 200 characters. It cannot check
+  that the user said it: the model is told not to guess, and a made-up order number fails where a real system
+  looks it up. Treat a collected value as you would the argument of a tool call the model makes.
+- **A sentence or a call with a value that is not there does not happen.** The sentence is not said, with a line in
+  the log. The call is not made and counts as failed, so a `failed` branch can take over. A name that no agent
+  collects or saves is refused when the config is loaded.
+- **The relay's own values** are `{{user.id}}` (the `userId` of the session token, when there is one),
+  `{{session.id}}` and `{{channel}}` (`web` or `phone`).
+- **Where the values are.** In the session: they are carried across a
+  [dropped connection](#carrying-a-conversation-across-a-dropped-connection), given to each agent the conversation
+  comes to (`values` in the handover's result), and gone when the conversation ends. At most 32 in a conversation.
+  `main` has no `collect`: no handover leads to the start of a conversation.
+- Instructions are not filled in: `{{name}}` works in `say` and in arguments. An agent's model sees the values in
+  the handover's result.
 
 **The flow builder.** Admin → Flow draws the same thing. Each agent is a step on a canvas; Start is `main`. Add a
 step, write when to come to it and what it does, tick its tools, and draw an arrow by dragging from the dot on a
@@ -296,7 +344,7 @@ name used twice) is not saved, and the builder says what to fix. It also points 
 step that no arrow leads to from Start. A step's name is taken when you leave the field, and the arrows that lead to
 the step follow it. Where each step sits is stored with it as `at`, which the relay itself does not read. A step's
 editor also has what the relay does itself on arriving: the sentence, the tool and its arguments, and the branches,
-which are drawn as dashed arrows with their conditions.
+which are drawn as dashed arrows with their conditions. It has the values too: what the assistant asks for before it hands over to the step, what the step keeps from its tool's answer, and branches that read a value.
 
 The builder edits the config's own `agents`. A [variant](#versions-and-ab-tests) that replaces `agents` keeps its own
 and is edited in the file. Tools are chosen by name from the relay's tools; a client's own tool is typed in. Max
@@ -319,7 +367,16 @@ and branches on `status`. With the order shipped the conversation went on to `tr
 `refunds` (and refunded after a yes), and with the order service down to `human`, each time with the sentence said
 as written and the tool's answer used by the agent that followed, 9 runs of 9. Before the repeat was cut, the same
 model said the sentence twice in 3 runs of 3 when the next agent had little else to say. A changed flow was saved
-through `PUT /auth/admin/studio/flow`, and one with a condition the relay does not know was refused. With an
+through `PUT /auth/admin/studio/flow`, and one with a condition the relay does not know was refused.
+
+The example with values above was run with the same model and an order service that knows two orders by number, six
+conversations. Asked "where is my order?", the assistant asked for the number before handing over, twice of twice;
+with the number in the question it handed over at once, three of three, in one of them not until the user was
+asked what they needed. The sentence was said with the number in it, the lookup was called with it, and the
+conversation went on by the saved status: to `tracking` for a shipped order, to `refunds` for a delivered one, and
+to `human` for a number the service did not know. A user who said they had no number was asked for another way to
+find the order, and no number was made up. In one run the next agent said part of the fixed sentence again in
+other words, which the cut of exact repeats does not catch. With an
 order service that takes three seconds to answer, the sentence reached the client 1.5 seconds after the user's
 question, before the lookup started, and the agent's answer followed when the lookup had answered at 4.6 seconds.
 

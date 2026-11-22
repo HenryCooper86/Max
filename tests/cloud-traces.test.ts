@@ -148,6 +148,27 @@ describe("a project's traces headers", () => {
     expect(liveProject(created.id)!.traces_headers_enc).toBeNull();
   });
 
+  it("do not follow the traces to another host", async () => {
+    const owner = await customer();
+    const created = project(owner);
+    const traces = (endpoint: string) => ({ studio: { traces: { endpoint, content: false } } });
+    patch(owner, created.id, { ...traces("https://otel.example.com/v1/traces"), tracesHeaders: KEY });
+    const saved = liveProject(created.id)!.traces_headers_enc;
+    expect(saved).toMatch(/^v2:/);
+    // Another path on the same host, or a save of something else in the Studio: they stay.
+    patch(owner, created.id, traces("https://otel.example.com/api/v1/traces"));
+    patch(owner, created.id, { studio: { keepConversations: true } });
+    expect(liveProject(created.id)!.traces_headers_enc).toBe(saved);
+    // Another host: one collector's key is not sent to the next.
+    expect(patch(owner, created.id, traces("https://otel.example.org/v1/traces")).hasTracesHeaders).toBe(false);
+    expect(liveProject(created.id)!.traces_headers_enc).toBeNull();
+    // Given with the new address in the same save, they are the new collector's and are kept.
+    patch(owner, created.id, { ...traces("https://collector.example.net/v1/traces"), tracesHeaders: "x-api-key=new" });
+    expect(liveProject(created.id)!.traces_headers_enc).toMatch(/^v2:/);
+    // Switched off, they go too: a later address would otherwise be sent them.
+    expect(patch(owner, created.id, traces("")).hasTracesHeaders).toBe(false);
+  });
+
   it("are refused, with the reason, when they cannot be sent", async () => {
     const owner = await customer();
     const created = project(owner);
@@ -167,6 +188,13 @@ describe("a project's traces headers", () => {
     expect(refused("no-equals-sign")).toMatch(/must look like name=value/);
     expect(refused("=value")).toMatch(/must look like name=value/);
     for (const name of ["host", "Content-Length", "CONTENT-TYPE", "transfer-encoding", "Connection"]) {
+      expect(refused(`${name}=x`)).toBe(`The ${name.toLowerCase()} header cannot be set here.`);
+    }
+    // Nor one that changes how the request is made, or has the relay speak for somebody it is not.
+    for (const name of ["Upgrade", "expect", "te", "trailer", "keep-alive", "Cookie", "Forwarded"]) {
+      expect(refused(`${name}=x`)).toBe(`The ${name.toLowerCase()} header cannot be set here.`);
+    }
+    for (const name of ["Proxy-Authorization", "proxy-connection", "X-Forwarded-For", "x-forwarded-host"]) {
       expect(refused(`${name}=x`)).toBe(`The ${name.toLowerCase()} header cannot be set here.`);
     }
     // None of those was saved; ten is allowed, as are an empty value, empty parts and encoded characters.

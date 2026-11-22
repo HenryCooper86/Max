@@ -4,6 +4,14 @@ import type { TracesTestResult } from "../api";
 import { useSay } from "../hooks";
 import type { StudioTabProps } from "./types";
 
+function hostOf(address: string): string {
+  try {
+    return new URL(address).origin;
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Where each conversation is traced: the address of the project's own OpenTelemetry collector, the headers it
  * wants (a secret: only ever typed in, never shown), whether what was said goes with it, and a test.
@@ -16,6 +24,9 @@ export function TracesSetting({ session, project, draft, update, updateStudio, o
   const unsaved = endpoint.trim() !== saved;
   const problem = endpoint.trim() ? toolUrlProblem(endpoint.trim()) : undefined;
   const hasHeaders = project.hasTracesHeaders === true;
+  // The relay removes saved headers when the traces go to another host: one collector's key is not sent to the next.
+  const headersLeft =
+    hasHeaders && unsaved && !(draft.tracesHeaders ?? "") && hostOf(endpoint.trim()) !== hostOf(saved);
   const [testing, setTesting] = useState(false);
   const [removing, setRemoving] = useState(false);
   // Each with the endpoint it is about: what is known of one says nothing of the next.
@@ -148,6 +159,14 @@ export function TracesSetting({ session, project, draft, update, updateStudio, o
           "With this on, transcripts (what the visitor and the agent said, up to 2,000 characters each) are sent to that collector; with it off, only timings, tool names and error messages are."
         )}
       </p>
+      {headersLeft ? (
+        <p className="cxWarn" role="status">
+          {say(
+            "已保存的请求头属于原来的收集器，保存新地址时会被移除。请在上面填写新收集器的请求头。",
+            "The saved headers belong to the collector they were given for and are removed when this address is saved. Enter the new collector's headers above."
+          )}
+        </p>
+      ) : null}
       {unsaved && !problem ? (
         <p className="cxWarn" role="status">
           {say("请保存以生效", "Save to apply")}

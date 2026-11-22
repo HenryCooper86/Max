@@ -474,6 +474,19 @@ export function patchProject(
       if (!secret) return fail(503, "Max Cloud is not configured");
       changes.traces_headers_enc = encryptModelKey(headers, secret, tracesHeadersScope(projectId));
     }
+  } else if (current.traces_headers_enc && changes.studio !== undefined) {
+    // The headers were given for one collector. When the traces go to another host, they do not go with them:
+    // one service's API key is not sent to the next because an address was changed (or mistyped).
+    const host = (endpoint: string) => {
+      try {
+        return new URL(endpoint).origin;
+      } catch {
+        return "";
+      }
+    };
+    const before = projectStudio(current).traces.endpoint;
+    const after = (JSON.parse(changes.studio) as ProjectStudio).traces.endpoint;
+    if (host(before) !== host(after)) changes.traces_headers_enc = null;
   }
   if (!updateProject(projectId, customerId, changes)) return fail(404, "Project not found.");
   const row = liveProject(projectId, customerId);

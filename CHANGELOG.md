@@ -238,6 +238,9 @@
   turns it on; the address must be public https, by the rules of a tool call. "Send test trace" in the Conversations
   tab checks it. A collector that is down costs the project its traces and nothing else. The relay operator's own
   tracing still does not include projects' conversations. See [Traces](docs/cloud.md#traces).
+- Requests to a customer's address (a project's tools, its conversation webhook, its collector) no longer wait for
+  ever on a server that answers "101 Switching Protocols" or closes the connection without an answer: both are a
+  failure at once. The trace exporter keeps its 10-second limit itself, whatever the request does.
 
 ### Tools and knowledge
 

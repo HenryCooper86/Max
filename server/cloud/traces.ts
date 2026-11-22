@@ -24,8 +24,25 @@ const log = createLogger("cloud");
 
 export const TRACES_HEADERS_MAX = 2000;
 const TRACES_HEADERS_MAX_COUNT = 10;
-/** Headers the relay sets itself, or that would change what the request is. */
-const REFUSED_HEADERS = new Set(["host", "content-length", "content-type", "transfer-encoding", "connection"]);
+/**
+ * Headers the relay sets itself, that would change what the request is, or that would make the relay speak
+ * for somebody it is not (a cookie, a forwarded address) to a service that trusts where a request comes from.
+ */
+const REFUSED_HEADERS = new Set([
+  "host",
+  "content-length",
+  "content-type",
+  "transfer-encoding",
+  "connection",
+  "expect",
+  "upgrade",
+  "te",
+  "trailer",
+  "keep-alive",
+  "cookie",
+  "forwarded"
+]);
+const REFUSED_HEADER_PREFIXES = ["proxy-", "x-forwarded-"];
 /** RFC 9110 token characters. */
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
@@ -53,7 +70,10 @@ export function tracesHeadersProblem(raw: string): string | undefined {
     const name = at > 0 ? part.slice(0, at).trim() : "";
     if (!name) return "Traces headers must look like name=value,name2=value2.";
     if (!HEADER_NAME.test(name)) return `${name.slice(0, 40)} is not a valid header name.`;
-    if (REFUSED_HEADERS.has(name.toLowerCase())) return `The ${name.toLowerCase()} header cannot be set here.`;
+    const lower = name.toLowerCase();
+    if (REFUSED_HEADERS.has(lower) || REFUSED_HEADER_PREFIXES.some((prefix) => lower.startsWith(prefix))) {
+      return `The ${lower.slice(0, 40)} header cannot be set here.`;
+    }
   }
   // A value is URL-encoded, so what it decodes to is what is sent: no line breaks smuggled in as %0D%0A.
   for (const value of Object.values(parseHeaders(raw))) {

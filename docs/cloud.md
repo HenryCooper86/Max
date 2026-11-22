@@ -139,7 +139,8 @@ the conversation webhook: the collector's full traces address (for Langfuse,
   `voice.turn` span for each turn with how long the speech recognition, the thinking and the first sound took, and a
   `voice.tool` span for each tool call with its name, how long it took and whether it worked. The project's name is
   the `service.name` and the agent's name. Tool arguments and results are never sent. A failed tool call carries
-  its error message, and an error the relay reported is an event on its span, with or without the setting below.
+  its error message, and an error the relay reported is an event on its span, with or without the setting below; a
+  turn's span also says how many characters each side said, but not what.
 - **What was said.** Off unless the owner turns on "Include what was said": then each turn's span also carries what
   the visitor and the agent said, cut at 2,000 characters each. The console says that transcripts go to that
   collector. Nothing else about the visitor is sent.
@@ -151,7 +152,11 @@ the conversation webhook: the collector's full traces address (for Langfuse,
   They are encrypted with `CLOUD_SECRET_KEY` like a model key (and move with it in
   [a rotation](#rotating-cloud_secret_key)), are not part of the Studio settings, and are never shown again or
   returned by any request: the project only says `hasTracesHeaders`. Saving them without `CLOUD_SECRET_KEY` set
-  fails as saving a model key does. If they cannot be decrypted, the project's conversations are not traced, and the
+  fails as saving a model key does. They belong to the collector they were given for: when the address is changed
+  to another host, or emptied, the saved headers are removed, and the new collector's are entered with it (in the
+  same save, over the API). Headers that change how a request is made, or that would have the relay speak for
+  somebody else, are refused as well (`upgrade`, `expect`, `te`, `trailer`, `keep-alive`, `cookie`, `forwarded`,
+  and any `proxy-` or `x-forwarded-` header). If they cannot be decrypted, the project's conversations are not traced, and the
   relay logs one warning.
 - **Send test trace.** Sends one small sample trace (a session with one turn, marked `max.test` in its attributes) to
   the saved address with the saved headers, once and without a retry, and says in words how it went: that the

@@ -243,6 +243,26 @@ describe("createSpanExporter", () => {
     expect(exporter.stats()).toEqual({ exported: 0, dropped: 1, failedBatches: 1 });
   });
 
+  it("gives a request up after 10 seconds even when it never settles, and goes on to the next batch", async () => {
+    // A request that takes no notice of the abort: the exporter is not left waiting on it for good.
+    const request = vi.fn(() => new Promise<Response>(() => undefined));
+    const exporter = createSpanExporter(settings, { request: request as unknown as typeof fetch });
+    exporter.export([span()]);
+    const done = exporter.flush();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await done;
+    expect(exporter.stats()).toEqual({ exported: 0, dropped: 1, failedBatches: 1 });
+    // And closing it ends: it is not held by what was never answered.
+    exporter.export([span()]);
+    const closed = exporter.close();
+    await vi.advanceTimersByTimeAsync(21_000);
+    await closed;
+    expect(exporter.stats().failedBatches).toBe(2);
+  });
+
   it("flush sends what is queued and close stops later exports", async () => {
     const request = okFetch();
     const exporter = createSpanExporter(settings, { request: request as unknown as typeof fetch });

@@ -206,13 +206,22 @@ export function createSpanExporter(settings: TracingSettings, options: SpanExpor
     const controller = new AbortController();
     let timeout: TimerHandle | undefined;
     try {
-      timeout = setTimer(() => controller.abort(), REQUEST_TIMEOUT_MS);
-      const response = await request(settings.endpoint, {
+      const asked = request(settings.endpoint, {
         method: "POST",
         headers: { ...settings.headers, "content-type": "application/json" },
         body: payload,
         signal: controller.signal
       });
+      // The time limit is kept here too, not left to the request to honour: one that never settles
+      // would hold this batch, and every batch behind it, for good.
+      const late = new Promise<never>((_, reject) => {
+        timeout = setTimer(() => {
+          controller.abort();
+          reject(new Error("no answer within 10 seconds"));
+        }, REQUEST_TIMEOUT_MS);
+      });
+      asked.catch(() => undefined);
+      const response = await Promise.race([asked, late]);
       try {
         await response.body?.cancel();
       } catch {

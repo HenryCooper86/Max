@@ -66,7 +66,7 @@ enum LocalizationTable {
     /// small, quick-to-compile literal.
     static let rows: [String: Row] = {
         var out: [String: Row] = [:]
-        for list in [coreRows, settingsRows, navigationRows, statusRows] {
+        for list in [coreRows, settingsRows, navigationRows, statusRows, resilienceRows] {
             for (key, zh, en) in list { out[key] = Row(zh: zh, en: en) }
         }
         return out

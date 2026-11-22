@@ -155,6 +155,13 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         if dismiss { visible = false }
     }
 
+    /// Mirrors Android's stopOwnPlayback: in QQ Music mode the music belongs
+    /// to QQ Music and Max does not touch it.
+    func stopOwnPlayback() {
+        guard !prefersQQMusic else { return }
+        stopPlayback()
+    }
+
     func setAppInBackground(_ background: Bool) {
         appInBackground = background
         if background { stopPlayback() }
@@ -325,3 +332,6 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         return .failed("music.emptyQueue", message)
     }
 }
+
+
+extension MusicPlaybackModel: OwnMusicStopping {}

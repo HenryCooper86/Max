@@ -1,4 +1,13 @@
 AMAP_IOS_KEY =
 #include? "../Pods/Target Support Files/Pods-MaxHelmet/Pods-MaxHelmet.release.xcconfig"
 EXCLUDED_ARCHS[sdk=iphonesimulator*] =
+#include "Base.xcconfig"
 #include? "Secrets.xcconfig"
+
+// A Release build for a device with no relay host would ship pointing at a
+// placeholder. With MAX_RELAY_HOST empty the lookup below resolves
+// MAX_RELAY_HOST_UNSET_ and defines MAX_RELAY_HOST_MISSING, which
+// MaxHelmet/UI/RelayConfiguration.swift turns into a compile error; any
+// configured host names a setting that does not exist and adds nothing.
+MAX_RELAY_HOST_UNSET_ = MAX_RELAY_HOST_MISSING
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) $(MAX_RELAY_HOST_UNSET_$(MAX_RELAY_HOST:c99extidentifier))

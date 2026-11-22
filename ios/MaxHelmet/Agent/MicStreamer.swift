@@ -14,8 +14,9 @@ final class MicStreamer {
     private let onLevel: (Float) -> Void
 
     /// Shared with PcmPlayer so iOS's voice-processing I/O unit can use the
-    /// playback as its echo-cancellation reference — see start().
-    private let engine: AVAudioEngine
+    /// playback as its echo-cancellation reference — see start(). Replaced only
+    /// by rebind(to:) after a media-services reset.
+    private var engine: AVAudioEngine
     private var converter: AVAudioConverter?
     /// The input format `converter` was built for. process() rebuilds the
     /// converter when the tap starts delivering a different format (a mid-ride
@@ -134,6 +135,49 @@ final class MicStreamer {
             configObserver = nil
         }
         engine.inputNode.removeTap(onBus: 0)
+        converter = nil
+        converterInputFormat = nil
+        pending.removeAll(keepingCapacity: true)
+    }
+
+    /// True while capture is meant to be on (between start() and stop()/pauseCapture()).
+    var isCapturing: Bool { running }
+
+    /// Makes sure capture that is meant to be on is actually flowing. Used
+    /// after a route change has settled: the configuration-change handler
+    /// below bails out when the new input reports no format yet, and an engine
+    /// stopped by the change stays stopped. Returns whether the engine runs.
+    @discardableResult
+    func ensureRunning() -> Bool {
+        guard running else { return false }
+        if engine.isRunning { return true }
+        let input = engine.inputNode
+        let format = input.inputFormat(forBus: 0)
+        guard format.sampleRate > 0 else { return false }
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            self?.process(buffer)
+        }
+        engine.prepare()
+        do {
+            try engine.start()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Points capture at a new engine after a media-services reset. The old
+    /// engine is abandoned rather than stopped: after a reset its objects are
+    /// no longer backed by the media server. The caller starts capture again
+    /// with start().
+    func rebind(to newEngine: AVAudioEngine) {
+        running = false
+        if let observer = configObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configObserver = nil
+        }
+        engine = newEngine
         converter = nil
         converterInputFormat = nil
         pending.removeAll(keepingCapacity: true)

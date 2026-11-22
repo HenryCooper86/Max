@@ -38,6 +38,8 @@ final class CameraController: DeviceActionHandler {
     private let onRecordingChange: (Bool) -> Void
     private let onOpenGallery: () -> Void
     private let onAutoStopped: () -> Void
+    /// What the phone's heat and Low Power Mode allow right now.
+    private let capturePolicy: () -> CapturePolicy
 
     private var recording = false
     private var autoStopTask: Task<Void, Never>?
@@ -53,13 +55,15 @@ final class CameraController: DeviceActionHandler {
         store: CaptureStoring,
         onRecordingChange: @escaping (Bool) -> Void,
         onOpenGallery: @escaping () -> Void,
-        onAutoStopped: @escaping () -> Void
+        onAutoStopped: @escaping () -> Void,
+        capturePolicy: @escaping () -> CapturePolicy = { .unrestricted }
     ) {
         self.session = session
         self.store = store
         self.onRecordingChange = onRecordingChange
         self.onOpenGallery = onOpenGallery
         self.onAutoStopped = onAutoStopped
+        self.capturePolicy = capturePolicy
         session.setRecordingCompletion { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
@@ -94,6 +98,7 @@ final class CameraController: DeviceActionHandler {
     private func takePhoto() async -> DeviceActionResult {
         guard !recording, !startingRecording else { return .failed("camera.recording") }
         guard !takingPhoto else { return .failed("camera.busy") }
+        if let refusal = capturePolicy().photo { return refusal.result }
         takingPhoto = true
         defer { takingPhoto = false }
         let generation = operationGeneration
@@ -112,6 +117,7 @@ final class CameraController: DeviceActionHandler {
     private func startRecording() async -> DeviceActionResult {
         guard !recording, !startingRecording else { return .failed("camera.recording") }
         guard !takingPhoto, stopTask == nil else { return .failed("camera.busy") }
+        if let refusal = capturePolicy().videoRecording { return refusal.result }
         startingRecording = true
         defer { startingRecording = false }
         let generation = operationGeneration
@@ -129,6 +135,12 @@ final class CameraController: DeviceActionHandler {
             }
             onRecordingChange(true)
             scheduleAutoStop()
+            // Heat that arrived while the start was awaited was not seen by
+            // enforce() (nothing was recording yet); check again now it runs.
+            if capturePolicy().videoRecording == .hot {
+                _ = await stopRecording(auto: false)
+                return CaptureRefusal.hot.result
+            }
             return .ok
         } catch {
             return finishRecording(.failure(error), auto: false)
@@ -152,6 +164,16 @@ final class CameraController: DeviceActionHandler {
         }
         stopTask = task
         return await task.value
+    }
+
+    /// Applies a new heat policy to a recording in progress. Heat stops it (the
+    /// clip so far is kept, as with any stop); Low Power Mode does not cut a
+    /// recording the rider already started. Returns whether it stopped one.
+    @discardableResult
+    func enforce(_ policy: CapturePolicy) async -> Bool {
+        guard policy.videoRecording == .hot, recording, !startingRecording else { return false }
+        _ = await stopRecording(auto: false)
+        return true
     }
 
     /// Ends capture independently of voice/audio teardown and invalidates permission waits.

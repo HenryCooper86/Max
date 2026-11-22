@@ -28,7 +28,7 @@ test -e Config/Secrets.xcconfig || \
   cp Config/Secrets.xcconfig.example Config/Secrets.xcconfig
 ```
 
-脚本会核对 Ruby、Bundler、CocoaPods 和依赖。只在忽略提交的 `Config/Secrets.xcconfig` 中设置 `AMAP_IOS_KEY`，不要提交真实密钥。用 Xcode 打开 `ios/MaxHelmet.xcworkspace` 运行；真机先在 **Signing & Capabilities** 选择自己的团队。新增 Swift 源文件由同步文件组自动纳入 target。
+脚本会核对 Ruby、Bundler、CocoaPods 和依赖。只在忽略提交的 `Config/Secrets.xcconfig` 中设置 `AMAP_IOS_KEY`，不要提交真实密钥。用 Xcode 打开 `ios/MaxHelmet.xcworkspace` 运行；真机构建需在 `Config/Secrets.xcconfig` 中写入 `MAX_DEVELOPMENT_TEAM = <你的团队 ID>`（项目文件不再固定团队），并设置 `MAX_RELAY_HOST`（Release 真机构建缺少它会直接编译失败）。版本号在 `Config/Base.xcconfig` 的 `MARKETING_VERSION`，构建号通过 `xcodebuild ... MAX_BUILD_NUMBER=<n>` 传入。新增 Swift 源文件由同步文件组自动纳入 target。
 
 从仓库根目录构建模拟器版本：
 
@@ -47,13 +47,13 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 在仓库根目录运行 `npm run dev:server`，然后打开 App，点底部齿轮进入 **设置 → 连接** 修改 **语音中继地址**。
 
-| 运行位置           | 中继 URL                                         | 默认值           |
-| ------------------ | ------------------------------------------------ | ---------------- |
-| iOS 模拟器         | `ws://localhost:8787/agent`                      | 是               |
-| iPhone 真机        | `wss://3.35.135.136/agent`（测试服务器，自签名） | Debug 构建默认值 |
-| 同一局域网的开发机 | `ws://<开发机局域网 IP>:8787/agent`              | 需手动填写       |
+| 运行位置           | 中继 URL                                                             | 默认值                             |
+| ------------------ | -------------------------------------------------------------------- | ---------------------------------- |
+| iOS 模拟器         | `ws://localhost:8787/agent`                                          | 是                                 |
+| iPhone 真机        | `wss://<MAX_RELAY_HOST>/agent`，例如 `wss://relay.example.com/agent` | 设置了 `MAX_RELAY_HOST` 时为默认值 |
+| 同一局域网的开发机 | `ws://<开发机局域网 IP>:8787/agent`                                  | 需手动填写                         |
 
-在真机上，`localhost` 指向手机本身。Debug 构建可使用设置中的自签名测试证书选项；Release 构建没有该绕过，必须使用主机名匹配的可信证书。点头盔开始或结束会话。麦克风必需，天气定位可选；`VOICE_PROVIDER=mock` 为脚本演示，`doubao` 为实时语音。
+在真机上，`localhost` 指向手机本身，默认中继来自 `Config/Secrets.xcconfig` 中的 `MAX_RELAY_HOST`；未设置时点头盔会显示「未配置语音中继」卡片，而不会去连接任何地址。Debug 构建可使用设置中的自签名测试证书选项；Release 构建没有该绕过，必须使用主机名匹配的可信证书。点头盔开始或结束会话。麦克风必需，天气定位可选；`VOICE_PROVIDER=mock` 为脚本演示，`doubao` 为实时语音。
 
 **QA 任务归因**可输入活动、用例、发布批次和分配 ID；下一次 `session.start` 会连同 `platform=ios` 与构建 SHA 一起发送。
 

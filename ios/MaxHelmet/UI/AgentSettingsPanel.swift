@@ -546,7 +546,7 @@ struct SettingsPanel: View {
                 VisorRow(title: L("set.weather"), subtitle: L("set.weather.pending"))
             }
             VisorRow(title: L("set.route")) {
-                Text("\(state.rideContext.speedKmh) km/h · \(state.rideContext.routePhase)")
+                Text("\(state.rideContext.speedKmh.map(String.init) ?? "—") km/h · \(state.rideContext.routePhase)")
                     .visorFont(.subhead, mono: true)
                     .foregroundStyle(Visor.textSecondary)
             }

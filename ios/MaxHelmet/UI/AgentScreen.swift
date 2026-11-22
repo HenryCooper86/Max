@@ -52,12 +52,18 @@ func crashCountdownSeconds(windowS: Double, sinceT: TimeInterval, now: TimeInter
 
 /// The headline under the visor — the main words on the clean screen.
 /// An elevated fused hazard prefixes it with the safety call-out.
-private func readoutHeadline(_ state: AgentSession.State, name: String) -> String {
+func readoutHeadline(_ state: AgentSession.State, name: String) -> String {
     let base: String
     if !state.handsFree {
         base = L("main.hello", ("name", name))
+    } else if state.audioRecoveryFailed {
+        base = L("main.audioFailed")
+    } else if state.audioInterrupted {
+        base = L("main.audioPaused")
     } else if state.micMuted {
         base = L("main.muted")
+    } else if state.networkWaiting {
+        base = L("main.networkWaiting")
     } else if state.connection == .ready {
         base = turnCaption(state.turnState, name: name)
     } else {
@@ -71,12 +77,15 @@ private func readoutHeadline(_ state: AgentSession.State, name: String) -> Strin
     }
 }
 
-private func readoutHint(_ state: AgentSession.State, wakePhrase: String?) -> String {
+func readoutHint(_ state: AgentSession.State, wakePhrase: String?) -> String {
     if !state.handsFree {
         if let wakePhrase, !wakePhrase.isEmpty { return L("hint.wake", ("wake", wakePhrase)) }
         return L("hint.start")
     }
+    if state.audioRecoveryFailed { return L("hint.end") }
     if state.micMuted { return L("hint.unmute") }
+    // A relay-side lookup can take seconds; say so instead of looking stuck.
+    if state.toolActivityBusy && !state.audioInterrupted { return L("tool.activity.busy") }
     return L("hint.end")
 }
 
@@ -140,11 +149,16 @@ struct AgentScreen: View {
                             handsFree: state.handsFree,
                             stage: stage,
                             style: Visor.visualizer,
+                            animationsPaused: state.thermalShedding,
                             onTap: viewModel.toggleHandsFree
                         )
                         .overlay(alignment: .topLeading) {
                             let frame = mascotFrame(in: stage)
-                            Mascot(mood: mascotMood(visorMode(state), hazard: presentedHazard), tiltEnabled: layout != .landscape)
+                            Mascot(
+                                mood: mascotMood(visorMode(state), hazard: presentedHazard),
+                                tiltEnabled: layout != .landscape,
+                                animationsPaused: state.thermalShedding
+                            )
                                 .frame(width: frame.width, height: frame.height)
                                 .offset(x: frame.minX, y: frame.minY)
                         }
@@ -228,8 +242,14 @@ struct AgentScreen: View {
     /// pill row: a hazard already recolours the visor and leads the headline,
     /// so the banner adds the detail without displacing anything above it.
     @ViewBuilder private func transientAlerts() -> some View {
+        if viewModel.relaySetupRequired && !state.handsFree {
+            RelaySetupNotice(onOpenSettings: { viewModel.showPreferences = true })
+        }
         if let alert = state.hazardAlert {
             HazardBanner(alert: alert)
+        }
+        if let notice = state.transientNotice {
+            DeviceNoticeBanner(text: notice)
         }
         if case let .checkIn(sinceT) = state.crashPhase {
             CrashCheckInBanner(sinceT: sinceT, onCancel: { session.crashController.riderTapCancelled() })
@@ -244,7 +264,13 @@ struct AgentScreen: View {
             items: state.transcript,
             assistantName: Visor.assistantName,
             canFlag: { state.canFlagTurn($0) },
-            onFlag: { item, reason in viewModel.flagTurn(item, reason: reason) }
+            onFlag: { item, reason in viewModel.flagTurn(item, reason: reason) },
+            typingEnabled: typedInputVisible(capabilities: state.capabilities, connection: state.connection),
+            typingLocked: typedInputLockedForSpeed(state.speedKmh),
+            onSendText: { text in
+                if case .success = session.sendTextInput(text) { return true }
+                return false
+            }
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
@@ -306,7 +332,7 @@ private struct TopBar: View {
             HStack(spacing: Visor.Space.s2) {
                 if state.bluetoothRouted {
                     Image(systemName: "headphones")
-                        .font(.system(size: 12, weight: .medium))
+                        .hudIcon(12, .medium, relativeTo: .caption)
                         .foregroundStyle(Visor.textSecondary)
                         .accessibilityLabel(L("a11y.bluetooth"))
                 }
@@ -373,7 +399,7 @@ private struct HazardBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 13, weight: .semibold))
+                        .hudIcon(13, relativeTo: .subheadline)
                         .foregroundStyle(color)
                         .accessibilityHidden(true)
                     Text(alert.label).visorFont(.subhead, .semibold).foregroundStyle(Visor.text)
@@ -394,6 +420,65 @@ private struct HazardBanner: View {
             RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous)
                 .strokeBorder(color, lineWidth: Visor.hairline)
         )
+        // One announcement for the whole warning, not four fragments.
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Explains an unconfigured relay where a generic "connection failed" used
+/// to appear, with the way out one tap away.
+private struct RelaySetupNotice: View {
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Visor.Space.s2) {
+            HStack(spacing: 6) {
+                Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                    .hudIcon(13, relativeTo: .subheadline)
+                    .foregroundStyle(Visor.warn)
+                    .accessibilityHidden(true)
+                Text(L("relay.unset.title"))
+                    .visorFont(.subhead, .semibold)
+                    .foregroundStyle(Visor.text)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            Text(L("relay.unset.body"))
+                .visorFont(.caption)
+                .foregroundStyle(Visor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(L("relay.unset.action"), action: onOpenSettings)
+                .buttonStyle(.visor(.plain, fullWidth: false))
+                .frame(minHeight: Visor.hit)
+        }
+        .padding(Visor.Space.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Visor.soft(Visor.warn), in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous)
+                .strokeBorder(Visor.warn, lineWidth: Visor.hairline)
+        )
+    }
+}
+
+/// A short-lived line about the phone itself (heat, Low Power Mode).
+private struct DeviceNoticeBanner: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Visor.Space.s2) {
+            Image(systemName: "thermometer.medium")
+                .hudIcon(13, relativeTo: .footnote)
+                .foregroundStyle(Visor.warn)
+                .accessibilityHidden(true)
+            Text(text)
+                .visorFont(.footnote, .medium)
+                .foregroundStyle(Visor.text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(Visor.Space.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Visor.surface2, in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -434,6 +519,12 @@ private struct CaptionsOverlay: View {
     let assistantName: String
     let canFlag: (TranscriptItem) -> Bool
     let onFlag: (TranscriptItem, String) -> Void
+    /// The backend takes typed turns: for noise, or riders who cannot speak.
+    var typingEnabled = false
+    /// The bike is known to be moving: the field stays visible but locked.
+    var typingLocked = false
+    /// Returns whether the turn went out, so the field keeps unsent text.
+    var onSendText: (String) -> Bool = { _ in false }
 
     private let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -445,6 +536,23 @@ private struct CaptionsOverlay: View {
     /// It must never scroll the screen: that would carry the readout and the
     /// pill row (including the 字幕 pill that closes it) out of reach.
     var body: some View {
+        VStack(spacing: 0) {
+            transcript
+            if typingEnabled {
+                Rectangle().fill(Visor.line).frame(height: Visor.hairline)
+                TypedInputBar(assistantName: assistantName, locked: typingLocked, onSend: onSendText)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        // Fills whatever the region has left under the pills and any banner,
+        // so the card always ends on its own rounded edge inside the screen.
+        .frame(minHeight: CaptionsOverlay.minimumHeight, maxHeight: .infinity)
+        .background(RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous).fill(Visor.surface1))
+        .overlay(RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous).strokeBorder(Visor.line, lineWidth: Visor.hairline))
+        .clipShape(RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
+    }
+
+    private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 if items.isEmpty {
@@ -482,17 +590,58 @@ private struct CaptionsOverlay: View {
                 if let latest = items.last?.id { proxy.scrollTo(latest, anchor: .bottom) }
             }
         }
-        .frame(maxWidth: .infinity)
-        // Fills whatever the region has left under the pills and any banner,
-        // so the card always ends on its own rounded edge inside the screen.
-        .frame(minHeight: CaptionsOverlay.minimumHeight, maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous).fill(Visor.surface1))
-        .overlay(RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous).strokeBorder(Visor.line, lineWidth: Visor.hairline))
-        .clipShape(RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     static let minimumHeight: CGFloat = 140
     static let heightBesideRoute: CGFloat = 220
+}
+
+/// One line to type a turn. The relay shows the typed text back as the
+/// rider's own transcript, so the field just clears once it is sent.
+private struct TypedInputBar: View {
+    let assistantName: String
+    let locked: Bool
+    let onSend: (String) -> Bool
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    private var sendable: Bool { !locked && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var body: some View {
+        HStack(spacing: Visor.Space.s2) {
+            TextField(locked ? L("typed.locked") : L("typed.placeholder", ("name", assistantName)), text: $text, axis: .vertical)
+                .disabled(locked)
+                .lineLimit(1...3)
+                .visorFont(.subhead)
+                .foregroundStyle(Visor.text)
+                .focused($focused)
+                .submitLabel(.send)
+                .onSubmit(send)
+                .onChange(of: text) { _, newValue in
+                    let clamped = clampToTextInputLimit(newValue)
+                    if clamped != newValue { text = clamped }
+                }
+                .frame(minHeight: Visor.hit)
+                .accessibilityLabel(typedInputAccessibility.fieldLabel)
+            Button(action: send) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .hudIcon(24, .semibold, relativeTo: .title3, maximum: 36)
+                    .foregroundStyle(sendable ? Visor.accent : Visor.textTertiary)
+                    .frame(minWidth: Visor.hit, minHeight: Visor.hit)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!sendable)
+            .accessibilityLabel(typedInputAccessibility.sendLabel)
+        }
+        .padding(.horizontal, Visor.Space.s3)
+    }
+
+    private func send() {
+        guard sendable, onSend(text) else { return }
+        text = ""
+    }
 }
 
 // MARK: - pill row (字幕 · 静音 · 相册 · 设置)

@@ -65,9 +65,13 @@ struct VisorView: View {
     let stage: CGSize
     /// Drawing style of the live voice display (wave is the original line).
     var style: VoiceVisualizer = .wave
+    /// A critically hot phone stops the 30 fps redraw; the visor holds still
+    /// exactly as it does under Reduce Motion.
+    var animationsPaused = false
     var onTap: () -> Void
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || animationsPaused }
     @State private var spectrum = SpectrumState()
 
     /// The stage always has a real size from the layout; never draw into a

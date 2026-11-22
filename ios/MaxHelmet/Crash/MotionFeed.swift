@@ -13,10 +13,12 @@ final class SystemMotionFeed: MotionStreaming {
     private let manager = CMMotionManager()
     private let queue = OperationQueue()
     private let speedProvider: () -> Double?
+    private let gateSpeedProvider: () -> Double?
     var onSample: ((CrashSample) -> Void)?
 
-    init(speedProvider: @escaping () -> Double?) {
+    init(speedProvider: @escaping () -> Double?, gateSpeedProvider: @escaping () -> Double? = { nil }) {
         self.speedProvider = speedProvider
+        self.gateSpeedProvider = gateSpeedProvider
         queue.maxConcurrentOperationCount = 1
     }
 
@@ -31,7 +33,8 @@ final class SystemMotionFeed: MotionStreaming {
                 t: m.timestamp,
                 accelG: (a.x * a.x + a.y * a.y + a.z * a.z).squareRoot(),
                 rotationRadS: (r.x * r.x + r.y * r.y + r.z * r.z).squareRoot(),
-                speedKmh: self.speedProvider()
+                speedKmh: self.speedProvider(),
+                gateSpeedKmh: self.gateSpeedProvider()
             )
             DispatchQueue.main.async { self.onSample?(sample) }
         }

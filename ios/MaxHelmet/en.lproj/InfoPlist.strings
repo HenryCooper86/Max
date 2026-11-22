@@ -1,0 +1,12 @@
+/* App name under the icon. */
+"CFBundleDisplayName" = "Max";
+
+/* Permission prompts. Keep in step with Info.plist, Info-Debug.plist and zh-Hans.lproj. */
+"NSMicrophoneUsageDescription" = "Max uses the microphone for hands-free voice conversation.";
+"NSLocationWhenInUseUsageDescription" = "Max uses your precise location after you explicitly start navigation or a Helmet Ride. During a Helmet Ride it can keep forwarding your location to the RDK helmet's navigation while the phone is locked, until you stop the Helmet Ride.";
+"NSContactsUsageDescription" = "Max reads your contacts so it can call or text someone when you say their name.";
+"NSAppleMusicUsageDescription" = "Max uses your music library so it can control playback while you ride.";
+"NSCameraUsageDescription" = "Max uses the camera to take photos and record video when you ask it to.";
+"NSPhotoLibraryAddUsageDescription" = "Max saves the photos and videos you export to your photo library.";
+"NSLocalNetworkUsageDescription" = "Max uses the local network to reach a voice relay on the same Wi-Fi and to find nearby Max helmets for pairing.";
+"NSMotionUsageDescription" = "Crash detection needs the motion sensors.";

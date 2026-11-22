@@ -237,6 +237,12 @@ struct ProviderCapabilities: Equatable {
     var weatherContext: Bool = false
     var sessionMemory: Bool = false
     var emergencyMode: Bool = false
+    /// The backend runs relay-side tools (weather lookups and the like). Absent
+    /// on relays older than tool support, so it reads as false there.
+    var tools: Bool = false
+    /// The backend accepts typed `text.input` turns. Doubao and the original
+    /// helmet demo do not; absent on older relays.
+    var textInput: Bool = false
 }
 
 /// Mirror of the ride.context event payload / DEFAULT_RIDE_CONTEXT in src/main.tsx.
@@ -245,7 +251,9 @@ struct RideContext: Equatable {
     var modeLabel: String = L("mode.navigation")
     var scenario: DemoScenario = .commute
     var scenarioLabel: String = L("scenario.commute")
-    var speedKmh: Int = 0
+    /// nil when the relay left the field out, which every live backend does;
+    /// only the mock demo sends a number. Never read an absent value as 0.
+    var speedKmh: Int? = nil
     var routePhase: String = L("ride.default.routePhase")
     var network: String = "offline"
     var batteryPct: Int = 0
@@ -387,6 +395,10 @@ enum AgentEvent {
     case error(message: String)
     case navRoute(NavRouteData)
     case navError(commandId: String, code: String)
+    case toolActivity(ToolActivity)
+    /// A client-tool call. This app declares no client tools, so one arriving
+    /// is unexpected; it still gets the single answer the protocol requires.
+    case toolCall(callId: String, name: String)
     /// Event types this client does not consume.
     case unhandled
 }
@@ -424,7 +436,9 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
                 voiceSelection: caps["voiceSelection"] as? Bool ?? false,
                 weatherContext: caps["weatherContext"] as? Bool ?? false,
                 sessionMemory: caps["sessionMemory"] as? Bool ?? false,
-                emergencyMode: caps["emergencyMode"] as? Bool ?? false
+                emergencyMode: caps["emergencyMode"] as? Bool ?? false,
+                tools: caps["tools"] as? Bool ?? false,
+                textInput: caps["textInput"] as? Bool ?? false
             )
         )
 
@@ -468,7 +482,7 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             modeLabel: str("modeLabel", mode.label),
             scenario: scenario,
             scenarioLabel: str("scenarioLabel", scenario.label),
-            speedKmh: int("speedKmh"),
+            speedKmh: relaySpeedKmh(json["speedKmh"]).map { Int($0.rounded()) },
             routePhase: routePhase.isEmpty ? L("ride.default.routePhase2") : routePhase,
             network: network.isEmpty ? "online" : network,
             batteryPct: int("batteryPct"),
@@ -548,6 +562,13 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
 
     case ServerEventTypes.navError:
         return .navError(commandId: str("commandId"), code: str("code"))
+
+    case ServerEventTypes.toolActivity:
+        guard let state = ToolActivity.State(rawValue: str("state")) else { return .unhandled }
+        return .toolActivity(ToolActivity(callId: str("callId"), name: str("name"), state: state))
+
+    case ServerEventTypes.toolCall:
+        return .toolCall(callId: str("callId"), name: str("name"))
 
     default:
         return .unhandled
@@ -631,6 +652,8 @@ func buildSessionStart(
 ) -> String {
     var payload: [String: Any] = [
         "type": "session.start",
+        // Optional protocol version; the relay logs mismatches with it.
+        "protocol": 1,
         "sampleRate": MicStreamer.sampleRate,
         "channels": 1,
         "voiceGender": voiceGender.wire,
@@ -810,6 +833,103 @@ func buildTurnFeedback(turnId: String, speaker: Speaker, text: String, reason: S
     ]
     let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     return String(data: data, encoding: .utf8) ?? "{}"
+}
+
+// MARK: - typed input and tools
+
+/// One `tool.activity` update. Only what the status line needs is kept; the
+/// tool's arguments and output never reach the client.
+struct ToolActivity: Equatable {
+    enum State: String { case started, succeeded, failed }
+    let callId: String
+    let name: String
+    let state: State
+}
+
+/// Tracks the tool calls in flight so the HUD can say "looking that up…" while
+/// any of them runs. The relay fails a call it gets no answer for after 15 s,
+/// so a `started` whose end never arrives is forgotten a little after that.
+struct ToolActivityTracker {
+    static let staleAfter: TimeInterval = 20
+    private var running: [String: TimeInterval] = [:]
+
+    var isBusy: Bool { !running.isEmpty }
+
+    mutating func apply(_ activity: ToolActivity, now: TimeInterval) {
+        switch activity.state {
+        case .started: running[activity.callId] = now
+        case .succeeded, .failed: running.removeValue(forKey: activity.callId)
+        }
+    }
+
+    mutating func expire(now: TimeInterval) {
+        running = running.filter { now - $0.value < Self.staleAfter }
+    }
+
+    mutating func reset() { running.removeAll() }
+}
+
+enum TextInputRejection: Error, Equatable {
+    case empty, tooLong, unsupported, notReady
+    /// The bike is known to be moving (see typedInputLockedForSpeed).
+    case moving
+}
+
+/// `text.input` limit from docs/protocol.md, counted the way the relay counts
+/// it: UTF-16 code units, so an emoji takes two.
+let textInputMaxUTF16Units = 2000
+
+/// Trims typed text to the limit without splitting a character.
+func clampToTextInputLimit(_ text: String) -> String {
+    guard text.utf16.count > textInputMaxUTF16Units else { return text }
+    var units = 0
+    var end = text.startIndex
+    for index in text.indices {
+        let next = text.index(after: index)
+        let characterUnits = text[index..<next].utf16.count
+        guard units + characterUnits <= textInputMaxUTF16Units else { break }
+        units += characterUnits
+        end = next
+    }
+    return String(text[..<end])
+}
+
+/// Validates a typed turn and builds its `text.input` event. The relay would
+/// answer an unsupported or malformed turn with an `error`; refusing here keeps
+/// the rider's text in the field instead of silently losing it.
+func prepareTextInput(_ raw: String, textInputSupported: Bool, ready: Bool, speedKmh: Double? = nil) -> Result<String, TextInputRejection> {
+    let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return .failure(.empty) }
+    guard text.utf16.count <= textInputMaxUTF16Units else { return .failure(.tooLong) }
+    guard textInputSupported else { return .failure(.unsupported) }
+    guard ready else { return .failure(.notReady) }
+    guard !typedInputLockedForSpeed(speedKmh) else { return .failure(.moving) }
+    let payload: [String: Any] = ["type": ClientEventTypes.textInput, "text": text]
+    guard let data = try? JSONSerialization.data(withJSONObject: payload),
+          let json = String(data: data, encoding: .utf8) else { return .failure(.empty) }
+    return .success(json)
+}
+
+/// The typing field belongs on screen only when it can work: the backend said
+/// it takes typed turns and the session is up.
+func typedInputVisible(capabilities: ProviderCapabilities, connection: ConnectionState) -> Bool {
+    capabilities.textInput && connection == .ready
+}
+
+/// The protocol wants exactly one `tool.result` per `tool.call` and only sends
+/// calls for declared tools, which this app has none of. Answering with an
+/// error at once lets the model move on instead of waiting out the 15 s
+/// timeout. A call id the relay itself would reject cannot be answered.
+func unexpectedToolCallReply(callId: String, name: String) -> String? {
+    guard !callId.isEmpty, callId.count <= 128 else { return nil }
+    let shownName = String(name.prefix(64))
+    let payload: [String: Any] = [
+        "type": ClientEventTypes.toolResult,
+        "callId": callId,
+        "error": "The iOS app has no client tool named \(shownName)."
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
+    return String(data: data, encoding: .utf8)
 }
 
 let audioStartEvent = #"{"type":"audio.start"}"#

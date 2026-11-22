@@ -126,7 +126,7 @@ struct VisorChevronRow: View {
         Button(action: action) {
             VisorRow(title: title, subtitle: subtitle, titleColor: titleColor, divider: divider) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .hudIcon(13, relativeTo: .footnote)
                     .foregroundStyle(Visor.textTertiary)
                     .accessibilityHidden(true)
             }
@@ -341,7 +341,7 @@ struct VisorPillLabel: View {
     var body: some View {
         let color = tint ?? Visor.accent
         HStack(spacing: compact ? 4 : Visor.Space.s2 - 2) {
-            Image(systemName: icon).font(.system(size: 13, weight: .semibold))
+            Image(systemName: icon).hudIcon(13, relativeTo: .footnote)
             Text(label).visorFont(.footnote, .medium).lineLimit(1)
         }
         .foregroundStyle(active ? color : Visor.textSecondary)

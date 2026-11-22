@@ -47,9 +47,11 @@ final class AgentSession: NSObject, ObservableObject {
         var recordingStartedAt: Double? = nil
         /// Bumped by a `gallery.open` command so the UI presents the gallery.
         var galleryRequestToken = 0
-        /// False until the first ride.context event. Without this, the default
-        /// speedKmh of 0 reads as "stopped" and defeats the SMS speed gate.
+        /// False until the first ride.context event.
         var hasRideContext = false
+        /// The ride speed the safety gates use (fresh GPS, else a relay value
+        /// that was actually sent), nil when unknown. Refreshed on every fix.
+        var speedKmh: Double? = nil
         /// Guided demo ride: the mock provider auto-tours the scenario catalog.
         var guidedDemo = false
         /// The relay refused the connection with HTTP 401 — a login (or token)
@@ -62,6 +64,21 @@ final class AgentSession: NSObject, ObservableObject {
         var feedbackFloorId = Int.max
         /// Crash-detection UI phase, owned entirely by CrashController.onUIChange.
         var crashPhase: CrashUIPhase = .hidden
+        /// A call, Siri or another app took the audio; capture and playback are
+        /// paused while the relay session stays open.
+        var audioInterrupted = false
+        /// Recovery after an interruption or route change gave up; the rider
+        /// has to restart hands-free.
+        var audioRecoveryFailed = false
+        /// The relay dropped while the phone had no network at all; reconnect
+        /// waits for the network instead of spending its retry budget.
+        var networkWaiting = false
+        /// A relay-side tool (a lookup) is running for the current turn.
+        var toolActivityBusy = false
+        /// A short-lived line for the HUD (device heat, Low Power Mode).
+        var transientNotice: String? = nil
+        /// The phone is critically hot: decorative animation stops too.
+        var thermalShedding = false
         /// Human-readable coordinates for the active incident, or nil.
         var crashLocationText: String?
 
@@ -80,7 +97,7 @@ final class AgentSession: NSObject, ObservableObject {
     }
 
     /// Mirrors MAX_RECONNECT_ATTEMPTS in src/main.tsx.
-    static let maxReconnectAttempts = 6
+    static let maxReconnectAttempts = ReconnectPolicy.maxAttempts
     /// Mirrors IDLE_CLOSE_CODE in shared/agent.ts: the relay closed this idle
     /// session to free its upstream slot; auto-reconnecting would defeat it.
     static let idleCloseCode = 4001
@@ -181,8 +198,23 @@ final class AgentSession: NSObject, ObservableObject {
     private var testingTestCaseId = "baseline-live-session"
     private var testingRunId = ""
     private var testingAssignmentId = ""
-    private var reconnectAttempts = 0
+    private var reconnectPolicy = ReconnectPolicy()
     private var reconnectWorkItem: DispatchWorkItem?
+    /// True once the microphone actually started for this session; recovery
+    /// restarts capture only if there was capture to restart.
+    private var captureStarted = false
+    /// Agent audio that arrives while a call holds the audio is stale by the
+    /// time it ends; drop it rather than queue it for later.
+    private var audioSuspended = false
+    private var toolActivity = ToolActivityTracker()
+    private var transientNoticeGeneration = 0
+    /// A media-services reset happened while no audio was running; the engine
+    /// object is dead and is replaced before audio next starts.
+    private var engineRebuildPending = false
+    @MainActor private lazy var mediaResetObserver = MediaServicesResetObserver()
+    /// The socket session.start (and any audio.start) went out on. Pausing
+    /// and resuming the microphone sends audio.stop/audio.start only on it.
+    private weak var handshakeSocket: URLSessionWebSocketTask?
     /// The 150 ms deferred reconnect of a settings-change restart, so stop()
     /// can cancel it — otherwise it would resurrect the session (and clobber
     /// intentionalClose) after the rider ended hands-free inside that window.
@@ -202,15 +234,14 @@ final class AgentSession: NSObject, ObservableObject {
     /// Plain mirror of `state.micMuted`, read off the audio thread alongside
     /// `transmitting` so the mic callback never touches `@Published` state.
     private var micMuted = false
-    /// Plain mirror of `state.rideContext.speedKmh` (nil until `hasRideContext`),
-    /// read by CrashController's motion feed on CoreMotion's background queue
-    /// at ~100 Hz — same reasoning as `micMuted` above: never touch `@Published`
-    /// state off-main.
-    private var latestSpeedKmh: Double?
+    /// Ride speed from the phone's GPS (primary) and the relay (only when it
+    /// sent one). Read by CrashController's motion feed on CoreMotion's
+    /// background queue at ~100 Hz, so it carries its own lock — never touch
+    /// `@Published` state off-main.
+    private let rideSpeed = RideSpeedTracker()
     /// Serializes the transport-gate fields (`webSocket`, `transmitting`,
-    /// `micMuted`, `socketOpen`, `latestSpeedKmh`): the main thread writes them,
-    /// but the audio-render thread (mic callbacks, `sendMicFrame`), the
-    /// CoreMotion queue (`SystemMotionFeed`'s speed provider), the URLSession
+    /// `micMuted`, `socketOpen`): the main thread writes them,
+    /// but the audio-render thread (mic callbacks, `sendMicFrame`), the URLSession
     /// delegate queue (`receive`), and the ping queue read them. The key hazard is
     /// the `webSocket` reference — an off-main read otherwise races ARC
     /// retain/release against a main-thread reassignment (ThreadSanitizer-flagged;
@@ -233,7 +264,7 @@ final class AgentSession: NSObject, ObservableObject {
     /// cancels echo across a single engine (see MicStreamer/PcmPlayer), so this
     /// is what stops the built-in speaker from feeding the agent's own voice back
     /// into the mic. Mirrors the web's single shared AudioContext.
-    private let voiceEngine = AVAudioEngine()
+    private var voiceEngine = AVAudioEngine()
     private lazy var player = PcmPlayer(engine: voiceEngine)
     /// The one capture store shared by the camera handler (writes) and the
     /// gallery UI (reads).
@@ -243,6 +274,25 @@ final class AgentSession: NSObject, ObservableObject {
         CrashSettings(contactNumber: nil, relayOptIn: false, callTarget: "120", logOnly: false)
     }
     private let audioRouter = AudioRouter()
+    @MainActor private lazy var resilience: VoiceSessionResilience = {
+        let resilience = VoiceSessionResilience(
+            audioEvents: SystemAudioSessionEvents(),
+            network: SystemNetworkPathMonitor(),
+            scheduler: MainQueueResilienceScheduler(),
+            calls: SystemCallState()
+        )
+        resilience.actions = self
+        return resilience
+    }()
+    /// Watches heat and Low Power Mode for the whole app lifetime: camera work
+    /// can be asked for by voice only during a session, but a recording
+    /// started then must still stop if the phone heats up.
+    @MainActor private(set) lazy var thermalGovernor: ThermalGovernor = {
+        let governor = ThermalGovernor(source: SystemThermalStateSource())
+        governor.onAnnouncement = { [weak self] in self?.announceThermal($0) }
+        governor.onPolicyChange = { [weak self] in self?.applyCapturePolicy($0) }
+        return governor
+    }()
     @MainActor lazy var music = MusicPlaybackModel()
     private lazy var mic = MicStreamer(
         engine: voiceEngine,
@@ -275,7 +325,10 @@ final class AgentSession: NSObject, ObservableObject {
     /// see the task report.
     private(set) lazy var crashController: CrashController = MainActor.assumeIsolated {
         CrashController(
-            motion: SystemMotionFeed(speedProvider: { [weak self] in self?.latestSpeedKmhGate() }),
+            motion: SystemMotionFeed(
+                speedProvider: { [weak self] in self?.rideSpeed.crashSpeedKmh },
+                gateSpeedProvider: { [weak self] in self?.rideSpeed.crashGateSpeedKmh }
+            ),
             locate: { [weak self] completion in self?.crashLocationProvider.resolve(completion) ?? completion(nil) },
             speak: { [weak self] line in self?.speak(line) },
             interruptPlayback: { [weak self] in self?.stopAgentSpeech() },
@@ -315,7 +368,8 @@ final class AgentSession: NSObject, ObservableObject {
             }
         },
         onOpenGallery: { [weak self] in self?.update { $0.galleryRequestToken += 1 } },
-        onAutoStopped: { [weak self] in self?.speak(L("st.recordingSaved")) }
+        onAutoStopped: { [weak self] in self?.speak(L("st.recordingSaved")) },
+        capturePolicy: { [weak self] in self?.thermalGovernor.policy ?? .unrestricted }
     )
 
     func stopCameraForSession() {
@@ -349,15 +403,13 @@ final class AgentSession: NSObject, ObservableObject {
     /// own handler rather than here.
     @MainActor private lazy var deviceRouter = DeviceActionRouter(
         handlers: [
-            .torch: TorchController(),
+            .torch: TorchController(device: torchDevice),
             .volume: PlaybackVolumeController(gain: player),
             .music: MusicController(player: music),
             .sms: MessageComposer(
                 presenter: MainActorMessagePresenter(),
-                speedProvider: { [weak self] in
-                    guard let self, self.state.value.hasRideContext else { return nil }
-                    return Double(self.state.value.rideContext.speedKmh)
-                },
+                // Unknown speed is refused by the composer itself.
+                speedProvider: { [weak self] in self?.rideSpeed.currentSpeedKmh },
                 resolver: SystemContactResolver()
             ),
             .call: CallDialer(),
@@ -368,11 +420,14 @@ final class AgentSession: NSObject, ObservableObject {
                 send: { [weak self] json in
                     guard !Task.isCancelled else { return }
                     self?.webSocket?.send(.string(json)) { _ in }
-                }
+                },
+                capturePolicy: { [snapshot = thermalGovernor.snapshot] in snapshot.value }
             )
         ],
-        isDeviceUnlocked: { UIApplication.shared.isProtectedDataAvailable }
+        isDeviceUnlocked: { UIApplication.shared.isProtectedDataAvailable },
+        loadRefusal: { [snapshot = thermalGovernor.snapshot] action in loadRefusal(for: action, policy: snapshot.value) }
     )
+    private let torchDevice = SystemTorchDevice()
 
     override init() {
         super.init()
@@ -398,7 +453,19 @@ final class AgentSession: NSObject, ObservableObject {
                 self.mic.stop()
                 self.player.release()
                 self.audioRouter.stopVoiceRouting()
+                MainActor.assumeIsolated { self.resilience.deactivate() }
                 self.onCrash { $0.disarm() }
+            }
+        }
+        MainActor.assumeIsolated {
+            thermalGovernor.start()
+            mediaResetObserver.onReset = { [weak self] in
+                guard let self else { return }
+                // During a session the coordinator receives the same
+                // notification and rebuilds; otherwise remember it.
+                if mediaServicesResetAction(sessionAudioActive: self.resilience.isActive) == .rebuildOnNextStart {
+                    self.engineRebuildPending = true
+                }
             }
         }
     }
@@ -429,6 +496,7 @@ final class AgentSession: NSObject, ObservableObject {
         self.testingRunId = String(testingRunId.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
         self.testingAssignmentId = String(testingAssignmentId.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
         reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
 
         let trustedSelfSigned = allowSelfSignedTls
         if trustedSelfSigned != allowSelfSigned {
@@ -441,15 +509,17 @@ final class AgentSession: NSObject, ObservableObject {
         }
 
         intentionalClose = false
-        reconnectAttempts = 0
+        // A stale ride's speed must not outlive it — otherwise
+        // CrashController's speed gate could see a leftover fast reading
+        // before the first fix of the new session arrives.
+        rideSpeed.reset()
+        reconnectPolicy.reset()
+        captureStarted = false
+        audioSuspended = false
+        toolActivity.reset()
         withTransportLock {
             transmitting = true
             micMuted = false
-            // A stale ride's speed must not outlive it (mirrors hasRideContext
-            // below) — otherwise CrashController's speed gate could see a
-            // leftover fast reading before the first ride.context of the new
-            // session arrives.
-            latestSpeedKmh = nil
         }
         spokenDeliveryIds.removeAll(keepingCapacity: true)
         spokenDeliveryOrder.removeAll(keepingCapacity: true)
@@ -468,6 +538,11 @@ final class AgentSession: NSObject, ObservableObject {
             // A stale route or ride context must not outlive its ride.
             $0.guidance = nil
             $0.hasRideContext = false
+            $0.speedKmh = nil
+            $0.audioInterrupted = false
+            $0.audioRecoveryFailed = false
+            $0.networkWaiting = false
+            $0.toolActivityBusy = false
         }
         #if DEBUG
         if syntheticAudioQA {
@@ -479,19 +554,27 @@ final class AgentSession: NSObject, ObservableObject {
         }
         #endif
         onCrash { $0.arm() }
+        MainActor.assumeIsolated { resilience.activate() }
 
         lastLocationSentAt = -.infinity
+        // The session's own location stream doubles as the speed source for
+        // crash detection and the SMS gate: it runs for as long as crash
+        // detection is armed and location permission allows, so no second
+        // high-accuracy stream is started.
+        rideSpeed.observe(locationProvider)
         locationProvider.onUpdate = { [weak self] coordinate in
             guard let self, self.lifecycle.accepts(generation) else { return }
             self.location = coordinate
             let now = ProcessInfo.processInfo.systemUptime
             self.lastLocationFixAt = now
+            self.publishRideSpeed()
             guard self.state.value.connection == .ready, now - self.lastLocationSentAt >= 10 else { return }
             self.lastLocationSentAt = now
-            let event: [String: Any] = ["type": "location.update", "lat": coordinate.latitude, "lon": coordinate.longitude]
-            if let data = try? JSONSerialization.data(withJSONObject: event), let json = String(data: data, encoding: .utf8) {
-                self.webSocket?.send(.string(json)) { _ in }
-            }
+            let json = buildLocationUpdate(
+                lat: coordinate.latitude, lon: coordinate.longitude,
+                speedKmh: self.rideSpeed.freshGpsSpeedKmh
+            )
+            self.webSocket?.send(.string(json)) { _ in }
         }
         locationProvider.resolve { [weak self] coordinate in
             guard let self else { return }
@@ -520,8 +603,10 @@ final class AgentSession: NSObject, ObservableObject {
                     // Attach the playback node first so it renders through the
                     // shared engine before the mic starts it — the engine's output
                     // is the echo-cancellation reference signal.
+                    if self.engineRebuildPending { self.replaceVoiceEngine() }
                     self.player.prepare()
                     try self.mic.start()
+                    self.captureStarted = true
                     // Any agent audio that arrived while the permission dialog was
                     // up (e.g. the opening greeting) was buffered — play it now
                     // that the shared engine is running.
@@ -556,6 +641,7 @@ final class AgentSession: NSObject, ObservableObject {
         }
         intentionalClose = true
         reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
         restartWorkItem?.cancel()
         webSocket?.send(.string(audioStopEvent)) { _ in }
         webSocket?.cancel(with: .normalClosure, reason: nil)
@@ -597,9 +683,15 @@ final class AgentSession: NSObject, ObservableObject {
         // instead, which removes the tap (capture genuinely stops) without
         // touching the engine. Consulted before any of that teardown runs.
         let hasActiveIncident = onCrash { $0.hasActiveIncident }
+        captureStarted = false
+        audioSuspended = false
+        toolActivity.reset()
         if hasActiveIncident {
             mic.pauseCapture()
         } else {
+            // An open incident keeps listening so its siren comes back after a
+            // call; onIncidentResolved deactivates it.
+            MainActor.assumeIsolated { resilience.deactivate() }
             #if DEBUG
             if syntheticAudioQA { voiceEngine.stop() } else { mic.stop() }
             #else
@@ -622,6 +714,10 @@ final class AgentSession: NSObject, ObservableObject {
             $0.bluetoothRouted = false
             $0.hazardAlert = nil
             $0.feedbackFloorId = Int.max
+            $0.audioInterrupted = false
+            $0.audioRecoveryFailed = false
+            $0.networkWaiting = false
+            $0.toolActivityBusy = false
         }
     }
 
@@ -865,7 +961,7 @@ final class AgentSession: NSObject, ObservableObject {
             // reconnecting anyway would open a zombie session with no mic.
             guard self.state.value.handsFree else { return }
             self.intentionalClose = false
-            self.reconnectAttempts = 0
+            self.reconnectPolicy.connected()
             self.connect()
         }
         restartWorkItem = work
@@ -892,9 +988,11 @@ final class AgentSession: NSObject, ObservableObject {
     private func connect() -> Bool {
         guard !intentionalClose, let url = relayEndpointURL() else { return false }
         withTransportLock { socketOpen = false }
+        rideSpeed.relayConnectionLost()
         update {
             $0.connection = .connecting
-            $0.statusText = self.reconnectAttempts > 0 ? L("st.reconnecting", ("n", String(self.reconnectAttempts))) : L("conn.connecting")
+            $0.statusText = self.reconnectPolicy.attempts > 0 ? L("st.reconnecting", ("n", String(self.reconnectPolicy.attempts))) : L("conn.connecting")
+            $0.networkWaiting = false
         }
 
         let task = urlSession.webSocketTask(with: url)
@@ -913,7 +1011,7 @@ final class AgentSession: NSObject, ObservableObject {
     private func handleSocketOpened(_ task: URLSessionWebSocketTask) {
         assert(Thread.isMainThread)
         guard task === webSocket else { return }
-        reconnectAttempts = 0
+        reconnectPolicy.connected()
         update {
             $0.connection = .relay
             $0.statusText = L("st.ready")
@@ -948,6 +1046,9 @@ final class AgentSession: NSObject, ObservableObject {
         // must be told about it again (mirrors the web client's open handler).
         if current.guidedDemo { task.send(.string(buildGuidedDemo(enabled: true))) { _ in } }
         if transmitting { task.send(.string(audioStartEvent)) { _ in } }
+        handshakeSocket = task
+        toolActivity.reset()
+        update { $0.toolActivityBusy = false }
         // Mic frames wait for session.started, not merely the relay handshake.
         withTransportLock { socketOpen = false }
     }
@@ -994,6 +1095,7 @@ final class AgentSession: NSObject, ObservableObject {
                 #if DEBUG
                 if self.syntheticAudioQA { self.qaReceivedPCMBytes += data.count }
                 #endif
+                guard !self.audioSuspended else { return }
                 // Conversion/scheduling still runs on PcmPlayer's own queue.
                 self.player.play(data)
             }
@@ -1020,6 +1122,8 @@ final class AgentSession: NSObject, ObservableObject {
             socketOpen = false
             webSocket = nil
         }
+        rideSpeed.relayConnectionLost()
+        publishRideSpeed()
         // This socket is gone — whatever nav.request it might have carried
         // will never get an answer on it (even a reconnect starts a fresh
         // relay session that doesn't know the old commandId). Resolve any
@@ -1040,7 +1144,7 @@ final class AgentSession: NSObject, ObservableObject {
         // leaving it half-alive kept the mic capturing, the audio route
         // claimed, and the orb pulsing "listening" with no session behind it.
         if task.closeCode.rawValue == Self.idleCloseCode {
-            reconnectAttempts = 0
+            reconnectPolicy.reset()
             stop()
             update { $0.statusText = L("st.idleEnded") }
             return
@@ -1051,7 +1155,7 @@ final class AgentSession: NSObject, ObservableObject {
         // are active on the shared relay — see the web HUD's 复制令牌 button),
         // anything else is a configuration problem (e.g. wrong path → HTTP 400).
         if let status = (task.response as? HTTPURLResponse)?.statusCode, status != 101 {
-            reconnectAttempts = 0
+            reconnectPolicy.reset()
             // End hands-free entirely, like the idle-close branch: a rejected
             // upgrade left a zombie session (mic capturing, audio route
             // claimed, no reconnect), the token field hidden behind the
@@ -1069,48 +1173,59 @@ final class AgentSession: NSObject, ObservableObject {
         }
 
         // Unexpected drop: reconnect with exponential backoff (mirrors src/main.tsx).
-        reconnectAttempts += 1
-        if reconnectAttempts > Self.maxReconnectAttempts {
+        switch reconnectPolicy.socketDropped(hasActiveIncident: onCrash({ $0.hasActiveIncident })) {
+        case .waitForNetwork:
+            // No network at all is not the relay's fault: keep the budget and
+            // let networkBecameAvailable() reconnect the moment it returns. A
+            // slow check stays scheduled in case the path monitor is wrong.
+            update {
+                $0.connection = .offline
+                $0.networkWaiting = true
+                $0.statusText = L("st.networkWaiting")
+            }
+            scheduleReconnect(after: .seconds(Int(Self.crashOutageRetryDelayS)))
+
+        case .crashOutageRetry:
             // The alert queues and survives reconnect — the network is
             // delivery-only. ANY active incident (check-in, alarm, or
             // escalated) must keep the session retrying, not only once a
             // crash.alert is already pending: the give-up threshold (~31 s of
             // backoff) lands well before escalation (~45 s: 15 s check-in +
-            // 30 s alarm) can even build one. Vetoing on "has an incident"
-            // rather than "has a pending alert" is what actually covers the
-            // scenario this exists for — an unconscious rider can't
+            // 30 s alarm) can even build one. An unconscious rider can't
             // re-toggle hands-free, so keep retrying at a slow, indefinite
-            // cadence instead of giving up. reconnectAttempts is deliberately
-            // left over the threshold (not reset) so every subsequent
-            // failure re-checks this condition — once the incident resolves
-            // (ack/cancel/disarm), the very next failure falls through to the
-            // normal give-up path below.
-            if onCrash({ $0.hasActiveIncident }) {
-                update {
-                    $0.connection = .offline
-                    $0.statusText = L("st.networkLost")
-                }
-                let work = DispatchWorkItem { [weak self] in self?.connect() }
-                reconnectWorkItem = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.crashOutageRetryDelayS, execute: work)
-                return
+            // cadence instead of giving up; once the incident resolves the
+            // next failure falls through to the normal give-up.
+            update {
+                $0.connection = .offline
+                $0.statusText = L("st.networkLost")
             }
-            reconnectAttempts = 0
+            scheduleReconnect(after: .seconds(Int(Self.crashOutageRetryDelayS)))
+
+        case .giveUp:
             stop()
             update {
                 $0.connection = .degraded
                 $0.statusText = L("st.relayFailed")
             }
-            return
+
+        case let .retry(delayMs):
+            update {
+                $0.connection = .offline
+                $0.statusText = L("st.disconnected", ("n", String(delayMs / 1000)))
+            }
+            scheduleReconnect(after: .milliseconds(delayMs))
         }
-        let delayMs = min(8_000, 1_000 * (1 << (reconnectAttempts - 1)))
-        update {
-            $0.connection = .offline
-            $0.statusText = L("st.disconnected", ("n", String(delayMs / 1000)))
+    }
+
+    private func scheduleReconnect(after delay: DispatchTimeInterval) {
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        let work = DispatchWorkItem { [weak self] in
+            self?.reconnectWorkItem = nil
+            self?.connect()
         }
-        let work = DispatchWorkItem { [weak self] in self?.connect() }
         reconnectWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     // MARK: - event handling
@@ -1119,6 +1234,10 @@ final class AgentSession: NSObject, ObservableObject {
         switch event {
         case let .sessionStarted(provider, mode, capabilities):
             withTransportLock { socketOpen = true }
+            // Only the mock demo's ride.context speed is a real scenario value;
+            // a live relay just echoes the phone's own earlier GPS speed.
+            rideSpeed.sessionStarted(mock: mode == "mock")
+            publishRideSpeed()
             update {
                 $0.provider = provider
                 $0.isLive = mode != "mock"
@@ -1184,11 +1303,12 @@ final class AgentSession: NSObject, ObservableObject {
             update { $0.weather = weather }
 
         case let .rideContextUpdate(rideContext):
-            withTransportLock { latestSpeedKmh = Double(rideContext.speedKmh) }
+            rideSpeed.recordRelay(speedKmh: rideContext.speedKmh.map(Double.init))
             update {
                 $0.rideContext = rideContext
                 $0.hasRideContext = true
             }
+            publishRideSpeed()
 
         case let .sessionMemoryUpdate(memory):
             update { $0.sessionMemory = memory }
@@ -1240,6 +1360,23 @@ final class AgentSession: NSObject, ObservableObject {
         case let .navError(commandId, code):
             relayNavigationSearch.handleNavError(commandId: commandId, code: code)
 
+        case let .toolActivity(activity):
+            let now = ProcessInfo.processInfo.systemUptime
+            toolActivity.apply(activity, now: now)
+            update { $0.toolActivityBusy = self.toolActivity.isBusy }
+            if activity.state == .started {
+                DispatchQueue.main.asyncAfter(deadline: .now() + ToolActivityTracker.staleAfter) { [weak self] in
+                    guard let self else { return }
+                    self.toolActivity.expire(now: ProcessInfo.processInfo.systemUptime)
+                    self.update { $0.toolActivityBusy = self.toolActivity.isBusy }
+                }
+            }
+
+        case let .toolCall(callId, name):
+            if let reply = unexpectedToolCallReply(callId: callId, name: name) {
+                webSocket?.send(.string(reply)) { _ in }
+            }
+
         case .unhandled:
             break
         }
@@ -1272,14 +1409,10 @@ final class AgentSession: NSObject, ObservableObject {
         return transmitting && !micMuted
     }
 
-    /// CoreMotion-queue gate (~100 Hz): the most recent ride speed, or nil when
-    /// unknown/no ride context yet. CrashController's `SystemMotionFeed` calls
-    /// this synchronously from its background delivery queue — never read
-    /// `state` (a `@Published` property) from there.
-    private func latestSpeedKmhGate() -> Double? {
-        transportLock.lock()
-        defer { transportLock.unlock() }
-        return latestSpeedKmh
+    /// Mirrors the resolved ride speed into the HUD state (main thread only).
+    private func publishRideSpeed() {
+        let speed = rideSpeed.currentSpeedKmh
+        update { $0.speedKmh = speed }
     }
 
     /// Off-main identity check (URLSession delegate / ping queues) against the
@@ -1501,7 +1634,7 @@ extension AgentSession: URLSessionDelegate {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        // Demo relay support: the Lightsail test relay uses a self-signed
+        // Demo relay support: a test relay may use a self-signed
         // certificate. Keep this gated behind the explicit settings toggle.
         completionHandler(.useCredential, URLCredential(trust: trust))
         #else
@@ -1514,9 +1647,11 @@ extension AgentSession: URLSessionDelegate {
 
 /// The startup callback is bounded, but fresh fixes continue throughout the
 /// hands-free session. A slow first fix must not become a permanently missing location.
-final class LocationProvider: NSObject, CLLocationManagerDelegate {
+final class LocationProvider: NSObject, CLLocationManagerDelegate, RideLocationSource {
     private let manager = CLLocationManager()
     var onUpdate: ((CLLocationCoordinate2D) -> Void)?
+    /// Every accepted fix, speed included, for the ride-speed tracker.
+    var onFix: ((CLLocation) -> Void)?
     private var completion: ((CLLocationCoordinate2D?) -> Void)?
     private var generation = 0
     private var tracking = false
@@ -1549,6 +1684,7 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         tracking = false
         completion = nil
         onUpdate = nil
+        onFix = nil
         manager.stopUpdatingLocation()
     }
 
@@ -1567,6 +1703,7 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
 
     private func accept(_ location: CLLocation) {
         guard tracking, Self.isFresh(location) else { return }
+        onFix?(location)
         onUpdate?(location.coordinate)
         finish(location.coordinate)
     }
@@ -1587,6 +1724,243 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         case .authorizedWhenInUse, .authorizedAlways: requestCurrentLocation()
         case .denied, .restricted: manager.stopUpdatingLocation(); finish(nil)
         default: break
+        }
+    }
+}
+
+// MARK: - interruption, route and network recovery
+
+extension AgentSession: VoiceResilienceActions {
+    /// True once handleSocketOpened has run for the current socket, which is
+    /// when audio.start/audio.stop may go out on it. A socket still opening
+    /// sends audio.start itself if `transmitting` is set by then.
+    private var relayHandshakeSent: Bool {
+        guard let webSocket, let handshakeSocket else { return false }
+        return webSocket === handshakeSocket
+    }
+
+    /// A call or Siri took the audio and the system has stopped the engine.
+    /// Take the tap off so nothing is captured, drop what the agent was saying,
+    /// and tell the relay the microphone paused: binary frames outside
+    /// audio.start/audio.stop are a protocol error. The relay session stays.
+    func suspendAudio() {
+        audioSuspended = true
+        synthesizer.stopSpeaking(at: .immediate)
+        player.stopPlayback()
+        if captureStarted { mic.pauseCapture() }
+        let wasTransmitting = transmitting
+        withTransportLock { transmitting = false }
+        if wasTransmitting && relayHandshakeSent { webSocket?.send(.string(audioStopEvent)) { _ in } }
+        update {
+            $0.audioInterrupted = true
+            $0.audioRecoveryFailed = false
+            $0.voiceLevel = 0
+            $0.turnState = .idle
+            $0.statusText = L("st.audioInterrupted")
+        }
+    }
+
+    func resumeAudio() -> Bool {
+        guard restoreAudioPath() else { return false }
+        resumeTransmitting()
+        return true
+    }
+
+    func rerouteAudio() -> Bool {
+        restoreAudioPath()
+    }
+
+    /// After a media-services reset every audio object is dead, the shared
+    /// engine included. Build a new engine, move capture and playback onto it,
+    /// and start again as on a first start.
+    func rebuildAudio() -> Bool {
+        guard audioPathWanted.playback else {
+            // Nothing to restart now; build the new engine when audio next
+            // starts, and never leave a suspended state behind.
+            engineRebuildPending = true
+            resumeTransmitting()
+            return true
+        }
+        replaceVoiceEngine()
+        guard restoreAudioPath(forceCategory: true) else { return false }
+        resumeTransmitting()
+        return true
+    }
+
+    private func replaceVoiceEngine() {
+        let engine = AVAudioEngine()
+        voiceEngine = engine
+        mic.rebind(to: engine)
+        player.rebind(to: engine)
+        engineRebuildPending = false
+    }
+
+    #if DEBUG
+    var debugAudioSuspended: Bool { audioSuspended }
+    var debugEngineRebuildPending: Bool { engineRebuildPending }
+    #endif
+
+    func networkBecameUnavailable() {
+        _ = reconnectPolicy.networkChanged(available: false)
+        guard lifecycle.active, webSocket == nil else { return }
+        update {
+            $0.networkWaiting = true
+            $0.statusText = L("st.networkWaiting")
+        }
+    }
+
+    func networkBecameAvailable(interfaceChanged: Bool) {
+        let restored = reconnectPolicy.networkChanged(available: true)
+        update { $0.networkWaiting = false }
+        guard lifecycle.active, !intentionalClose else { return }
+        if webSocket == nil {
+            // Only a reconnect that is already waiting is brought forward; a
+            // session still resolving its first location will connect itself.
+            guard reconnectWorkItem != nil else { return }
+            reconnectWorkItem?.cancel()
+            reconnectWorkItem = nil
+            reconnectPolicy.connected()
+            connect()
+        } else if restored || interfaceChanged {
+            probeRelaySocket()
+        }
+    }
+
+    func voiceAudioStatusChanged(_ status: VoiceAudioStatus) {
+        switch status {
+        case .failed:
+            update {
+                $0.audioRecoveryFailed = true
+                $0.statusText = L("st.audioResumeFailed")
+            }
+        case .live:
+            update { $0.audioRecoveryFailed = false }
+        case .interrupted, .recovering:
+            break
+        }
+    }
+
+    private var audioPathWanted: (capture: Bool, playback: Bool) {
+        let capture = lifecycle.active && captureStarted
+        return (capture, capture || onCrash { $0.hasActiveIncident })
+    }
+
+    /// Re-activates the voice session and gets the shared engine running with
+    /// whatever this session needs from it: capture plus playback for a live
+    /// ride, playback alone for the siren of an incident that outlived it.
+    @discardableResult
+    private func restoreAudioPath(forceCategory: Bool = false) -> Bool {
+        let wanted = audioPathWanted
+        guard wanted.playback else { return true }
+        guard audioRouter.reassertVoiceRouting(forceCategory: forceCategory) else { return false }
+        do {
+            if wanted.capture {
+                if mic.isCapturing {
+                    guard mic.ensureRunning() else { return false }
+                } else {
+                    player.prepare()
+                    try mic.start()
+                }
+            } else if !voiceEngine.isRunning {
+                player.prepare()
+                voiceEngine.prepare()
+                try voiceEngine.start()
+            }
+        } catch {
+            return false
+        }
+        player.flushPending()
+        update { $0.bluetoothRouted = self.audioRouter.hasBluetoothHeadset }
+        return true
+    }
+
+    private func resumeTransmitting() {
+        audioSuspended = false
+        guard lifecycle.active else { return }
+        let wasTransmitting = transmitting
+        // audio.start goes out before frames can: the mic callback only sends
+        // once `transmitting` is set below.
+        if !wasTransmitting && relayHandshakeSent { webSocket?.send(.string(audioStartEvent)) { _ in } }
+        withTransportLock { transmitting = true }
+        update {
+            $0.audioInterrupted = false
+            $0.audioRecoveryFailed = false
+            $0.turnState = .listening
+            if !wasTransmitting { $0.statusText = L("st.audioResumed") }
+        }
+    }
+
+    /// After a handover the socket may be bound to an interface that is gone,
+    /// and TCP can take minutes to notice. A ping that fails, or gets no pong
+    /// within a few seconds, cancels it; the receive loop then reports the
+    /// drop and the normal reconnect takes over.
+    private func probeRelaySocket() {
+        guard let task = webSocket else { return }
+        final class Answer { var received = false }
+        let answer = Answer()
+        task.sendPing { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self, task === self.webSocket, !answer.received else { return }
+                answer.received = true
+                if error != nil { task.cancel(with: .goingAway, reason: nil) }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self, task === self.webSocket, !answer.received else { return }
+            answer.received = true
+            task.cancel(with: .goingAway, reason: nil)
+        }
+    }
+}
+
+// MARK: - typed turns, device heat
+
+extension AgentSession {
+    /// Sends a typed turn. The relay echoes it back as a final rider
+    /// transcript, so nothing is added to the captions here.
+    @discardableResult
+    func sendTextInput(_ raw: String) -> Result<Void, TextInputRejection> {
+        let current = state
+        let ready = socketOpen && current.connection == .ready
+        // Typing at speed is refused like composing an SMS; an unknown speed
+        // is allowed so a phone with no GPS fix (indoors) can still type.
+        switch prepareTextInput(raw, textInputSupported: current.capabilities.textInput, ready: ready, speedKmh: rideSpeed.currentSpeedKmh) {
+        case let .success(json):
+            // A new turn supersedes whatever the agent was still saying.
+            stopAgentSpeech()
+            webSocket?.send(.string(json)) { _ in }
+            return .success(())
+        case let .failure(reason):
+            return .failure(reason)
+        }
+    }
+
+    @MainActor fileprivate func announceThermal(_ announcement: ThermalAnnouncement) {
+        let line = L(announcement.messageKey)
+        if announcement.spoken && state.handsFree { speak(line) }
+        showTransientNotice(line)
+    }
+
+    @MainActor fileprivate func applyCapturePolicy(_ policy: CapturePolicy) {
+        update { $0.thermalShedding = policy.shedNonEssential }
+        shedExtrasForHeat(policy, torch: torchDevice, music: music, hudCast: hudCast)
+        guard state.recording else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            _ = await self.cameraController.enforce(policy)
+        }
+    }
+
+    private func showTransientNotice(_ text: String) {
+        transientNoticeGeneration += 1
+        let generation = transientNoticeGeneration
+        update {
+            $0.transientNotice = text
+            $0.statusText = text
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, self.transientNoticeGeneration == generation else { return }
+            self.update { $0.transientNotice = nil }
         }
     }
 }

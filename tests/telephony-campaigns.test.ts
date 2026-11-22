@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as realSleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../server/logger";
 import { createCampaigns, type CampaignOptions } from "../server/telephony/campaigns";
@@ -63,9 +62,9 @@ const statuses = (harness: ReturnType<typeof setup>, id: string) =>
   harness.campaigns.get(id)!.calls.map((call) => call.status);
 
 /** Lets the real file writes finish. The timers are fake; the file system is not. */
-async function settleFile() {
+async function settleFile(harness: ReturnType<typeof setup>) {
   await advance(0);
-  await realSleep(30);
+  await harness.campaigns.settled();
 }
 
 /**
@@ -557,15 +556,15 @@ describe("keeping campaigns in a file", () => {
     const file = path.join(directory, "campaigns.json");
     const harness = setup({ file, place: () => ({ ok: true, callSid: "CA1" }) });
     const id = make(harness, { calls: numbers(1) });
-    await settleFile();
+    await settleFile(harness);
     expect(JSON.parse(readFileSync(file, "utf8")).campaigns[0].cancelled).toBe(false);
 
     harness.campaigns.cancel(id);
     await advance(500);
-    await realSleep(30);
+    await harness.campaigns.settled();
     expect(JSON.parse(readFileSync(file, "utf8")).campaigns[0].cancelled).toBe(false);
     await advance(600);
-    await realSleep(30);
+    await harness.campaigns.settled();
     expect(JSON.parse(readFileSync(file, "utf8")).campaigns[0].cancelled).toBe(true);
   });
 
@@ -611,7 +610,7 @@ describe("keeping campaigns in a file", () => {
 
     const again = setup({ file });
     make(again);
-    await settleFile();
+    await settleFile(again);
     expect(JSON.parse(readFileSync(file, "utf8")).campaigns).toHaveLength(1);
   });
 });

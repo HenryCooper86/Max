@@ -84,6 +84,9 @@
 - A blocked term never reaches a caption or the record, and on the cascaded backends its sentence is not spoken. Rules
   are judged while the assistant speaks, so they cut an answer short rather than prevent it. The conversation record
   lists what was found. See [guardrails](docs/conversations.md#guardrails).
+- `guardrails.hold` has the judge read every sentence before it is spoken or shown, on the pipeline, local and Max
+  Speech backends: an answer that breaks a rule is stopped at that sentence and nobody hears or sees it. It adds one
+  check to the wait for the first words (about 0.27 s with a local 8B model).
 
 ### Recording
 

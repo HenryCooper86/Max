@@ -67,6 +67,15 @@ export type EngineEvents = {
   /** The model wants a tool run. Answer with `sendToolResult`; the model
    *  continues its reply once every call it made has an answer. */
   onToolCall?(call: EngineToolCall): void;
+  /**
+   * For engines that make the speech themselves from the model's text. True
+   * when the session wants to read each piece of a reply before anyone hears
+   * or sees it: the engine then hands the text to `holdSpeech` sentence by
+   * sentence, and neither speaks it nor reports it with `onAgentText` until
+   * that resolves to true. False ends the reply: the session has stopped it.
+   */
+  holdsSpeech?(): boolean;
+  holdSpeech?(text: string): Promise<boolean>;
 };
 
 /** A picture for the model: base64 without a `data:` prefix, and its media type. */

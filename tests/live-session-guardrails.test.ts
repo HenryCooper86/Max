@@ -439,3 +439,102 @@ describe("rules for users", () => {
     await provider.close();
   });
 });
+
+describe("speech held for the judge", () => {
+  const held = { rules: ["Do not give medical advice."], say: "I can't advise on that.", hold: true };
+
+  it("asks to read speech first only when there is a rule, a judge and the setting", async () => {
+    const judge = fakeJudge();
+    const on = await setup(held, judge);
+    expect(on.events().holdsSpeech!()).toBe(true);
+    await on.provider.close();
+    const noSetting = await setup({ rules: held.rules }, judge);
+    expect(noSetting.events().holdsSpeech!()).toBe(false);
+    await noSetting.provider.close();
+    const termsOnly = await setup({ blockedTerms: ["Acme"], hold: true }, judge);
+    expect(termsOnly.events().holdsSpeech!()).toBe(false);
+    await termsOnly.provider.close();
+    const noJudge = await setup(held);
+    expect(noJudge.events().holdsSpeech!()).toBe(false);
+    expect(await noJudge.events().holdSpeech!("Anything.")).toBe(true);
+    await noJudge.provider.close();
+  });
+
+  it("lets a sentence through once the judge has read it, and does not have it read again", async () => {
+    const judge = fakeJudge();
+    const { client, provider, events, cancels, userSays, assistantSays } = await setup(held, judge);
+    userSays("How are you?");
+    events().onResponseStarted();
+    const first = events().holdSpeech!("I am well, thank you for asking today.");
+    expect(judge.asked).toEqual([
+      { user_said_before: "How are you?", assistant_says: "I am well, thank you for asking today." }
+    ]);
+    expect(client.captions()).toEqual([]);
+    await judge.answer(0);
+    expect(await first).toBe(true);
+    // The engine now speaks and shows it. That is not a reason to ask the judge again.
+    assistantSays("I am well, thank you for asking today.");
+    events().onResponseDone({ cancelled: false });
+    expect(judge.asked).toHaveLength(1);
+    expect(cancels()).toBe(0);
+    expect(client.captions().at(-1)).toBe("I am well, thank you for asking today.");
+    await provider.close();
+  });
+
+  it("stops a reply that breaks a rule before a word of it is heard or shown", async () => {
+    const judge = fakeJudge();
+    const { client, provider, events, said, contexts, noted, cancels, userSays, lineIsVoiced } = await setup(
+      held,
+      judge
+    );
+    userSays("My head hurts.");
+    events().onResponseStarted();
+    const reading = events().holdSpeech!("Take 800 milligrams of ibuprofen now.");
+    await judge.answer(1);
+    expect(await reading).toBe(false);
+    expect(cancels()).toBe(1);
+    expect(client.audio).toBe(0);
+    expect(client.captions().some((text) => /ibuprofen/.test(text))).toBe(false);
+    events().onResponseDone({ cancelled: true });
+    expect(said).toEqual(["I can't advise on that."]);
+    lineIsVoiced();
+    expect(contexts.at(-1)).toContain("was stopped");
+    expect(noted).toEqual([
+      expect.objectContaining({
+        speaker: "assistant",
+        kind: "rule",
+        rule: "Do not give medical advice.",
+        stopped: true
+      })
+    ]);
+    await provider.close();
+  });
+
+  it("does not stop a reply the user has already spoken over", async () => {
+    const judge = fakeJudge();
+    const { provider, events, said, noted, userSays } = await setup(held, judge);
+    userSays("My head hurts.");
+    events().onResponseStarted();
+    const reading = events().holdSpeech!("Take 800 milligrams of ibuprofen now.");
+    // The engine heard the user and dropped the reply before any of it was spoken.
+    events().onSpeechStarted();
+    events().onResponseDone({ cancelled: true });
+    await judge.answer(1);
+    // Not a refusal: the engine has dropped that reply itself.
+    expect(await reading).toBe(true);
+    expect(said).toEqual([]);
+    expect(noted).toEqual([]);
+    await provider.close();
+  });
+
+  it("refuses held text with a blocked term without asking the judge", async () => {
+    const judge = fakeJudge();
+    const { provider, events, noted, userSays } = await setup({ ...held, blockedTerms: ["Acme"] }, judge);
+    userSays("Who makes it?");
+    events().onResponseStarted();
+    expect(await events().holdSpeech!("Acme makes it.")).toBe(false);
+    expect(judge.asked).toEqual([]);
+    expect(noted).toEqual([expect.objectContaining({ kind: "term", stopped: true })]);
+    await provider.close();
+  });
+});

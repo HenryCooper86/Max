@@ -182,6 +182,15 @@ export async function failure(stageName: string, response: Response): Promise<Er
   return new Error(`${stageName} HTTP ${response.status}${hint}${body ? `: ${body}` : ""}`);
 }
 
+/** Sentences as one text: a space between them, except where the script does not use one. */
+function joined(sentences: string[]): string {
+  let text = "";
+  for (const sentence of sentences) {
+    text += text && !/[\s。！？…]$/u.test(text) ? ` ${sentence}` : sentence;
+  }
+  return text;
+}
+
 export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   const { log, request } = options;
   let history: ChatMessage[] = [];
@@ -378,6 +387,67 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
         const turn: ChatMessage[] = userMessage ? [userMessage] : [];
         let full = "";
         let nudged = false;
+        // With a guardrail that holds speech, nothing of the reply is spoken or
+        // shown until the session has read it: sentence by sentence, and every
+        // sentence that arrived during one reading together in the next.
+        const session = options.events();
+        const hold = session?.holdsSpeech?.() ? session.holdSpeech?.bind(session) : undefined;
+        const waiting: string[] = [];
+        let cleared = "";
+        let refused = false;
+        let reading: Promise<void> | undefined;
+        const read = async (): Promise<void> => {
+          while (waiting.length > 0 && current() && !refused) {
+            const batch = waiting.splice(0);
+            const known = history.length;
+            let allowed = true;
+            try {
+              allowed = await (hold as (text: string) => Promise<boolean>)(
+                joined(cleared ? [cleared, ...batch] : batch)
+              );
+            } catch (error) {
+              // A session that cannot read is not a reason to say nothing: its own checks fail open too.
+              log.warn(`${options.label} held speech could not be read`, {
+                message: error instanceof Error ? error.message : String(error)
+              });
+            }
+            if (!allowed) {
+              // The session stopped the reply, and has told the model so. What was
+              // asked and what was said until then go before that note.
+              refused = true;
+              waiting.length = 0;
+              if (!settled) {
+                settled = true;
+                history.splice(
+                  Math.min(known, history.length),
+                  0,
+                  ...(userMessage ? [userMessage] : []),
+                  ...(cleared.trim() ? [{ role: "assistant" as const, content: cleared.trim() }] : [])
+                );
+              }
+              return;
+            }
+            if (!current()) return;
+            for (const sentence of batch) {
+              const text = cleared ? joined([cleared, sentence]).slice(cleared.length) : sentence;
+              cleared += text;
+              options.events()?.onAgentText(text);
+              if (speaker.sentence) speaker.sentence(sentence);
+              else speaker.delta?.(text);
+            }
+          }
+        };
+        const held = (sentence: string): void => {
+          if (refused || !current()) return;
+          waiting.push(sentence);
+          reading ??= read().finally(() => {
+            reading = undefined;
+          });
+        };
+        /** Everything handed over so far has been read. */
+        const allRead = async (): Promise<void> => {
+          while (reading) await reading;
+        };
         for (let round = 0; ; round += 1) {
           // The last round offers no tools, so the model has to answer in words.
           const offerTools = round < MAX_TOOL_ROUNDS;
@@ -396,11 +466,11 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
             messages,
             controller.signal,
             (delta) => {
-              if (!current()) return;
+              if (!current() || hold) return;
               options.events()?.onAgentText(delta);
               speaker.delta?.(delta);
             },
-            speaker.sentence?.bind(speaker),
+            hold ? held : speaker.sentence?.bind(speaker),
             offerTools
           );
           full += result.text;
@@ -424,6 +494,20 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
             if (!current()) return;
             turn.push({ role: "tool", tool_call_id: call.id, content: output });
           }
+        }
+        if (hold) {
+          await allRead();
+          if (refused) {
+            // The session cancels a reply it stops. If it did not, the reply ends here.
+            if (current()) {
+              stop();
+              endReply(true);
+            }
+            return;
+          }
+          if (!current()) return;
+          // The model is reminded of what it said, not of what it was kept from saying.
+          full = cleared;
         }
         // History keeps what was said; tool chatter stays inside its turn.
         if (userMessage) history.push(userMessage);

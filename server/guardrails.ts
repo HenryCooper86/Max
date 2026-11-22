@@ -37,6 +37,11 @@ export type GuardrailsConfig = {
   say?: string;
   /** End the conversation after that line. */
   endConversation: boolean;
+  /**
+   * Have the judge read each sentence of the assistant before it is spoken or
+   * shown, on the backends where the relay makes the speech itself.
+   */
+  hold?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -61,7 +66,7 @@ function textList(raw: unknown, name: string, max: number, maxChars: number): { 
 export function guardrailsConfigFrom(raw: unknown): { config?: GuardrailsConfig; problem?: string } {
   if (raw === undefined || raw === null) return {};
   if (!isRecord(raw)) return { problem: "guardrails must be an object" };
-  const known = ["blockedTerms", "rules", "userRules", "say", "endConversation"];
+  const known = ["blockedTerms", "rules", "userRules", "say", "endConversation", "hold"];
   const unknown = Object.keys(raw).find((key) => !known.includes(key));
   if (unknown) return { problem: `guardrails has no key ${JSON.stringify(unknown.slice(0, 40))}` };
   const terms = textList(raw.blockedTerms, "blockedTerms", MAX_TERMS, MAX_TERM_CHARS);
@@ -79,6 +84,9 @@ export function guardrailsConfigFrom(raw: unknown): { config?: GuardrailsConfig;
   if (raw.endConversation !== undefined && typeof raw.endConversation !== "boolean") {
     return { problem: "guardrails.endConversation must be true or false" };
   }
+  if (raw.hold !== undefined && typeof raw.hold !== "boolean") {
+    return { problem: "guardrails.hold must be true or false" };
+  }
   if (terms.list.length + rules.list.length + userRules.list.length === 0) return {};
   const say = typeof raw.say === "string" ? raw.say.trim() : "";
   return {
@@ -87,7 +95,8 @@ export function guardrailsConfigFrom(raw: unknown): { config?: GuardrailsConfig;
       rules: rules.list,
       userRules: userRules.list,
       ...(say ? { say } : {}),
-      endConversation: raw.endConversation === true
+      endConversation: raw.endConversation === true,
+      ...(raw.hold === true ? { hold: true } : {})
     }
   };
 }

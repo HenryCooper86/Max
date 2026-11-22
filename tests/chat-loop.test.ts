@@ -282,6 +282,154 @@ describe("chat loop", () => {
   });
 });
 
+describe("chat loop with speech held for the session", () => {
+  /** A session that reads every piece before it is spoken, and answers when the test says. */
+  function setupHeld(replies: Array<() => Response>, speaker?: (sentences: string[], deltas: string[]) => Speaker) {
+    const chats: any[] = [];
+    const seen: string[] = [];
+    const sentences: string[] = [];
+    const deltas: string[] = [];
+    const asked: string[] = [];
+    const answers: Array<(allowed: boolean) => void> = [];
+    let failing = false;
+    const request = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      chats.push(JSON.parse(init!.body as string));
+      return replies[chats.length - 1]!();
+    });
+    const events = {
+      onResponseStarted: () => seen.push("start"),
+      onAgentText: (delta: string) => seen.push(`text:${delta}`),
+      onResponseDone: ({ cancelled }: { cancelled: boolean }) => seen.push(`done:${cancelled}`),
+      onError: (message: string) => seen.push(`error:${message}`),
+      holdsSpeech: () => true,
+      holdSpeech: (piece: string) => {
+        asked.push(piece);
+        if (failing) return Promise.reject(new Error("the judge is away"));
+        return new Promise<boolean>((resolve) =>
+          answers.push((allowed) => {
+            // As the session does: it stops the reply and tells the model, then says no.
+            if (!allowed) {
+              loop.addContext("Your last answer broke a rule.");
+              loop.stop();
+            }
+            resolve(allowed);
+          })
+        );
+      }
+    } as unknown as EngineEvents;
+    const loop: ChatLoop = createChatLoop({
+      log,
+      request: request as never,
+      label: "test",
+      stage: () => ({ baseUrl: "https://llm.example/v1", apiKey: "k", model: "m" }),
+      events: () => events,
+      tools: () => [],
+      instructions: () => "Be brief.",
+      closed: () => false,
+      newSpeaker: () =>
+        speaker?.(sentences, deltas) ?? {
+          sentence: (sentence) => sentences.push(sentence),
+          finish: async () => undefined
+        }
+    });
+    const answer = async (allowed: boolean) => {
+      await vi.waitFor(() => expect(answers.length).toBeGreaterThan(0));
+      answers.shift()!(allowed);
+      for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    };
+    return { loop, chats, seen, sentences, deltas, asked, answer, failReading: () => (failing = true) };
+  }
+
+  it("speaks and shows nothing until the session has read it, sentence by sentence", async () => {
+    const h = setupHeld([() => sseOf([text("Hi th"), text("ere. How are"), text(" you? Fine.")])]);
+    const done = h.loop.reply("hello");
+    await vi.waitFor(() => expect(h.asked).toEqual(["Hi there."]));
+    // The model has written everything, and nobody has heard or seen a word.
+    expect(h.sentences).toEqual([]);
+    expect(h.seen).toEqual(["start"]);
+    await h.answer(true);
+    expect(h.sentences).toEqual(["Hi there."]);
+    // What came in during the first reading is read together, with what was said before it.
+    expect(h.asked).toEqual(["Hi there.", "Hi there. How are you? Fine."]);
+    await h.answer(true);
+    await done;
+    expect(h.sentences).toEqual(["Hi there.", "How are you?", "Fine."]);
+    expect(h.seen).toEqual(["start", "text:Hi there.", "text: How are you?", "text: Fine.", "done:false"]);
+    // The next turn carries what was said.
+    void h.loop.reply("and you?");
+    await vi.waitFor(() => expect(h.chats).toHaveLength(2));
+    expect(h.chats[1].messages.slice(1, 3)).toEqual([
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "Hi there. How are you? Fine." }
+    ]);
+  });
+
+  it("stops at the piece the session refuses, and remembers only what was said", async () => {
+    const h = setupHeld([
+      () => sseOf([text("Sure. "), text("Take two of your neighbour's pills. "), text("Then rest.")]),
+      () => sseOf([text("Ok.")])
+    ]);
+    const done = h.loop.reply("my head hurts");
+    await h.answer(true);
+    expect(h.sentences).toEqual(["Sure."]);
+    await h.answer(false);
+    await done;
+    expect(h.sentences).toEqual(["Sure."]);
+    expect(h.seen).toEqual(["start", "text:Sure."]);
+    void h.loop.reply("ok");
+    await vi.waitFor(() => expect(h.chats).toHaveLength(2));
+    // The question and what was said of the answer, then the session's note: not what was held back.
+    expect(h.chats[1].messages.slice(1)).toEqual([
+      { role: "user", content: "my head hurts" },
+      { role: "assistant", content: "Sure." },
+      { role: "system", content: "Your last answer broke a rule." },
+      { role: "user", content: "ok" }
+    ]);
+    expect(JSON.stringify(h.chats[1])).not.toContain("neighbour");
+  });
+
+  it("gives a speaker that takes deltas the text it may say", async () => {
+    const h = setupHeld([() => sseOf([text("One. Two.")])], (_sentences, deltas) => ({
+      delta: (piece) => deltas.push(piece),
+      finish: async () => undefined
+    }));
+    const done = h.loop.reply("count");
+    await h.answer(true);
+    await h.answer(true);
+    await done;
+    expect(h.deltas.join("")).toBe("One. Two.");
+    expect(h.asked.at(-1)).toBe("One. Two.");
+  });
+
+  it("joins sentences of a script without spaces as they were written", async () => {
+    const h = setupHeld([() => sseOf([text("你好。今天天气很好。")])]);
+    const done = h.loop.reply("你好");
+    await h.answer(true);
+    await h.answer(true);
+    await done;
+    expect(h.seen.filter((item) => item.startsWith("text:")).join("")).toBe("text:你好。text:今天天气很好。");
+  });
+
+  it("drops what was being read when the user speaks over it", async () => {
+    const h = setupHeld([() => sseOf([text("A long answer. And more.")]), () => sseOf([text("Yes.")])]);
+    void h.loop.reply("tell me");
+    await vi.waitFor(() => expect(h.asked).toHaveLength(1));
+    h.loop.stop();
+    await h.answer(true);
+    expect(h.sentences).toEqual([]);
+    expect(h.seen).toEqual(["start"]);
+  });
+
+  it("says the text when the session's reading fails", async () => {
+    const h = setupHeld([() => sseOf([text("Hello.")])]);
+    h.failReading();
+    await h.loop.reply("hi");
+    expect(h.asked).toEqual(["Hello."]);
+    expect(h.sentences).toEqual(["Hello."]);
+    expect(h.seen).toEqual(["start", "text:Hello.", "done:false"]);
+  });
+});
+
 describe("chat loop pictures", () => {
   const pic = (name: string) => ({ data: name, mimeType: "image/jpeg" });
   const imagePart = (name: string) => ({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${name}` } });

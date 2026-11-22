@@ -1616,20 +1616,37 @@ if (assistant().variants.length > 0) {
     log.warn(
       "variants are counted in memory only and start from zero at a restart: set CONVERSATION_LOG_FILE to keep the counts"
     );
+  if (!config.trustProxy)
+    log.warn(
+      "variants: visitors without a user id are told apart by their address. Behind a reverse proxy every visitor has the proxy's address and gets the same variant: set RELAY_TRUST_PROXY=on, or give users an id with a session token"
+    );
   if (config.voiceProvider === "doubao" || config.voiceProvider === "mock")
     log.warn(
       `variants do not apply to the ${config.voiceProvider === "mock" ? "demo" : "Doubao"} backend: every conversation there runs the config as it is`
     );
 }
 if (assistant().guardrails) {
-  const { blockedTerms, rules, userRules, endConversation } = assistant().guardrails!;
+  const { blockedTerms, rules, userRules, endConversation, hold } = assistant().guardrails!;
   log.info("guardrails on", {
     blockedTerms: blockedTerms.length,
     rules: rules.length,
     userRules: userRules.length,
     ...(rules.length + userRules.length > 0 ? { model: guardrailModelFromEnv()?.model ?? "none" } : {}),
+    ...(hold ? { hold: true } : {}),
     then: endConversation ? "end the conversation" : "carry on"
   });
+}
+// Speech can be held for the judge only where the relay makes the speech from text itself.
+for (const profile of [assistant(), ...assistant().variants.map((variant) => variant.profile)]) {
+  if (!profile.guardrails?.hold) continue;
+  const where = profile.variant ? `variants: ${profile.variant}: ` : "";
+  if (profile.guardrails.rules.length === 0) {
+    log.warn(`${where}guardrails.hold is set but there are no rules to judge: nothing is held`);
+  } else if (!["pipeline", "local", "max-speech"].includes(config.voiceProvider)) {
+    log.warn(
+      `${where}guardrails.hold does not apply to the ${config.voiceProvider} backend, which makes speech and text together: rules are judged while the assistant speaks`
+    );
+  }
 }
 
 for (const problem of noiseSuppression.problems) log.warn(problem);

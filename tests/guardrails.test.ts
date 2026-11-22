@@ -50,6 +50,9 @@ describe("guardrailsConfigFrom", () => {
     expect(problem({ rules: Array.from({ length: 11 }, (_, i) => `rule ${i}`) })).toContain("at most 10");
     expect(problem({ rules: ["x"], say: 5 })).toContain("guardrails.say");
     expect(problem({ rules: ["x"], endConversation: "yes" })).toContain("endConversation");
+    expect(problem({ rules: ["x"], hold: "yes" })).toContain("guardrails.hold must be true or false");
+    expect(guardrailsConfigFrom({ rules: ["x"], hold: true }).config).toMatchObject({ hold: true });
+    expect("hold" in guardrailsConfigFrom({ rules: ["x"], hold: false }).config!).toBe(false);
     // A misspelt key would otherwise look like a rule that is on.
     expect(problem({ blockedterms: ["x"] })).toContain('no key "blockedterms"');
     expect(guardrailsConfigFrom({ blockedTerms: ["ok"], rules: "x" }).config).toBeUndefined();

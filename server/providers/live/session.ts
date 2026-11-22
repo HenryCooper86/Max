@@ -460,6 +460,8 @@ export function createLiveProvider(
   let guardTail = "";
   /** The judge is reading a reply, and how much of the current reply it has passed. */
   let guardJudging = false;
+  /** The engine asks before it speaks (`guardrails.hold` on a backend that can). */
+  let speechHeld = false;
   let guardJudgedChars = 0;
   /** The line that takes the place of what was stopped, waiting for the reply that was cut to stop. */
   let guardLine: { text: string; delivery: TranscriptDelivery; end: boolean } | undefined;
@@ -1202,6 +1204,8 @@ export function createLiveProvider(
   function judgeReply(): void {
     const config = guard();
     if (!guardJudge || !config?.rules.length || guardJudging || replyForced || closed) return;
+    // The engine has every sentence read before it is spoken: nothing is left to read afterwards.
+    if (speechHeld) return;
     if (replyInterrupted || replyGate === "closed") return;
     const text = replyText + heldText + guardTail;
     const fresh = text.length - guardJudgedChars;
@@ -1695,6 +1699,26 @@ export function createLiveProvider(
       if (closed) return;
       log.warn("upstream error", { message });
       status("degraded", `${backend.label}: ${message}`.slice(0, 200));
+    },
+    holdsSpeech() {
+      const config = guard();
+      return Boolean(config?.hold && guardJudge && config.rules.length > 0);
+    },
+    async holdSpeech(text) {
+      const config = guard();
+      if (closed || !config?.hold || !guardJudge || config.rules.length === 0) return true;
+      speechHeld = true;
+      if (!responseActive) beginReply();
+      // A reply that is over, or the relay's own line: the engine drops or says it without us.
+      if (replyForced || replyInterrupted || replyGate === "closed") return true;
+      const reply = replyCount;
+      if (blockedTermIn(text, true)) return false;
+      const verdict = await guardJudge.check({ speaker: "assistant", text, before: riderText });
+      // The reply ended meanwhile (the user spoke over it): the engine has dropped it itself.
+      if (closed || reply !== replyCount || replyInterrupted || !responseActive) return true;
+      if (!verdict.broken) return true;
+      guardStopped("assistant", "rule", verdict.rule);
+      return false;
     },
     onToolCall(call) {
       if (closed) return;

@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { PROTOCOL_VERSION as RELAY_PROTOCOL_VERSION } from "../shared/agent";
+import { PROTOCOL_VERSION, SDK_VERSION } from "../sdk/src/version";
 import {
   PcmFramer,
   buildSessionStart,
@@ -153,8 +156,20 @@ describe("session.start", () => {
       type: "session.start",
       sampleRate: 16000,
       channels: 1,
-      platform: "web"
+      platform: "web",
+      protocol: PROTOCOL_VERSION,
+      appVersion: `max-voice-agent@${SDK_VERSION}`
     });
+  });
+
+  it("states the package's real version and the relay's protocol", () => {
+    const manifest = JSON.parse(readFileSync(new URL("../sdk/package.json", import.meta.url), "utf8")) as {
+      version: string;
+    };
+    expect(SDK_VERSION).toBe(manifest.version);
+    expect(PROTOCOL_VERSION).toBe(RELAY_PROTOCOL_VERSION);
+    // The relay accepts at most 40 bytes of appVersion.
+    expect(Buffer.byteLength(buildSessionStart({}).appVersion)).toBeLessThanOrEqual(40);
   });
 
   it("includes options and serializes tools without handlers", () => {
@@ -196,6 +211,8 @@ describe("reconnect policy", () => {
 
   it("never reconnects after an idle close and gives up after 6 attempts", () => {
     expect(shouldReconnect(4001, 1)).toBe(false);
+    expect(shouldReconnect(4003, 1)).toBe(false);
+    expect(shouldReconnect(1008, 1)).toBe(false);
     expect(shouldReconnect(1006, 1)).toBe(true);
     expect(shouldReconnect(1006, 6)).toBe(true);
     expect(shouldReconnect(1006, 7)).toBe(false);

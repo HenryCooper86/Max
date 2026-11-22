@@ -9,3 +9,4 @@ import { defineVoiceAgentElement } from "./widget.js";
 defineVoiceAgentElement();
 
 export { VoiceAgentElement, defineVoiceAgentElement } from "./widget.js";
+export type { WidgetStringOverrides, WidgetStrings } from "./widget.js";

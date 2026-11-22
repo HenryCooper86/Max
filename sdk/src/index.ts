@@ -13,6 +13,8 @@ export type {
   VoiceAgentErrorCode,
   VoiceAgentEvents,
   VoiceAgentOptions,
-  VoiceAgentStatus
+  VoiceAgentStatus,
+  VoiceAgentWarning
 } from "./client.js";
 export type { AgentCapabilities, JsonSchema, ToolActivityEvent, TranscriptItem, VoiceGender } from "./protocol.js";
+export { PROTOCOL_VERSION, SDK_VERSION } from "./version.js";

@@ -7,8 +7,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { VoiceAgent } from "./client.js";
-import type { ClientTool, StartOptions, VoiceAgentError, VoiceAgentOptions, VoiceAgentStatus } from "./client.js";
+import { VoiceAgent, VoiceAgentError } from "./client.js";
+import type { ClientTool, StartOptions, VoiceAgentOptions, VoiceAgentStatus } from "./client.js";
 import type { TranscriptItem } from "./protocol.js";
 
 /** What {@link useVoiceAgent} returns. */
@@ -40,16 +40,41 @@ export interface UseVoiceAgentResult {
 const SILENT = { mic: 0, output: 0 };
 
 /**
+ * What identifies a client. Changing any of these replaces it; everything else
+ * (tool handlers, a token function's identity, `context`) is read live. Inline
+ * objects and functions are compared by content, so they do not recreate the
+ * client on every render.
+ */
+function connectionKey(options: VoiceAgentOptions): string {
+  const token = options.token;
+  return JSON.stringify([
+    options.url,
+    typeof token === "function" ? { fn: true } : (token ?? null),
+    options.project ?? null,
+    options.language ?? null,
+    options.voice ?? null,
+    options.backend ?? null,
+    options.autoReconnect ?? null,
+    options.speakFallback ?? null,
+    (options.tools ?? []).map(({ name, description, parameters }) => [name, description, parameters ?? null])
+  ]);
+}
+
+/**
  * Runs a voice agent for the lifetime of a component.
  *
- * The client is created once from the first `options` (connection settings
- * such as `url`, `token`, `language` are not re-read) and destroyed on unmount.
- * Tool handlers are the exception: they always call the latest closure, so
- * they can read current props and state.
+ * The client is created when the component mounts and again whenever a
+ * connection option changes (`url`, `token`, `project`, `language`, `voice`,
+ * `backend`, `autoReconnect`, `speakFallback`, or the tools' names,
+ * descriptions and parameters); the old one is destroyed, which ends any
+ * running conversation. A token function, tool handlers and `context` are read
+ * live, so inline closures are safe and never restart the client. `audioContext`
+ * is read when the client is created.
  */
 export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
   const latest = useRef(options);
   latest.current = options;
+  const key = connectionKey(options);
 
   const [agent, setAgent] = useState<VoiceAgent | undefined>();
   const [status, setStatus] = useState<VoiceAgentStatus>("idle");
@@ -60,7 +85,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
 
   useEffect(() => {
     const first = latest.current;
-    // Indirection keeps handlers fresh without recreating the client.
+    // Indirection keeps handlers (and a token function) fresh without recreating the client.
     const tools: ClientTool[] | undefined = first.tools?.map((tool) => ({
       ...tool,
       handler(args) {
@@ -68,7 +93,19 @@ export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
         return current.handler(args);
       }
     }));
-    const instance = new VoiceAgent({ ...first, ...(tools ? { tools } : {}) });
+    const token =
+      typeof first.token === "function" ? () => (latest.current.token as () => Promise<string>)() : first.token;
+    const instance = new VoiceAgent({
+      ...first,
+      ...(tools ? { tools } : {}),
+      ...(token !== undefined ? { token } : {})
+    });
+    // A previous client's state must not leak into this one.
+    setStatus("idle");
+    setTranscript([]);
+    setMuted(false);
+    setLevel(SILENT);
+    setError(undefined);
     const off = [
       instance.on("status", (next) => {
         setStatus(next);
@@ -84,12 +121,22 @@ export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
       instance.destroy();
       setAgent(undefined);
     };
-  }, []);
+  }, [key]);
+
+  // The context string applies to the next session, so it can follow props without a new client.
+  const context = options.context;
+  useEffect(() => {
+    if (context !== undefined) agent?.setContext(context);
+  }, [agent, context]);
 
   const start = useCallback(
     (startOptions?: StartOptions) => {
       setError(undefined);
-      return agent ? agent.start(startOptions) : Promise.reject(new Error("Voice agent is not ready"));
+      return agent
+        ? agent.start(startOptions)
+        : Promise.reject(
+            new VoiceAgentError("connection", "The voice agent is not ready yet: wait for the component to mount")
+          );
     },
     [agent]
   );

@@ -10,6 +10,7 @@
 
 import { createBrowserAudio } from "./audio.js";
 import type { AudioIO } from "./audio.js";
+import { PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
 import {
   MAX_TEXT_CHARS,
   TOOL_NAME_PATTERN,
@@ -22,6 +23,7 @@ import {
   shouldReconnect,
   IDLE_CLOSE_CODE,
   USAGE_LIMIT_CLOSE_CODE,
+  UNAUTHORIZED_CLOSE_CODE,
   MAX_TOOLS
 } from "./protocol.js";
 import type {
@@ -58,17 +60,54 @@ export interface ClientTool<Args extends Record<string, unknown> = Record<string
 export type ToolCallInfo = { callId: string; name: string; arguments: Record<string, unknown> };
 
 /** Machine-readable reason attached to a {@link VoiceAgentError}. */
-export type VoiceAgentErrorCode = "microphone" | "token" | "connection" | "relay" | "audio";
+export type VoiceAgentErrorCode =
+  | "microphone"
+  | "token"
+  | "connection"
+  | "relay"
+  | "audio"
+  /** The relay closed with 4003: this account's voice minutes are used up. Retrying will not help. */
+  | "usage_limit"
+  /** The relay closed with 1008: it refused the credentials, even after a fresh token where one could be fetched. */
+  | "unauthorized";
 
 /** Error delivered through the `error` event and rejected `start()` calls. */
 export class VoiceAgentError extends Error {
   readonly code: VoiceAgentErrorCode;
+  /** The WebSocket close code behind the error, when the relay closed the connection. */
+  readonly closeCode?: number;
 
-  constructor(code: VoiceAgentErrorCode, message: string, options?: { cause?: unknown }) {
+  constructor(code: VoiceAgentErrorCode, message: string, options?: { cause?: unknown; closeCode?: number }) {
     super(message, options);
     this.name = "VoiceAgentError";
     this.code = code;
+    if (options?.closeCode !== undefined) this.closeCode = options.closeCode;
   }
+}
+
+/** Something the developer should know that does not end the session. */
+export type VoiceAgentWarning = {
+  /**
+   * `audio_blocked`: the browser left the audio context suspended, so the agent cannot be heard until {@link VoiceAgent.resumeAudio} runs inside a user gesture.
+   * `protocol_mismatch`: the relay speaks a newer protocol than this SDK; the session runs, but update the SDK.
+   */
+  code: "audio_blocked" | "protocol_mismatch";
+  message: string;
+};
+
+/** Maps a relay close code to the error `start()` or the `error` event reports. */
+function closeError(code: number, initial: boolean): VoiceAgentError {
+  if (code === USAGE_LIMIT_CLOSE_CODE) {
+    return new VoiceAgentError("usage_limit", "Voice minutes used up for this month", { closeCode: code });
+  }
+  if (code === UNAUTHORIZED_CLOSE_CODE) {
+    return new VoiceAgentError("unauthorized", "The relay refused these credentials", { closeCode: code });
+  }
+  return new VoiceAgentError(
+    "connection",
+    initial ? `Relay closed the connection (${code})` : "Lost the connection to the relay",
+    { closeCode: code }
+  );
 }
 
 /** Why a connection ended. */
@@ -90,6 +129,10 @@ export interface VoiceAgentEvents {
   error: VoiceAgentError;
   /** Mic and agent-output loudness, 0..1, at most ~30 times a second while active. */
   level: { mic: number; output: number };
+  /** Something is wrong that does not end the session, such as audio blocked by the browser. */
+  warning: VoiceAgentWarning;
+  /** Audio that was blocked can play now. */
+  audioresume: void;
   /** A session is established (fires again after each reconnect). */
   open: void;
   /** A connection ended. */
@@ -163,7 +206,7 @@ export type WebSocketConstructor = new (url: string) => WebSocketLike;
 interface VoiceAgentInternals {
   WebSocket?: WebSocketConstructor;
   /** Builds the audio layer; receives the callback to report playback start/stop. */
-  audio?: (onPlayingChange: (playing: boolean) => void) => AudioIO;
+  audio?: (onPlayingChange: (playing: boolean) => void, onBlockedChange: (blocked: boolean) => void) => AudioIO;
   toolTimeoutMs?: number;
   connectTimeoutMs?: number;
 }
@@ -243,6 +286,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private generation = 0;
   private sessionSeq = 0;
   private attempts = 0;
+  /** A refused (1008) connection gets one retry with a fresh token; reset once a session starts. */
+  private authRetried = false;
+  private blocked = false;
+  private protocolWarned = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private levelTimer: ReturnType<typeof setInterval> | undefined;
   private lastLevel = { mic: 0, output: 0 };
@@ -313,12 +360,13 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
    * @throws {VoiceAgentError} when the microphone is refused or the relay cannot be reached.
    */
   start(options: StartOptions = {}): Promise<void> {
-    if (this.destroyed) return Promise.reject(new Error("VoiceAgent was destroyed"));
+    if (this.destroyed) return Promise.reject(new VoiceAgentError("connection", "VoiceAgent was destroyed"));
     if (this.startPromise && (this.lifecycle === "connecting" || this.lifecycle === "active")) return this.startPromise;
 
     this.generation += 1;
     const generation = this.generation;
     this.attempts = 0;
+    this.authRetried = false;
     this.isMuted = false;
     this.wantMic = options.microphone !== false;
     this.setLifecycle("connecting");
@@ -326,7 +374,17 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     // Audio setup runs synchronously first: browsers only allow it inside the gesture.
     const audio = this.ensureAudio();
     const prepared = audio.prepare();
-    const mic = this.wantMic ? audio.startMic((pcm) => this.onMicFrame(pcm)) : Promise.resolve();
+    const mic = this.wantMic
+      ? audio
+          .startMic((pcm) => this.onMicFrame(pcm))
+          .catch((error: unknown) => {
+            throw error instanceof VoiceAgentError
+              ? error
+              : new VoiceAgentError("microphone", `Could not open the microphone: ${errorMessage(error)}`, {
+                  cause: error
+                });
+          })
+      : Promise.resolve();
     this.startLevelTimer();
 
     const pending = new Promise<never>((_, reject) => {
@@ -341,6 +399,24 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     // The caller owns rejection handling; this keeps an ignored start() from becoming unhandled.
     promise.catch(() => undefined);
     return promise;
+  }
+
+  /** True while the browser is keeping audio suspended, so the agent cannot be heard. See {@link resumeAudio}. */
+  get audioBlocked(): boolean {
+    return this.blocked;
+  }
+
+  /**
+   * Resumes audio the browser blocked. Call it from a click or key press (the
+   * `warning` event with code `audio_blocked` tells you when it is needed).
+   *
+   * @returns whether audio is running afterwards.
+   */
+  async resumeAudio(): Promise<boolean> {
+    if (!this.audio) return true;
+    const running = await this.audio.resume();
+    this.setBlocked(!running);
+    return running;
   }
 
   /** Ends the conversation and releases the microphone. The agent can be started again. */
@@ -409,14 +485,42 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
       this.playing = playing;
       this.refreshStatus();
     };
-    if (this.options.internals?.audio) return (this.audio ??= this.options.internals.audio(onPlayingChange));
+    const onBlockedChange = (blocked: boolean) => this.setBlocked(blocked);
+    if (this.options.internals?.audio) {
+      return (this.audio ??= this.options.internals.audio(onPlayingChange, onBlockedChange));
+    }
     this.audio ??= createBrowserAudio({
       ...(this.options.audioContext ? { audioContext: this.options.audioContext } : {}),
       ...(this.options.language ? { language: this.options.language } : {}),
       ...(this.options.voice ? { voice: this.options.voice } : {}),
-      onPlayingChange
+      onPlayingChange,
+      onBlockedChange
     });
     return this.audio;
+  }
+
+  /** Warns, once per client, when the relay is ahead of this SDK. A relay
+   *  that is behind, or too old to say, needs nothing from the page. */
+  private checkRelayProtocol(relay: number | undefined): void {
+    if (this.protocolWarned || typeof relay !== "number" || relay <= PROTOCOL_VERSION) return;
+    this.protocolWarned = true;
+    this.emit("warning", {
+      code: "protocol_mismatch",
+      message: `The relay speaks protocol ${relay}; this SDK (${SDK_VERSION}) speaks ${PROTOCOL_VERSION}. Update max-voice-agent.`
+    });
+  }
+
+  private setBlocked(blocked: boolean): void {
+    if (blocked === this.blocked || this.destroyed) return;
+    this.blocked = blocked;
+    if (blocked) {
+      this.emit("warning", {
+        code: "audio_blocked",
+        message: "The browser is blocking audio. Call resumeAudio() from a click or key press."
+      });
+    } else {
+      this.emit("audioresume", undefined);
+    }
   }
 
   private get streaming(): boolean {
@@ -612,8 +716,16 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
         this.audio?.clearPlayback();
         const wasReady = this.lifecycle === "active";
         if (initial && !wasReady && event.code !== IDLE_CLOSE_CODE) {
+          if (this.takeAuthRetry(event.code)) {
+            this.emit("close", { code: event.code, reason: event.reason, willReconnect: true });
+            this.connect(generation, true).then(
+              () => settle(),
+              (error: unknown) => settle(error as VoiceAgentError)
+            );
+            return;
+          }
           this.emit("close", { code: event.code, reason: event.reason, willReconnect: false });
-          settle(new VoiceAgentError("connection", `Relay closed the connection (${event.code})`));
+          settle(closeError(event.code, true));
           return;
         }
         this.onSocketClosed(generation, event.code, event.reason);
@@ -622,21 +734,30 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     });
   }
 
+  /**
+   * A 1008 close means the relay refused the credentials. A static token cannot
+   * change, so retrying is pointless; a token function (or a public agent id)
+   * gets one retry with a freshly fetched token before giving up.
+   */
+  private takeAuthRetry(code: number): boolean {
+    const { token, project, autoReconnect } = this.options;
+    const refreshable = typeof token === "function" || (token === undefined && Boolean(project));
+    if (code !== UNAUTHORIZED_CLOSE_CODE || this.authRetried || !refreshable || autoReconnect === false) return false;
+    this.authRetried = true;
+    return true;
+  }
+
   private onSocketClosed(generation: number, code: number, reason: string): void {
     this.attempts += 1;
-    const willReconnect = shouldReconnect(code, this.attempts, this.options.autoReconnect ?? true);
+    const willReconnect =
+      this.takeAuthRetry(code) || shouldReconnect(code, this.attempts, this.options.autoReconnect ?? true);
     this.emit("close", { code, reason, willReconnect });
     if (code === IDLE_CLOSE_CODE) {
       this.teardown("closed");
       return;
     }
     if (!willReconnect) {
-      this.fail(
-        new VoiceAgentError(
-          "connection",
-          code === USAGE_LIMIT_CLOSE_CODE ? "Voice minutes used up for this month" : "Lost the connection to the relay"
-        )
-      );
+      this.fail(closeError(code, false));
       return;
     }
     this.setLifecycle("connecting");
@@ -675,6 +796,8 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
         this.provider = event.provider;
         this.socketReady = true;
         this.attempts = 0;
+        this.authRetried = false;
+        this.checkRelayProtocol(event.protocol);
         this.setLifecycle("active");
         if (this.streaming) this.sendIfReady({ type: "audio.start" });
         this.emit("open", undefined);

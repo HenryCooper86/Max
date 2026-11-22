@@ -225,6 +225,24 @@ final class ImageInputTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(image.cgImage).width, 64)
     }
 
+    func testWhatIsSeeThroughIsWhiteNotBlack() throws {
+        // A screenshot with nothing behind it: see-through but for a red square in the top left corner.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 200), format: format).pngData { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 60, height: 60))
+        }
+        let image = try decoded(try XCTUnwrap(jpegBase64ForImageInput(png)))
+        let empty = try colour(of: image, atX: 0.75, y: 0.75)
+        XCTAssertGreaterThan(empty.red, 0.9)
+        XCTAssertGreaterThan(empty.blue, 0.9)
+        let square = try colour(of: image, atX: 0.1, y: 0.1)
+        XCTAssertGreaterThan(square.red, 0.7)
+        XCTAssertLessThan(square.blue, 0.3)
+    }
+
     func testWhatIsNoPictureIsRefused() {
         XCTAssertNil(jpegBase64ForImageInput(Data("not a picture".utf8)))
         XCTAssertNil(jpegBase64ForImageInput(Data()))

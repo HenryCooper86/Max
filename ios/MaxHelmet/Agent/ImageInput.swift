@@ -129,6 +129,24 @@ func jpegBase64ForImageInput(_ data: Data) -> String? {
             kCGImageSourceThumbnailMaxPixelSize: max(scaledWidth, scaledHeight)
         ]
         guard let scaled = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        return UIImage(cgImage: scaled).jpegData(compressionQuality: quality)?.base64EncodedString()
+        return opaque(scaled).jpegData(compressionQuality: quality)?.base64EncodedString()
+    }
+}
+
+/// JPEG has no transparency: what is see-through in a screenshot or a sticker is white, not black.
+private func opaque(_ image: CGImage) -> UIImage {
+    switch image.alphaInfo {
+    case .none, .noneSkipFirst, .noneSkipLast:
+        return UIImage(cgImage: image)
+    default:
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let size = CGSize(width: image.width, height: image.height)
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            UIImage(cgImage: image).draw(in: CGRect(origin: .zero, size: size))
+        }
     }
 }

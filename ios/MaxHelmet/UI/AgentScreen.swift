@@ -637,7 +637,6 @@ private struct TypedInputBar: View {
                     .visorFont(.caption)
                     .foregroundStyle(Visor.textSecondary)
                     .padding(.horizontal, Visor.Space.s3)
-                    .accessibilityAddTraits(.updatesFrequently)
             }
         }
         .onChange(of: picked) { _, item in

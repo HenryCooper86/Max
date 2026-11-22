@@ -1954,11 +1954,13 @@ extension AgentSession {
             speedKmh: rideSpeed.currentSpeedKmh
         ) {
         case let .success(json):
+            // A picture that cannot go is not counted, and is not said to have gone.
+            guard let webSocket else { return .failure(.notReady) }
             if let refused = imageLimiter.rejection(at: now) { return .failure(refused) }
             imageLimiter.didSend(at: now)
             // With words it is a turn of the user's, which supersedes whatever the agent was still saying.
             if !(text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { stopAgentSpeech() }
-            webSocket?.send(.string(json)) { _ in }
+            webSocket.send(.string(json)) { _ in }
             return .success(())
         case let .failure(reason):
             return .failure(reason)

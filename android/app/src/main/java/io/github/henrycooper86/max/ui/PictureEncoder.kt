@@ -3,7 +3,11 @@ package io.github.henrycooper86.max.ui
 import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Rect
 import android.media.ExifInterface
 import android.net.Uri
 import android.util.Base64
@@ -30,15 +34,17 @@ fun encodePictureForInput(resolver: ContentResolver, uri: Uri): String? = runCat
     val upright = upright(decoded, orientationOf(resolver, uri))
     try {
         encodeImageForInput(upright.width, upright.height) { width, height, quality ->
-            val scaled =
-                if (width == upright.width && height == upright.height) upright
-                else Bitmap.createScaledBitmap(upright, width, height, true)
+            // JPEG has no transparency: what is see-through in a screenshot or a sticker is white, not black.
+            val scaled = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             try {
+                val canvas = Canvas(scaled)
+                canvas.drawColor(Color.WHITE)
+                canvas.drawBitmap(upright, null, Rect(0, 0, width, height), Paint(Paint.FILTER_BITMAP_FLAG))
                 val bytes = ByteArrayOutputStream()
                 scaled.compress(Bitmap.CompressFormat.JPEG, quality, bytes)
                 Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP)
             } finally {
-                if (scaled !== upright) scaled.recycle()
+                scaled.recycle()
             }
         }
     } finally {

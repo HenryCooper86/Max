@@ -550,18 +550,23 @@ private fun TypedTurnField(
     var draft by rememberSaveable { mutableStateOf("") }
     val ready = mode == TypedInputMode.READY
     val send = { if (ready && draft.isNotBlank() && onSend(draft)) draft = "" }
-    // What became of the last picture, said under the field until the next one.
-    var pictureNote by rememberSaveable { mutableStateOf<Str?>(null) }
+    // What became of the last picture, said under the field until the next one. Not kept when the screen is
+    // made again (a new language, a new font size): a picture on its way then could not take "Sending…" away.
+    var pictureNote by remember { mutableStateOf<Str?>(null) }
     var sendingPicture by remember { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             sendingPicture = true
             pictureNote = Str.PICTURE_SENDING
-            // What is typed goes with the picture, as one turn.
+            // What is typed goes with the picture, as one turn. It leaves the field now, so that it cannot be
+            // sent a second time, and comes back if the picture does not go.
             val words = draft
+            draft = ""
             onPicture(uri, words) { refusal ->
                 sendingPicture = false
-                if (refusal == null && words.isNotBlank() && draft == words) draft = ""
+                if (refusal != null && words.isNotBlank()) {
+                    draft = (if (draft.isBlank()) words else "$words $draft").take(MAX_TEXT_INPUT_CHARS)
+                }
                 pictureNote = when (refusal) {
                     // With words the assistant answers at once: nothing more to say here.
                     null -> if (words.isBlank()) Str.PICTURE_SENT else null

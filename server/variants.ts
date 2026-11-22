@@ -84,8 +84,12 @@ export function pickVariant<T extends { id: string; weight: number }>(
 ): T | undefined {
   if (variants.length === 0) return undefined;
   const total = variants.reduce((sum, variant) => sum + variant.weight, 0);
+  // The list's ids are part of what is hashed: another test shares people out
+  // anew, and does not put the same people first again.
+  const test = variants.map((variant) => variant.id).join(",");
   const point =
-    (key ? createHash("sha256").update(`variant:${key}`).digest().readUIntBE(0, 6) / 2 ** 48 : random()) * total;
+    (key ? createHash("sha256").update(`variant:${test}:${key}`).digest().readUIntBE(0, 6) / 2 ** 48 : random()) *
+    total;
   let passed = 0;
   for (const variant of variants) {
     passed += variant.weight;
@@ -116,7 +120,8 @@ type VariantTally = {
   lastAt: number;
 };
 
-type Counted = VariantTally & { seconds: number };
+/** A reason may be any word, also one every object has ("constructor"): counted in a map. */
+type Counted = Omit<VariantTally, "endReasons"> & { seconds: number; reasons: Map<string, number> };
 
 export type VariantResults = {
   /** Counts one finished conversation. */
@@ -148,14 +153,21 @@ export function createVariantResults(): VariantResults {
     const key = JSON.stringify([version ?? null, variant ?? null]);
     let group = groups.get(key);
     if (!group) {
-      if (groups.size >= MAX_GROUPS) return;
+      // Room for the newest: the group that has been quiet longest goes.
+      if (groups.size >= MAX_GROUPS) {
+        let oldest: string | undefined;
+        for (const [name, other] of groups) {
+          if (oldest === undefined || other.lastAt < (groups.get(oldest) as Counted).lastAt) oldest = name;
+        }
+        if (oldest !== undefined) groups.delete(oldest);
+      }
       group = {
         ...(version !== undefined ? { version } : {}),
         ...(variant !== undefined ? { variant } : {}),
         conversations: 0,
         averageSeconds: 0,
         seconds: 0,
-        endReasons: {},
+        reasons: new Map(),
         analysed: 0,
         succeeded: 0,
         failed: 0,
@@ -168,11 +180,14 @@ export function createVariantResults(): VariantResults {
     }
     group.conversations += 1;
     group.seconds += Number.isFinite(session.seconds) ? session.seconds : 0;
-    const reason = typeof session.endReason === "string" && session.endReason ? session.endReason : "unknown";
-    if (reason in group.endReasons || Object.keys(group.endReasons).length < MAX_END_REASONS) {
-      group.endReasons[reason] = (group.endReasons[reason] ?? 0) + 1;
+    const reason = (typeof session.endReason === "string" && session.endReason ? session.endReason : "unknown").slice(
+      0,
+      64
+    );
+    if (group.reasons.has(reason) || group.reasons.size < MAX_END_REASONS) {
+      group.reasons.set(reason, (group.reasons.get(reason) ?? 0) + 1);
     }
-    if (record.analysis) {
+    if (isRecord(record.analysis)) {
       group.analysed += 1;
       if (record.analysis.success === true) group.succeeded += 1;
       if (record.analysis.success === false) group.failed += 1;
@@ -223,8 +238,9 @@ export function createVariantResults(): VariantResults {
     },
     tallies() {
       return [...groups.values()]
-        .map(({ seconds, ...tally }) => ({
+        .map(({ seconds, reasons, ...tally }) => ({
           ...tally,
+          endReasons: Object.fromEntries(reasons),
           averageSeconds: tally.conversations ? Math.round(seconds / tally.conversations) : 0,
           firstAt: Number.isFinite(tally.firstAt) ? tally.firstAt : 0
         }))

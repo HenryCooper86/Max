@@ -61,6 +61,22 @@ describe("pickVariant", () => {
     expect(counts.a / 4000).toBeLessThan(0.28);
   });
 
+  it("shares people out anew for another test", () => {
+    const other = [
+      { id: "c", weight: 1 },
+      { id: "d", weight: 3 }
+    ];
+    let moved = 0;
+    for (let i = 0; i < 2000; i += 1) {
+      const first = pickVariant(variants, `user-${i}`)!.id === "a";
+      const second = pickVariant(other, `user-${i}`)!.id === "c";
+      if (first !== second) moved += 1;
+    }
+    // Independent draws of 1 in 4 differ for 3 in 8.
+    expect(moved / 2000).toBeGreaterThan(0.3);
+    expect(moved / 2000).toBeLessThan(0.45);
+  });
+
   it("draws at random for someone it cannot tell from anyone else", () => {
     expect(pickVariant(variants, undefined, () => 0)!.id).toBe("a");
     expect(pickVariant(variants, undefined, () => 0.24)!.id).toBe("a");
@@ -120,6 +136,38 @@ describe("a config with variants", () => {
     const none = assistantProfileFrom({ ...config, variants: [{ id: "control" }] });
     expect(none.variants).toEqual([]);
     expect(none.configProblems).toEqual([expect.stringContaining("at least two")]);
+    // The config and a variant wrong in the same way: said for each.
+    const both = assistantProfileFrom({
+      ...config,
+      guardrails: { blockedTerms: "Acme" },
+      variants: [{ id: "control" }, { id: "odd", guardrails: { blockedTerms: "Acme" } }]
+    });
+    expect(both.configProblems).toHaveLength(2);
+    expect(both.configProblems[0]).toMatch(/^guardrails\.blockedTerms/);
+    expect(both.configProblems[1]).toMatch(/^variants: odd: guardrails\.blockedTerms/);
+    // What is wrong with the config alone is not said again for every variant.
+    const baseOnly = assistantProfileFrom({
+      ...config,
+      guardrails: { blockedTerms: "Acme" },
+      variants: [{ id: "a" }, { id: "b", greeting: "Hi." }]
+    });
+    expect(baseOnly.configProblems).toHaveLength(1);
+  });
+
+  it("uses the config's rememberUsers for every variant, and says so only when a variant asks for another", () => {
+    const base = { ...config, conversation: { rememberUsers: true, idleReminderSeconds: 20 } };
+    const quiet = assistantProfileFrom({
+      ...base,
+      variants: [{ id: "a" }, { id: "b", conversation: { idleReminderSeconds: 40 } }]
+    });
+    expect(quiet.configProblems).toEqual([]);
+    expect(quiet.variants[1]!.profile.conversation).toMatchObject({ rememberUsers: true, idleReminderSeconds: 40 });
+    const asked = assistantProfileFrom({
+      ...base,
+      variants: [{ id: "a" }, { id: "b", conversation: { rememberUsers: false } }]
+    });
+    expect(asked.configProblems).toEqual([expect.stringContaining("variants: b: conversation.rememberUsers")]);
+    expect(asked.variants[1]!.profile.conversation.rememberUsers).toBe(true);
     expect(assistantProfileFrom({ name: "Ava", device: "app" }).variants).toEqual([]);
   });
 });
@@ -205,6 +253,31 @@ describe("createVariantResults", () => {
     results.add({} as never);
     results.add(null as never);
     expect(results.tallies()).toHaveLength(3);
+  });
+
+  it("counts reasons with names every object has, and keeps the newest groups", () => {
+    const results = createVariantResults();
+    for (const endReason of ["constructor", "constructor", "toString", "__proto__", "x".repeat(200)]) {
+      results.add(record({ variant: "a", endReason }));
+    }
+    results.add(record({ variant: "a" }, { analysis: 5 as never }));
+    const [tally] = results.tallies();
+    expect(tally!.endReasons).toEqual({
+      constructor: 2,
+      toString: 1,
+      ["__proto__"]: 1,
+      ["x".repeat(64)]: 1,
+      unknown: 1
+    });
+    expect(Object.keys(tally!.endReasons)).toContain("__proto__");
+    expect(tally!.analysed).toBe(0);
+    // More versions than are kept: the ones that have been quiet longest go.
+    const many = createVariantResults();
+    for (let i = 0; i < 205; i += 1) many.add(record({ version: `v${i}`, endedAt: 1000 + i }));
+    const versions = many.tallies().map((item) => item.version);
+    expect(versions).toHaveLength(200);
+    expect(versions[0]).toBe("v204");
+    expect(versions).not.toContain("v0");
   });
 
   it("counts what an earlier log holds, but not what is yet to end", async () => {

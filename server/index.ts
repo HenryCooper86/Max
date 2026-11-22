@@ -1883,7 +1883,11 @@ wss.on("connection", (client, request) => {
   // The same user gets the same variant every time; a visitor without an id, by their address.
   const variant = cloudProject
     ? undefined
-    : pickVariant(assistant().variants, authenticatedUser?.id ?? tokenGrant?.userId ?? address);
+    : pickVariant(
+        assistant().variants,
+        // An address nobody could tell is not one to tell people apart by: such a visitor is drawn at random.
+        authenticatedUser?.id ?? tokenGrant?.userId ?? (address && address !== "unknown" ? address : undefined)
+      );
   const observer =
     !cloudProject && conversations.active()
       ? conversations.open({

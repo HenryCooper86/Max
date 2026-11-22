@@ -324,22 +324,38 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
   const base = baseProfileFrom(raw, baseDir);
   const specs = variantSpecsFrom(raw.variants);
   if (specs.problem) base.configProblems.push(specs.problem);
+  const problems: string[] = [];
   for (const spec of specs.variants) {
     // The whole config with the variant's keys in place of its own.
     const profile = baseProfileFrom({ ...raw, ...spec.overrides }, baseDir);
     profile.variant = spec.id;
-    // Whether users are remembered is decided before a conversation has its variant.
+    // Whether users are remembered is decided before a conversation has its
+    // variant: it is the config's own for all of them. Worth a word only when
+    // the variant asks for something else.
+    const asked = isRecord(spec.overrides.conversation) ? spec.overrides.conversation.rememberUsers : undefined;
     if (profile.conversation.rememberUsers !== base.conversation.rememberUsers) {
       profile.conversation = { ...profile.conversation, rememberUsers: base.conversation.rememberUsers };
-      base.configProblems.push(
-        `variants: ${spec.id}: conversation.rememberUsers is the same for every variant; the config's own value is used`
-      );
+      if (asked !== undefined) {
+        problems.push(
+          `variants: ${spec.id}: conversation.rememberUsers is the same for every variant; the config's own value is used`
+        );
+      }
     }
-    for (const problem of profile.configProblems) {
-      if (!base.configProblems.includes(problem)) base.configProblems.push(`variants: ${spec.id}: ${problem}`);
+    // What is wrong with the config whatever the variant sets is said once, for
+    // the config. What is wrong because of the variant's own keys is said for it.
+    const overridden = Object.keys(spec.overrides);
+    if (profile.configProblems.length > 0 && overridden.length > 0) {
+      const without = Object.fromEntries(Object.entries(raw).filter(([key]) => !overridden.includes(key)));
+      const others = [...baseProfileFrom(without, baseDir).configProblems];
+      for (const problem of profile.configProblems) {
+        const index = others.indexOf(problem);
+        if (index >= 0) others.splice(index, 1);
+        else problems.push(`variants: ${spec.id}: ${problem}`);
+      }
     }
     base.variants.push({ id: spec.id, weight: spec.weight, profile });
   }
+  base.configProblems.push(...problems);
   return base;
 }
 

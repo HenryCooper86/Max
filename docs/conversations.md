@@ -743,11 +743,29 @@ config keys it replaces:
 If any part of `variants` is wrong, no variant is used and the startup log says what is wrong. A mistake inside a
 variant's own keys is reported under its name and handled as it would be in the config.
 
+The relay counts at most 200 combinations of version and variant; beyond that the one that has been quiet longest is
+dropped from the counts.
+
 **Who gets which.** The same person gets the same variant every time, so nobody hears the assistant change between two
 calls. The relay decides by the user's id when it has one (a signed-in user, or the `userId` of a
 [session token](embedding.md) or an outbound call), otherwise by the other party's phone number on a call, and
-otherwise by the visitor's network address. People behind one address therefore get the same variant, and a visitor
-whose address changes may get another. Changing the list or its weights moves some people to another variant.
+otherwise by the visitor's network address. Only a user id is exact:
+
+- People behind one address get the same variant, and a visitor whose address changes (a phone leaving Wi-Fi) may get
+  another, also when a dropped conversation is [resumed](#carrying-a-conversation-across-a-dropped-connection) from
+  the new address. Each leg of a resumed conversation is a record of its own and is counted on its own.
+- Behind a reverse proxy the relay sees the proxy's address for everyone unless `RELAY_TRUST_PROXY=on` is set. Without
+  it every visitor without an id gets the same variant, and the relay warns about this at startup.
+- A caller who withholds their number is given a variant at random on each call.
+- Changing the weights moves some people to another variant. Changing the list of ids starts a new test: everyone is
+  shared out anew.
+
+For a test you want to rely on, give users an id with a [session token](embedding.md).
+
+**The Studio.** Admin → Studio does not show `variants` or `version` and keeps both as they are when it saves. So an
+edit there to a key that a variant replaces (the greeting, say) changes the config and every variant that does not
+replace it, and conversations before and after the edit are counted under the same `version`. Change `version` in the
+file when you want them told apart.
 
 **How each variant did.** The relay counts the finished conversations of each version and variant. `GET /v1/variants`
 is owner-only (the relay token) and answers:

@@ -37,7 +37,11 @@
   See [the protocol](docs/protocol.md#imageinput).
 - Web SDK: `agent.sendImage(source, { text, maxSide })` takes a file, a canvas, an image, a `<video>` frame, an
   `ImageBitmap` or a data URL, scales it to 1024 pixels on the longer side and encodes JPEG small enough for the limit.
-  It works over the WebSocket and WebRTC. `useVoiceAgent` returns it too. There is no widget button.
+  It works over the WebSocket and WebRTC. `useVoiceAgent` returns it too.
+- The widget has a picture button with the new `image-input` attribute, shown only where the relay's model takes
+  pictures. What is typed in the text box goes with the picture as its question, and the picture appears in the
+  transcript. `el.sendImage(source)` does the same from code, and `voice-agent:image` says whether it was sent.
+  Tested in Chrome against a local model that can see (`gemma3:4b`).
 - Backends: OpenAI Realtime (unless the model is a preview model) and Gemini Live. The pipeline, local and Max Speech
   backends need a chat model that can see pictures and a new setting, `PIPELINE_LLM_IMAGES=on` or `LOCAL_LLM_IMAGES=on`
   (off by default, because the relay cannot tell). Grok and local realtime servers take none. See

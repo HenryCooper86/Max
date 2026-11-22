@@ -9,6 +9,7 @@
 
 import { VoiceAgent } from "./client.js";
 import type { ClientTool, VoiceAgentError, VoiceAgentOptions } from "./client.js";
+import type { ImageSource } from "./image.js";
 import type { TranscriptItem, VoiceGender } from "./protocol.js";
 import { resolveLocale, resolveStrings } from "./widget-strings.js";
 import type { WidgetStringOverrides, WidgetStrings } from "./widget-strings.js";
@@ -28,7 +29,8 @@ const OBSERVED = [
   "label",
   "accent",
   "position",
-  "text-input"
+  "text-input",
+  "image-input"
 ] as const;
 /** `lang` only picks the widget's text language; it never reaches the relay. */
 const WATCHED = [...OBSERVED, "lang"];
@@ -114,6 +116,11 @@ const TEMPLATE = `
   .small[hidden] { display: none; }
   .actions { display: flex; gap: 8px; }
   .sound { margin: 0 12px 8px; align-self: flex-start; }
+  .picture { margin: 0 12px 8px; align-self: flex-start; }
+  .picture[disabled] { opacity: 0.55; cursor: default; }
+  input[type="file"] { display: none; }
+  .lines li[data-picture] { padding: 4px; }
+  .lines li img { display: block; max-width: 160px; max-height: 120px; border-radius: 8px; }
   .panel:focus-visible { outline: 3px solid var(--va-accent); outline-offset: -3px; }
   .fab {
     position: relative; width: 56px; height: 56px; border-radius: 50%; border: 0; padding: 0;
@@ -151,11 +158,13 @@ const TEMPLATE = `
     </header>
     <ul class="lines" part="lines" role="log" aria-live="polite" aria-relevant="additions text"></ul>
     <button class="small sound" part="sound" type="button" hidden></button>
+    <button class="small picture" part="picture" type="button" hidden></button>
     <p class="note" part="note" role="alert"></p>
     <form hidden>
       <input type="text" part="input" maxlength="2000" autocomplete="off" />
       <button class="small" part="send" type="submit"></button>
     </form>
+    <input class="file" type="file" accept="image/jpeg,image/png" tabindex="-1" aria-hidden="true" />
   </section>
   <button class="fab" part="button" type="button" aria-pressed="false">
     <span class="ring" aria-hidden="true"></span>
@@ -189,10 +198,11 @@ async function fetchToken(url: string): Promise<string> {
  * Attributes: `relay`, `project` (a Max Cloud public agent id: no backend needed), `token`, `token-url`, `language`, `voice`, `backend`,
  * `transport` (`webrtc` to send audio over WebRTC where the relay offers it),
  * `context` (facts about the page, for the assistant), `label`, `accent`, `position` (`bottom-right` by default,
- * `bottom-left`, or `inline` to place it in the flow), `text-input`.
+ * `bottom-left`, or `inline` to place it in the flow), `text-input`, `image-input` (a button for showing the
+ * assistant a picture, on relays whose model can see one).
  * Set the `tools` property to give the agent client tools, and `strings` to override any of its text (built-in English and
  * Simplified Chinese, chosen from `language`, then `lang`). Dispatches `voice-agent:status`, `:transcript`, `:toolcall`,
- * `:error` and `:warning` events.
+ * `:error`, `:warning` and `:image` events.
  */
 export class VoiceAgentElement extends ElementBase {
   static readonly observedAttributes = WATCHED;
@@ -204,6 +214,12 @@ export class VoiceAgentElement extends ElementBase {
   #lines = new Map<string, HTMLLIElement>();
   #strings: WidgetStringOverrides = {};
   #error: VoiceAgentError | undefined;
+  /** Why the last picture did not go out, until the next one does or a session starts. */
+  #notice: "pictureNotSent" | "pictureUnusable" | undefined;
+  /** A picture is being prepared and sent. */
+  #sendingPicture = false;
+  /** Object URLs of the thumbnails shown, to release with the list. */
+  #thumbnails: string[] = [];
   /** The user closed the panel; it stays closed until the next session starts. */
   #dismissed = false;
   readonly #root: ShadowRoot;
@@ -219,6 +235,8 @@ export class VoiceAgentElement extends ElementBase {
     mute: HTMLButtonElement;
     close: HTMLButtonElement;
     sound: HTMLButtonElement;
+    picture: HTMLButtonElement;
+    file: HTMLInputElement;
     send: HTMLButtonElement;
     live: HTMLElement;
   };
@@ -265,11 +283,13 @@ export class VoiceAgentElement extends ElementBase {
       list: select(root, ".lines"),
       note: select(root, ".note"),
       form: select(root, "form"),
-      input: select(root, "input"),
+      input: select(root, 'input[type="text"]'),
       fab: select(root, ".fab"),
       mute: select(root, ".mute"),
       close: select(root, ".close"),
       sound: select(root, ".sound"),
+      picture: select(root, ".picture"),
+      file: select(root, ".file"),
       send: select(root, 'button[type="submit"]'),
       live: select(root, ".sr")
     };
@@ -286,6 +306,13 @@ export class VoiceAgentElement extends ElementBase {
     ui.sound.addEventListener("click", () => {
       void this.#agent?.resumeAudio().then(() => this.#renderStatus());
     });
+    ui.picture.addEventListener("click", () => ui.file.click());
+    ui.file.addEventListener("change", () => {
+      const file = ui.file.files?.[0];
+      // The same file can be chosen again next time.
+      ui.file.value = "";
+      if (file) void this.sendImage(file);
+    });
     ui.form.addEventListener("submit", (event) => {
       event.preventDefault();
       if (this.#agent?.sendText(ui.input.value)) ui.input.value = "";
@@ -301,6 +328,7 @@ export class VoiceAgentElement extends ElementBase {
   disconnectedCallback(): void {
     this.#off.forEach((unsubscribe) => unsubscribe());
     this.#off = [];
+    this.#releaseThumbnails();
     this.#agent?.destroy();
     this.#agent = undefined;
   }
@@ -325,6 +353,44 @@ export class VoiceAgentElement extends ElementBase {
   /** Ends the conversation. */
   stop(): void {
     this.#agent?.stop();
+  }
+
+  /**
+   * Shows the assistant a picture, as the picture button does: with what is
+   * typed in the text box as the words that go with it, when there is a text
+   * box and something in it. The picture appears in the transcript. Resolves
+   * to whether it was sent; when it was not, the panel says so.
+   */
+  async sendImage(source: ImageSource, options: { text?: string; maxSide?: number } = {}): Promise<boolean> {
+    const agent = this.#agent;
+    if (!agent || this.#sendingPicture) return false;
+    const ui = this.#ui;
+    const typed = options.text === undefined && !ui.form.hidden ? ui.input.value.trim() : "";
+    const text = options.text ?? typed;
+    this.#sendingPicture = true;
+    this.#renderStatus();
+    let sent = false;
+    let unusable = false;
+    try {
+      sent = await agent.sendImage(source, {
+        ...(text ? { text } : {}),
+        ...(options.maxSide ? { maxSide: options.maxSide } : {})
+      });
+    } catch {
+      unusable = true;
+    }
+    this.#sendingPicture = false;
+    // The session was replaced or ended while the picture was prepared: nothing of it belongs in this panel.
+    if (this.#agent !== agent) return false;
+    this.#notice = sent ? undefined : unusable ? "pictureUnusable" : "pictureNotSent";
+    if (sent) {
+      if (typed) ui.input.value = "";
+      this.#renderPicture(source);
+    }
+    this.#renderNote();
+    this.#renderStatus();
+    this.dispatchEvent(new CustomEvent("voice-agent:image", { detail: { sent }, bubbles: true, composed: true }));
+    return sent;
   }
 
   #active(): boolean {
@@ -369,7 +435,7 @@ export class VoiceAgentElement extends ElementBase {
   #renderNote(): void {
     const error = this.#error;
     if (!error) {
-      this.#ui.note.textContent = "";
+      this.#ui.note.textContent = this.#notice ? this.#t()[this.#notice] : "";
       return;
     }
     const known = (this.#t().errors as Record<string, string | undefined>)[error.code];
@@ -386,6 +452,7 @@ export class VoiceAgentElement extends ElementBase {
     ui.close.textContent = t.close;
     ui.close.setAttribute("aria-label", t.close);
     ui.sound.textContent = t.enableSound;
+    ui.picture.textContent = t.picture;
     ui.send.textContent = t.send;
     ui.input.setAttribute("aria-label", t.typeMessage);
     ui.input.setAttribute("placeholder", t.typeMessage);
@@ -402,7 +469,9 @@ export class VoiceAgentElement extends ElementBase {
     this.#dirty = false;
     this.#lines.clear();
     this.#ui.list.replaceChildren();
+    this.#releaseThumbnails();
     this.#error = undefined;
+    this.#notice = undefined;
 
     const relay = this.getAttribute("relay");
     const tokenUrl = this.getAttribute("token-url");
@@ -464,6 +533,9 @@ export class VoiceAgentElement extends ElementBase {
     ui.mute.textContent = muted ? t.unmute : t.mute;
     ui.mute.hidden = !active;
     ui.sound.hidden = !(this.#agent?.audioBlocked ?? false);
+    // Only where it can work: asked for on the page, in a conversation, with a model that sees pictures.
+    ui.picture.hidden = !(this.hasAttribute("image-input") && active && this.#agent?.capabilities?.imageInput === true);
+    ui.picture.disabled = this.#sendingPicture;
     if (!active) ui.fab.style.setProperty("--level", "0");
   }
 
@@ -480,6 +552,36 @@ export class VoiceAgentElement extends ElementBase {
     this.#ui.list.scrollTop = this.#ui.list.scrollHeight;
     this.#renderStatus();
   }
+
+  #releaseThumbnails(): void {
+    for (const url of this.#thumbnails) URL.revokeObjectURL(url);
+    this.#thumbnails = [];
+  }
+
+  /** Puts a picture the user sent into the transcript: the picture itself where the browser can show it. */
+  #renderPicture(source: ImageSource): void {
+    const t = this.#t();
+    const line = document.createElement("li");
+    line.dataset.role = "user";
+    line.dataset.final = "true";
+    line.dataset.picture = "";
+    const shown =
+      typeof source === "string"
+        ? source
+        : source instanceof Blob && typeof URL.createObjectURL === "function"
+          ? URL.createObjectURL(source)
+          : undefined;
+    if (shown) {
+      if (typeof source !== "string") this.#thumbnails.push(shown);
+      const image = document.createElement("img");
+      image.src = shown;
+      image.alt = t.pictureSent;
+      line.append(image);
+    } else line.textContent = t.pictureSent;
+    this.#lines.set(`picture-${this.#lines.size}-${Date.now()}`, line);
+    this.#ui.list.append(line);
+    this.#ui.list.scrollTop = this.#ui.list.scrollHeight;
+  }
 }
 
 /** Registers `<voice-agent>` if it is not defined yet. */
@@ -493,7 +595,7 @@ export function defineVoiceAgentElement(): void {
  * Appends a `<voice-agent>` configured from a script tag's `data-*` attributes
  * (`data-relay`, `data-project`, `data-token`, `data-token-url`, `data-language`, `data-voice`,
  * `data-backend`, `data-transport`, `data-context`, `data-label`, `data-accent`, `data-position`,
- * `data-text-input`). Does nothing without `data-relay`.
+ * `data-text-input`, `data-image-input`). Does nothing without `data-relay`.
  *
  * @returns the created element, if any.
  */

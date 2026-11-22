@@ -31,7 +31,7 @@ it is not built; see [not built yet](#not-built-yet).
 | Several agents with handoff, and a flow builder       | Yes    | Per-agent instructions and tools. Handoffs can be limited to the arrows you draw, each with a condition, in the config or on a canvas (Admin → Flow). The relay refuses a handover along no arrow. Conditions are judged by the model; there are no branches on variables without a model. |
 | Conversation survives a dropped connection            | Yes    | For 10 minutes, in the relay's memory.                                                                                                                                                                                                                                                     |
 | Memory across conversations                           | Yes    | Recent turns and facts the user asked to keep, per user, with a route to forget a user. No summarising of long histories.                                                                                                                                                                  |
-| Images or video in the conversation                   | Partly | A picture, with or without words, to the conversation's model (web SDK `sendImage`). Camera frames for the helmet. No video.                                                                                                                                                               |
+| Images or video in the conversation                   | Partly | A picture, with or without words, to the conversation's model: a button in the web widget, `sendImage` in the web SDK. Camera frames for the helmet. No video.                                                                                                                             |
 | Wake word                                             | Yes    | Uncommon on agent platforms; it comes from Max's device origins.                                                                                                                                                                                                                           |
 
 ### Tools and knowledge
@@ -108,11 +108,11 @@ In rough order of how much they would matter to most users:
 3. **A vector database for very large knowledge bases.** The built-in knowledge base holds its index in memory and
    compares a question with every passage: measured at 100,000 passages, not beyond. For a larger collection, call
    your own search from a tool or an MCP server.
-4. **Continuous video, and image input beyond the web SDK.** A user can show the assistant one picture at a time
+4. **Continuous video, and image input in the native clients.** A user can show the assistant one picture at a time
    (at most one a second and 50 per connection), JPEG or PNG, to OpenAI Realtime, Gemini Live, or a multimodal chat
-   model on the pipeline, local and Max Speech backends. There is no continuous video, and no screen sharing. Only the
-   web SDK has a method for it; the iOS and Android clients and the widget do not, so a native client sends the
-   `image.input` event itself. The OpenAI and Gemini paths were built to the vendors' documentation and not run against
+   model on the pipeline, local and Max Speech backends. There is no continuous video, and no screen sharing. The
+   web SDK has a method for it and the widget a button; the iOS and Android clients have neither, so a native client
+   sends the `image.input` event itself. The OpenAI and Gemini paths were built to the vendors' documentation and not run against
    their servers.
 5. **Guardrails that hold speech back on the speech-to-speech backends.** Blocked terms are stopped before they are
    shown. With `guardrails.hold`, the cascaded backends (pipeline, local, Max Speech) have every sentence judged

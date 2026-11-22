@@ -176,7 +176,7 @@ def created_at(pair_id: str, directory: Path) -> str | None:
 def safe_path(root, relative: str):
     """Resolve ``relative`` inside ``root``, or return None.
 
-    Load-bearing: this server binds 0.0.0.0 and the sidecar runs as root, so a
+    Load-bearing: this server can be opted onto 0.0.0.0 and the sidecar runs as root, so a
     path that escapes the gallery reads whatever root can read. The check is on
     the *resolved* result, not the spelling, so "..", absolute paths and encoded
     variants are all covered by one rule.
@@ -309,8 +309,16 @@ def downscale(jpeg: bytes, width: int) -> bytes | None:
     return buf.tobytes() if ok else None
 
 
-def serve(pair, gallery, port: int, share_frames: bool = False, token: str = "") -> None:
-    """Serve preview and gallery on one port. Blocks forever."""
+def serve(
+    pair, gallery, port: int, share_frames: bool = False, token: str = "", listen_all: bool = False
+) -> None:
+    """Serve preview and gallery on one port. Blocks forever.
+
+    Binds loopback unless ``listen_all``: the sidecar runs with broad privileges
+    on a worn device, so reaching it from the LAN is an operator's explicit
+    choice (``MAX_VISION_LISTEN=all``), not a default. An SSH forward still
+    reaches a loopback bind.
+    """
 
     class BenchHandler(BaseHTTPRequestHandler):
         def _allowed(self, query: str) -> bool:
@@ -562,7 +570,7 @@ def serve(pair, gallery, port: int, share_frames: bool = False, token: str = "")
         def log_message(self, *args) -> None:
             return
 
-    server = ThreadingHTTPServer(("0.0.0.0", port), BenchHandler)
+    server = ThreadingHTTPServer(("0.0.0.0" if listen_all else "127.0.0.1", port), BenchHandler)
     # A stream that never ends would otherwise keep the process alive on exit.
     server.daemon_threads = True
     server.serve_forever()

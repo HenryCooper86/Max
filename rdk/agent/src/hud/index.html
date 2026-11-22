@@ -305,6 +305,7 @@
     return url.toString();
   }
 
+  const loopbackHost = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
   document.getElementById("front").src = sidecar("/preview/front");
   document.getElementById("rear").src = sidecar("/preview/rear");
 
@@ -697,7 +698,9 @@
     } catch {
       // "Cannot reach the sidecar" and "nothing captured yet" must never look
       // the same. A blank panel that meant both cost an afternoon once.
-      statusEl.textContent = "sidecar unreachable";
+      statusEl.textContent =
+        "sidecar unreachable" +
+        (loopbackHost ? "" : " — port __PREVIEW_PORT__ listens on the board only unless MAX_VISION_LISTEN=all is set");
       return;
     }
 

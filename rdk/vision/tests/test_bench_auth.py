@@ -45,10 +45,24 @@ def free_port() -> int:
 def lan_ipv4() -> str | None:
     """A non-loopback IPv4 of this machine, so a request can arrive as a peer
     the sidecar must actually authenticate."""
-    for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-        address = info[4][0]
-        if not address.startswith("127."):
-            return address
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+    except OSError:
+        return None
+    for address in sorted({info[4][0] for info in infos}):
+        if address.startswith("127."):
+            continue
+        # The hostname can also resolve to addresses this machine cannot reach
+        # itself on (a VPN tunnel, a bridge with no route): only one that
+        # accepts a connection from here is of any use to the tests.
+        try:
+            with socket.socket() as listener:
+                listener.bind((address, 0))
+                listener.listen(1)
+                with socket.create_connection((address, listener.getsockname()[1]), timeout=1):
+                    return address
+        except OSError:
+            continue
     return None
 
 
@@ -68,7 +82,7 @@ def running(tmp_path, token=TOKEN, share=True):
     threading.Thread(
         target=serve,
         args=(pair, gallery, port),
-        kwargs={"share_frames": share, "token": token},
+        kwargs={"share_frames": share, "token": token, "listen_all": True},
         daemon=True,
     ).start()
     time.sleep(0.5)
@@ -194,3 +208,42 @@ def test_a_lan_delete_without_a_token_refuses_and_keeps_the_capture(tmp_path):
     # page the rider visits on this network could make.
     assert status(f"http://{address}:{port}/gallery/{pair_id}/delete", method="POST") == 401
     assert gallery.pair_dir(pair_id).exists()
+
+
+class _Bound(Exception):
+    pass
+
+
+def bound_address(monkeypatch, **kwargs):
+    """The (host, port) serve() hands the HTTP server, without opening a socket."""
+    import bench_server
+
+    seen = []
+
+    def record(address, handler):
+        seen.append(address)
+        raise _Bound
+
+    monkeypatch.setattr(bench_server, "ThreadingHTTPServer", record)
+    with pytest.raises(_Bound):
+        serve(CameraPair(front_channel=0, rear_channel=2), None, 8081, **kwargs)
+    return seen[0]
+
+
+def test_the_bench_server_binds_loopback_unless_told_otherwise(monkeypatch):
+    # A bug in the sidecar is a root compromise of a worn device; the LAN
+    # exposure is opt-in, not the default.
+    assert bound_address(monkeypatch) == ("127.0.0.1", 8081)
+
+
+def test_listening_on_every_interface_is_an_explicit_opt_in(monkeypatch):
+    assert bound_address(monkeypatch, listen_all=True) == ("0.0.0.0", 8081)
+
+
+def test_config_defaults_to_loopback_and_only_accepts_the_exact_opt_in():
+    from service import VisionConfig
+
+    assert VisionConfig.from_env({}).listen_all is False
+    assert VisionConfig.from_env({"MAX_VISION_LISTEN": "loopback"}).listen_all is False
+    assert VisionConfig.from_env({"MAX_VISION_LISTEN": "yes"}).listen_all is False
+    assert VisionConfig.from_env({"MAX_VISION_LISTEN": "all"}).listen_all is True

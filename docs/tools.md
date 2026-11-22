@@ -297,7 +297,8 @@ Custom clients implement the same exchange: see `tool.call` and `tool.result` in
 
 ## Remote MCP servers
 
-An [MCP](https://modelcontextprotocol.io) server publishes a set of tools over HTTP. List one in `assistant.config.json`
+An [MCP](https://modelcontextprotocol.io) server publishes a set of tools, over HTTP or as a
+[program the relay runs](#mcp-servers-the-relay-runs-itself). List one in `assistant.config.json`
 and the relay connects to it at startup, asks which tools it has, and offers each of them to the assistant as an
 ordinary server tool. Calls are forwarded to the server. This gives the assistant a calendar, a CRM or a search service
 without glue code.
@@ -330,9 +331,11 @@ without glue code.
 
 How it works:
 
-- **Streamable HTTP only.** The relay speaks the MCP Streamable HTTP transport (protocol revision 2025-06-18): every
-  message is a POST to `url`, answered with a JSON body or an event stream. It does not run local `stdio` servers or
-  speak the older SSE-only transport. Anything a server sends on its own, such as requests to the client, is ignored.
+- **Streamable HTTP.** For a `url` the relay speaks the MCP Streamable HTTP transport (protocol revision 2025-06-18):
+  every message is a POST to `url`, answered with a JSON body or an event stream. It does not speak the older
+  SSE-only transport. Anything a server sends on its own, such as requests to the client, is ignored. A server that
+  is a program on the relay's machine is named by a `command` instead: see
+  [MCP servers the relay runs itself](#mcp-servers-the-relay-runs-itself).
 - **The URL rule is the webhook rule.** `url` must be `https:`. Plain `http:` is accepted only for hosts that never cross
   the internet: `localhost`, `.local` and `.internal` names, private IP ranges and single-label service names. Redirects
   are not followed.
@@ -351,6 +354,62 @@ How it works:
   the relay logs "`calendar` MCP server is not available". The relay tries that server again after 15 seconds, then after
   a minute, then every five minutes, and offers its tools to new sessions as soon as it answers. A server that answers
   with no tools at all is not retried.
+
+### MCP servers the relay runs itself
+
+Many MCP servers are not services but programs: you start one and talk to it over its standard input and output
+(the `stdio` transport). Give an entry a `command` in place of a `url` and the relay starts the program when it
+starts, keeps it running, and stops it when it stops.
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "files",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/srv/docs"],
+      "env": { "API_KEY": "${FILES_API_KEY}" },
+      "allowedTools": ["read_text_file", "list_directory"],
+      "prefix": "files"
+    }
+  ]
+}
+```
+
+| Key       | Type         | What it does                                                                                                  |
+| --------- | ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `command` | string       | The program to start: a path, or a name found on `PATH`. In place of `url`; an entry has one or the other.    |
+| `args`    | string array | Its arguments, up to 64. They are passed as they are: there is no shell, so no quoting, `~`, `$VAR` or pipes. |
+| `env`     | object       | Variables for the program, up to 32. `${NAME}` in a value is filled from the relay's environment.             |
+| `cwd`     | string       | The directory to start it in. Without it: the relay's own.                                                    |
+
+`name`, `allowedTools`, `prefix`, `timeoutMs`, `backgroundTools` and `backgroundTimeoutMs` work as above; `headers`
+belong to a `url`. The limits on tools, what the assistant is given back and the retry of a server that is not
+available are the same.
+
+- **Only the config file names a command.** Nothing that arrives over the network can add or change one: Admin →
+  Studio and Admin → Flow carry `mcpServers` over as they are, and a client cannot send any. Whoever can write the
+  config file can run a program as the relay's user, which was already so through `toolsModule`.
+- **The program does not get the relay's environment.** The relay's environment holds its model keys. The program
+  gets `PATH`, `HOME`, the user's name, the locale, the time zone and the temporary directory (on Windows, the
+  equivalents), and what you list under `env`. A `${NAME}` the relay does not have keeps the program from being
+  started at all, so it never runs with a blank credential.
+- **It is a program with the relay's rights.** It can read and write what the relay's user can. Give it only the
+  directories and keys it needs, list `allowedTools`, and consider [rules for what tools
+  return](conversations.md#guardrails) when it reads what others wrote.
+- **If the program stops**, the call that was under way fails (what it had done by then is not known, so it is not
+  sent again) and the next call starts the program again, at most once every three seconds. A program that cannot be
+  started at all is retried like a server that is down.
+- **What the program writes to its standard error** is its log and appears in the relay's log as `mcp files: …`.
+  So does a line on its standard output that is not a message.
+- A message is one line of at most 1 MiB; a program that sends a longer one is stopped. Requests the program makes
+  of the relay are refused, except `ping`. A call that times out or is cancelled is reported to the program
+  (`notifications/cancelled`).
+- When the Studio saves a config the tools are loaded again: the relay starts the program anew and then stops the
+  old one, so for a moment two are running.
+- Tested with a server of our own that speaks the protocol, through a conversation with a local model: listing
+  tools, calls, a program that was killed and started again, and the relay stopping with its program. Not run
+  against the published servers; `npx` in the example downloads and runs a package, so read what you install.
 
 What the assistant is given back:
 

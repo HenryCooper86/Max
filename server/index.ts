@@ -40,7 +40,7 @@ import { buildHealth, config, describeConfig, readinessIssues, readinessWarnings
 import { metricsResponse, registerMetricsSource } from "./prometheus";
 import { cloudCounters } from "./cloud/counters";
 import { cloudSessionTokens, sessionTokens } from "./session-tokens";
-import { installServerTools, serverTools as installedServerTools } from "./tools/registry";
+import { closeServerTools, installServerTools, serverTools as installedServerTools } from "./tools/registry";
 import { createConversationLifecycle } from "./conversation-lifecycle";
 import { createRecordings, recordingSettingsFromEnv } from "./recording";
 import { guardrailModelFromEnv, guardrailProblems } from "./guardrails";
@@ -2301,6 +2301,8 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     await companionRegistry.close();
     await companionStore.flush();
     await Promise.allSettled([...activeSessions.values()].map((session) => session.close()));
+    // No session is left to call a tool: the MCP servers the relay runs itself are stopped with it.
+    closeServerTools();
     usageMeter.flush();
     // Conversations that just ended still owe their webhook and their traces.
     await conversations.drain(3_000);

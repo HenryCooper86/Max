@@ -29,7 +29,7 @@ describe("buildServerTools", () => {
 
   it("reports a non-array tools value", async () => {
     expect((await buildServerTools({ tools: { a: 1 } })).problems).toEqual(["tools must be an array"]);
-    expect(await buildServerTools({})).toEqual({ tools: [], problems: [], unreachable: [] });
+    expect(await buildServerTools({})).toMatchObject({ tools: [], problems: [], unreachable: [] });
   });
 
   it("loads code tools from a module, trimming names and skipping bad entries", async () => {

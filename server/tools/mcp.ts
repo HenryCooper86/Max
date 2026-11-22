@@ -1,9 +1,10 @@
 import type { ToolContext, ToolDefinition, ToolParameters } from "./index";
 import { MAX_TOOL_DESCRIPTION, toolSpecFrom } from "./schema";
+import { stdioConnection, StdioError, type RpcMessage } from "./mcp-stdio";
 import { expandEnv, urlAllowed } from "./webhook";
 
 /**
- * Remote MCP servers as tool sources. The owner lists a server under
+ * MCP servers as tool sources. The owner lists a server under
  * `mcpServers` in `assistant.config.json`; at startup the relay connects,
  * asks it which tools it has (`tools/list`) and registers each one as an
  * ordinary relay tool whose handler forwards the call (`tools/call`). That
@@ -29,15 +30,33 @@ import { expandEnv, urlAllowed } from "./webhook";
  *
  * Errors reach the model, so they name the server and, at most, an HTTP
  * status: never a header value, nor the URL (its query string may carry a key).
+ *
+ * A server can instead be a program on the relay's own machine: an entry with
+ * a `command` in place of a `url` is started by the relay and spoken to over
+ * its stdin and stdout (see mcp-stdio.ts). Only the config file can name a
+ * command; nothing that arrives over the network can.
  */
 
-export type McpServerConfig = {
-  /** Letters, digits, `_` and `-`; used in logs and problems. */
-  name: string;
+type McpHttpServer = {
   /** May contain `${ENV}` placeholders. */
   url: string;
   /** Values may contain `${ENV}` placeholders. */
   headers: Record<string, string>;
+};
+
+type McpStdioServer = {
+  /** The program to start, as a path or a name looked up on PATH. Never run through a shell. */
+  command: string;
+  args: string[];
+  /** Added to the small environment the process gets. Values may contain `${ENV}` placeholders. */
+  env: Record<string, string>;
+  /** The directory to start it in. Absent: the relay's own. */
+  cwd?: string;
+};
+
+export type McpServerConfig = (McpHttpServer | McpStdioServer) & {
+  /** Letters, digits, `_` and `-`; used in logs and problems. */
+  name: string;
   /** MCP tool names (as the server lists them) to expose; absent = all. */
   allowedTools?: string[];
   /** When set, exposed tool names are `${prefix}_${mcpName}`. */
@@ -63,20 +82,62 @@ const SERVER_NAME = /^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/;
 const PREFIX = /^[a-zA-Z_][a-zA-Z0-9_]{0,23}$/;
 const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 const PLACEHOLDER = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/g;
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const MAX_COMMAND_CHARS = 500;
+const MAX_ARGS = 64;
+const MAX_ARG_CHARS = 2000;
+const MAX_ENV_ENTRIES = 32;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /** Parses one `mcpServers[]` entry of the config file. */
-export function mcpServerFrom(raw: unknown): { server?: McpServerConfig; problem?: string } {
-  if (!isRecord(raw)) return { problem: "mcpServers: each entry must be an object" };
-  const name = typeof raw.name === "string" ? raw.name.trim() : "";
-  if (!SERVER_NAME.test(name))
+/** Where the server is: a `url`, or a `command` the relay starts itself. */
+function mcpTransportFrom(
+  raw: Record<string, unknown>,
+  name: string
+): McpHttpServer | McpStdioServer | { problem: string } {
+  const has = (key: string) => raw[key] !== undefined && raw[key] !== null;
+  if (has("command")) {
+    if (has("url")) return { problem: `mcp server ${name}: takes a url or a command, not both` };
+    if (has("headers")) return { problem: `mcp server ${name}: headers go with a url, not with a command` };
+    if (typeof raw.command !== "string" || !raw.command.trim() || raw.command.length > MAX_COMMAND_CHARS)
+      return { problem: `mcp server ${name}: command must be the program to run` };
+    let args: string[] = [];
+    if (has("args")) {
+      if (
+        !Array.isArray(raw.args) ||
+        raw.args.length > MAX_ARGS ||
+        !raw.args.every((item) => typeof item === "string" && item.length <= MAX_ARG_CHARS)
+      )
+        return { problem: `mcp server ${name}: args must be a list of at most ${MAX_ARGS} texts` };
+      args = raw.args as string[];
+    }
+    const env: Record<string, string> = {};
+    if (has("env")) {
+      if (!isRecord(raw.env) || Object.keys(raw.env).length > MAX_ENV_ENTRIES)
+        return { problem: `mcp server ${name}: env must be an object of at most ${MAX_ENV_ENTRIES} variables` };
+      for (const [variable, value] of Object.entries(raw.env)) {
+        if (!ENV_NAME.test(variable) || typeof value !== "string")
+          return { problem: `mcp server ${name}: invalid env variable ${variable.slice(0, 40)}` };
+        env[variable] = value;
+      }
+    }
+    if (has("cwd") && (typeof raw.cwd !== "string" || !raw.cwd.trim()))
+      return { problem: `mcp server ${name}: cwd must be a directory` };
     return {
-      problem: `mcpServers: invalid name ${JSON.stringify(raw.name ?? "")} (letters, digits, _ and -; starts with a letter; at most 32)`
+      command: raw.command.trim(),
+      args,
+      env,
+      ...(typeof raw.cwd === "string" ? { cwd: raw.cwd.trim() } : {})
     };
-  if (typeof raw.url !== "string" || !raw.url.trim()) return { problem: `mcp server ${name}: needs a url` };
+  }
+  for (const key of ["args", "env", "cwd"]) {
+    if (has(key)) return { problem: `mcp server ${name}: ${key} goes with a command, not with a url` };
+  }
+  if (typeof raw.url !== "string" || !raw.url.trim())
+    return { problem: `mcp server ${name}: needs a url, or a command to run` };
   const url = raw.url.trim();
   // Shape is checked now with variables blanked; they are expanded per request.
   let parsed: URL;
@@ -88,7 +149,7 @@ export function mcpServerFrom(raw: unknown): { server?: McpServerConfig; problem
   if (!urlAllowed(parsed))
     return { problem: `mcp server ${name}: url must be https (plain http only to local or private hosts)` };
   const headers: Record<string, string> = {};
-  if (raw.headers !== undefined && raw.headers !== null) {
+  if (has("headers")) {
     if (!isRecord(raw.headers)) return { problem: `mcp server ${name}: headers must be an object` };
     for (const [header, value] of Object.entries(raw.headers)) {
       if (!HEADER_NAME.test(header) || typeof value !== "string")
@@ -96,6 +157,18 @@ export function mcpServerFrom(raw: unknown): { server?: McpServerConfig; problem
       headers[header] = value;
     }
   }
+  return { url, headers };
+}
+
+export function mcpServerFrom(raw: unknown): { server?: McpServerConfig; problem?: string } {
+  if (!isRecord(raw)) return { problem: "mcpServers: each entry must be an object" };
+  const name = typeof raw.name === "string" ? raw.name.trim() : "";
+  if (!SERVER_NAME.test(name))
+    return {
+      problem: `mcpServers: invalid name ${JSON.stringify(raw.name ?? "")} (letters, digits, _ and -; starts with a letter; at most 32)`
+    };
+  const transport = mcpTransportFrom(raw, name);
+  if ("problem" in transport) return { problem: transport.problem };
   let allowedTools: string[] | undefined;
   if (raw.allowedTools !== undefined) {
     if (
@@ -132,8 +205,7 @@ export function mcpServerFrom(raw: unknown): { server?: McpServerConfig; problem
   return {
     server: {
       name,
-      url,
-      headers,
+      ...transport,
       ...(allowedTools ? { allowedTools } : {}),
       ...(prefix ? { prefix } : {}),
       timeoutMs: Number.isFinite(timeout) && timeout > 0 ? Math.min(timeout, MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS,
@@ -149,8 +221,6 @@ export function mcpServerFrom(raw: unknown): { server?: McpServerConfig; problem
     }
   };
 }
-
-type RpcMessage = { id?: unknown; method?: unknown; result?: unknown; error?: unknown };
 
 /** An error whose text is already safe to show the model. */
 class McpError extends Error {}
@@ -249,19 +319,27 @@ function textOf(content: unknown): { texts: string[]; parts: string[] } {
   return { texts, parts };
 }
 
-/**
- * Connects to the server, lists its tools and returns them as relay tools.
- * Never rejects: a server that is down yields no tools and a problem, so one
- * broken integration cannot keep the relay from starting.
- */
-export async function loadMcpTools(
-  server: McpServerConfig,
-  options: { request?: typeof fetch; env?: NodeJS.ProcessEnv; clientVersion?: string } = {}
-): Promise<{ tools: ToolDefinition[]; problems: string[] }> {
+/** One server, whichever way it is reached. */
+type McpClient = {
+  /** Connects and introduces the relay. Rejects when the server is not there. */
+  start(): Promise<void>;
+  rpc(method: string, params: Record<string, unknown>, signal?: AbortSignal, timeoutMs?: number): Promise<unknown>;
+  close(): void;
+};
+
+const clientInfo = (version: string | undefined) => ({
+  protocolVersion: PROTOCOL_VERSION,
+  capabilities: {},
+  clientInfo: { name: "max-voice-agent-relay", version: version ?? "0.0.0" }
+});
+
+function httpClient(
+  server: McpHttpServer & { timeoutMs: number },
+  label: string,
+  options: { request?: typeof fetch; env?: NodeJS.ProcessEnv; clientVersion?: string }
+): McpClient {
   const request = options.request ?? fetch;
   const env = options.env ?? process.env;
-  const label = `${server.name} MCP server`;
-  const problems: string[] = [];
   const session: { id?: string; protocol?: string } = {};
   let nextId = 1;
   let handshaking: Promise<void> | undefined;
@@ -343,11 +421,7 @@ export async function loadMcpTools(
       {
         id,
         method: "initialize",
-        params: {
-          protocolVersion: PROTOCOL_VERSION,
-          capabilities: {},
-          clientInfo: { name: "max-voice-agent-relay", version: options.clientVersion ?? "0.0.0" }
-        }
+        params: clientInfo(options.clientVersion)
       },
       id
     );
@@ -392,6 +466,105 @@ export async function loadMcpTools(
     }
   }
 
+  return { start: handshake, rpc, close: () => undefined };
+}
+
+function stdioClient(
+  server: McpStdioServer & { timeoutMs: number },
+  label: string,
+  options: { env?: NodeJS.ProcessEnv; clientVersion?: string; onLog?: (line: string) => void; now?: () => number }
+): McpClient {
+  const env = options.env ?? process.env;
+  let nextId = 1;
+  /** The start of the process that the relay has introduced itself to. */
+  let introduced = 0;
+  let handshaking: Promise<void> | undefined;
+  const connection = stdioConnection(
+    label,
+    () => {
+      const missing = new Set<string>();
+      const extra: Record<string, string> = {};
+      for (const [variable, value] of Object.entries(server.env)) {
+        const expanded = expandEnv(value, env);
+        expanded.missing.forEach((item) => missing.add(item));
+        extra[variable] = expanded.value;
+      }
+      // Fail closed: a server started with a blank credential would run unauthenticated.
+      if (missing.size) throw new McpError(`relay is missing environment variable ${[...missing].join(", ")}`);
+      return { command: server.command, args: server.args, env: extra, ...(server.cwd ? { cwd: server.cwd } : {}) };
+    },
+    { env, onLog: options.onLog, now: options.now }
+  );
+
+  const failure = (message: RpcMessage, method: string): McpError => {
+    const error = message.error;
+    return new McpError(isRecord(error) && typeof error.message === "string" ? error.message : `${method} failed`);
+  };
+
+  async function handshake(): Promise<void> {
+    await connection.start();
+    const generation = connection.generation();
+    const id = nextId++;
+    const init = await connection.request(
+      { id, method: "initialize", params: clientInfo(options.clientVersion) },
+      server.timeoutMs
+    );
+    if (init.error !== undefined) throw failure(init, "initialize");
+    connection.notify({ method: "notifications/initialized" });
+    introduced = generation;
+  }
+
+  /** The process is running and knows the relay: a process started again is a stranger. */
+  async function ready(): Promise<void> {
+    await connection.start();
+    if (connection.generation() === introduced) return;
+    handshaking ??= handshake().finally(() => {
+      handshaking = undefined;
+    });
+    await handshaking;
+  }
+
+  const told = (error: unknown): unknown => (error instanceof StdioError ? new McpError(error.message) : error);
+
+  return {
+    start: () => ready().catch((error: unknown) => Promise.reject(told(error))),
+    async rpc(method, params, signal, timeoutMs = server.timeoutMs) {
+      try {
+        await ready();
+        const answer = await connection.request({ id: nextId++, method, params }, timeoutMs, signal);
+        if (answer.error !== undefined) throw failure(answer, method);
+        return answer.result;
+      } catch (error) {
+        throw told(error);
+      }
+    },
+    close: () => connection.close()
+  };
+}
+
+/**
+ * Connects to one MCP server and turns its tools into relay tools. Never
+ * throws: a server that is down gives no tools and one problem, so one
+ * broken integration cannot keep the relay from starting. `close` ends what
+ * the relay started for the server (a process, for a `command`).
+ */
+export async function loadMcpTools(
+  server: McpServerConfig,
+  options: {
+    request?: typeof fetch;
+    env?: NodeJS.ProcessEnv;
+    clientVersion?: string;
+    /** What a server run as a process writes to its log. */
+    onLog?: (line: string) => void;
+    /** The clock that spaces out the starts of a process. */
+    now?: () => number;
+  } = {}
+): Promise<{ tools: ToolDefinition[]; problems: string[]; close(): void }> {
+  const label = `${server.name} MCP server`;
+  const problems: string[] = [];
+  const client = "command" in server ? stdioClient(server, label, options) : httpClient(server, label, options);
+  const rpc = client.rpc;
+
   async function callTool(
     name: string,
     args: Record<string, unknown>,
@@ -408,7 +581,7 @@ export async function loadMcpTools(
 
   const tools: ToolDefinition[] = [];
   try {
-    await handshake();
+    await client.start();
     const listed: unknown[] = [];
     let cursor: string | undefined;
     let pages = 0;
@@ -463,10 +636,13 @@ export async function loadMcpTools(
         problems.push(`${label}: backgroundTools names ${name}, which the server does not have`);
     }
   } catch (error) {
+    // Nothing of the server is in use: what was started for it is not left running.
+    client.close();
     return {
       tools: [],
-      problems: [`${label} is not available: ${error instanceof Error ? error.message : String(error)}`]
+      problems: [`${label} is not available: ${error instanceof Error ? error.message : String(error)}`],
+      close: () => undefined
     };
   }
-  return { tools, problems };
+  return { tools, problems, close: client.close };
 }

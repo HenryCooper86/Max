@@ -150,7 +150,7 @@ describe("buildServerTools: knowledge", () => {
   });
 
   it("adds nothing without a knowledge key", async () => {
-    expect(await buildServerTools({})).toEqual({ tools: [], problems: [], unreachable: [] });
+    expect(await buildServerTools({})).toMatchObject({ tools: [], problems: [], unreachable: [] });
   });
 });
 

@@ -12,6 +12,7 @@
     "tests/fixtures/agent-tools.ts",
     "tests/fixtures/broken-tools.ts",
     "tests/fixtures/not-array-tools.ts",
+    "tests/fixtures/mcp-stdio-server.mjs",
     "examples/web-embed/agent-tools.ts",
     "examples/web-embed/server.mjs"
   ],

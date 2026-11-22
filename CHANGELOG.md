@@ -83,6 +83,10 @@
   same user gets the same variant every time, the record names it as `session.variant`, and `GET /v1/variants` counts
   conversations, length, end reasons, analysis success and sentiment for each. Its `comparison` says whether each
   variant's success rate differs from the first variant's by more than chance (Fisher's exact test). See [versions and A/B tests](docs/conversations.md#versions-and-ab-tests).
+- MCP servers that are programs: an `mcpServers` entry with a `command` (and `args`, `env`, `cwd`) in place of a
+  `url` is started by the relay and spoken to over its standard input and output. The program gets a small
+  environment, not the relay's keys, is started again when it stops, and is stopped with the relay. Only the config
+  file can name a command. See [MCP servers the relay runs itself](docs/tools.md#mcp-servers-the-relay-runs-itself).
 - Flows. An agent's new `handoffs` key lists the agents it may hand over to, each with a condition, so the agents
   become steps a conversation moves through along the arrows you draw. The relay refuses a handover along no arrow
   and tells the model where the conversation can go. Admin → Flow is a canvas for the same thing: add steps, drag

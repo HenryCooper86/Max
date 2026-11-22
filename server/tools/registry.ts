@@ -29,6 +29,8 @@ let installed: ToolDefinition[] = [];
 let problems: string[] = [];
 /** Bumped on every install, so a retry of an older config never lands. */
 let generation = 0;
+/** Ends what was started for the tools now installed. */
+const closeInstalled: Array<() => void> = [];
 let retryTimer: NodeJS.Timeout | undefined;
 
 const MAX_MCP_SERVERS = 8;
@@ -116,6 +118,8 @@ type BuiltTools = {
   problems: string[];
   /** MCP servers that could not be reached: worth trying again later. */
   unreachable: McpServerConfig[];
+  /** Ends what was started for these tools: the processes of MCP servers the relay runs itself. */
+  close(): void;
 };
 
 function isTool(value: unknown): value is ToolDefinition {
@@ -174,6 +178,7 @@ export async function buildServerTools(
 ): Promise<BuiltTools> {
   const tools: ToolDefinition[] = [];
   const unreachable: McpServerConfig[] = [];
+  const closers: Array<() => void> = [];
   const found: string[] = [];
   const names = new Set<string>();
   const add = (tool: ToolDefinition) => {
@@ -253,15 +258,23 @@ export async function buildServerTools(
         servers.push(server);
       }
       // Together: one slow server must not hold the others (or startup) up.
-      const loaded = await Promise.all(servers.map((server) => loadMcpTools(server, options)));
+      const loaded = await Promise.all(
+        servers.map((server) => loadMcpTools(server, { ...options, onLog: mcpLog(server.name) }))
+      );
       loaded.forEach((result, index) => {
+        closers.push(result.close);
         result.tools.forEach(add);
         found.push(...result.problems);
         if (result.tools.length === 0 && result.problems.length > 0) unreachable.push(servers[index]!);
       });
     }
   }
-  return { tools, problems: found, unreachable };
+  return { tools, problems: found, unreachable, close: () => closers.splice(0).forEach((close) => close()) };
+}
+
+/** What an MCP server run as a process writes to its own log, in the relay's. */
+function mcpLog(name: string): (line: string) => void {
+  return (line) => log.info(`mcp ${name}: ${line}`);
 }
 
 /** Tries the MCP servers that were down again, so a relay that started before
@@ -273,8 +286,12 @@ function retryUnreachable(servers: McpServerConfig[], mine: number, attempt: num
   retryTimer = setTimeout(
     () => {
       retryTimer = undefined;
-      void Promise.all(servers.map((server) => loadMcpTools(server))).then((loaded) => {
-        if (mine !== generation) return;
+      void Promise.all(servers.map((server) => loadMcpTools(server, { onLog: mcpLog(server.name) }))).then((loaded) => {
+        if (mine !== generation) {
+          loaded.forEach((result) => result.close());
+          return;
+        }
+        loaded.forEach((result) => closeInstalled.push(result.close));
         const still: McpServerConfig[] = [];
         const names = new Set(installed.map((tool) => tool.name));
         const added: ToolDefinition[] = [];
@@ -309,12 +326,29 @@ function retryUnreachable(servers: McpServerConfig[], mine: number, attempt: num
 export async function installServerTools(source: ServerToolSource): Promise<void> {
   const mine = (generation += 1);
   const built = await buildServerTools(source);
-  if (mine !== generation) return;
+  if (mine !== generation) {
+    built.close();
+    return;
+  }
+  // The tools this replaces are gone from here on, and with them the processes started for them.
+  closeInstalled.splice(0).forEach((close) => close());
+  closeInstalled.push(built.close);
   installed = built.tools;
   problems = built.problems;
   for (const problem of problems) log.warn(problem);
   if (installed.length) log.info("tools ready", { tools: installed.map((tool) => tool.name) });
   retryUnreachable(built.unreachable, mine, 0);
+}
+
+/**
+ * Ends what the relay's tools started: the MCP servers it runs as processes.
+ * For shutdown: a process left running would keep the relay itself from exiting.
+ */
+export function closeServerTools(): void {
+  generation += 1;
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = undefined;
+  closeInstalled.splice(0).forEach((close) => close());
 }
 
 /** The relay's current tools. */
@@ -329,9 +363,7 @@ export function serverToolProblems(): readonly string[] {
 
 /** Test seam. */
 export function setServerToolsForTests(tools: ToolDefinition[] = []): void {
-  generation += 1;
-  if (retryTimer) clearTimeout(retryTimer);
-  retryTimer = undefined;
+  closeServerTools();
   installed = tools;
   problems = [];
 }

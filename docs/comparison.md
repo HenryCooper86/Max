@@ -40,7 +40,7 @@ it is not built; see [not built yet](#not-built-yet).
 | -------------------------------------- | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Server-side functions                  | Yes | Code tools and HMAC-signed webhook tools. See [tools](tools.md).                                                                                      |
 | Client-side functions                  | Yes | The page or app runs the tool: scroll, fill a form, add to cart.                                                                                      |
-| Remote MCP servers                     | Yes | Streamable HTTP. Not stdio servers.                                                                                                                   |
+| MCP servers                            | Yes | Streamable HTTP, and local servers the relay runs as programs (stdio).                                                                                |
 | Knowledge base                         | Yes | Search over your files, built in: keyword (BM25), or hybrid with any embeddings endpoint. Up to 100,000 passages, with the embeddings cached on disk. |
 | Tools that keep running while it talks | Yes | Mark a tool `background`, wherever it runs (webhook, code, the page, an MCP server): the agent carries on and reports the result when it comes.       |
 

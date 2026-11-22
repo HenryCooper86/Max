@@ -17,7 +17,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -1010,6 +1010,8 @@ function fakeBoard(options: {
   }
   release(root, "old", options.oldReleaseBroken ?? false, options.hardenedOld ?? false, options.oldRelay);
   release(stage, "new", options.newReleaseBroken, true, options.newRelay);
+  // The directory holding the release must not be writable by others, whatever the tester's umask is.
+  chmodSync(dirname(root), 0o755);
   writeFileSync(join(stage, ".rdk-release-sha"), `${sha}\n`);
 
   mkdirSync(join(etc, "max"), { recursive: true });
@@ -1028,7 +1030,8 @@ function fakeBoard(options: {
     chmodSync(join(bin, name), 0o755);
   };
   // GNU stat -c '%U:%G:%a' -> the sandbox is not owned by root, so report root.
-  shim("stat", 'echo "root:root:$(/usr/bin/stat -f %Lp "$3")"');
+  // (GNU stat on Linux, BSD stat on macOS.)
+  shim("stat", 'echo "root:root:$(/usr/bin/stat -c %a "$3" 2>/dev/null || /usr/bin/stat -f %Lp "$3")"');
   // shasum is perl: stderr is silenced so a dead channel cannot be what fails it.
   shim("sha256sum", 'exec shasum -a 256 "$@" 2>/dev/null');
   // BSD find has no -readable.

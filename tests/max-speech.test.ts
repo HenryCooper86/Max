@@ -435,10 +435,13 @@ describe("max speech engine", () => {
 
   it("finishes the text already sent when the chat model fails, and ends after the audio", async () => {
     const fake = await fakeServer();
+    // The model drops only once its first words have been read: an errored
+    // stream discards what it still holds, so a timer could lose them on a slow machine.
+    let drop!: () => void;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(text("Half a"))}\n\n`));
-        setTimeout(() => controller.error(new Error("model dropped")), 20);
+        drop = () => controller.error(new Error("model dropped"));
       }
     });
     const { engine, events, seen, audio } = setup(fake, [() => new Response(body, { status: 200 })]);
@@ -446,6 +449,8 @@ describe("max speech engine", () => {
     fake.send({ type: "transcript.final", text: "hi", ms: {} });
     await until(() => seen.includes("user:final:hi"));
     engine.respond();
+    await until(() => speaks(fake).some((message) => message.text === "Half a"), "first speak");
+    drop();
     await until(() => speaks(fake).some((message) => message.final), "final speak");
     const id = speaks(fake)[0].id;
     expect(speaks(fake).map((message) => [message.text, message.final])).toEqual([

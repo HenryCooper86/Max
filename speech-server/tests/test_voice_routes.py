@@ -480,8 +480,11 @@ async def test_speech_in_a_custom_voice_holds_the_cloning_lock_one_sentence_at_a
         real_acquire = slots.cloning_lock.acquire
 
         async def acquire():
+            # Counted when the lock is granted, not when it is asked for: the next sentence's job queues for
+            # the lock while the current one is still speaking.
+            granted = await real_acquire()
             acquired.append(len(slots.cloning.calls))
-            return await real_acquire()
+            return granted
 
         slots.cloning_lock.acquire = acquire
         r = await c.post("/v1/audio/speech", json={"input": text, "voice": v["id"], "response_format": "pcm"})

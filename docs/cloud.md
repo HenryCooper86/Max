@@ -105,11 +105,17 @@ taken from the prepaid balance for it.
 To run every project's analysis on one model of your own instead, set `CLOUD_ANALYSIS_LLM_BASE_URL` (any
 OpenAI-compatible chat endpoint, like `http://127.0.0.1:11434/v1` for Ollama), `CLOUD_ANALYSIS_LLM_MODEL` and, when
 the endpoint wants one, `CLOUD_ANALYSIS_LLM_API_KEY`. That endpoint is never sent a customer's key, and it is then
-you who pays and you who are sent the transcripts.
+you who pays and you who are sent the transcripts; the console tells the customer so in place of "on your bill", and
+a project's own key is not read for it.
 
-At most 24 analyses run at once; a conversation that ends past that is kept and sent without one, with the reason.
-An analysis that fails (a key the vendor refuses, an answer that is not what was asked for) is not tried again
-later: the reason is kept with the conversation, without the vendor's own words.
+At most 24 analyses run at once, and at most 4 of one project, so a busy project does not take every place; a
+conversation that ends past that is kept and sent without one, with the reason. An analysis that fails (a key the
+vendor refuses, an answer with nothing that was asked for) is not tried again later: the reason is kept with the
+conversation, without the vendor's own words.
+
+When the relay is stopped, analyses under way get two more seconds. A conversation whose analysis is not done by
+then is kept and sent to the project's server without one, with `analysisError` "not analysed: the relay was
+stopping".
 
 This was run end to end with a local model through `CLOUD_ANALYSIS_LLM_BASE_URL` (`qwen3:8b` on Ollama: about seven
 seconds for a six-line conversation and four fields). The three vendor endpoints and model names are from the

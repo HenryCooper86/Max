@@ -5,6 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { DEFAULT_STUDIO, parseStudio, type ProjectStudio } from "../../shared/cloud-studio";
 import { createLogger } from "../logger";
+import { analysisUsesProjectKey } from "./analysis";
 import { cloudSecretKey, cloudSecretKeys, now } from "./context";
 import {
   customerByEmail,
@@ -62,6 +63,8 @@ export type PublicProject = {
   hasWebhookSecret: boolean;
   /** The owner's limit on this project's minutes per calendar month (UTC); null for none. */
   monthlyMinutesCap: number | null;
+  /** Whether conversation analysis runs with the project's own model key, and not on a model the operator named. */
+  analysisOnOwnKey: boolean;
   createdAt: number;
 };
 
@@ -253,6 +256,7 @@ function publicProject(row: ProjectRow): PublicProject {
     publicId: row.public_id ?? "",
     hasWebhookSecret: Boolean(row.webhook_secret_enc),
     monthlyMinutesCap: row.monthly_minutes_cap ?? null,
+    analysisOnOwnKey: analysisUsesProjectKey(),
     createdAt: row.created_at
   };
 }

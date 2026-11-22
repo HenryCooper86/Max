@@ -14,7 +14,7 @@ export { registerCloudPaymentRoutes, registerCloudRoutes, registerEmbedRoutes } 
 export { conversationRecorder, pruneOldConversations } from "./conversations";
 export { projectServerTools } from "./tools";
 export { projectWebhooks } from "./conversation-webhook";
-export { cloudConversationEnded } from "./conversation-end";
+export { cloudConversationEnded, settleConversationAnalyses } from "./conversation-end";
 export {
   createInvite as createCloudInvite,
   listInvites as listCloudInvites,

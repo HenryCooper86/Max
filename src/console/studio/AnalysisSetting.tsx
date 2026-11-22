@@ -32,6 +32,14 @@ function typeLabel(type: AnalysisField["type"], say: Say): string {
 
 const NOTHING = "nothing to look for";
 
+/** The choices as typed: "orders, returns" (a Chinese comma works too). */
+export function parseOptions(typed: string): string[] {
+  return typed
+    .split(/[,，]/)
+    .map((option) => option.trim())
+    .filter(Boolean);
+}
+
 /** What is wrong with the settings as typed, in the server's own words, or nothing. */
 export function analysisProblem(analysis: StudioAnalysis): string | undefined {
   const parsed = analysisConfigFrom({
@@ -65,8 +73,11 @@ function FieldRow({
   onRemove: () => void;
 }) {
   const say = useSay();
-  // As typed: the list is made from it when the person leaves the box.
-  const [options, setOptions] = useState((field.options ?? []).join(", "));
+  // As typed, while it still says what the field holds. A row that another field has moved into, or a field
+  // that was made something else and back, shows its own choices and not what was typed for another.
+  const [typed, setTyped] = useState((field.options ?? []).join(", "));
+  const own = field.options ?? [];
+  const options = JSON.stringify(parseOptions(typed)) === JSON.stringify(own) ? typed : own.join(", ");
   const id = `cxsAnalysisField${index}`;
   return (
     <div className="cxsAnalysisField" role="group" aria-label={say(`字段 ${index + 1}`, `Field ${index + 1}`)}>
@@ -119,20 +130,19 @@ function FieldRow({
             value={options}
             placeholder={say("订单, 退货, 其他", "orders, returns, other")}
             onChange={(event) => {
-              setOptions(event.target.value);
-              onChange({
-                ...field,
-                options: event.target.value
-                  .split(/[,，]/)
-                  .map((option) => option.trim())
-                  .filter(Boolean)
-              });
+              setTyped(event.target.value);
+              onChange({ ...field, options: parseOptions(event.target.value) });
             }}
           />
         </label>
       ) : null}
       <div className="cxsAnalysisActions">
-        <button type="button" className="siteButton quiet small" onClick={onRemove}>
+        <button
+          type="button"
+          className="siteButton quiet small"
+          aria-label={say(`删除字段 ${index + 1}`, `Remove field ${index + 1}`)}
+          onClick={onRemove}
+        >
           {say("删除字段", "Remove field")}
         </button>
       </div>
@@ -147,7 +157,11 @@ export function AnalysisSetting({ project, draft, updateStudio }: StudioTabProps
   const analysis: StudioAnalysis = draft.studio.analysis ?? DEFAULT_ANALYSIS;
   const saved: StudioAnalysis = project.studio.analysis ?? DEFAULT_ANALYSIS;
   const unsaved = JSON.stringify(analysis) !== JSON.stringify(saved);
-  const problem = analysis.enabled ? analysisProblem(analysis) : undefined;
+  // Checked whether it is on or off: the server refuses what it cannot use either way, and a field left
+  // half-written behind a switch that is off would stop every other setting from being saved.
+  const problem = analysisProblem(analysis);
+  const shown = analysis.enabled || Boolean(problem);
+  const vendor = VENDOR[draft.backend];
   const set = (patch: Partial<StudioAnalysis>) => updateStudio({ analysis: { ...analysis, ...patch } });
   const nowhere =
     analysis.enabled && !draft.studio.keepConversations && !(draft.studio.conversationWebhook ?? "").trim();
@@ -164,13 +178,26 @@ export function AnalysisSetting({ project, draft, updateStudio }: StudioTabProps
       </label>
       <p className="cxMuted">
         {say(
-          `一个模型读完对话文字，写出摘要、情绪、是否成功，以及你要它找的信息。它用你自己的 ${VENDOR[draft.backend]} 密钥运行，每段对话大约几千个 token，费用记在你的 ${VENDOR[draft.backend]} 账户上。结果显示在对话记录里，并随对话一起发到你的服务器。`,
-          `A model reads the transcript and writes a summary, the mood, whether it succeeded, and what you ask it to find. It runs with your own ${VENDOR[draft.backend]} key: a few thousand tokens per conversation, on your ${VENDOR[draft.backend]} bill. The result is shown with the conversation here and sent to your server with it.`
+          "一个模型读完对话文字，写出摘要、情绪、是否成功，以及你要它找的信息。",
+          "A model reads the transcript and writes a summary, the mood, whether it succeeded, and what you ask it to find. "
+        )}
+        {project.analysisOnOwnKey === false
+          ? say(
+              "它在本服务运营方提供的模型上运行，对话文字会发送到那里，不使用你的密钥，也不向你收费。",
+              "It runs on a model this service's operator provides: the transcript is sent there, your key is not used, and you are not charged for it. "
+            )
+          : say(
+              `它用你自己的 ${vendor} 密钥运行，每段对话大约几千个 token，费用记在你的 ${vendor} 账户上。`,
+              `It runs with your own ${vendor} key: a few thousand tokens per conversation, on your ${vendor} bill. `
+            )}
+        {say(
+          "结果显示在对话记录里，并随对话一起发到你的服务器。",
+          "The result is shown with the conversation here and sent to your server with it."
         )}
       </p>
-      {analysis.enabled ? (
+      {shown ? (
         <div className="cxsAnalysis">
-          <div className="cxsAnalysisChecks">
+          <div className="cxsAnalysisChecks" role="group" aria-label={say("分析内容", "What to write")}>
             <label className="cxsHistoryCheck">
               <input
                 type="checkbox"

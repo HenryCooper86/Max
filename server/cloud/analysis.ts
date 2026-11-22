@@ -15,6 +15,8 @@ import type { ConversationTurn } from "./conversations";
 
 /** Analyses under way at once. Each holds a transcript and a request for up to half a minute. */
 const MAX_AT_ONCE = 24;
+/** And of one project: a busy one does not take every place from the others. */
+const MAX_AT_ONCE_PER_PROJECT = 4;
 
 /** Each vendor's OpenAI-compatible chat endpoint, and a small model of theirs that does this well. */
 const VENDORS: Record<CloudBackend, { baseUrl: string; model: string; setting: string }> = {
@@ -29,6 +31,11 @@ const VENDORS: Record<CloudBackend, { baseUrl: string; model: string; setting: s
 
 /** What is kept with a conversation, and sent with it: the result, or why there is none. */
 export type ConversationAnalysis = { at: number; result?: AnalysisResult; error?: string };
+
+/** Whether analyses run on the project's own vendor with its own key, and not on a model the operator named. */
+export function analysisUsesProjectKey(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !env.CLOUD_ANALYSIS_LLM_BASE_URL?.trim();
+}
 
 /** The model that analyses a project's conversations. */
 export function projectAnalysisModel(
@@ -51,6 +58,7 @@ export function projectAnalysisModel(
 }
 
 let running = 0;
+const runningOf = new Map<string, number>();
 
 /**
  * Analyses one conversation. Always resolves: to the result, or to the reason
@@ -59,17 +67,30 @@ let running = 0;
  */
 export async function analyseProjectConversation(
   input: {
+    projectId: string;
     backend: CloudBackend;
+    /** The project's own model key. Not needed, and not used, when the operator named a model. */
     modelKey: string;
     config: AnalysisConfig;
     turns: readonly ConversationTurn[];
     language?: string;
   },
-  options: { request?: typeof fetch; clock?: () => number; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}
+  options: {
+    request?: typeof fetch;
+    clock?: () => number;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {}
 ): Promise<ConversationAnalysis> {
   const clock = options.clock ?? Date.now;
   if (running >= MAX_AT_ONCE) return { at: clock(), error: "not analysed: too many analyses were under way" };
+  const ofProject = runningOf.get(input.projectId) ?? 0;
+  if (ofProject >= MAX_AT_ONCE_PER_PROJECT) {
+    return { at: clock(), error: "not analysed: too many of this project's analyses were under way" };
+  }
   running += 1;
+  runningOf.set(input.projectId, ofProject + 1);
   try {
     const result = await analyzeConversation(
       input.turns,
@@ -78,13 +99,21 @@ export async function analyseProjectConversation(
       {
         ...(options.request ? { request: options.request } : {}),
         ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(input.language ? { language: input.language } : {})
       }
     );
+    // A model that answered with none of what was asked for has analysed nothing.
+    if (Object.keys(result).length === 0) {
+      return { at: clock(), error: "the analysis model answered with nothing that was asked for" };
+    }
     return { at: clock(), result };
   } catch (error) {
     return { at: clock(), error: error instanceof Error ? error.message : "the analysis failed" };
   } finally {
     running -= 1;
+    const left = (runningOf.get(input.projectId) ?? 1) - 1;
+    if (left > 0) runningOf.set(input.projectId, left);
+    else runningOf.delete(input.projectId);
   }
 }

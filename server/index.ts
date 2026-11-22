@@ -79,6 +79,7 @@ import {
   projectLimitRefusal,
   projectWebhooks,
   cloudConversationEnded,
+  settleConversationAnalyses,
   pruneOldConversations,
   projectServerTools,
   projectKeyValid,
@@ -2354,6 +2355,9 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     // No session is left to call a tool: the MCP servers the relay runs itself are stopped with it.
     closeServerTools();
     usageMeter.flush();
+    // A project's conversation that is being analysed is sent when that is done: two seconds for it, then
+    // it goes without.
+    await settleConversationAnalyses(2_000);
     // Conversations that just ended still owe their webhook and their traces.
     await Promise.all([conversations.drain(3_000), projectWebhooks.drain(3_000)]);
     await recordings?.close();

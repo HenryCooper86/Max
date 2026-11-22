@@ -7,10 +7,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ANALYSIS, DEFAULT_STUDIO, parseStudio, studioAnalysisConfig } from "../shared/cloud-studio";
 import { analyseProjectConversation, projectAnalysisModel } from "../server/cloud/analysis";
-import { cloudConversationEnded } from "../server/cloud/conversation-end";
+import { cloudConversationEnded, settleConversationAnalyses } from "../server/cloud/conversation-end";
 import { setCloudClock } from "../server/cloud/context";
 import { conversationRecorder, listConversations, readConversation } from "../server/cloud/conversations";
-import { createProject, patchProject, signup } from "../server/cloud/customers";
+import { createProject, listProjects, patchProject, signup } from "../server/cloud/customers";
 import { resetCloudDatabase } from "../server/cloud/store";
 
 const START = Date.UTC(2026, 10, 23, 12, 0, 0);
@@ -137,6 +137,10 @@ describe("a project's analysis settings", () => {
     expect(
       refused({ fields: Array.from({ length: 25 }, (_, n) => ({ name: `f${n}`, type: "string", description: "x" })) })
     ).toMatch(/more than 24 entries/);
+    // No key of an object: it would vanish from every result.
+    expect(refused({ fields: [{ name: "__proto__", type: "string", description: "x" }] })).toMatch(
+      /^Analysis: fields\[0\]\.name must be letters/
+    );
     // Off with nothing chosen is nothing to refuse.
     expect(refused({ enabled: false, summary: false })).toBeUndefined();
   });
@@ -202,6 +206,7 @@ describe("analysing a project's conversation", () => {
     const { asked, request } = model();
     const analysis = await analyseProjectConversation(
       {
+        projectId: "p1",
         backend: "openai",
         modelKey: "sk-own",
         config: studioAnalysisConfig({ analysis: ANALYSIS } as never)!,
@@ -226,13 +231,13 @@ describe("analysing a project's conversation", () => {
     const refused = model("Your key sk-own is not valid", 401);
     expect(
       await analyseProjectConversation(
-        { backend: "openai", modelKey: "sk-own", config, turns: TURNS },
+        { projectId: "p1", backend: "openai", modelKey: "sk-own", config, turns: TURNS },
         { request: refused.request, clock: () => START, env: {} }
       )
     ).toEqual({ at: START, error: "analysis model answered HTTP 401" });
     const nonsense = model("I think it went well!");
     const outcome = await analyseProjectConversation(
-      { backend: "openai", modelKey: "sk-own", config, turns: TURNS },
+      { projectId: "p1", backend: "openai", modelKey: "sk-own", config, turns: TURNS },
       { request: nonsense.request, clock: () => START, env: {} }
     );
     expect(outcome).toEqual({ at: START, error: "analysis model did not return valid JSON" });
@@ -247,14 +252,59 @@ describe("analysing a project's conversation", () => {
       await gate;
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(RESULT) } }] }));
     }) as unknown as typeof fetch;
-    const input = { backend: "openai" as const, modelKey: "sk-own", config, turns: TURNS };
-    const running = Array.from({ length: 24 }, () => analyseProjectConversation(input, { request: slow, env: {} }));
-    const over = await analyseProjectConversation(input, { request: slow, clock: () => START, env: {} });
-    expect(over).toEqual({ at: START, error: "not analysed: too many analyses were under way" });
+    const of = (projectId: string) => ({
+      projectId,
+      backend: "openai" as const,
+      modelKey: "sk-own",
+      config,
+      turns: TURNS
+    });
+    const start = (projectId: string) => analyseProjectConversation(of(projectId), { request: slow, env: {} });
+    // One busy project takes four places, and no more: the others still have theirs.
+    const busy = Array.from({ length: 4 }, () => start("busy"));
+    expect(await analyseProjectConversation(of("busy"), { request: slow, clock: () => START, env: {} })).toEqual({
+      at: START,
+      error: "not analysed: too many of this project's analyses were under way"
+    });
+    const others = Array.from({ length: 20 }, (_, n) => start(`p${n}`));
+    // Twenty-four in all.
+    expect(await analyseProjectConversation(of("late"), { request: slow, clock: () => START, env: {} })).toEqual({
+      at: START,
+      error: "not analysed: too many analyses were under way"
+    });
     release();
-    expect((await Promise.all(running)).every((analysis) => analysis.result)).toBe(true);
-    // And there is room again.
-    expect((await analyseProjectConversation(input, { request: slow, env: {} })).result).toBeDefined();
+    expect((await Promise.all([...busy, ...others])).every((analysis) => analysis.result)).toBe(true);
+    // And there is room again, for the busy one too.
+    expect((await start("busy")).result).toBeDefined();
+    expect((await start("late")).result).toBeDefined();
+  });
+
+  it("takes an answer with nothing that was asked for as no analysis", async () => {
+    const config = studioAnalysisConfig({ analysis: ANALYSIS } as never)!;
+    const empty = model({ verdict: "fine", sentiment: "ecstatic" });
+    expect(
+      await analyseProjectConversation(
+        { projectId: "p1", backend: "openai", modelKey: "sk-own", config: { ...config, fields: [] }, turns: TURNS },
+        { request: empty.request, clock: () => START, env: {} }
+      )
+    ).toEqual({ at: START, error: "the analysis model answered with nothing that was asked for" });
+  });
+
+  it("gives up at once when it is told to stop", async () => {
+    const config = studioAnalysisConfig({ analysis: ANALYSIS } as never)!;
+    const stop = new AbortController();
+    const hangs = vi.fn(
+      (_url: unknown, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        })
+    ) as unknown as typeof fetch;
+    const waiting = analyseProjectConversation(
+      { projectId: "p1", backend: "openai", modelKey: "sk-own", config, turns: TURNS },
+      { request: hangs, clock: () => START, env: {}, signal: stop.signal }
+    );
+    stop.abort();
+    expect(await waiting).toEqual({ at: START, error: "analysis was cancelled" });
   });
 });
 
@@ -293,8 +343,8 @@ describe("a project's conversation, when it ends", () => {
         recorder
       },
       { ended: (input: Record<string, unknown>) => void sent.push(input) } as never,
-      (async (input: Record<string, unknown>) => {
-        asked.push(input);
+      (async (input: Record<string, unknown>, given?: { signal?: AbortSignal }) => {
+        asked.push({ ...input, signal: given?.signal });
         if (options.analysis instanceof Error) throw options.analysis;
         return options.analysis ?? { at: clock + 15_000, result: RESULT };
       }) as never
@@ -385,6 +435,65 @@ describe("a project's conversation, when it ends", () => {
     expect(kept.asked).toHaveLength(1);
     expect(kept.sent).toEqual([]);
     expect(first(nowhere.owner, nowhere.id)).toMatchObject({ success: true });
+  });
+
+  it("is sent without its analysis when the relay stops before the analysis is done", async () => {
+    const { owner, id } = await shop({ analysis: ANALYSIS, conversationWebhook: "https://shop.example.com/hook" });
+    let answer!: (analysis: unknown) => void;
+    const slow = new Promise((resolve) => (answer = resolve));
+    const { sent, asked } = finish(owner, id, { keep: true, analysis: slow });
+    await settle();
+    expect(sent).toEqual([]);
+    // The analysis is told to stop along with the relay.
+    const signal = (asked[0] as unknown as { signal: AbortSignal }).signal;
+    expect(signal.aborted).toBe(false);
+    await settleConversationAnalyses(20);
+    expect(signal.aborted).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ analysisError: "not analysed: the relay was stopping" });
+    const kept = readConversation(owner, first(owner, id)!.id);
+    expect(kept.ok && kept.value.conversation.analysis).toMatchObject({
+      error: "not analysed: the relay was stopping"
+    });
+    // An answer that comes after all changes nothing: sent once, and the reason stays.
+    answer({ at: clock, result: RESULT });
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(first(owner, id)!.success).toBeUndefined();
+    // Nothing is left to wait for.
+    await settleConversationAnalyses(20);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("is given the time a stopping relay has, and is sent with its analysis when that is enough", async () => {
+    const { owner, id } = await shop({ analysis: ANALYSIS, conversationWebhook: "https://shop.example.com/hook" });
+    let answer!: (analysis: unknown) => void;
+    const { sent } = finish(owner, id, { keep: true, analysis: new Promise((resolve) => (answer = resolve)) });
+    const stopping = settleConversationAnalyses(5_000);
+    answer({ at: clock, result: RESULT });
+    await stopping;
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ analysis: RESULT });
+    expect(sent[0]).not.toHaveProperty("analysisError");
+  });
+
+  it("does not read the project's key for a model the operator named", async () => {
+    const { owner, id } = await shop({ analysis: ANALYSIS, conversationWebhook: "https://shop.example.com/hook" });
+    process.env.CLOUD_ANALYSIS_LLM_BASE_URL = "http://127.0.0.1:11434/v1";
+    try {
+      // The project says whose model it is, for the console to say so.
+      const listed = listProjects(owner);
+      expect(listed.find((item) => item.id === id)!.analysisOnOwnKey).toBe(false);
+      // A key that cannot be read stands in nobody's way: it was never going to be used.
+      process.env.CLOUD_SECRET_KEY = randomBytes(32).toString("base64");
+      const { asked } = finish(owner, id);
+      await settle();
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).toMatchObject({ projectId: id, modelKey: "" });
+    } finally {
+      delete process.env.CLOUD_ANALYSIS_LLM_BASE_URL;
+    }
+    expect(listProjects(owner).find((item) => item.id === id)!.analysisOnOwnKey).toBe(true);
   });
 
   it("says so when the project's model key cannot be read", async () => {

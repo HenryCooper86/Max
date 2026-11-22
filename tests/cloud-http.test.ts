@@ -400,6 +400,7 @@ describe("projects", () => {
       publicId: expect.stringMatching(/^pub_[0-9a-f]{24}$/),
       hasWebhookSecret: false,
       monthlyMinutesCap: null,
+      analysisOnOwnKey: true,
       createdAt: START
     });
     const id = created.project.id;

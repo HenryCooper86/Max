@@ -147,6 +147,21 @@ describe("what conversations are analysed for", () => {
     expect(off).toContain("你自己的 Google 密钥");
     expect(off).not.toContain("cxsAnalysisCriteria");
     expect(off).not.toContain("请保存以生效");
+    // On a relay whose operator runs the analysis model, it does not say the customer pays.
+    const operated = { ...project, analysisOnOwnKey: false } as unknown as Project;
+    const told = renderToStaticMarkup(
+      createElement(
+        LanguageProvider,
+        null,
+        createElement(AnalysisSetting, {
+          ...base,
+          project: operated,
+          draft: draftFromProject(operated)
+        } as unknown as StudioTabProps)
+      )
+    );
+    expect(told).toContain("运营方提供的模型");
+    expect(told).not.toContain("你自己的");
     // A project stored before there was analysis shows the same.
     const old = {
       ...project,

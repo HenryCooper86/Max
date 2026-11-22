@@ -4,7 +4,7 @@
 
 import { studioAnalysisConfig } from "../../shared/cloud-studio";
 import { createLogger } from "../logger";
-import { analyseProjectConversation, type ConversationAnalysis } from "./analysis";
+import { analyseProjectConversation, analysisUsesProjectKey, type ConversationAnalysis } from "./analysis";
 import { cloudSecretKeys } from "./context";
 import { projectWebhooks } from "./conversation-webhook";
 import { saveConversation, type ConversationRecorder } from "./conversations";
@@ -13,6 +13,10 @@ import { decryptModelKey } from "./secrets";
 import { liveProject, setConversationAnalysis } from "./store";
 
 const log = createLogger("cloud");
+
+/** A conversation whose analysis is under way: it is still owed its result in the history and its webhook. */
+type Analysing = { done: Promise<void>; stop(): void };
+const analysing = new Set<Analysing>();
 
 export function cloudConversationEnded(
   input: {
@@ -79,6 +83,35 @@ export function cloudConversationEnded(
     }
   };
 
+  // Kept, and owed to the project's server, whatever becomes of the analysis: `finish` runs once.
+  let finished = false;
+  const finish = (analysis: ConversationAnalysis): void => {
+    if (finished) return;
+    finished = true;
+    analysing.delete(entry);
+    if (analysis.error)
+      log.warn("a conversation was not analysed", { projectId: input.projectId, why: analysis.error });
+    if (savedId) {
+      try {
+        setConversationAnalysis(savedId, input.customerId, JSON.stringify(analysis));
+      } catch (error) {
+        log.warn("a conversation's analysis could not be saved", {
+          projectId: input.projectId,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+    send(analysis);
+  };
+  const stopper = new AbortController();
+  const entry: Analysing = {
+    done: Promise.resolve(),
+    stop() {
+      stopper.abort();
+      finish({ at: input.endedAt, error: "not analysed: the relay was stopping" });
+    }
+  };
+
   let waiting: Promise<ConversationAnalysis> | undefined;
   try {
     const project = liveProject(input.projectId, input.customerId);
@@ -87,19 +120,29 @@ export function cloudConversationEnded(
     // Only what somebody said is analysed, and only when the result has somewhere to go.
     const said = turns.some((turn) => turn.speaker === "user");
     if (project && studio && config && said && (savedId || studio.conversationWebhook)) {
-      const modelKey = project.model_key_enc
-        ? decryptModelKey(project.model_key_enc, cloudSecretKeys(), project.id)
-        : undefined;
+      // The project's own key is read only when it is the one that will be used.
+      const ownKey = analysisUsesProjectKey();
+      const modelKey = !ownKey
+        ? ""
+        : project.model_key_enc
+          ? decryptModelKey(project.model_key_enc, cloudSecretKeys(), project.id)
+          : null;
       waiting =
-        modelKey === undefined
-          ? Promise.resolve({ at: input.endedAt, error: "not analysed: the project's model key could not be read" })
-          : analyse({
-              backend: project.backend,
-              modelKey,
-              config,
-              turns,
-              ...(studio.language ? { language: studio.language } : {})
-            });
+        modelKey === null
+          ? Promise.resolve({ at: input.endedAt, error: "not analysed: the project has no model key" })
+          : modelKey === undefined
+            ? Promise.resolve({ at: input.endedAt, error: "not analysed: the project's model key could not be read" })
+            : analyse(
+                {
+                  projectId: project.id,
+                  backend: project.backend,
+                  modelKey,
+                  config,
+                  turns,
+                  ...(studio.language ? { language: studio.language } : {})
+                },
+                { signal: stopper.signal }
+              );
     }
   } catch (error) {
     log.warn("a conversation's analysis could not be started", {
@@ -111,24 +154,29 @@ export function cloudConversationEnded(
     send();
     return;
   }
-  // The project's server is sent the conversation once, with its analysis: it waits for it (half a minute at most).
-  void waiting
+  // The project's server is sent the conversation once, with its analysis: it waits for it (half a minute at
+  // most, and no longer than the relay runs).
+  analysing.add(entry);
+  entry.done = waiting
     .catch((error: unknown): ConversationAnalysis => {
       return { at: input.endedAt, error: error instanceof Error ? error.message : "the analysis failed" };
     })
-    .then((analysis) => {
-      if (analysis.error)
-        log.warn("a conversation was not analysed", { projectId: input.projectId, why: analysis.error });
-      if (savedId) {
-        try {
-          setConversationAnalysis(savedId, input.customerId, JSON.stringify(analysis));
-        } catch (error) {
-          log.warn("a conversation's analysis could not be saved", {
-            projectId: input.projectId,
-            message: error instanceof Error ? error.message : String(error)
-          });
-        }
-      }
-      send(analysis);
-    });
+    .then(finish);
+}
+
+/**
+ * For a relay that is stopping: analyses under way get this long to finish, and the conversations still waiting
+ * then are kept and sent without one, with the reason. The deliveries themselves are `projectWebhooks.drain`'s.
+ */
+export async function settleConversationAnalyses(timeoutMs: number): Promise<void> {
+  if (analysing.size === 0) return;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    Promise.allSettled([...analysing].map((entry) => entry.done)),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    })
+  ]);
+  if (timer) clearTimeout(timer);
+  for (const entry of [...analysing]) entry.stop();
 }

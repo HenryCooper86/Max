@@ -54,10 +54,12 @@ function analysisOf(raw: string | null | undefined): ConversationAnalysis | unde
   }
 }
 
+const SENTIMENTS: ReadonlyArray<AnalysisResult["sentiment"]> = ["positive", "neutral", "negative"];
+
 function marksOf(raw: string | null | undefined): Pick<ConversationSummary, "sentiment" | "success"> {
   const result = analysisOf(raw)?.result;
   return {
-    ...(result?.sentiment ? { sentiment: result.sentiment } : {}),
+    ...(result?.sentiment && SENTIMENTS.includes(result.sentiment) ? { sentiment: result.sentiment } : {}),
     ...(typeof result?.success === "boolean" ? { success: result.success } : {})
   };
 }

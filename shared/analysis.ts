@@ -52,7 +52,8 @@ function fieldFrom(raw: unknown, index: number): { field?: AnalysisField; proble
   const label = `analysis.fields[${index}]`;
   if (!isRecord(raw)) return { problem: `${label} must be an object` };
   const { name, type, description, options } = raw;
-  if (typeof name !== "string" || !FIELD_NAME.test(name))
+  // `__proto__` is no key of an object: a field of that name would vanish from every result.
+  if (typeof name !== "string" || !FIELD_NAME.test(name) || name === "__proto__")
     return {
       problem: `${label}.name must be letters, digits and underscores, starting with a letter, at most 48 characters`
     };

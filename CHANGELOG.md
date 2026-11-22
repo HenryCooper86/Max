@@ -119,6 +119,12 @@
   (`CLOUD_ANALYSIS_LLM_BASE_URL`). The cloud database gains a column by itself. Run for real with a local model;
   the vendor endpoints are built to their documentation. See
   [who pays for an analysis](docs/cloud.md#who-pays-for-an-analysis).
+- Project analysis, after review: a relay that stops while a conversation is being analysed still sends it to the
+  project's server (two seconds for the analysis, then without one, with the reason); at most 4 analyses of one
+  project run at once; the console says so when the operator's model does the analysing, and a project's key is not
+  read for it; the choices of a field shown in the console are always the ones that will be saved; a field left
+  unfinished is shown with what is wrong with it even with analysis switched off; a field cannot be named
+  `__proto__`; an answer with nothing that was asked for counts as no analysis.
 - Conversation analysis asks a model server again without JSON mode when it refuses `response_format` (HTTP 400).
 - Max Cloud: a conversation webhook per project. Each conversation is POSTed to the project's own server when it
   ends, signed with the project's signing secret, with three more tries when it fails, a test request in the

@@ -1,6 +1,8 @@
 package io.github.henrycooper86.max.actions
 
 import io.github.henrycooper86.max.agent.buildDeviceResult
+import io.github.henrycooper86.max.ui.Str
+import io.github.henrycooper86.max.ui.tr
 
 data class DeviceResult(val status: String, val reason: String? = null, val detail: String? = null) {
     fun json(commandId: String) = buildDeviceResult(commandId, status, reason, detail)
@@ -26,7 +28,23 @@ fun validDeviceArguments(action: String, args: Map<String, Any?>): Boolean = whe
     else -> false
 }
 
-fun safeToComposeMessage(speedKmh: Double?): Boolean = speedKmh != null && speedKmh.isFinite() && speedKmh in 0.0..5.0
+/**
+ * SMS composition fails closed: refused unless speed is known to be below
+ * walking pace. With no GPS fix (indoors, tunnels) and no mock-relay speed
+ * that also refuses, so the refusal says the speed is unknown rather than
+ * claiming the rider is riding; dialling is unaffected.
+ */
+fun smsSpeedRefusal(speedKmh: Double?): DeviceResult? = when {
+    safeToComposeMessage(speedKmh) -> null
+    speedKmh == null -> DeviceResult("denied", "unsafe.speed", tr(Str.SMS_SPEED_UNKNOWN))
+    else -> DeviceResult.denied("unsafe.speed")
+}
+
+/** Walking pace: at or above it the rider counts as riding (the same limit as iOS). */
+const val WALKING_PACE_KMH = 5.0
+
+fun safeToComposeMessage(speedKmh: Double?): Boolean =
+    speedKmh != null && speedKmh.isFinite() && speedKmh >= 0.0 && speedKmh < WALKING_PACE_KMH
 
 fun nextVoiceGain(current: Float, direction: String): Float =
     (current + if (direction == "up") 0.5f else -0.5f).coerceIn(0.5f, 4f)

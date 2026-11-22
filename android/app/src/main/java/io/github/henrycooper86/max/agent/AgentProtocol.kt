@@ -185,7 +185,11 @@ data class ProviderCapabilities(
     val voiceSelection: Boolean = false,
     val weatherContext: Boolean = false,
     val sessionMemory: Boolean = false,
-    val emergencyMode: Boolean = false
+    val emergencyMode: Boolean = false,
+    /** The backend can call tools. Absent (false) on relays older than tool support. */
+    val tools: Boolean = false,
+    /** The session accepts typed turns (`text.input`). Absent (false) on older relays. */
+    val textInput: Boolean = false
 )
 
 /** Mirror of the ride.context event payload / DEFAULT_RIDE_CONTEXT in src/main.tsx. */
@@ -194,7 +198,8 @@ data class RideContext(
     val modeLabel: String = tr(Str.MODE_NAV),
     val scenario: DemoScenario = DemoScenario.COMMUTE,
     val scenarioLabel: String = tr(Str.SC_COMMUTE),
-    val speedKmh: Int = 0,
+    /** Null when the relay did not send one: live relays have no speed of their own. */
+    val speedKmh: Int? = null,
     val routePhase: String = tr(Str.WAITING_RIDE_CONTEXT),
     val network: String = "offline",
     val batteryPct: Int = 0,
@@ -276,6 +281,19 @@ sealed interface AgentEvent {
     data object CrashSimulate : AgentEvent
     data class NavError(val commandId: String, val code: String) : AgentEvent
 
+    /** Progress of a tool call the assistant made, for the status line (docs/protocol.md, Tools). */
+    data class ToolActivity(
+        val callId: String,
+        val name: String,
+        val where: String,
+        val state: String,
+        val durationMs: Int?,
+        val error: String?
+    ) : AgentEvent
+
+    /** A request to run a client tool. This app declares none, so each one is answered with an error. */
+    data class ToolCall(val callId: String, val name: String) : AgentEvent
+
     /** Event types this client does not consume. */
     data object Unhandled : AgentEvent
 }
@@ -318,7 +336,9 @@ fun parseAgentEvent(text: String): AgentEvent {
                     voiceSelection = caps?.optBoolean("voiceSelection", false) ?: false,
                     weatherContext = caps?.optBoolean("weatherContext", false) ?: false,
                     sessionMemory = caps?.optBoolean("sessionMemory", false) ?: false,
-                    emergencyMode = caps?.optBoolean("emergencyMode", false) ?: false
+                    emergencyMode = caps?.optBoolean("emergencyMode", false) ?: false,
+                    tools = caps?.optBoolean("tools", false) ?: false,
+                    textInput = caps?.optBoolean("textInput", false) ?: false
                 )
             )
         }
@@ -362,7 +382,9 @@ fun parseAgentEvent(text: String): AgentEvent {
                     modeLabel = json.optString("modeLabel").ifEmpty { mode.label },
                     scenario = scenario,
                     scenarioLabel = json.optString("scenarioLabel").ifEmpty { scenario.label },
-                    speedKmh = json.optInt("speedKmh", 0),
+                    // Absent must stay unknown: reading it as 0 told every speed check the bike was parked.
+                    speedKmh = (json.opt("speedKmh") as? Number)?.toDouble()
+                        ?.takeIf { it.isFinite() && it in 0.0..MAX_PLAUSIBLE_SPEED_KMH }?.let { Math.round(it).toInt() },
                     routePhase = json.optString("routePhase").ifEmpty { tr(Str.WAITING_ROUTE) },
                     network = json.optString("network").ifEmpty { "online" },
                     batteryPct = json.optInt("batteryPct", 0),
@@ -437,6 +459,20 @@ fun parseAgentEvent(text: String): AgentEvent {
             code = json.optString("code")
         )
 
+        ServerEventTypes.TOOL_ACTIVITY -> AgentEvent.ToolActivity(
+            callId = json.optString("callId"),
+            name = json.optString("name"),
+            where = json.optString("where"),
+            state = json.optString("state"),
+            durationMs = (json.opt("durationMs") as? Number)?.toInt(),
+            error = json.optString("error").ifEmpty { null }
+        )
+
+        ServerEventTypes.TOOL_CALL -> AgentEvent.ToolCall(
+            callId = json.optString("callId"),
+            name = json.optString("name")
+        )
+
         else -> AgentEvent.Unhandled
     }
 }
@@ -508,6 +544,7 @@ fun buildSessionStart(
 ): String =
     JSONObject().apply {
         put("type", "session.start")
+        put("protocol", PROTOCOL_VERSION)
         put("sampleRate", MicStreamer.SAMPLE_RATE)
         put("channels", 1)
         put("voiceGender", voiceGender.wire)
@@ -620,6 +657,39 @@ fun buildDeviceResult(commandId: String, status: String, reason: String? = null,
         if (reason != null) put("reason", reason)
         if (detail != null) put("detail", detail)
     }.toString()
+
+/**
+ * Client → server location.update. `speedKmh` (optional, km/h, 0 to 400) is
+ * the phone's fresh GPS speed for the assistant's own fast-moving rule; it is
+ * omitted when no fresh GPS speed is known, so the relay never sees a guess.
+ */
+fun buildLocationUpdate(lat: Double, lon: Double, speedKmh: Double?): String =
+    JSONObject().apply {
+        put("type", ClientEventTypes.LOCATION_UPDATE)
+        put("lat", lat)
+        put("lon", lon)
+        speedKmh?.takeIf { it.isFinite() && it in 0.0..MAX_PLAUSIBLE_SPEED_KMH }
+            ?.let { put("speedKmh", Math.round(it * 10) / 10.0) }
+    }.toString()
+
+/** The relay rejects longer typed turns (docs/protocol.md, text.input). */
+const val MAX_TEXT_INPUT_CHARS = 2000
+
+/** Sent as session.start `protocol` so the relay can log version mismatches. */
+const val PROTOCOL_VERSION = 1
+
+/** Client → server text.input: a typed turn, answered aloud like a spoken one. Null when there is nothing to send. */
+fun buildTextInput(text: String): String? {
+    var clean = text.trim()
+    if (clean.length > MAX_TEXT_INPUT_CHARS) {
+        clean = clean.take(MAX_TEXT_INPUT_CHARS)
+        // An unpaired high surrogate would reach the relay as invalid text.
+        if (clean.last().isHighSurrogate()) clean = clean.dropLast(1)
+        clean = clean.trimEnd()
+    }
+    if (clean.isEmpty()) return null
+    return JSONObject().put("type", ClientEventTypes.TEXT_INPUT).put("text", clean).toString()
+}
 
 const val AUDIO_START_EVENT = """{"type":"audio.start"}"""
 const val AUDIO_STOP_EVENT = """{"type":"audio.stop"}"""

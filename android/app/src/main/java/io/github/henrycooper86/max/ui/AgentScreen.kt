@@ -71,6 +71,16 @@ import io.github.henrycooper86.max.agent.Speaker
 import io.github.henrycooper86.max.agent.TURN_FLAG_REASONS
 import io.github.henrycooper86.max.agent.TranscriptItem
 import io.github.henrycooper86.max.agent.TurnState
+import io.github.henrycooper86.max.agent.MAX_TEXT_INPUT_CHARS
+import io.github.henrycooper86.max.agent.TypedInputMode
+import io.github.henrycooper86.max.agent.toolStatusText
+import io.github.henrycooper86.max.agent.typedInputMode
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.input.ImeAction
 import io.github.henrycooper86.max.navigation.NavGuidanceState
 import io.github.henrycooper86.max.ui.theme.Visor
 import io.github.henrycooper86.max.ui.theme.VisorColors
@@ -137,7 +147,11 @@ private fun settledState(state: AgentSession.State): AgentSession.State {
 /** The single caption under the visor. */
 internal fun orbCaption(state: AgentSession.State, assistantName: String = DEFAULT_ASSISTANT_NAME): String {
     if (!state.handsFree) return tr(Str.TAP_VISOR)
-    val caption = if (state.micMuted) {
+    val caption = if (state.voiceCaptureDown) {
+        tr(Str.VOICE_DOWN)
+    } else if (state.audioPaused) {
+        tr(Str.AUDIO_PAUSED)
+    } else if (state.micMuted) {
         tr(Str.MIC_MUTED)
     } else {
         when (state.connection) {
@@ -210,14 +224,17 @@ private fun AgentScreenContent(
             val name = viewModel.assistantName
             val alerts: @Composable () -> Unit = {
                 state.hazardAlert?.let { HazardBanner(it) }
-                if (isNavPresentationActive(state)) state.navGuidance?.let { GuidanceCard(it, viewModel::confirmNavigation, viewModel.music, viewModel.hudCast) }
+                if (isNavPresentationActive(state)) state.navGuidance?.let {
+                    GuidanceCard(it, viewModel::confirmNavigation, viewModel.music, viewModel.hudCast, mapPaused = state.extrasShed)
+                }
                 if (recording) RecordingNotice()
             }
             val utilities: @Composable () -> Unit = {
                 MusicPlaybackCard(viewModel.music, assistantName = name)
                 if (viewModel.showCaptions) CaptionsOverlay(
                     items = state.transcript, assistantName = name,
-                    canFlag = state::canFlagTurn, onFlag = viewModel::flagTurn
+                    canFlag = state::canFlagTurn, onFlag = viewModel::flagTurn,
+                    typedInput = typedInputMode(state), onSend = viewModel::sendText
                 )
             }
             val visor: @Composable (Dp) -> Unit = { width ->
@@ -362,6 +379,8 @@ private fun SessionReadout(state: AgentSession.State, name: String, wakePhrase: 
     val hint = when {
         idle && !wakePhrase.isNullOrBlank() -> tr(Str.HINT_WAKE, "caption" to orbCaption(state, name), "wake" to wakePhrase)
         idle -> orbCaption(state, name)
+        // A running tool says what the wait is for, ahead of the relay's own detail.
+        state.toolStatus != null -> toolStatusText(state.toolStatus)
         // While a turn is in flight the relay's detail only rewords the headline
         // ("Max 思考中…" / "Max 正在思考"); it adds something only while waiting.
         state.connection == ConnectionState.READY &&
@@ -465,7 +484,9 @@ private fun CaptionsOverlay(
     items: List<TranscriptItem>,
     assistantName: String,
     canFlag: (TranscriptItem) -> Boolean = { false },
-    onFlag: (TranscriptItem, String) -> Unit = { _, _ -> }
+    onFlag: (TranscriptItem, String) -> Unit = { _, _ -> },
+    typedInput: TypedInputMode = TypedInputMode.HIDDEN,
+    onSend: (String) -> Boolean = { false }
 ) {
     val c = Visor.colors
     val listState = rememberLazyListState()
@@ -500,6 +521,38 @@ private fun CaptionsOverlay(
                     )
                 }
             }
+        }
+        if (typedInput != TypedInputMode.HIDDEN) TypedTurnField(typedInput, onSend)
+    }
+}
+
+/** A typed turn for backends that accept text.input; disabled while the bike is moving. */
+@Composable
+private fun TypedTurnField(mode: TypedInputMode, onSend: (String) -> Boolean) {
+    val c = Visor.colors
+    var draft by rememberSaveable { mutableStateOf("") }
+    val ready = mode == TypedInputMode.READY
+    val send = { if (ready && draft.isNotBlank() && onSend(draft)) draft = "" }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(VisorSpace.x2),
+        modifier = Modifier.fillMaxWidth().padding(top = VisorSpace.x3)
+    ) {
+        VisorTextField(
+            value = draft,
+            onValueChange = { draft = it.take(MAX_TEXT_INPUT_CHARS) },
+            label = if (ready) tr(Str.TYPE_HINT) else tr(Str.TYPE_STOP_FIRST),
+            enabled = ready,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { send() }),
+            modifier = Modifier.weight(1f)
+        )
+        IconButton(onClick = send, enabled = ready && draft.isNotBlank()) {
+            Icon(
+                Icons.AutoMirrored.Filled.Send,
+                contentDescription = tr(Str.TYPE_SEND),
+                tint = if (ready && draft.isNotBlank()) c.accent else c.textTertiary
+            )
         }
     }
 }
@@ -623,7 +676,13 @@ private fun HazardBanner(alert: AgentEvent.HazardAlert) {
  * is no arrived branch to render.
  */
 @Composable
-private fun GuidanceCard(guidance: NavGuidanceState, onConfirm: (String, Boolean) -> Unit, music: io.github.henrycooper86.max.music.MusicController, hudCast: io.github.henrycooper86.max.navigation.HudCastClient) {
+private fun GuidanceCard(
+    guidance: NavGuidanceState,
+    onConfirm: (String, Boolean) -> Unit,
+    music: io.github.henrycooper86.max.music.MusicController,
+    hudCast: io.github.henrycooper86.max.navigation.HudCastClient,
+    mapPaused: Boolean = false
+) {
     val c = Visor.colors
     var showingDetails by remember { mutableStateOf(guidance.confirmationId == null) }
     var awaitingApproval by remember { mutableStateOf(guidance.confirmationId != null) }
@@ -632,7 +691,7 @@ private fun GuidanceCard(guidance: NavGuidanceState, onConfirm: (String, Boolean
         awaitingApproval = guidance.confirmationId != null
         if (awaitingApproval) showingDetails = false
     }
-    if (showingDetails) NavigationDetailsDialog(guidance, music, hudCast) { showingDetails = false }
+    if (showingDetails) NavigationDetailsDialog(guidance, music, hudCast, mapPaused) { showingDetails = false }
     VisorCard(borderColor = if (guidance.offRoute) c.warn else null) {
         Row(verticalAlignment = Alignment.Top) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(VisorSpace.x1)) {
@@ -667,7 +726,7 @@ private fun GuidanceCard(guidance: NavGuidanceState, onConfirm: (String, Boolean
         if (guidance.confirmationId == null) {
             VisorButton(tr(Str.OPEN_NAV), onClick = { showingDetails = true }, style = VisorButtonStyle.GHOST)
         }
-        GuidanceRouteMap(guidance)
+        GuidanceRouteMap(guidance, paused = mapPaused)
     }
 }
 

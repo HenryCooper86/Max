@@ -34,6 +34,21 @@ class CrashEngineTest {
         val timeout = CrashEngine.tick(CrashState(CrashPhase.CANDIDATE), 5.0)
         assertEquals(CrashPhase.ARMED, timeout.state.phase)
     }
+    @Test fun gateSpeedOpensTheGateButNeverVetoesStillness() {
+        var s = CrashEngine.step(CrashState(), CrashSample(0.0, 5.0, 0.0, speed = null, gateSpeed = 60.0)).state
+        s = CrashEngine.step(s, CrashSample(.03, 5.0, 0.0, speed = null, gateSpeed = 60.0)).state
+        assertEquals(CrashPhase.CANDIDATE, s.phase); assertEquals(60.0, s.peakSpeed!!, 0.0)
+        // The tunnel's remembered 60 km/h keeps arriving as a gate speed while the bike lies still.
+        repeat(110) { s = CrashEngine.step(s, CrashSample(.04 + it / 100.0, .01, 0.0, speed = null, gateSpeed = 60.0)).state }
+        assertEquals(CrashPhase.CHECK_IN, s.phase)
+    }
+    @Test fun invalidGateSpeedIsIgnored() {
+        var s = CrashState()
+        repeat(5) { s = CrashEngine.step(s, CrashSample(it / 100.0, 5.0, 0.0, speed = null, gateSpeed = Double.NaN)).state }
+        assertEquals(CrashPhase.ARMED, s.phase)
+        repeat(5) { s = CrashEngine.step(s, CrashSample(.1 + it / 100.0, 5.0, 0.0, speed = null, gateSpeed = -20.0)).state }
+        assertEquals(CrashPhase.ARMED, s.phase)
+    }
     @Test fun countdownAndCancellationAreOneShot() {
         var s = CrashEngine.simulate(CrashState(), 0.0).state
         assertEquals(CrashPhase.CHECK_IN, CrashEngine.tick(s, 14.9).state.phase)

@@ -25,12 +25,20 @@ import kotlinx.coroutines.delay
 
 /** No AMap API, including privacy initialization, runs before the rider opts in. */
 @Composable
-fun GuidanceRouteMap(guidance: NavGuidanceState, detailed: Boolean = false, followsRider: Boolean = false, viewportModifier: Modifier? = null) {
+fun GuidanceRouteMap(
+    guidance: NavGuidanceState,
+    detailed: Boolean = false,
+    followsRider: Boolean = false,
+    viewportModifier: Modifier? = null,
+    /** The phone is critically hot: the map's GPU load is shed, voice and text guidance continue. */
+    paused: Boolean = false
+) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("max_map", 0) }
     var consent by remember { mutableStateOf(prefs.getBoolean("consent_v1", false)) }
     var showConsent by remember { mutableStateOf(!prefs.contains("consent_v1")) }
     val uri = LocalUriHandler.current
+    if (paused) { MapNote(tr(Str.MAP_PAUSED_HOT)); return }
     when (mapAvailability(consent, BuildConfig.AMAP_ANDROID_KEY, guidance.route)) {
         MapAvailability.CONSENT_REQUIRED -> {
             MapNote(tr(Str.MAP_OFF))

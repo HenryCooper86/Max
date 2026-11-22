@@ -30,8 +30,8 @@ class DeviceActionsTest {
         commands.forEach { (action, args) -> assertTrue(action, validDeviceArguments(action, args)) }
     }
     @Test fun `unknown negative or moving speed refuses SMS`() {
-        listOf(null, Double.NaN, Double.POSITIVE_INFINITY, -1.0, 5.01, 42.0).forEach { assertFalse(safeToComposeMessage(it)) }
-        assertTrue(safeToComposeMessage(0.0)); assertTrue(safeToComposeMessage(5.0))
+        listOf(null, Double.NaN, Double.POSITIVE_INFINITY, -1.0, 5.0, 5.01, 42.0).forEach { assertFalse(safeToComposeMessage(it)) }
+        assertTrue(safeToComposeMessage(0.0)); assertTrue(safeToComposeMessage(4.99))
     }
     @Test fun `voice gain stays within safe range and can increase from shipped default`() {
         assertEquals(2.5f, nextVoiceGain(2f, "up"))

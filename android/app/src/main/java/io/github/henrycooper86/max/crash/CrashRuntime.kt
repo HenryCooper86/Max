@@ -16,6 +16,7 @@ import kotlin.math.sqrt
 
 /** Sensors and monotonic timer share the main dispatcher; no microphone is acquired. */
 class CrashRuntime(context: Context, private val scope: CoroutineScope, speed: () -> Double?,
+    private val gateSpeed: () -> Double? = { null },
     locate: suspend () -> Pair<Double, Double>?, speak: (String) -> Unit,
     send: (String) -> Unit, resolved: () -> Unit) : SensorEventListener {
     private val prefs = context.getSharedPreferences("max_crash", Context.MODE_PRIVATE)
@@ -66,7 +67,7 @@ class CrashRuntime(context: Context, private val scope: CoroutineScope, speed: (
         val magnitude = sqrt(event.values.take(3).sumOf { it.toDouble() * it })
         if (event.sensor.type == Sensor.TYPE_GYROSCOPE) { rotation = magnitude; rotationTime = event.timestamp }
         else if (rotationTime > 0 && event.timestamp - rotationTime in 0..100_000_000L) {
-            controller.sample(CrashSample(event.timestamp / 1e9, magnitude / SensorManager.GRAVITY_EARTH, rotation, speedProvider()))
+            controller.sample(CrashSample(event.timestamp / 1e9, magnitude / SensorManager.GRAVITY_EARTH, rotation, speedProvider(), gateSpeed()))
         }
     }
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit

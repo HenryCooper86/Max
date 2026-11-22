@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -392,7 +393,8 @@ internal fun VisorTextField(
     secret: Boolean = false,
     visualTransformation: VisualTransformation? = null,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
-    mono: Boolean = false
+    mono: Boolean = false,
+    keyboardActions: KeyboardActions = KeyboardActions.Default
 ) {
     OutlinedTextField(
         value = value,
@@ -405,6 +407,7 @@ internal fun VisorTextField(
         colors = visorTextFieldColors(),
         visualTransformation = visualTransformation ?: if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
         modifier = modifier.fillMaxWidth()
     )
 }

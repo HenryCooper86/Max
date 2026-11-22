@@ -5,8 +5,6 @@ import io.github.henrycooper86.max.ui.Str
 import io.github.henrycooper86.max.ui.AppLanguage
 import io.github.henrycooper86.max.ui.Localization
 
-import android.os.Handler
-import android.os.Looper
 import io.github.henrycooper86.max.BuildConfig
 import okhttp3.Call
 import okhttp3.Callback
@@ -18,10 +16,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONObject
 import java.io.IOException
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
 
 /**
  * Talks to the relay's /auth endpoints so riders sign in with username and
@@ -30,15 +24,19 @@ import javax.net.ssl.X509TrustManager
  * self-signed trust toggle applies here exactly as it does to the socket.
  * The Android counterpart of ios/.../Agent/AuthClient.swift.
  */
-class AuthClient {
+class AuthClient(
+    /** BuildConfig.DEBUG in the app; tests pass the build type they exercise. */
+    private val debugBuild: Boolean = BuildConfig.DEBUG,
+    /** Where results are delivered: the main thread in the app, inline in tests. */
+    private val deliver: (() -> Unit) -> Unit = MainThread::post
+) {
 
     data class User(val id: String, val username: String, val displayName: String, val role: String)
 
     data class Login(val token: String, val user: User)
 
-    private val mainHandler = Handler(Looper.getMainLooper())
     private var allowSelfSigned = false
-    private var httpClient = buildClient(allowSelfSigned = false)
+    private var httpClient = relayHttpClient(allowSelfSigned = false, debugBuild = debugBuild)
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
@@ -72,7 +70,7 @@ class AuthClient {
             onResult(null, tr(Str.ERR_RELAY_BAD))
             return
         }
-        ensureClient(allowSelfSignedTls)
+        val client = clientFor(allowSelfSignedTls)
 
         val body = JSONObject()
             .put("username", username)
@@ -86,9 +84,9 @@ class AuthClient {
             .post(body)
             .build()
 
-        httpClient.newCall(request).enqueue(object : Callback {
+        client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                mainHandler.post { onResult(null, tr(Str.ERR_RELAY_UNREACHABLE)) }
+                deliver { onResult(null, tr(Str.ERR_RELAY_UNREACHABLE)) }
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -117,7 +115,7 @@ class AuthClient {
                 } else {
                     null
                 }
-                mainHandler.post { onResult(login, error) }
+                deliver { onResult(login, error) }
             }
         })
     }
@@ -126,7 +124,7 @@ class AuthClient {
     fun logout(relayUrl: String, token: String, allowSelfSignedTls: Boolean) {
         if (token.isEmpty()) return
         val base = authBaseUrl(relayUrl) ?: return
-        ensureClient(allowSelfSignedTls)
+        val client = clientFor(allowSelfSignedTls)
 
         val body = JSONObject().put("token", token).toString().toRequestBody(JSON)
         val request = Request.Builder()
@@ -134,36 +132,20 @@ class AuthClient {
             .header("Authorization", "Bearer $token")
             .post(body)
             .build()
-        httpClient.newCall(request).enqueue(object : Callback {
+        client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = Unit
             override fun onResponse(call: Call, response: Response) = response.close()
         })
     }
 
-    private fun ensureClient(allowSelfSignedTls: Boolean) {
-        val debugTrustEnabled = BuildConfig.DEBUG && allowSelfSignedTls
-        if (debugTrustEnabled != allowSelfSigned) {
-            allowSelfSigned = debugTrustEnabled
-            httpClient = buildClient(allowSelfSigned)
+    /** The client for this request, rebuilt only when the effective trust setting changes. */
+    @Synchronized
+    internal fun clientFor(allowSelfSignedTls: Boolean): OkHttpClient {
+        val trust = selfSignedTrustAllowed(debugBuild, allowSelfSignedTls)
+        if (trust != allowSelfSigned) {
+            allowSelfSigned = trust
+            httpClient = relayHttpClient(trust, debugBuild)
         }
-    }
-
-    private fun buildClient(allowSelfSigned: Boolean): OkHttpClient {
-        val builder = OkHttpClient.Builder()
-        if (BuildConfig.DEBUG && allowSelfSigned) {
-            // Debug-only, mirroring AgentSession.buildHttpClient. Release
-            // binaries cannot install a trust-all manager or hostname verifier.
-            val trustAll = object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
-                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            }
-            val sslContext = SSLContext.getInstance("TLS").apply {
-                init(null, arrayOf(trustAll), SecureRandom())
-            }
-            builder.sslSocketFactory(sslContext.socketFactory, trustAll)
-            builder.hostnameVerifier { _, _ -> true }
-        }
-        return builder.build()
+        return httpClient
     }
 }

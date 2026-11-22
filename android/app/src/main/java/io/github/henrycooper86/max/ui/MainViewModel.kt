@@ -76,13 +76,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_TEMPLATE_SWITCHING = "assistant_template_switching"
         private const val KEY_THEME_OVERRIDES = "assistant_theme"
         private const val KEY_RELAY_VISUALIZER = "assistant_visualizer"
-        private const val KEY_LANGUAGE = "ui_language"
-        private const val KEY_WEARER_TEMPLATE = "wearer_template"
-        private const val KEY_WEARER_VISUALIZER = "wearer_visualizer"
     }
 
     private val session: AgentSession = AgentSessionHolder.get(application)
     private val prefs = application.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val uiPrefs = application.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE)
+        .also { migrateUiPreferences(prefs, it) }
     private val secureTokens = SecureTokenStore(prefs)
     private val authClient = AuthClient()
     private val healthClient = HealthClient()
@@ -253,9 +252,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     /** The wearer's own choices from Settings (ignored while the owner pins the look). */
-    var wearerTemplate by mutableStateOf(prefs.getString(KEY_WEARER_TEMPLATE, null))
+    var wearerTemplate by mutableStateOf(uiPrefs.getString(KEY_WEARER_TEMPLATE, null))
         private set
-    var wearerVisualizer by mutableStateOf(prefs.getString(KEY_WEARER_VISUALIZER, null))
+    var wearerVisualizer by mutableStateOf(uiPrefs.getString(KEY_WEARER_VISUALIZER, null))
         private set
 
     /** The owner's PNG logo once downloaded (in memory only); null = show the bundled device mark. */
@@ -275,13 +274,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun selectTemplate(id: String) {
         if (!templateSwitching || VisorTemplates.find(id) == null) return
         wearerTemplate = id
-        prefs.edit().putString(KEY_WEARER_TEMPLATE, id).apply()
+        uiPrefs.edit().putString(KEY_WEARER_TEMPLATE, id).apply()
     }
 
     fun selectVoiceStyle(style: VoiceStyle) {
         if (!templateSwitching) return
         wearerVisualizer = style.wire
-        prefs.edit().putString(KEY_WEARER_VISUALIZER, style.wire).apply()
+        uiPrefs.edit().putString(KEY_WEARER_VISUALIZER, style.wire).apply()
     }
 
     /** Voice backends advertised by the relay (null until /health reports `voice`). */
@@ -295,12 +294,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var healthJob: Job? = null
 
     /** The wearer's language choice (follow system / 中文 / English), applied live. */
-    var languagePreference by mutableStateOf(LanguagePreference.fromStored(prefs.getString(KEY_LANGUAGE, null)))
+    var languagePreference by mutableStateOf(LanguagePreference.fromStored(uiPrefs.getString(KEY_LANGUAGE, null)))
         private set
 
     fun selectLanguage(preference: LanguagePreference) {
         languagePreference = preference
-        prefs.edit().apply { if (preference.stored == null) remove(KEY_LANGUAGE) else putString(KEY_LANGUAGE, preference.stored) }.apply()
+        uiPrefs.edit().apply { if (preference.stored == null) remove(KEY_LANGUAGE) else putString(KEY_LANGUAGE, preference.stored) }.apply()
         applyLanguage()
     }
 
@@ -551,6 +550,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
     }
+
+    /** Sends a typed turn; true when it went out (the field then clears). */
+    fun sendText(text: String): Boolean = session.sendTextInput(text)
 
     /** Mutes/unmutes the mic mid-session (bottom mute control). */
     fun toggleMute() = session.toggleMute()

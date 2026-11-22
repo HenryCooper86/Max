@@ -23,6 +23,10 @@ import io.github.henrycooper86.max.navigation.NavGuidanceState
 import io.github.henrycooper86.max.navigation.NavSpeaker
 import io.github.henrycooper86.max.navigation.NavigationController
 import io.github.henrycooper86.max.navigation.RelayNavigationSearch
+import io.github.henrycooper86.max.power.DeviceLoad
+import io.github.henrycooper86.max.power.DeviceLoadGuard
+import io.github.henrycooper86.max.power.LoadNotice
+import io.github.henrycooper86.max.power.loadNoticeText
 import io.github.henrycooper86.max.service.VoiceAgentService
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -43,13 +47,9 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
 
 /**
  * Owns one hands-free voice session end to end: relay WebSocket, mic streaming,
@@ -92,6 +92,15 @@ class AgentSession(
         val sessionMemory: SessionMemory = SessionMemory(),
         val telemetry: Telemetry? = null,
         val bluetoothRouted: Boolean = false,
+        val speedKmh: Double? = null,
+        /** Capture and assistant audio are paused because another app (a phone call) has the audio. */
+        val audioPaused: Boolean = false,
+        /** The microphone stopped working; voice is off and retried, crash detection stays on. */
+        val voiceCaptureDown: Boolean = false,
+        /** The transient tool line from tool.activity; null when no tool is running. */
+        val toolStatus: ToolStatus? = null,
+        /** Heat or battery saver has switched off the map and other extras (the voice session stays). */
+        val extrasShed: Boolean = false,
         /** The active ADAS hazard alert, shown as a banner until it auto-clears. */
         val hazardAlert: AgentEvent.HazardAlert? = null,
         /** NavigationController's published turn-by-turn state, rendered as the
@@ -152,6 +161,7 @@ class AgentSession(
     val state: StateFlow<State> = _state.asStateFlow()
 
     private var httpClient: OkHttpClient = buildHttpClient(allowSelfSigned = false)
+
     private var allowSelfSigned = false
 
     // @Volatile: read from the mic capture thread (onFrame), written on OkHttp
@@ -175,7 +185,7 @@ class AgentSession(
     private var testingTestCaseId: String = "baseline-live-session"
     private var testingRunId: String = ""
     private var testingAssignmentId: String = ""
-    private var reconnectAttempts = 0
+    @Volatile
     private var reconnectJob: Job? = null
     /** The 150 ms deferred reconnect of a settings-change restart, so stop()
      * can cancel it — otherwise it would resurrect the session (and clobber
@@ -202,6 +212,9 @@ class AgentSession(
     @Volatile private var location: Pair<Double, Double>? = null
     @Volatile private var lastLocationFixAt = Long.MIN_VALUE / 2
     private val sessionLocation = LocationManagerSource(context)
+    /** The phone's own speed, fed by [sessionLocation]; see RideSpeed for the precedence. */
+    private val rideSpeed = RideSpeed(android.os.SystemClock::elapsedRealtime)
+    private var speedExpiryJob: Job? = null
     private var lastLocationSentAt = Long.MIN_VALUE / 2
     /** Relay-issued speech deliveries already handed to device TTS. */
     private val spokenDeliveryIds = linkedSetOf<String>()
@@ -259,7 +272,8 @@ class AgentSession(
     private var stopAfterIncident = false
     val crash by lazy {
         io.github.henrycooper86.max.crash.CrashRuntime(context, deviceScope,
-            speed = { state.value.rideContext.speedKmh.toDouble().takeIf { state.value.hasRideContext } },
+            speed = rideSpeed::forCrash,
+            gateSpeed = rideSpeed::forCrashGate,
             locate = { resolveCrashLocation() },
             speak = { text -> stopAgentSpeech(); if (music.state.value.playing) music.stopPlayback(); ttsSpeak(text) },
             send = { text -> if (socketOpen) webSocket?.send(text); Unit },
@@ -270,7 +284,8 @@ class AgentSession(
     val captures = CaptureStore(context)
     val camera = CameraController(context, captures, deviceScope)
     val deviceActions = DeviceActions(context, player, music, camera,
-        speed = { state.value.rideContext.speedKmh.toDouble().takeIf { state.value.hasRideContext } })
+        speed = ::currentSpeedKmh,
+        load = { loadGuard.load })
     private val deviceCommandIds = linkedSetOf<String>()
     private val deviceJobs = mutableSetOf<Job>()
     private val audioRouter = AudioRouter(context)
@@ -292,20 +307,60 @@ class AgentSession(
         { level -> _state.update { it.copy(voiceLevel = if (transmitting && !micMuted) level else 0f) } },
         {
             // Capture died on its own (dead mic / unrecoverable read error).
-            // Marshal off the capture thread and end hands-free — leaving the HUD
-            // pulsing "listening" behind a mic that will never emit another frame
-            // is worse than stopping and letting the rider restart (mirrors the
-            // web/iOS mic-failure handling). stop() releases the AudioRecord and
-            // effects, and its lifecycle guard makes a late signal a no-op.
-            scope.launch {
-                if (!_state.value.handsFree) return@launch
-                stop()
-                _state.update {
-                    it.copy(connection = ConnectionState.DEGRADED, statusText = tr(Str.STATUS_MIC_INTERRUPTED))
-                }
+            // Marshal off the capture thread. A headset change or a phone call
+            // makes AudioRecord fail just before its own callback arrives, so the
+            // environment decides: recover the mic, wait for the call, or end
+            // hands-free rather than leave the HUD pulsing "listening" behind a
+            // mic that will never emit another frame (mirrors web/iOS).
+            deviceScope.launch {
+                if (!_state.value.handsFree || lifecycle.current() == null) return@launch
+                synchronized(captureLock) { captureRunning = false }
+                if (syntheticCapture) endForCaptureFailure() else environment.onCaptureFailed()
             }
         }
     )
+
+    /** Serialises AudioRecord start/stop between the startup coroutine and main-thread callbacks. */
+    private val captureLock = Any()
+    @Volatile private var captureRunning = false
+
+    /** Mirror of state.audioPaused for the socket reader threads. */
+    @Volatile private var audioPaused = false
+
+    /** A call ended before session.started: audio.start is owed once the provider is ready. */
+    @Volatile private var audioStartPending = false
+
+    private val environmentControls = EnvironmentControls()
+    private val environment = SessionEnvironment(
+        focus = AndroidVoiceFocus(context),
+        devices = AndroidAudioDeviceWatch(context),
+        network = AndroidNetworkWatch(context),
+        controls = environmentControls,
+        scope = deviceScope,
+        clock = android.os.SystemClock::elapsedRealtime,
+        media = AndroidMediaPlaybackWatch(context),
+        calls = AndroidCallStateWatch(context)
+    )
+    private val loadGuard = DeviceLoadGuard(AndroidDeviceLoadSource(context), ::onLoadNotice, ::shedLoad,
+        onLoad = { load -> _state.update { it.copy(extrasShed = !load.extrasAllowed) } })
+    private val toolTracker = ToolActivityTracker()
+    private var toolRefreshJob: Job? = null
+    /** tool.call ids already answered: the protocol allows exactly one tool.result per call. */
+    private val answeredToolCalls = linkedSetOf<String>()
+
+    private fun startCapture(generation: Int): Boolean = synchronized(captureLock) {
+        if (!lifecycle.accepts(generation) || audioPaused || !_state.value.handsFree) return false
+        if (!captureRunning) {
+            mic.start()
+            captureRunning = true
+        }
+        true
+    }
+
+    private fun stopCapture() = synchronized(captureLock) {
+        captureRunning = false
+        mic.stop()
+    }
 
     // ---- navigation ---------------------------------------------------------
 
@@ -382,11 +437,14 @@ class AgentSession(
         stopAfterIncident = false
         if (!syntheticCapture) crash.arm()
         intentionalClose = false
-        reconnectAttempts = 0
+        environment.reconnect.reset()
         transmitting = true
         micMuted = false
+        audioPaused = false
+        audioStartPending = false
+        rideSpeed.reset()
         spokenDeliveryIds.clear()
-        deviceScope.launch { deviceCommandIds.clear() }
+        deviceScope.launch { deviceCommandIds.clear(); answeredToolCalls.clear() }
 
         // In-helmet Bluetooth headset routing; playback follows the same path.
         val bluetoothRouted = audioRouter.startVoiceRouting()
@@ -405,8 +463,21 @@ class AgentSession(
                 micMuted = false,
                 bluetoothRouted = bluetoothRouted,
                 authRequired = false,
-                hasRideContext = false
+                hasRideContext = false,
+                speedKmh = null,
+                audioPaused = false,
+                voiceCaptureDown = false,
+                toolStatus = null,
+                extrasShed = false
             )
+        }
+        if (!syntheticCapture) {
+            // Focus, device, network and heat watchers live exactly as long as
+            // this generation; stop() releases them. In-app music plays under
+            // the session's focus rather than competing with it.
+            music.underVoiceFocus = true
+            environment.start()
+            loadGuard.start()
         }
         scope.launch {
             val resolvedLocation = if (syntheticCapture) null else resolveLocation()
@@ -446,12 +517,17 @@ class AgentSession(
                 return@launch
             }
             try {
-                mic.start()
-                // stop() may have won the race while AudioRecord was starting.
-                if (!lifecycle.accepts(generation)) mic.stop()
+                // A session started during a phone call waits for the call to end;
+                // resumeAudio() starts capture then. The generation is checked under
+                // the capture lock, and stop() invalidates it before stopping capture,
+                // so a stop racing this start always releases the microphone.
+                startCapture(generation)
             } catch (error: Exception) {
                 Log.w(TAG, "Mic start failed", error)
-                failHandsFreeStart(generation, tr(Str.STATUS_MIC_UNAVAILABLE))
+                // A dead microphone must not take crash detection down with it:
+                // voice stays off and is retried; only synthetic QA ends the session.
+                if (syntheticCapture) failHandsFreeStart(generation, tr(Str.STATUS_MIC_UNAVAILABLE))
+                else deviceScope.launch { if (lifecycle.accepts(generation)) environment.onCaptureStartFailed() }
             }
         }
     }
@@ -464,17 +540,22 @@ class AgentSession(
         if (clearLocation) location = null
         if (clearLocation) lastLocationFixAt = Long.MIN_VALUE / 2
         lastLocationSentAt = Long.MIN_VALUE / 2
-        sessionLocation.start { fix ->
+        sessionLocation.start(onFix = { fix ->
             if (lifecycle.accepts(generation)) {
                 location = fix.lat to fix.lon
                 val now = android.os.SystemClock.elapsedRealtime()
                 lastLocationFixAt = now
                 if (_state.value.connection == ConnectionState.READY && now - lastLocationSentAt >= 10_000) {
                     lastLocationSentAt = now
-                    webSocket?.send(org.json.JSONObject().put("type", "location.update").put("lat", fix.lat).put("lon", fix.lon).toString())
+                    webSocket?.send(buildLocationUpdate(fix.lat, fix.lon, rideSpeed.freshGpsKmh()))
                 }
             }
-        }
+        }, onSpeed = { kmh, fixAtMs, fromGps ->
+            if (lifecycle.accepts(generation)) {
+                rideSpeed.onGps(kmh, fixAtMs, fromGps)
+                publishSpeed()
+            }
+        })
     }
 
     /** Tears down every resource acquired before an async start failed. */
@@ -494,7 +575,7 @@ class AgentSession(
         crash.sessionEnded()
         if (crash.controller.active && !force) {
             stopAfterIncident = true
-            transmitting = false; micMuted = false; mic.stop(); stopAgentSpeech()
+            transmitting = false; micMuted = false; stopCapture(); stopAgentSpeech()
             webSocket?.send(AUDIO_STOP_EVENT)
             deviceJobs.forEach { it.cancel() }; deviceJobs.clear(); camera.stopForSession()
             navSearch.failPending(); navController.teardown()
@@ -514,11 +595,20 @@ class AgentSession(
         intentionalClose = true
         reconnectJob?.cancel()
         restartJob?.cancel()
+        environment.stop()
+        loadGuard.stop()
+        music.underVoiceFocus = false
+        audioPaused = false
+        audioStartPending = false
+        toolRefreshJob?.cancel()
+        toolTracker.clear()
+        speedExpiryJob?.cancel()
+        rideSpeed.reset()
         webSocket?.send(AUDIO_STOP_EVENT)
         webSocket?.close(1000, "rider stopped")
         socketOpen = false
         webSocket = null
-        mic.stop()
+        stopCapture()
         tts?.stop()
         // Release (not just flush) so the next session can pick a new audio route.
         player.release()
@@ -544,6 +634,11 @@ class AgentSession(
                 voiceLevel = 0f,
                 micMuted = false,
                 bluetoothRouted = false,
+                speedKmh = null,
+                audioPaused = false,
+                voiceCaptureDown = false,
+                toolStatus = null,
+                extrasShed = false,
                 hazardAlert = null,
                 navGuidance = null,
                 feedbackFloorId = Int.MAX_VALUE
@@ -698,26 +793,8 @@ class AgentSession(
 
     // ---- relay connection --------------------------------------------------
 
-    private fun buildHttpClient(allowSelfSigned: Boolean): OkHttpClient {
-        val builder = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS)
-
-        if (BuildConfig.DEBUG && allowSelfSigned) {
-            // Debug-only: release binaries cannot install a trust-all manager
-            // or hostname verifier, even if stale preferences request it.
-            val trustAll = object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
-                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            }
-            val sslContext = SSLContext.getInstance("TLS").apply {
-                init(null, arrayOf(trustAll), SecureRandom())
-            }
-            builder.sslSocketFactory(sslContext.socketFactory, trustAll)
-            builder.hostnameVerifier { _, _ -> true }
-        }
-
-        return builder.build()
-    }
+    private fun buildHttpClient(allowSelfSigned: Boolean): OkHttpClient =
+        relayHttpClient(allowSelfSigned) { pingInterval(20, TimeUnit.SECONDS) }
 
     private fun restartIfConnected() {
         if (_state.value.handsFree && webSocket != null) restartSession()
@@ -740,8 +817,8 @@ class AgentSession(
 
     private fun nativeAppVersion(): String =
         runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.0"
-        }.getOrDefault("0.1.0").take(40)
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: BuildConfig.VERSION_NAME
+        }.getOrDefault(BuildConfig.VERSION_NAME).take(40)
 
     private fun restartSession() {
         val socket = webSocket
@@ -756,18 +833,24 @@ class AgentSession(
             // reconnecting anyway would open a zombie session with no mic.
             if (!_state.value.handsFree) return@launch
             intentionalClose = false
-            reconnectAttempts = 0
+            environment.reconnect.onConnected()
             connect()
         }
     }
 
+    // Synchronized: a network handover reconnects from the main thread while a
+    // backoff retry may fire on a worker; only one socket may be current.
+    @Synchronized
     private fun connect() {
         if (intentionalClose) return
         socketOpen = false
+        rideSpeed.onSocketClosed()
+        environment.onSocketChanged()
+        val attempts = environment.reconnect.attempts
         _state.update {
             it.copy(
                 connection = ConnectionState.CONNECTING,
-                statusText = if (reconnectAttempts > 0) tr(Str.STATUS_RECONNECTING, "n" to reconnectAttempts) else tr(Str.CONN_CONNECTING)
+                statusText = if (attempts > 0) tr(Str.STATUS_RECONNECTING, "n" to attempts) else tr(Str.CONN_CONNECTING)
             )
         }
 
@@ -782,11 +865,12 @@ class AgentSession(
             }
             return
         }
+        val superseded = webSocket
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
 
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (webSocket !== this@AgentSession.webSocket) return
-                reconnectAttempts = 0
+                environment.reconnect.onConnected()
                 // Only turns appended from here on belong to this relay session
                 // and are eligible for turn.feedback.
                 _state.update {
@@ -824,14 +908,16 @@ class AgentSession(
                 // The guided tour lives in the provider instance, so a fresh session
                 // must be told about it again (mirrors the web client's open handler).
                 if (current.guidedDemo) webSocket.send(buildGuidedDemo(enabled = true))
-                // Resume the audio stream if the rider was transmitting before a drop.
-                if (transmitting) webSocket.send(AUDIO_START_EVENT)
+                // Resume the audio stream if the rider was transmitting before a drop
+                // (not while a phone call holds the audio: resumeAudio() sends it).
+                if (transmitting && !audioPaused) { audioStartPending = false; webSocket.send(AUDIO_START_EVENT) }
                 // Mic frames wait for session.started, not merely the relay handshake.
                 socketOpen = false
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (webSocket !== this@AgentSession.webSocket) return
+                environment.onRelayTraffic()
                 observePipeline("socket.text.received", text.length)
                 val event = runCatching { parseAgentEvent(text) }.getOrElse {
                     _state.update { state -> state.copy(statusText = tr(Str.STATUS_BAD_PROVIDER)) }
@@ -849,11 +935,14 @@ class AgentSession(
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 if (webSocket !== this@AgentSession.webSocket) return
+                environment.onRelayTraffic()
                 // AudioTrack setup can throw (unsupported config / bad state); keep it
                 // from escaping onto the reader thread and tearing down the listener.
                 observePipeline("socket.binary.received", bytes.size)
                 runCatching {
-                    if (!crash.controller.active) player.play(bytes.toByteArray()) {
+                    // While a phone call has the audio, the reply is dropped, not queued
+                    // to blare out when the call ends.
+                    if (!crash.controller.active && !audioPaused) player.play(bytes.toByteArray()) {
                         webSocket === this@AgentSession.webSocket && lifecycle.current() != null
                     }
                 }
@@ -886,6 +975,8 @@ class AgentSession(
                 handleSocketClosed(webSocket, httpStatus = response?.code)
             }
         })
+        // A reconnect that raced another one: the older socket must not linger open.
+        if (superseded != null) runCatching { superseded.cancel() }
     }
 
     private fun handleSocketClosed(socket: WebSocket, closeCode: Int = 0, httpStatus: Int? = null) {
@@ -899,6 +990,8 @@ class AgentSession(
         closedSocket = socket
         socketOpen = false
         webSocket = null
+        rideSpeed.onSocketClosed()
+        environment.onSocketChanged()
         warningAudio.stop()
         if (intentionalClose) {
             if (_state.value.handsFree) return // restartSession() will reconnect
@@ -912,7 +1005,7 @@ class AgentSession(
         // leaving it half-alive kept the mic capturing, Bluetooth SCO routed,
         // and the orb pulsing "listening" with no session behind it.
         if (closeCode == IDLE_CLOSE_CODE && !crash.controller.active) {
-            reconnectAttempts = 0
+            environment.reconnect.onConnected()
             lifecycle.finishOn(deviceScope, generation, teardown = { stop() }, publish = {
                 _state.update { it.copy(statusText = tr(Str.STATUS_IDLE_ENDED)) }
             })
@@ -924,7 +1017,7 @@ class AgentSession(
         // active on the shared relay — see the web HUD's 复制令牌 button),
         // anything else is a configuration problem (e.g. wrong path → 400).
         if (httpStatus != null && httpStatus != 101) {
-            reconnectAttempts = 0
+            environment.reconnect.onConnected()
             // End hands-free entirely, like the idle-close branch: a rejected
             // upgrade left a zombie session (mic capturing, audio routed, no
             // reconnect) and the next helmet tap STOPPED the zombie instead of
@@ -946,24 +1039,28 @@ class AgentSession(
             return
         }
 
-        // Unexpected drop: reconnect with exponential backoff (mirrors src/main.tsx).
-        reconnectAttempts += 1
-        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS && !crash.controller.active) {
-            reconnectAttempts = 0
-            lifecycle.finishOn(deviceScope, generation, teardown = { stop() }, publish = {
+        deviceScope.launch { clearToolStatus() }
+        // Unexpected drop: reconnect with exponential backoff (mirrors src/main.tsx),
+        // except while the phone has no network: the network callback reconnects
+        // the moment it returns, without spending the retry budget on a tunnel.
+        when (val decision = environment.reconnect.onDrop(keepTrying = crash.controller.active)) {
+            ReconnectPolicy.Decision.GiveUp -> lifecycle.finishOn(deviceScope, generation, teardown = { stop() }, publish = {
                 _state.update {
                     it.copy(connection = ConnectionState.DEGRADED, statusText = tr(Str.STATUS_RELAY_FAILED))
                 }
             })
-            return
-        }
-        val delayMs = if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) 30_000L else minOf(8_000L, 1_000L * (1L shl (reconnectAttempts - 1)))
-        _state.update {
-            it.copy(connection = ConnectionState.OFFLINE, statusText = tr(Str.STATUS_RECONNECT_IN, "n" to delayMs / 1000))
-        }
-        reconnectJob = scope.launch {
-            delay(delayMs)
-            connect()
+            ReconnectPolicy.Decision.WaitForNetwork -> _state.update {
+                it.copy(connection = ConnectionState.OFFLINE, statusText = tr(Str.STATUS_WAITING_NETWORK))
+            }
+            is ReconnectPolicy.Decision.Retry -> {
+                _state.update {
+                    it.copy(connection = ConnectionState.OFFLINE, statusText = tr(Str.STATUS_RECONNECT_IN, "n" to decision.delayMs / 1000))
+                }
+                reconnectJob = scope.launch {
+                    delay(decision.delayMs)
+                    connect()
+                }
+            }
         }
     }
 
@@ -973,6 +1070,9 @@ class AgentSession(
         when (event) {
             is AgentEvent.SessionStarted -> {
                 socketOpen = true
+                // A live relay's ride.context speed is the phone's own echo: only a mock relay's counts.
+                rideSpeed.onSessionMode(event.mode)
+                if (audioStartPending && transmitting && !audioPaused) { audioStartPending = false; sourceSocket.send(AUDIO_START_EVENT) }
                 deviceScope.launch { if (sourceSocket === webSocket && !syntheticCapture) crash.controller.ready() }
                 _state.update {
                     it.copy(
@@ -1004,6 +1104,15 @@ class AgentSession(
                         turnState = if (transmitting) mapTurnState(event.state, it.turnState) else it.turnState
                     )
                 }
+                // Only the relay's own status says its audio should be streaming (relay watchdog).
+                if (sourceSocket === webSocket) environment.onRelayStatus(event.state)
+                // Natural points for audio focus when another app keeps it (see VoiceFocusPolicy).
+                when (event.state) {
+                    "speaking" -> deviceScope.launch { if (sourceSocket === webSocket) environment.onAssistantSpeaking() }
+                    "listening", "ready", "hearing", "closed" -> deviceScope.launch {
+                        if (sourceSocket === webSocket && _state.value.hazardAlert == null) environment.onAssistantQuiet()
+                    }
+                }
             }
 
             is AgentEvent.CrashAck -> deviceScope.launch { if (sourceSocket === webSocket && !syntheticCapture) crash.controller.ack(event.incidentId, event.status, event.detail) }
@@ -1016,7 +1125,7 @@ class AgentSession(
                 }
                 pushTranscript(event.speaker, event.text, event.final, event.turnId, event.deliveryId)
                 val shouldSpeak = event.useBrowserSpeech ?: event.final
-                if (!crash.controller.active && event.speaker == Speaker.AGENT && shouldSpeak && spokenDeliveryIds.add(event.deliveryId)) {
+                if (!crash.controller.active && !audioPaused && event.speaker == Speaker.AGENT && shouldSpeak && spokenDeliveryIds.add(event.deliveryId)) {
                     if (spokenDeliveryIds.size > 512) spokenDeliveryIds.remove(spokenDeliveryIds.first())
                     ttsSpeak(event.text)
                 }
@@ -1034,12 +1143,17 @@ class AgentSession(
                 it.copy(weather = event.weather)
             }
 
-            is AgentEvent.RideContextUpdate -> _state.update { it.copy(rideContext = event.rideContext, hasRideContext = true) }
+            is AgentEvent.RideContextUpdate -> {
+                _state.update { it.copy(rideContext = event.rideContext, hasRideContext = true) }
+                if (sourceSocket === webSocket) rideSpeed.onRelay(event.rideContext.speedKmh?.toDouble())
+                deviceScope.launch { publishSpeed() }
+            }
 
             is AgentEvent.SessionMemoryUpdate -> _state.update { it.copy(sessionMemory = event.memory) }
 
             is AgentEvent.TelemetryUpdate -> _state.update { it.copy(telemetry = event.telemetry) }
 
+            // Safety warnings play even while a phone call has paused the session.
             is AgentEvent.HazardAlert -> handleHazardAlert(event, sourceSocket)
 
             is AgentEvent.ErrorEvent -> _state.update { it.copy(statusText = event.message) }
@@ -1071,6 +1185,17 @@ class AgentSession(
             is AgentEvent.NavRoute -> navSearch.handleNavRoute(event.data)
 
             is AgentEvent.NavError -> navSearch.handleNavError(event.commandId, event.code)
+
+            is AgentEvent.ToolActivity -> deviceScope.launch { if (sourceSocket === webSocket) showToolActivity(event) }
+
+            is AgentEvent.ToolCall -> {
+                val reply = unexpectedToolCallReply(event) ?: return
+                deviceScope.launch {
+                    if (sourceSocket !== webSocket || !answeredToolCalls.add(event.callId)) return@launch
+                    if (answeredToolCalls.size > 512) answeredToolCalls.remove(answeredToolCalls.first())
+                    sourceSocket.send(reply)
+                }
+            }
 
             AgentEvent.Unhandled -> Unit
         }
@@ -1160,6 +1285,7 @@ class AgentSession(
 
     private fun handleHazardAlert(alert: AgentEvent.HazardAlert, sourceSocket: WebSocket) {
         val owner = lifecycle.current() ?: return
+        deviceScope.launch { if (sourceSocket === webSocket) environment.onAssistantSpeaking() }
         warningAudio.withCurrentOwner(owner, { sourceSocket === webSocket && lifecycle.accepts(owner) }) {
             if (!lifecycle.accepts(owner)) return@withCurrentOwner
             val text = "${alert.message} ${alert.advice}"
@@ -1203,9 +1329,205 @@ class AgentSession(
                 warningAudio.withCurrentOwner(owner, { sourceSocket === webSocket && lifecycle.accepts(owner) }) {
                     if (lifecycle.accepts(owner) && hazardAlertGeneration == generation) {
                         _state.update { it.copy(hazardAlert = null) }
+                        deviceScope.launch { if (_state.value.turnState != TurnState.SPEAKING) environment.onAssistantQuiet() }
                     }
                 }
             }
+        }
+    }
+
+    // ---- speed ----------------------------------------------------------------
+
+    /** Fresh phone GPS, else a mock relay's scenario speed, else unknown (see RideSpeed). */
+    private fun currentSpeedKmh(): Double? = rideSpeed.current()
+
+    /** Main thread: mirrors the effective speed into state and expires a GPS reading when it goes stale. */
+    private fun publishSpeed() {
+        _state.update { it.copy(speedKmh = currentSpeedKmh()) }
+        speedExpiryJob?.cancel()
+        val until = rideSpeed.freshUntilMs() ?: return
+        speedExpiryJob = deviceScope.launch {
+            delay((until - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0) + 1)
+            _state.update { it.copy(speedKmh = currentSpeedKmh()) }
+        }
+    }
+
+    // ---- typed turns and tool activity --------------------------------------
+
+    /**
+     * Sends a typed turn (text.input). The relay shows it as a final rider line
+     * and the assistant answers aloud, so nothing is added to the transcript
+     * here. False when the backend does not accept typed turns or the session
+     * is not ready.
+     */
+    fun sendTextInput(text: String): Boolean {
+        if (!socketOpen || typedInputMode(_state.value) != TypedInputMode.READY) return false
+        val payload = buildTextInput(text) ?: return false
+        return webSocket?.send(payload) == true
+    }
+
+    /** Main thread only, like the refresh job it schedules. */
+    private fun showToolActivity(event: AgentEvent.ToolActivity) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val status = toolTracker.apply(event, now)
+        _state.update { it.copy(toolStatus = status) }
+        scheduleToolRefresh(now)
+    }
+
+    /** Re-reads the tracker when a failure line or a stale call expires, so the line never sticks. */
+    private fun scheduleToolRefresh(now: Long) {
+        toolRefreshJob?.cancel()
+        val wait = toolTracker.nextExpiryIn(now) ?: return
+        toolRefreshJob = deviceScope.launch {
+            delay(wait)
+            val later = android.os.SystemClock.elapsedRealtime()
+            _state.update { it.copy(toolStatus = toolTracker.current(later)) }
+            scheduleToolRefresh(later)
+        }
+    }
+
+    private fun clearToolStatus() {
+        toolRefreshJob?.cancel()
+        toolTracker.clear()
+        _state.update { it.copy(toolStatus = null) }
+    }
+
+    // ---- heat and battery saver ----------------------------------------------
+
+    private fun onLoadNotice(notice: LoadNotice) {
+        val text = loadNoticeText(notice)
+        _state.update { it.copy(statusText = text) }
+        // Heat warnings are spoken, queued behind any reply and never into a phone call.
+        if (notice.spoken && !audioPaused) ttsSpeak(text, flush = false, utteranceId = "max-load")
+    }
+
+    /** Stops what the new load forbids; the voice session, crash detection and guidance keep running. */
+    private fun shedLoad(load: DeviceLoad) {
+        if (load.recordingMustStop && camera.isRecording.value) deviceScope.launch { camera.stopRecording() }
+        if (!load.extrasAllowed) {
+            music.stopOwnPlayback()
+            hudCast.stop()
+            deviceScope.launch { camera.setTorch(false) }
+        }
+    }
+
+    // ---- focus, devices and network (SessionEnvironment) ----------------------
+
+    /** Runs on the main thread; every entry point re-checks that a session is still current. */
+    private inner class EnvironmentControls : SessionEnvironment.Controls {
+        override fun pauseAudio() {
+            if (lifecycle.current() == null) return
+            audioPaused = true
+            stopCapture()
+            stopAgentSpeech()
+            music.stopOwnPlayback()
+            if (socketOpen) webSocket?.send(AUDIO_STOP_EVENT)
+            _state.update {
+                it.copy(audioPaused = true, voiceLevel = 0f,
+                    statusText = tr(Str.STATUS_AUDIO_PAUSED, "name" to AssistantBranding.name))
+            }
+        }
+
+        override fun resumeAudio(): Boolean {
+            val generation = lifecycle.current() ?: return true
+            audioPaused = false
+            // While a dead-mic episode is open the "microphone unavailable" status stays.
+            _state.update {
+                if (it.voiceCaptureDown) it.copy(audioPaused = false)
+                else it.copy(audioPaused = false, statusText = tr(Str.STATUS_AUDIO_RESUMED, "name" to AssistantBranding.name))
+            }
+            return try {
+                if (startCapture(generation) && transmitting) {
+                    if (socketOpen) webSocket?.send(AUDIO_START_EVENT) else audioStartPending = true
+                }
+                true
+            } catch (error: Exception) {
+                Log.w(TAG, "Mic restart after a pause failed", error)
+                false
+            }
+        }
+
+        override fun silenceOutput() = stopAgentSpeech()
+        override fun audioYielded() {
+            if (lifecycle.current() == null) return
+            val text = tr(Str.STATUS_AUDIO_YIELDED, "name" to AssistantBranding.name)
+            _state.update { it.copy(statusText = text) }
+            if (!audioPaused) ttsSpeak(text, flush = false, utteranceId = "max-focus")
+        }
+
+        override val relayConnected: Boolean get() = webSocket != null
+
+        override fun rerouteAudio() {
+            // The environment never calls this during a call; the router also refuses in call modes.
+            if (lifecycle.current() == null) return
+            val change = audioRouter.refreshRouting() ?: return
+            _state.update { it.copy(bluetoothRouted = change.bluetooth) }
+            // The relay session is untouched; only capture moves to the new device.
+            if (change.changed && captureRunning && !restartCapture()) environment.onCaptureStartFailed()
+        }
+
+        override fun restartCapture(): Boolean {
+            val generation = lifecycle.current() ?: return true
+            if (audioPaused || !_state.value.handsFree) return true
+            return try {
+                stopCapture()
+                startCapture(generation)
+                true
+            } catch (error: Exception) {
+                Log.w(TAG, "Mic restart failed", error)
+                runCatching { stopCapture() }
+                false
+            }
+        }
+
+        override fun voiceCaptureLost() {
+            if (lifecycle.current() == null) return
+            runCatching { stopCapture() }
+            _state.update {
+                it.copy(voiceCaptureDown = true, voiceLevel = 0f,
+                    statusText = tr(Str.STATUS_VOICE_DOWN, "name" to AssistantBranding.name))
+            }
+            // Said once, through whatever output still works; crash detection stays armed.
+            ttsSpeak(tr(Str.STATUS_VOICE_DOWN, "name" to AssistantBranding.name), flush = false, utteranceId = "max-mic")
+        }
+
+        override fun voiceCaptureRestored() {
+            if (lifecycle.current() == null) return
+            _state.update {
+                it.copy(voiceCaptureDown = false, statusText = tr(Str.STATUS_AUDIO_RESUMED, "name" to AssistantBranding.name))
+            }
+        }
+
+        override fun replaceSocket() {
+            if (lifecycle.current() == null || webSocket == null) return
+            if (_state.value.handsFree) restartSession() else {
+                // Crash-alarm tail: drop the silent socket and connect again directly.
+                webSocket?.cancel()
+            }
+        }
+
+        override fun reconnectNow() {
+            if (lifecycle.current() == null) return
+            // Only called with no socket: an open one is never restarted over a
+            // network change (it fails on its own if the network took it down).
+            if (webSocket != null) return
+            reconnectJob?.cancel()
+            connect()
+        }
+
+        override fun waitForNetwork() {
+            if (lifecycle.current() == null) return
+            reconnectJob?.cancel()
+            _state.update { it.copy(statusText = tr(Str.STATUS_WAITING_NETWORK)) }
+        }
+    }
+
+    /** Synthetic QA only: its injected capture has no retries to wait for. */
+    private fun endForCaptureFailure() {
+        if (!_state.value.handsFree) return
+        stop()
+        _state.update {
+            it.copy(connection = ConnectionState.DEGRADED, statusText = tr(Str.STATUS_MIC_INTERRUPTED))
         }
     }
 

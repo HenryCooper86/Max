@@ -12,6 +12,9 @@ import io.github.henrycooper86.max.agent.AgentEvent
 import io.github.henrycooper86.max.agent.PcmPlayer
 import io.github.henrycooper86.max.capture.CameraController
 import io.github.henrycooper86.max.music.MusicController
+import io.github.henrycooper86.max.power.DeviceLoad
+import io.github.henrycooper86.max.power.loadRefusal
+import io.github.henrycooper86.max.power.startRecordingUnderLoad
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,7 +34,9 @@ class DeviceActions(
     private val player: PcmPlayer,
     val music: MusicController,
     val camera: CameraController,
-    private val speed: () -> Double?
+    private val speed: () -> Double?,
+    /** Current heat / battery-saver load; commands the phone cannot afford are refused. */
+    private val load: () -> DeviceLoad = { DeviceLoad() }
 ) {
     var host: DeviceActivityHost? = null
     private val mutex = Mutex()
@@ -46,6 +51,7 @@ class DeviceActions(
                 return DeviceResult.failed("device.locked")
             if (!isCurrent()) return DeviceResult.failed("action.cancelled")
             if (!validDeviceArguments(command.action, command.args)) return DeviceResult.unsupported("action.invalid")
+            loadRefusal(command.action, command.args, load())?.let { return it }
             return music.execute(command.args["control"] as String, command.args["app"] as? String)
         }
         return mutex.withLock {
@@ -53,6 +59,7 @@ class DeviceActions(
             if (!isCurrent()) return@withLock DeviceResult.failed("action.cancelled")
             if ((context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked) return@withLock DeviceResult.failed("device.locked")
             if (!validDeviceArguments(command.action, command.args)) return@withLock DeviceResult.unsupported("action.invalid")
+            loadRefusal(command.action, command.args, load())?.let { return@withLock it }
             val args = command.args
             suspend fun permission(name: String): Boolean = host.requestPermission(name) && isCurrent() && this.host === host
             try {
@@ -70,14 +77,14 @@ class DeviceActions(
                         DeviceResult.OK
                     }
                     "call.dial", "sms.compose" -> {
-                        if (command.action == "sms.compose" && !safeToComposeMessage(speed())) return@withLock DeviceResult.denied("unsafe.speed")
+                        if (command.action == "sms.compose") smsSpeedRefusal(speed())?.let { return@withLock it }
                         val raw = args["number"] as? String ?: args["name"] as String
                         val number = if (isDialableNumber(raw)) raw else {
                             if (!permission(Manifest.permission.READ_CONTACTS)) return@withLock DeviceResult.denied("permission.contacts")
                             withContext(Dispatchers.IO) { resolveContact(raw) } ?: return@withLock DeviceResult.failed("contact.notFound")
                         }
                         if (!isCurrent() || this.host !== host) return@withLock DeviceResult.failed("action.cancelled")
-                        if (command.action == "sms.compose" && !safeToComposeMessage(speed())) return@withLock DeviceResult.denied("unsafe.speed")
+                        if (command.action == "sms.compose") smsSpeedRefusal(speed())?.let { return@withLock it }
                         val intent = if (command.action == "call.dial") Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", number, null))
                         else Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", number, null)).putExtra("sms_body", args["body"] as String)
                         if (host.launch(intent)) DeviceResult.OK else DeviceResult.failed(if (command.action == "call.dial") "dial.unavailable" else "sms.unavailable")
@@ -86,7 +93,7 @@ class DeviceActions(
                         if (!permission(Manifest.permission.CAMERA)) return@withLock DeviceResult.denied("permission.camera")
                         when {
                             command.action == "camera.photo" -> camera.takePhoto()
-                            args["start"] == true -> camera.startRecording()
+                            args["start"] == true -> startRecordingUnderLoad(load, camera::startRecording, camera::stopRecording)
                             else -> camera.stopRecording()
                         }
                     }

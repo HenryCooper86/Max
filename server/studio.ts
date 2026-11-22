@@ -8,9 +8,18 @@ import {
   assistantSummary,
   DEPLOYER_KEYS,
   installAssistantProfile,
+  loadedAssistantConfig,
   wakeWordActive,
   type AssistantProfile
 } from "./assistant";
+import {
+  listConfigVersions,
+  readConfigVersion,
+  recordConfigVersion,
+  stableJson,
+  type ConfigVersionSummary
+} from "./config-history";
+import { createLogger } from "./logger";
 import { equalizerOptions } from "./audio-eq";
 import { DEVICE_PRESETS } from "./device-presets";
 import { voiceProviderSummaries } from "./providers/catalog";
@@ -69,6 +78,11 @@ const EDITABLE_KEYS = [
   "voice"
 ] as const;
 
+const log = createLogger("studio");
+
+/** The assistant the relay started with: some of a config is read once, at startup. */
+const atStart = assistant();
+
 const MAX_CONFIG_BYTES = 24 * 1024;
 const MAX_LOGO_BYTES = 512 * 1024;
 
@@ -123,6 +137,108 @@ function apply(stored: Record<string, unknown>): AssistantProfile {
   return profile;
 }
 
+// ---- the configs that have been live ----------------------------------------------
+
+function without(value: object, key: string): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([name]) => name !== key));
+}
+
+function historyDirectory(): string {
+  return path.join(studioDirectory(), "config-history");
+}
+
+/** Keeps a config that has just gone live. A history that cannot be written never fails the save itself. */
+function remember(stored: Record<string, unknown>, by: string, restoredFrom?: string): void {
+  try {
+    recordConfigVersion(historyDirectory(), stored, by, restoredFrom ? { restoredFrom } : {});
+  } catch (error) {
+    log.warn("the config history could not be written", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+/**
+ * Keeps the config the relay started with, when it is not the newest one
+ * kept already: a file edited by hand is part of the history too.
+ *
+ * A restore writes the Studio's own file. When the relay started from a file
+ * somewhere else (./assistant.config.json, before the first save), the paths
+ * in it are made absolute, so they still lead to the same files from there.
+ */
+export function recordStartupConfig(loaded = loadedAssistantConfig()): void {
+  if (!loaded) return;
+  const config: Record<string, unknown> = { ...loaded.raw };
+  if (path.resolve(loaded.file) !== studioConfigPath()) {
+    const directory = path.dirname(loaded.file);
+    for (const key of ["toolsModule", "logo"]) {
+      if (typeof config[key] === "string" && config[key]) config[key] = path.resolve(directory, config[key]);
+    }
+    // The knowledge base's paths, as the loader resolved them.
+    const knowledge = assistant().deployerConfig.knowledge;
+    if (knowledge !== undefined) config.knowledge = knowledge;
+  }
+  remember(config, "file");
+}
+
+export type StudioHistory = { ok: true; versions: Array<ConfigVersionSummary & { current: boolean }> };
+
+/** The configs kept, newest first. `current` marks the newest one that says what the config file says now. */
+export function studioHistory(): StudioHistory {
+  const now = stableJson(readStored());
+  const directory = historyDirectory();
+  const versions = listConfigVersions(directory);
+  const current = versions.find((version) => stableJson(readConfigVersion(directory, version.id)?.config) === now)?.id;
+  return { ok: true, versions: versions.map((version) => ({ ...version, current: version.id === current })) };
+}
+
+/** One kept config in full, or nothing when there is none of that id. The logo's path stays on the server. */
+export function studioVersion(
+  id: string
+): { ok: true; id: string; savedAt: number; by: string; config: unknown } | undefined {
+  const version = readConfigVersion(historyDirectory(), id);
+  if (!version) return undefined;
+  return {
+    ok: true,
+    id: version.id,
+    savedAt: version.savedAt,
+    by: version.by,
+    config: without(version.config, "logo")
+  };
+}
+
+/**
+ * Makes a kept config the live one again: the whole file as it was, the keys
+ * the Studio does not edit included. Returns nothing when there is no such
+ * version, and throws when the config is no longer valid. `restartFor` names
+ * what the running relay read only once, at startup, and so still has from
+ * the config it started with.
+ */
+export function restoreStudioConfig(id: string, by: string): (StudioState & { restartFor: string[] }) | undefined {
+  const version = readConfigVersion(historyDirectory(), id);
+  if (!version) return undefined;
+  const before = readStored();
+  writeStored(version.config);
+  let profile: AssistantProfile;
+  try {
+    profile = apply(version.config);
+  } catch (error) {
+    if (Object.keys(before).length > 0) writeStored(before);
+    else fs.rmSync(studioConfigPath(), { force: true });
+    throw error;
+  }
+  remember(version.config, by, id);
+  const restartFor = [
+    ...(stableJson(without(profile.tools, "baseDir")) !== stableJson(without(atStart.tools, "baseDir"))
+      ? ["tools"]
+      : []),
+    ...(stableJson(profile.analysis) !== stableJson(atStart.analysis) ? ["analysis"] : []),
+    ...(stableJson(profile.redact) !== stableJson(atStart.redact) ? ["privacy"] : []),
+    ...(profile.variants.length > 0 !== atStart.variants.length > 0 ? ["variants"] : [])
+  ];
+  return { ...studioState(), restartFor };
+}
+
 export function studioState(): StudioState {
   const stored = readStored();
   const { logo, ...visible } = stored;
@@ -147,7 +263,7 @@ export function studioState(): StudioState {
 
 /** Validates and saves an edited config, then makes it the live assistant.
  *  Throws with a message fit to show the admin when the config is not valid. */
-export function saveStudioConfig(raw: unknown): StudioState {
+export function saveStudioConfig(raw: unknown, by = "studio"): StudioState {
   if (!isRecord(raw)) throw new Error("The assistant config must be an object.");
   const next: Record<string, unknown> = {};
   for (const key of EDITABLE_KEYS) {
@@ -188,6 +304,7 @@ export function saveStudioConfig(raw: unknown): StudioState {
     writeStored(before);
     throw error;
   }
+  remember(next, by);
   return studioState();
 }
 
@@ -243,6 +360,7 @@ export function saveStudioLogo(body: Buffer): StudioState {
   const stored = { ...readStored(), logo: file };
   writeStored(stored);
   apply(stored);
+  remember(stored, "studio");
   return studioState();
 }
 
@@ -253,5 +371,6 @@ export function removeStudioLogo(): StudioState {
   removeLogoFiles();
   writeStored(stored);
   apply(stored);
+  remember(stored, "studio");
   return studioState();
 }

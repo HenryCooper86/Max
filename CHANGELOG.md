@@ -79,6 +79,12 @@
   same user gets the same variant every time, the record names it as `session.variant`, and `GET /v1/variants` counts
   conversations, length, end reasons, analysis success and sentiment for each. Its `comparison` says whether each
   variant's success rate differs from the first variant's by more than chance (Fisher's exact test). See [versions and A/B tests](docs/conversations.md#versions-and-ab-tests).
+- The relay keeps the last 50 assistant configs that were live: each save from the Studio, each restore, and a file
+  edited by hand when the relay next starts. Admin → Studio → History lists them with who made each live and which
+  keys changed, and restores one. The same is available over HTTP with an admin's token
+  (`/auth/admin/studio/history`). A restore says which keys need a restart of the relay (tools, analysis, privacy,
+  variants on or off). See
+  [going back to an earlier config](docs/conversations.md#going-back-to-an-earlier-config).
 
 ### Guardrails
 

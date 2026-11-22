@@ -10188,6 +10188,65 @@ button.opsCard:disabled {
   font-size: var(--fs-13);
 }
 
+.studioHistory p {
+  margin: 0 0 12px;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.studioHistory p.studioHistoryNote {
+  margin-top: -6px;
+}
+
+.studioHistory p.studioHistoryError {
+  color: var(--danger);
+}
+
+.studioHistoryList {
+  display: grid;
+  gap: 0;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.studioHistoryList li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 0;
+  border-top: var(--line-w) solid var(--line);
+}
+
+.studioHistoryList li:first-child {
+  border-top: 0;
+}
+
+.studioHistoryWhat {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.studioHistoryWhat strong {
+  font-size: var(--fs-15);
+  font-variant-numeric: tabular-nums;
+}
+
+.studioHistoryWhat span {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  overflow-wrap: anywhere;
+}
+
+.studioHistoryCurrent {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
 .studioSaveBar {
   position: sticky;
   bottom: 0;

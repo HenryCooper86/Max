@@ -747,8 +747,8 @@ Two keys of the assistant config let you compare how the assistant does when you
 
 `version` is a label of your own for the state of the config, up to 64 characters: a date, a git tag, a ticket number.
 Every [conversation record](#the-conversation-webhook) carries it as `session.version`, so you can tell the
-conversations before a change from those after it. The relay does not keep old configs. The config is a file: keep its
-history in git, and put the commit or tag in `version`.
+conversations before a change from those after it. The relay also keeps the configs themselves, so you can
+[go back to an earlier one](#going-back-to-an-earlier-config).
 
 `variants` runs two to eight versions of the assistant side by side. Each has an `id`, an optional `weight`, and the
 config keys it replaces:
@@ -802,7 +802,7 @@ otherwise by the visitor's network address. Only a user id is exact:
 
 For a test you want to rely on, give users an id with a [session token](embedding.md).
 
-**The Studio.** Admin → Studio does not show `variants` or `version` and keeps both as they are when it saves. So an
+**The Studio.** Admin → Studio does not show `variants` or `version` in its form and keeps both as they are when it saves. So an
 edit there to a key that a variant replaces (the greeting, say) changes the config and every variant that does not
 replace it, and conversations before and after the edit are counted under the same `version`. Change `version` in the
 file when you want them told apart.
@@ -888,6 +888,47 @@ against the first variant's, for the conversations of the config's current `vers
   sentiment are not compared.
 
 **Ending a test.** Move the winning variant's keys into the config, remove `variants`, and change `version`.
+
+### Going back to an earlier config
+
+The relay keeps every assistant config that has been live on it, so a change that made the assistant worse can be
+undone without finding the old file.
+
+A config is kept when an admin saves in the Studio or changes the logo, when one is restored, and when the relay
+starts with a config file that differs from the newest one kept, which is how an edit by hand gets in. Saving the same
+config twice keeps it once. The last 50 are kept, as files in `$STUDIO_DIR/config-history` (default
+`~/.max-relay/config-history`) that only the relay's user can read. Each one is the whole config: the keys the Studio
+does not edit (`tools`, `guardrails`, `variants`, `knowledge` and the rest) are in it too.
+
+**In the app.** Admin → Studio → History lists them, newest first: when each went live, who made it so (an admin's
+name, or "the config file on the server" for one found at startup), its `version` label, and which top-level keys
+differ from the one before. **Restore** makes one the live config again, after a confirmation.
+
+**Over HTTP.** The same three calls, with an admin's bearer token:
+
+| Call                                          | Answer                                                                                         |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `GET /auth/admin/studio/history`              | `versions`: `id`, `savedAt`, `by`, `name`, `version`, `changed`, `current`, and `restoredFrom` |
+| `GET /auth/admin/studio/history/:id`          | One version with its whole `config` (without the path of an uploaded logo)                     |
+| `POST /auth/admin/studio/history/:id/restore` | The Studio's state after the restore, and `restartFor`                                         |
+
+**What a restore does.** It writes the kept config over the config file (the one `ASSISTANT_CONFIG` names, else the
+Studio's), makes it the live assistant, and adds it to the history as a new entry with `restoredFrom`: going back is
+itself a step you can undo. New conversations use it at once; one in progress keeps the config it started with. The
+persona, greeting, conversation settings, agents, guardrails and the variants' own keys change at once. Four things
+the relay reads only when it starts: the tools (with `mcpServers` and `knowledge`), `analysis`, `privacy`, and whether
+there are variants at all. When the restored config differs in one of them, the answer's `restartFor` names it (for
+example `["tools"]`), the Studio says so, and the running relay keeps the old one until you restart it.
+
+**What it does not keep.** The history holds configs, not what they point to: a tools module, knowledge files and an
+uploaded logo are kept as paths, so restoring a config whose logo was since replaced or removed shows the current
+logo or the device's mark. API keys and backend settings are not part of the assistant config and are not in the
+history. Max Cloud projects do not keep a history of their settings yet.
+
+**What was tested.** On a local relay: a config file with a webhook tool and guardrails, a save from the Studio, the
+list, a restore, an edit of the file by hand followed by a restart (kept as a new entry), a restart with nothing
+changed (nothing added), and a restore that brought a removed tool back (`restartFor: ["tools"]`, the tool loaded
+after the restart). Requests without an admin's token and ids that are not versions were refused.
 
 **Where variants do not apply.** The Doubao backend and the demo backend (`VOICE_PROVIDER=mock`) run the config as it
 is: conversations there are still given a variant and recorded with it, so do not run a test on them. Max Cloud

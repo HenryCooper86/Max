@@ -26,6 +26,7 @@ import { DeviceFields, IdentityFields, LookFields, SoundFields, type LogoControl
 import { AssistantPreview } from "../studio/AssistantPreview";
 import { VoicesPanel } from "../studio/VoicesPanel";
 import { BackendSetup } from "./BackendSetup";
+import { ConfigHistory } from "./ConfigHistory";
 
 /** Cancelable event the workspace sends before switching section. */
 export const SECTION_LEAVE_EVENT = "admin:beforesection";
@@ -52,6 +53,7 @@ type Props = {
   backendApi?: Parameters<typeof BackendSetup>[0]["api"];
   voicesApi?: Parameters<typeof VoicesPanel>[0]["api"];
   voicesAudio?: Parameters<typeof VoicesPanel>[0]["audio"];
+  historyApi?: Parameters<typeof ConfigHistory>[0]["api"];
   api?: {
     fetchStudio: typeof fetchStudio;
     saveStudio: typeof saveStudio;
@@ -73,7 +75,8 @@ export function AssistantStudio({
   api = DEFAULT_API,
   backendApi,
   voicesApi,
-  voicesAudio
+  voicesAudio,
+  historyApi
 }: Props) {
   const { language } = useLanguage();
   const say = useCallback((zh: string, en: string) => localized(language, zh, en), [language]);
@@ -86,10 +89,13 @@ export function AssistantStudio({
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [logoError, setLogoError] = useState<string | undefined>();
   const [showErrors, setShowErrors] = useState(false);
+  // Counts the changes that reached the relay, so the history is read again after each.
+  const [revision, setRevision] = useState(0);
 
   const adopt = useCallback(
     (state: StudioState, keepDraft = false) => {
       setStudio(state);
+      setRevision((count) => count + 1);
       const next = draftFromStudio(state, language);
       setSaved(next);
       if (!keepDraft) {
@@ -357,6 +363,29 @@ export function AssistantStudio({
             <h3 id="studio-backend">{say("语音后端", "Voice backend")}</h3>
             <BackendSetup onSaved={onSaved} onAuthenticationExpired={onAuthenticationExpired} api={backendApi} />
           </section>
+          <ConfigHistory
+            revision={revision}
+            unsaved={dirty}
+            disabled={busy}
+            onAuthenticationExpired={onAuthenticationExpired}
+            api={historyApi}
+            onRestored={(state) => {
+              adopt(state);
+              setShowErrors(false);
+              setStatus({
+                kind: "saved",
+                message:
+                  say("已恢复。新的会话会立即使用。", "Restored. New sessions use it from now on.") +
+                  (state.restartFor.length > 0
+                    ? say(
+                        ` 其中 ${state.restartFor.join("、")} 要重启中继后才生效。`,
+                        ` Restart the relay for these to take effect: ${state.restartFor.join(", ")}.`
+                      )
+                    : "")
+              });
+              onSaved();
+            }}
+          />
           <section className="studioDanger" aria-labelledby="studio-reset">
             <h3 id="studio-reset">{say("恢复默认", "Reset to defaults")}</h3>
             <p>

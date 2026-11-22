@@ -133,7 +133,17 @@ import {
 import { assistant, assistantLogo, projectAssistantProfile, type AssistantProfile } from "./assistant";
 import { sendBrandLogo } from "./brand-logo-route";
 import { localizeErrors } from "./error-language";
-import { clearStudioVoice, removeStudioLogo, saveStudioConfig, saveStudioLogo, studioState } from "./studio";
+import {
+  clearStudioVoice,
+  recordStartupConfig,
+  removeStudioLogo,
+  restoreStudioConfig,
+  saveStudioConfig,
+  saveStudioLogo,
+  studioHistory,
+  studioState,
+  studioVersion
+} from "./studio";
 import { createStudioVoicesRouter, jsonParserExceptStudioVoices } from "./studio-voices";
 import { loadStudioBackends, saveStudioBackends, studioBackendsState } from "./studio-backends";
 import { chooseVoiceProvider, createSelectableProvider, createVoiceProvider } from "./providers/factory";
@@ -1025,11 +1035,50 @@ app.put("/auth/admin/studio", (req, res) => {
   if (!admin) return;
   const body = (req.body ?? {}) as Record<string, unknown>;
   try {
-    const state = saveStudioConfig(body.config);
+    const state = saveStudioConfig(body.config, admin.username);
     log.info("assistant config saved from studio", { by: admin.username, name: state.assistant.name });
     res.json(state);
   } catch (error) {
     res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Invalid assistant config." });
+  }
+});
+
+// The configs that have been live, newest first, and going back to one of them.
+app.get("/auth/admin/studio/history", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json(studioHistory());
+});
+
+app.get("/auth/admin/studio/history/:id", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const version = studioVersion(String(req.params.id));
+  res.setHeader("Cache-Control", "private, no-store");
+  if (!version) res.status(404).json({ ok: false, error: "There is no such version." });
+  else res.json(version);
+});
+
+app.post("/auth/admin/studio/history/:id/restore", (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const id = String(req.params.id);
+  try {
+    const state = restoreStudioConfig(id, admin.username);
+    if (!state) {
+      res.status(404).json({ ok: false, error: "There is no such version." });
+      return;
+    }
+    log.info("assistant config restored from history", {
+      by: admin.username,
+      version: id,
+      restartFor: state.restartFor
+    });
+    res.json(state);
+  } catch (error) {
+    res.status(400).json({
+      ok: false,
+      error: `That version can no longer be used: ${error instanceof Error ? error.message : "it is not a valid config"}`
+    });
   }
 });
 
@@ -2099,6 +2148,8 @@ authSessionSweepTimer.unref();
 // The relay's own tools (assistant.config.json → tools / toolsModule) load
 // before the first session can start.
 await installServerTools(assistant().tools);
+// The config the relay starts with is part of its history, also when it was edited by hand.
+recordStartupConfig();
 // A name in guardrails.checkedTools that is no tool is most likely a tool that is not being checked.
 for (const profile of [assistant(), ...assistant().variants.map((variant) => variant.profile)]) {
   const known = new Set([...installedServerTools().map((tool) => tool.name), "transfer_call"]);

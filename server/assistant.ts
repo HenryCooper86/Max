@@ -519,7 +519,10 @@ function loadAssistantProfile(): AssistantProfile {
     return DEFAULT_ASSISTANT_PROFILE;
   }
   try {
-    return assistantProfileFrom(JSON.parse(contents), path.dirname(file));
+    const raw: unknown = JSON.parse(contents);
+    const profile = assistantProfileFrom(raw, path.dirname(file));
+    if (isRecord(raw)) loadedConfig = { file, raw };
+    return profile;
   } catch (error) {
     throw new Error(`Invalid assistant config ${file}: ${error instanceof Error ? error.message : String(error)}`, {
       cause: error
@@ -527,9 +530,17 @@ function loadAssistantProfile(): AssistantProfile {
   }
 }
 
+/** The config file the relay started from, as it was written. Nothing when it runs on its defaults. */
+let loadedConfig: { file: string; raw: Record<string, unknown> } | undefined;
+
 let active: AssistantProfile =
   process.env.NODE_ENV === "test" && !process.env.ASSISTANT_CONFIG ? DEFAULT_ASSISTANT_PROFILE : loadAssistantProfile();
 configureWakePhrase(active.wake);
+
+/** The config file the relay loaded at startup, and what it held. */
+export function loadedAssistantConfig(): { file: string; raw: Record<string, unknown> } | undefined {
+  return loadedConfig;
+}
 
 /** The configured assistant. Read at call time so tests can swap it. */
 export function assistant(): AssistantProfile {

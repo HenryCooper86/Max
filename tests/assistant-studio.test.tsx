@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EQUALIZER_FREQUENCIES } from "../shared/agent";
 import { AssistantStudio, SECTION_LEAVE_EVENT } from "../src/components/admin/AssistantStudio";
 import type { ApiResult } from "../src/lib/api-client";
-import type { StudioBackends, StudioState } from "../src/lib/studio-api";
+import type { StudioBackends, StudioHistory, StudioRestored, StudioState, StudioVersion } from "../src/lib/studio-api";
 import type { VoicesApi } from "../src/lib/voices-api";
 import { BUILT_IN_EQUALIZER } from "../src/lib/device-catalog";
 
@@ -60,6 +60,25 @@ const voicesApi = {
   deleteVoice: async () => ({ ok: true as const, data: undefined })
 } as unknown as VoicesApi;
 
+function version(id: string, more: Partial<StudioVersion> = {}): StudioVersion {
+  return { id, savedAt: 1_800_000_000_000, by: "nora", changed: [], current: false, ...more };
+}
+
+function fakeHistory(versions: StudioVersion[] = []) {
+  return {
+    fetchStudioHistory: vi.fn(async (): Promise<ApiResult<StudioHistory>> => ({
+      ok: true,
+      data: { ok: true, versions }
+    })),
+    restoreStudioVersion: vi.fn<(id: string) => Promise<ApiResult<StudioRestored>>>(async () => ({
+      ok: true,
+      data: { ...studioState({ name: "Iris" }), restartFor: [] }
+    }))
+  };
+}
+
+let historyApi: ReturnType<typeof fakeHistory>;
+
 type Listener = (event: Event) => void;
 let listeners: Map<string, Set<Listener>>;
 let confirmAnswer: boolean;
@@ -74,6 +93,7 @@ function fire(type: string): boolean {
 beforeEach(() => {
   listeners = new Map();
   confirmAnswer = false;
+  historyApi = fakeHistory();
   vi.stubGlobal("window", {
     addEventListener: (type: string, listener: Listener) => {
       if (!listeners.has(type)) listeners.set(type, new Set());
@@ -106,6 +126,7 @@ async function mount(api: Parameters<typeof AssistantStudio>[0]["api"], onSaved 
         api={api}
         backendApi={backendApi}
         voicesApi={voicesApi}
+        historyApi={historyApi}
         onSaved={onSaved}
         onAuthenticationExpired={onExpired}
       />
@@ -284,5 +305,94 @@ describe("admin Studio", () => {
     api.fetchStudio.mockResolvedValueOnce({ ok: false, error: { kind: "unauthorized", status: 401, message: "no" } });
     const { onExpired } = await mount(api);
     expect(onExpired).toHaveBeenCalledOnce();
+  });
+
+  describe("history", () => {
+    const rows = () =>
+      root().findAll((node) => node.type === "li" && node.parent?.props.className === "studioHistoryList");
+    const restoreButtons = () => root().findAll((node) => node.type === "button" && /^恢复$/.test(textOf(node).trim()));
+
+    it("lists the configs that have been live, and reads the list again after a save", async () => {
+      historyApi = fakeHistory([
+        version("1800000060000-aaaaaaaa", {
+          savedAt: 1_800_000_060_000,
+          name: "Nova",
+          version: "v2",
+          changed: ["greeting", "guardrails"],
+          current: true
+        }),
+        version("1800000000000-bbbbbbbb", { by: "file", name: "Iris" })
+      ]);
+      const api = fakeApi(studioState({ name: "Nova" }));
+      await mount(api);
+      expect(rows()).toHaveLength(2);
+      expect(textOf(rows()[0]!)).toContain("Nova · v2");
+      expect(textOf(rows()[0]!)).toContain("greeting, guardrails");
+      expect(textOf(rows()[0]!)).toContain("当前");
+      expect(textOf(rows()[1]!)).toContain("服务器上的配置文件");
+      // Only a config that is not the current one can be gone back to.
+      expect(restoreButtons()).toHaveLength(1);
+      expect(historyApi.fetchStudioHistory).toHaveBeenCalledTimes(1);
+      await act(async () => nameInput().props.onChange({ currentTarget: { value: "Vega" } }));
+      await act(async () => button(/^保存$/).props.onClick());
+      expect(historyApi.fetchStudioHistory).toHaveBeenCalledTimes(2);
+    });
+
+    it("goes back to an earlier config behind a confirmation, and says what needs a restart", async () => {
+      historyApi = fakeHistory([
+        version("1800000060000-aaaaaaaa", { savedAt: 1_800_000_060_000, name: "Nova", current: true }),
+        version("1800000000000-bbbbbbbb", { name: "Iris" })
+      ]);
+      historyApi.restoreStudioVersion.mockResolvedValue({
+        ok: true,
+        data: { ...studioState({ name: "Iris" }), restartFor: ["tools", "analysis"] }
+      });
+      const { onSaved } = await mount(fakeApi(studioState({ name: "Nova" })));
+      await act(async () => nameInput().props.onChange({ currentTarget: { value: "Unsaved" } }));
+      confirmAnswer = false;
+      await act(async () => restoreButtons()[0]!.props.onClick());
+      expect(historyApi.restoreStudioVersion).not.toHaveBeenCalled();
+      // The question says the unsaved edit goes.
+      expect(vi.mocked(window.confirm).mock.calls[0]![0]).toContain("未保存的修改会丢失");
+      confirmAnswer = true;
+      await act(async () => restoreButtons()[0]!.props.onClick());
+      expect(historyApi.restoreStudioVersion).toHaveBeenCalledWith("1800000000000-bbbbbbbb");
+      expect(nameInput().props.value).toBe("Iris");
+      expect(status()).toContain("已恢复");
+      expect(status()).toContain("tools、analysis");
+      expect(onSaved).toHaveBeenCalledOnce();
+      expect(button(/^保存$/).props.disabled).toBe(true);
+    });
+
+    it("shows the relay's reason when a version cannot be restored, and changes nothing", async () => {
+      historyApi = fakeHistory([version("1800000000000-bbbbbbbb", { name: "Iris" })]);
+      historyApi.restoreStudioVersion.mockResolvedValue({
+        ok: false,
+        error: { kind: "http", status: 404, message: "There is no such version." }
+      });
+      const { onSaved } = await mount(fakeApi(studioState({ name: "Nova" })));
+      confirmAnswer = true;
+      await act(async () => restoreButtons()[0]!.props.onClick());
+      expect(textOf(root().find((node) => node.props.className === "studioHistoryError"))).toBe(
+        "There is no such version."
+      );
+      expect(nameInput().props.value).toBe("Nova");
+      expect(onSaved).not.toHaveBeenCalled();
+    });
+
+    it("shows six at first and the rest on request, and says so when there is nothing yet", async () => {
+      historyApi = fakeHistory(
+        Array.from({ length: 9 }, (_, index) => version(`180000000000${index}-cccccccc`, { name: `N${index}` }))
+      );
+      await mount(fakeApi(studioState({ name: "Nova" })));
+      expect(rows()).toHaveLength(6);
+      await act(async () => button(/显示全部 9 份/).props.onClick());
+      expect(rows()).toHaveLength(9);
+      act(() => renderer?.unmount());
+      historyApi = fakeHistory([]);
+      await mount(fakeApi(studioState()));
+      expect(rows()).toHaveLength(0);
+      expect(textOf(root().find((node) => node.props.className === "studioHistory"))).toContain("还没有历史版本");
+    });
   });
 });

@@ -84,6 +84,9 @@ relay is running (relative `knowledge` paths become absolute), so a save never d
 over `./assistant.config.json`: change these keys there afterwards, or keep your config in a file named by
 `ASSISTANT_CONFIG`, which wins over the Studio's.
 
+The relay keeps the last 50 configs that were live, and Admin → Studio → History goes back to any of them. See
+[going back to an earlier config](conversations.md#going-back-to-an-earlier-config).
+
 ### Look and sound
 
 These shape the relay's own web app and the native apps. The SDK widget takes its colour from its `accent` attribute
@@ -294,7 +297,7 @@ Set `WEBRTC=on` to let web clients send audio over WebRTC instead of the WebSock
 | Variable                                    | Default        | What it does                                                                              |
 | ------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------- |
 | `ASSISTANT_CONFIG`                          | none           | Path of the config file, or `off`.                                                        |
-| `STUDIO_DIR`                                | `~/.max-relay` | Where the Studio keeps its config, logo and saved backend keys.                           |
+| `STUDIO_DIR`                                | `~/.max-relay` | Where the Studio keeps its config, its history, the logo and saved backend keys.          |
 | `AGENT_WAKE_WORD`                           | `on`           | `off` turns the wake word off for every assistant.                                        |
 | `NOISE_SUPPRESSION`                         | `off`          | `phone` cleans the audio of phone calls, `on` of every session. See below.                |
 | `VOICE_EQUALIZER_ADJUSTABLE`                | `on`           | `off` stops users changing the voice equaliser.                                           |

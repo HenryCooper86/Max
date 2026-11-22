@@ -229,7 +229,8 @@ export function buildLiveInstructions(input: {
   const sessionRule = buildSessionLanguagePrompt(input.event.language, profile.languages);
   const previous = buildPreviousConversationPrompt(
     input.previousConversation?.turns ?? [],
-    input.previousConversation?.facts ?? []
+    input.previousConversation?.facts ?? [],
+    input.previousConversation?.summary
   );
   const rulesNote = inChinese
     ? ""
@@ -291,7 +292,8 @@ function buildWearableInstructions(input: {
   const sessionRule = buildSessionLanguagePrompt(input.event.language, profile.languages);
   const previous = buildPreviousConversationPrompt(
     input.previousConversation?.turns ?? [],
-    input.previousConversation?.facts ?? []
+    input.previousConversation?.facts ?? [],
+    input.previousConversation?.summary
   );
   const rulesNote = inChinese
     ? ""
@@ -366,7 +368,8 @@ function buildGeneralInstructions(input: {
   const sessionRule = buildSessionLanguagePrompt(input.event.language, profile.languages);
   const previous = buildPreviousConversationPrompt(
     input.previousConversation?.turns ?? [],
-    input.previousConversation?.facts ?? []
+    input.previousConversation?.facts ?? [],
+    input.previousConversation?.summary
   );
   const tools = (input.event.tools?.length ?? 0) > 0 || (input.serverToolCount ?? installedServerTools().length) > 0;
   const toolRule = tools

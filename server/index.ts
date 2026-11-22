@@ -157,7 +157,15 @@ import { AgentSessionController } from "./session-controller";
 import { markClientActivity, startWatchdog, trackClient } from "./watchdog";
 import type { Logger } from "./logger";
 import { staticCacheControl } from "./static-cache";
-import { clearUserConversationMemory, externalUserMemoryKey, flushUserMemory, userMemorySummary } from "./user-memory";
+import { analysisModelFromEnv } from "./conversation-analysis";
+import { summarizeMemory } from "./memory-summary";
+import {
+  clearUserConversationMemory,
+  externalUserMemoryKey,
+  flushUserMemory,
+  setUserMemorySummarizer,
+  userMemorySummary
+} from "./user-memory";
 import { registerAmapRoutes } from "./amap-proxy";
 import { createCampaigns } from "./telephony/campaigns";
 import { createCompanionBindingStore } from "./companion-store";
@@ -2233,6 +2241,20 @@ for (const profile of [assistant(), ...assistant().variants.map((variant) => var
       `${profile.variant ? `variants: ${profile.variant}: ` : ""}guardrails.${key} names ${strangers.join(", ")}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the tool you meant is not checked.`
     );
   }
+}
+// Summaries of what a user said longer ago, where the config asks for them and there is a model to write them.
+setUserMemorySummarizer({
+  enabled: () => assistant().conversation.memorySummary && analysisModelFromEnv() !== undefined,
+  summarize: (input) => {
+    const model = analysisModelFromEnv();
+    if (!model) throw new Error("there is no model for the memory summary");
+    return summarizeMemory(input, model);
+  }
+});
+if (assistant().conversation.memorySummary && !analysisModelFromEnv()) {
+  log.warn(
+    "conversation.memorySummary needs a chat model to write the summaries: set ANALYSIS_LLM_BASE_URL and ANALYSIS_LLM_MODEL, or a chat model for the conversation. Until then older turns are not summarised."
+  );
 }
 // The same for a tool an agent's onEnter calls: the step would arrive, call nothing and say why.
 {

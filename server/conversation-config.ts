@@ -37,13 +37,16 @@ export type ConversationSettings = {
   endSession: boolean;
   /** Keeps what a user said between conversations, for users named by a session token. */
   rememberUsers: boolean;
+  /** Fold what leaves a user's window of remembered turns into a summary a chat model writes. */
+  memorySummary: boolean;
 };
 
 export const DEFAULT_CONVERSATION_SETTINGS: ConversationSettings = {
   idleReminders: [],
   maxIdleReminders: 2,
   endSession: false,
-  rememberUsers: false
+  rememberUsers: false,
+  memorySummary: false
 };
 
 /** One specialist the conversation can be handed to. */
@@ -134,7 +137,8 @@ export function conversationSettingsFrom(raw: unknown): { settings: Conversation
       ...(maxDurationSeconds !== undefined ? { maxDurationSeconds } : {}),
       ...(farewell ? { farewell } : {}),
       endSession: raw.endSession === true,
-      rememberUsers: raw.rememberUsers === true
+      rememberUsers: raw.rememberUsers === true,
+      memorySummary: raw.memorySummary === true
     },
     problems
   };

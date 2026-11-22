@@ -83,6 +83,10 @@
   same user gets the same variant every time, the record names it as `session.variant`, and `GET /v1/variants` counts
   conversations, length, end reasons, analysis success and sentiment for each. Its `comparison` says whether each
   variant's success rate differs from the first variant's by more than chance (Fisher's exact test). See [versions and A/B tests](docs/conversations.md#versions-and-ab-tests).
+- A summary of older turns. With `conversation.memorySummary` a chat model folds the turns that leave a user's
+  window of 24 remembered turns into a short text, which the assistant is given with the latest turns. Written when
+  a conversation ends and during long ones; deleted with the rest when a user is forgotten. See
+  [a summary of older turns](docs/conversations.md#a-summary-of-older-turns).
 - Flow steps the relay does itself. An agent's new `onEnter` says a sentence in your words, calls a tool with fixed
   arguments and moves the conversation on by what the tool answered (`is`, `in`, `above`, `below`, `exists`,
   `failed`), with no model deciding any of it. On the cascaded backends the sentence is spoken as written. The

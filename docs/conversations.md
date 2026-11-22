@@ -36,15 +36,16 @@ a conversation may last, and whether the assistant can end it.
 }
 ```
 
-| Key                   | Type                | Default                  | What it does                                                                                                             |
-| --------------------- | ------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `idleReminderSeconds` | number, 5 to 300    | off                      | Seconds of silence, after the assistant has finished speaking, before it checks in.                                      |
-| `idleReminders`       | string or array     | a short default question | What the check-in says, in order; the last one repeats. Up to 5 lines of at most 200 characters.                         |
-| `maxIdleReminders`    | integer, 0 to 10    | `2`                      | Check-ins that may go unanswered. After the last one, the next silence ends the conversation.                            |
-| `maxDurationSeconds`  | number, 30 to 14400 | off                      | The longest a conversation may run, counted from when the voice backend is connected.                                    |
-| `farewell`            | string (≤ 300)      | a short default line     | Spoken when the relay ends the conversation itself, for silence or the time limit.                                       |
-| `endSession`          | boolean             | `false`                  | Gives the assistant an `end_session` tool, so it can end a conversation that is finished.                                |
-| `rememberUsers`       | boolean             | `false`                  | Keeps what a user said for their next conversation. See [remembering a user](#remembering-a-user-between-conversations). |
+| Key                   | Type                | Default                  | What it does                                                                                                                                  |
+| --------------------- | ------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `idleReminderSeconds` | number, 5 to 300    | off                      | Seconds of silence, after the assistant has finished speaking, before it checks in.                                                           |
+| `idleReminders`       | string or array     | a short default question | What the check-in says, in order; the last one repeats. Up to 5 lines of at most 200 characters.                                              |
+| `maxIdleReminders`    | integer, 0 to 10    | `2`                      | Check-ins that may go unanswered. After the last one, the next silence ends the conversation.                                                 |
+| `maxDurationSeconds`  | number, 30 to 14400 | off                      | The longest a conversation may run, counted from when the voice backend is connected.                                                         |
+| `farewell`            | string (≤ 300)      | a short default line     | Spoken when the relay ends the conversation itself, for silence or the time limit.                                                            |
+| `endSession`          | boolean             | `false`                  | Gives the assistant an `end_session` tool, so it can end a conversation that is finished.                                                     |
+| `memorySummary`       | boolean             | `false`                  | Folds what leaves a user's 24 remembered turns into a summary a chat model writes. See [a summary of older turns](#a-summary-of-older-turns). |
+| `rememberUsers`       | boolean             | `false`                  | Keeps what a user said for their next conversation. See [remembering a user](#remembering-a-user-between-conversations).                      |
 
 Numbers outside a range are clamped to it. A value of the wrong type is ignored and logged as a problem at startup.
 The default check-in is "Are you still there?" and the default farewell says the relay is ending the conversation and
@@ -386,7 +387,8 @@ The relay has to know who the user is, so this applies to sessions opened with a
 nobody. An outbound [phone call](telephony.md#outbound-calls) placed with a `userId` counts too.
 
 - **What is kept.** The last 24 things said, by the user and the assistant, each cut to 500 characters, and up to 12
-  facts the user asked to be remembered ("remember that my dog is called Biscuit"). Older turns fall off the end.
+  facts the user asked to be remembered ("remember that my dog is called Biscuit"). Older turns fall off the end,
+  unless you turn on the [summary of older turns](#a-summary-of-older-turns).
 - **What the assistant sees.** At the start of the next conversation those turns and facts are added to its
   instructions, marked as an earlier conversation and not as instructions. A conversation that is
   [resumed](#carrying-a-conversation-across-a-dropped-connection) already has its own turns, so it gets the facts only.
@@ -400,7 +402,7 @@ nobody. An outbound [phone call](telephony.md#outbound-calls) placed with a `use
 
   ```bash
   curl -H "Authorization: Bearer $RELAY_AUTH_TOKEN" https://voice.example.com/v1/users/user-42/memory
-  # {"ok":true,"memory":{"enabled":true,"updatedAt":1795348800000,"turnCount":6,"factCount":1}}
+  # {"ok":true,"memory":{"enabled":true,"updatedAt":1795348800000,"turnCount":6,"factCount":1,"summarized":false}}
 
   curl -X DELETE -H "Authorization: Bearer $RELAY_AUTH_TOKEN" https://voice.example.com/v1/users/user-42/memory
   # {"ok":true,"removed":true}
@@ -412,6 +414,42 @@ next turn, so end their sessions first if they must be forgotten at once.
 It is off by default because it stores what your users said. Tell them, and give them a way to be forgotten. It does
 not apply to Max Cloud projects. People signed in to the relay's own accounts (the helmet app) are remembered whatever
 this setting says, as before.
+
+### A summary of older turns
+
+Twenty-four turns are one long conversation or a few short ones. What a user said before that, their name, what they
+bought, where they are going, is gone unless they said "remember". With `conversation.memorySummary` a chat model
+folds the turns that leave the window into a short text, and the assistant is given that text together with the
+latest turns.
+
+```json
+{ "conversation": { "rememberUsers": true, "memorySummary": true } }
+```
+
+- **When it is written.** When a conversation ends, if at least four turns have left the window since the last
+  summary, and during a long conversation every twelve turns. It never delays the conversation: the assistant is
+  given whatever summary there is when a conversation starts.
+- **What it is made from.** The summary so far and the turns that have left the window since, so it is carried
+  forward, not rebuilt. At most 1,500 characters. Up to 48 turns wait for a summary; if the model cannot be reached
+  they wait for the next try, and beyond 48 the oldest are lost, as all of them were before.
+- **Which model.** The model of the [analysis](#analysis): `ANALYSIS_LLM_*`, else the pipeline's chat model, else the
+  local one. The turns are sent to that endpoint, after [redaction](#redacting-personal-data) if you turned it on.
+  Without a model the relay says so at startup and keeps no turns beyond the window.
+- **What the assistant sees.** The summary, marked as written by the system from earlier conversations and as less
+  exact than the turns kept word for word, and as data, not instructions. The facts a user asked to be remembered
+  are still kept word for word beside it.
+- **It is a model's text.** It can leave something out or get something wrong, and what is wrong stays in it until
+  later turns correct it. The model is told to keep every personal detail and to guess nothing; a small local model
+  mostly does. Do not rely on it for what must be exact: keep that in your own system and give it to the assistant
+  through a [tool](tools.md) or the session token.
+- **Forgetting a user** deletes the summary and the waiting turns with the rest, also when a summary was being
+  written at that moment. It applies to the same users as `rememberUsers`, and to people signed in to the relay's
+  own accounts. Not to Max Cloud projects.
+- Tested with a local model (`qwen3:8b`) for the assistant and the summary: a conversation of 16 exchanges in which
+  the user gave their name, their dog's name, a trip and a budget in the first four. Those turns left the window;
+  in a new conversation the assistant answered all four from the summary. With an earlier wording of the
+  summariser's instructions the same model left the dog's name out, 2 runs of 2, which is why the summary is asked
+  for in two parts, who the user is and what happened.
 
 ## After the conversation
 

@@ -40,6 +40,8 @@ export type ProviderSessionContext = {
     updatedAt: number;
     turns: UserMemoryTurn[];
     facts: UserMemoryFact[];
+    /** What was said before `turns`, in a few sentences a model wrote. */
+    summary?: string;
   };
   /** How the session reaches its user. A phone call has no screen and can be
    *  hung up; a web session has neither property. */

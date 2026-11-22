@@ -32,7 +32,13 @@ import {
   recordTesterTtsFallback,
   recordTesterTurnFeedback
 } from "./metrics";
-import { externalUserMemoryKey, recordUserMemoryEvent, userConversationMemory, userMemoryEnabled } from "./user-memory";
+import {
+  externalUserMemoryKey,
+  recordUserMemoryEvent,
+  summarizeUserMemory,
+  userConversationMemory,
+  userMemoryEnabled
+} from "./user-memory";
 import { redactText } from "./redact";
 import type { HelmetPeer } from "./companion-registry";
 import { isResumeId, resumeStore } from "./session-resume";
@@ -998,13 +1004,14 @@ export class AgentSessionController {
           // relative construction order above.
           routeActive: () => this.navHandler.activeRoute() !== undefined,
           captureNavigationStop: () => this.navHandler.captureStop(),
-          ...(durableMemory && (durableMemory.turns.length || durableMemory.facts.length)
+          ...(durableMemory && (durableMemory.turns.length || durableMemory.facts.length || durableMemory.summary)
             ? {
                 previousConversation: {
                   updatedAt: durableMemory.updatedAt,
                   // A resumed conversation already carries its own turns.
                   turns: resumed ? [] : durableMemory.turns,
-                  facts: durableMemory.facts
+                  facts: durableMemory.facts,
+                  ...(durableMemory.summary ? { summary: durableMemory.summary.text } : {})
                 }
               }
             : {})
@@ -1153,6 +1160,9 @@ export class AgentSessionController {
           await pendingMessages;
           await this.provider.close();
         } finally {
+          // The conversation is over: what has left the user's window of turns is folded into their summary.
+          const memoryKey = this.authenticatedUser?.id ?? this.tokenUserMemoryKey;
+          if (memoryKey) void summarizeUserMemory(memoryKey);
           this.noiseSuppressor?.close();
           this.noiseSuppressor = undefined;
           const detachHelmet = this.detachHelmet;

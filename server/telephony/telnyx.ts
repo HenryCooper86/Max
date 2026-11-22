@@ -324,6 +324,7 @@ export function telnyxCarrier(settings: TelnyxSettings, request: typeof fetch = 
       }
     },
     voiceUrl: (base, plan) => `${base}/telephony/telnyx/voice?key=${settings.webhookSecret}&plan=${plan}`,
+    statusUrl: (base, plan) => `${base}/telephony/telnyx/status?key=${settings.webhookSecret}&plan=${plan}`,
     voiceUrlIsSecret: true,
     answerXml: (streamUrl, ticket) => streamTexml(`${streamUrl}?ticket=${ticket}`),
     dialXml: (destination, options) => dialTwiml(destination, options),
@@ -351,7 +352,7 @@ export function telnyxCarrier(settings: TelnyxSettings, request: typeof fetch = 
       : {}),
     ...(api && apiKey && settings.applicationSid
       ? {
-          async placeCall(input: { to: string; from: string; url: string }) {
+          async placeCall(input: { to: string; from: string; url: string; statusUrl?: string }) {
             const result = await carrierPost(
               request,
               api,
@@ -361,7 +362,8 @@ export function telnyxCarrier(settings: TelnyxSettings, request: typeof fetch = 
                 From: input.from,
                 ApplicationSid: settings.applicationSid,
                 Url: input.url,
-                UrlMethod: "POST"
+                UrlMethod: "POST",
+                ...(input.statusUrl ? { StatusCallback: input.statusUrl, StatusCallbackMethod: "POST" } : {})
               })
             );
             const callId = callIdIn(result.body);

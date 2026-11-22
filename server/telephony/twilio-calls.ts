@@ -47,7 +47,7 @@ export type TelephonySettings = CallSettings & {
   accountSid?: string;
 };
 
-const E164 = /^\+[1-9]\d{6,14}$/;
+export const E164 = /^\+[1-9]\d{6,14}$/;
 const SIP_URI = /^sip:[^\s<>]+$/;
 const TARGET_NAME = /^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/;
 const SID = /^[A-Za-z0-9]{1,64}$/;
@@ -62,9 +62,12 @@ const CALL_MEMORY_MS = 24 * 60 * 60_000;
 const MAX_REMEMBERED_CALLS = 20_000;
 const DRAIN_TIMEOUT_MS = 6_000;
 const TRANSFER_ANNOUNCE_MS = 12_000;
-const MAX_CONTEXT_CHARS = 2_000;
-const MAX_VOICEMAIL_CHARS = 500;
+export const MAX_CONTEXT_CHARS = 2_000;
+export const MAX_VOICEMAIL_CHARS = 500;
 const REST_TIMEOUT_MS = 10_000;
+/** How long a watched call may stay unheard of (not placed, not answered) before it is reported as unknown. */
+const UNHEARD_MS = 3 * 60_000;
+const MAX_WATCHED_CALLS = 2_000;
 
 /**
  * Reads the TELEPHONY_* variables, which every carrier shares, and the
@@ -192,6 +195,7 @@ function twilioCarrier(
     authentic: (input) => validTwilioSignature(settings.authToken, input.url, input.params, input.signature),
     voiceUrl: (base, plan) => `${base}/telephony/twilio/voice?plan=${plan}`,
     voiceUrlIsSecret: false,
+    statusUrl: (base, plan) => `${base}/telephony/twilio/status?plan=${plan}`,
     answerXml: (streamUrl, ticket) => streamTwiml(streamUrl, { ticket }),
     dialXml: (destination, options) => dialTwiml(destination, options),
     hangupXml: (say, language) => hangupTwiml(say, language),
@@ -216,14 +220,16 @@ function twilioCarrier(
             const result = await rest(`Calls/${callId}.json`, { Twiml: xml });
             return { ok: result.ok, status: result.status };
           },
-          async placeCall(input: { to: string; from: string; url: string }) {
+          async placeCall(input: { to: string; from: string; url: string; statusUrl?: string }) {
             const result = await rest("Calls.json", {
               To: input.to,
               From: input.from,
               Url: input.url,
               Method: "POST",
               // Tells the voice webhook whether a person or a machine picked up.
-              MachineDetection: "Enable"
+              MachineDetection: "Enable",
+              // Twilio's default event is the last one: completed, busy, no-answer, failed or canceled.
+              ...(input.statusUrl ? { StatusCallback: input.statusUrl, StatusCallbackMethod: "POST" } : {})
             });
             const sid =
               result.body && typeof result.body === "object" ? (result.body as { sid?: unknown }).sid : undefined;
@@ -288,6 +294,32 @@ export type TelephonyDeps = {
 type Ticket = { call: CallInfo; expiresAt: number };
 type OutboundPlan = { context?: string; userId?: string; voicemailMessage?: string; expiresAt: number };
 
+/**
+ * What a caller who asked to watch a placed call is told. Exactly one of
+ * `ended`, `machine`, `unanswered` and `unknown` is the last word on a call.
+ */
+export type CallProgress =
+  /** A person is on the line and the assistant's session is starting. */
+  | { type: "answered"; callSid: string }
+  /** The conversation happened and is over. */
+  | { type: "ended"; callSid: string; reason: string; durationMs: number }
+  /** An answering machine or a fax picked up. */
+  | { type: "machine"; callSid: string; answeredBy: string; voicemailLeft: boolean }
+  /** Nobody picked up, as the carrier's status callback says. */
+  | { type: "unanswered"; callSid?: string; status: "busy" | "no-answer" | "failed" | "canceled" }
+  /** Nothing was heard about the call in time. */
+  | { type: "unknown" };
+
+/** One call being watched, from the moment it is placed until its last word. */
+type Watched = {
+  plan: string;
+  watch: (progress: CallProgress) => void;
+  callSid?: string;
+  answeredAt?: number;
+  expiresAt: number;
+  timer?: NodeJS.Timeout;
+};
+
 type PlaceCallInput = { to?: unknown; context?: unknown; userId?: unknown; voicemailMessage?: unknown };
 
 export type Telephony = {
@@ -303,9 +335,21 @@ export type Telephony = {
   handleStream(socket: StreamSocket, onSettled?: () => void, urlTicket?: string): void;
   /** Whether a call is waiting to open its media stream. No ticket, no socket. */
   expectsStream(): boolean;
+  /**
+   * Takes the carrier's status callback for an outbound call placed with a
+   * `watch`. Authenticated like the voice webhook. A replay or an unknown call
+   * is answered 200 and changes nothing.
+   */
+  statusWebhook(input: { url: string; params: Record<string, string>; signature: string | undefined }): {
+    status: number;
+  };
+  /** Why calls cannot be placed through this carrier (what to set up), or nothing when they can. */
+  placeProblem(): string | undefined;
+  /** `watch` hears what becomes of the call, and its errors stay out of the call. */
   placeCall(
     input: PlaceCallInput,
-    origin: string
+    origin: string,
+    watch?: (progress: CallProgress) => void
   ): Promise<{ ok: true; callSid: string } | { ok: false; status: number; error: string }>;
   activeCalls(): number;
 };
@@ -344,7 +388,34 @@ export function createTelephony(
   /** Calls whose stream has connected, and until when that is remembered. */
   const connected = new Map<string, number>();
   const outbound = new Map<string, OutboundPlan>();
+  /** Watched calls by plan id (the plan itself is gone once the voice webhook has used it), and by CallSid once answered. */
+  const watched = new Map<string, Watched>();
+  const watchedByCall = new Map<string, Watched>();
   let active = 0;
+
+  /** The last word on a watched call. Later events for it find nothing. */
+  function conclude(entry: Watched, progress: CallProgress): void {
+    if (watched.get(entry.plan) !== entry) return;
+    watched.delete(entry.plan);
+    if (entry.callSid && watchedByCall.get(entry.callSid) === entry) watchedByCall.delete(entry.callSid);
+    clearTimeout(entry.timer);
+    report(entry, progress);
+  }
+
+  function report(entry: Watched, progress: CallProgress): void {
+    try {
+      entry.watch(progress);
+    } catch (error) {
+      log.warn("a call watcher failed", { message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /** If nothing more is heard of the call in time, it is reported as unknown. */
+  function startUnheardTimer(entry: Watched): void {
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => conclude(entry, { type: "unknown" }), UNHEARD_MS);
+    entry.timer.unref?.();
+  }
 
   function prune(): void {
     const at = now();
@@ -360,6 +431,11 @@ export function createTelephony(
     for (const [id, plan] of outbound) {
       if (plan.expiresAt > at && outbound.size <= MAX_TICKETS) break;
       outbound.delete(id);
+    }
+    // Watchers live for different times, so look at all of them, oldest first.
+    for (const entry of [...watched.values()]) {
+      if (entry.expiresAt > at && watched.size <= MAX_WATCHED_CALLS) continue;
+      conclude(entry, { type: "unknown" });
     }
   }
 
@@ -385,6 +461,7 @@ export function createTelephony(
     }
     const planId = url.searchParams.get("plan");
     const plan = planId ? outbound.get(planId) : undefined;
+    const watcher = planId ? watched.get(planId) : undefined;
     if (planId) outbound.delete(planId);
     // A plan id that is unknown or expired is not an inbound call in disguise.
     if (planId && !plan) return { status: 200, body: carrier.hangupXml() };
@@ -392,6 +469,15 @@ export function createTelephony(
       const answeredBy = input.params.AnsweredBy ?? "";
       if (answeredBy.startsWith("machine") || answeredBy === "fax") {
         log.info("outbound call reached a machine", { callSid, answeredBy });
+        if (watcher) {
+          watcher.callSid = callSid;
+          conclude(watcher, {
+            type: "machine",
+            callSid,
+            answeredBy,
+            voicemailLeft: answeredBy !== "fax" && Boolean(plan.voicemailMessage)
+          });
+        }
         return {
           status: 200,
           body: carrier.hangupXml(answeredBy === "fax" ? undefined : plan.voicemailMessage, deps.language)
@@ -428,6 +514,15 @@ export function createTelephony(
       if (earlier) tickets.delete(earlier);
       tickets.set(ticket, { call, expiresAt: now() + TICKET_TTL_MS });
       ticketOf.set(callSid, ticket);
+    }
+    if (watcher && plan) {
+      watcher.callSid = callSid;
+      watcher.answeredAt = now();
+      watcher.expiresAt = now() + CALL_MEMORY_MS;
+      watchedByCall.set(callSid, watcher);
+      // The stream should connect within seconds; if it never does, say so.
+      startUnheardTimer(watcher);
+      report(watcher, { type: "answered", callSid });
     }
     const origin = settings.publicUrl ?? url.origin;
     const streamUrl = `${origin.replace(/^http/, "ws")}/telephony/${carrier.id}/stream`;
@@ -491,7 +586,18 @@ export function createTelephony(
         /* already gone */
       }
       session?.close(endReason ?? reason);
-      if (call) log.info("call ended", { callSid: call.callSid, reason: endReason ?? reason ?? "caller" });
+      if (call) {
+        log.info("call ended", { callSid: call.callSid, reason: endReason ?? reason ?? "caller" });
+        const entry = watchedByCall.get(call.callSid);
+        if (entry) {
+          conclude(entry, {
+            type: "ended",
+            callSid: call.callSid,
+            reason: endReason ?? reason ?? "caller",
+            durationMs: Math.max(0, now() - (entry.answeredAt ?? now()))
+          });
+        }
+      }
     };
 
     /** Lets Twilio play what it has buffered, then runs `then`. */
@@ -669,6 +775,8 @@ export function createTelephony(
         active += 1;
         counted = true;
         connected.set(call.callSid, now() + CALL_MEMORY_MS);
+        // The call is connected: its end is reported by finish, not by the timer.
+        clearTimeout(watchedByCall.get(call.callSid)?.timer);
         settle();
         bridge = carrier.bridge(message.streamId);
         const callerId = dialable(call.from);
@@ -719,19 +827,23 @@ export function createTelephony(
     socket.on("error", () => finish("caller"));
   }
 
+  /** Why this carrier cannot place calls yet, or nothing when it can. */
+  function placeProblem(): string | undefined {
+    if (!carrier.placeCall || !settings.phoneNumber) return carrier.placeCallHelp;
+    if (carrier.voiceUrlIsSecret && !settings.publicUrl) {
+      return `Set TELEPHONY_PUBLIC_URL to place calls through ${carrier.label}.`;
+    }
+    return undefined;
+  }
+
   async function placeCall(
     input: PlaceCallInput,
-    origin: string
+    origin: string,
+    watch?: (progress: CallProgress) => void
   ): Promise<{ ok: true; callSid: string } | { ok: false; status: number; error: string }> {
-    if (!carrier.placeCall || !settings.phoneNumber) {
-      return { ok: false, status: 503, error: carrier.placeCallHelp };
-    }
-    if (carrier.voiceUrlIsSecret && !settings.publicUrl) {
-      return {
-        ok: false,
-        status: 503,
-        error: `Set TELEPHONY_PUBLIC_URL to place calls through ${carrier.label}.`
-      };
+    const notReady = placeProblem();
+    if (notReady || !carrier.placeCall || !settings.phoneNumber) {
+      return { ok: false, status: 503, error: notReady ?? carrier.placeCallHelp };
     }
     const to = typeof input.to === "string" ? input.to.trim() : "";
     if (!E164.test(to))
@@ -765,13 +877,25 @@ export function createTelephony(
       expiresAt: now() + OUTBOUND_TTL_MS
     });
     const base = settings.publicUrl ?? origin;
+    const entry: Watched | undefined = watch ? { plan, watch, expiresAt: now() + UNHEARD_MS } : undefined;
+    if (entry) {
+      watched.set(plan, entry);
+      startUnheardTimer(entry);
+    }
     const result = await carrier.placeCall({
       to,
       from: settings.phoneNumber,
-      url: carrier.voiceUrl(base, plan)
+      url: carrier.voiceUrl(base, plan),
+      // Only a call that is watched needs the carrier to report back.
+      ...(entry ? { statusUrl: carrier.statusUrl(base, plan) } : {})
     });
     if (!result.ok) {
       outbound.delete(plan);
+      if (entry) {
+        // The caller is told by the error; the watcher hears nothing.
+        clearTimeout(entry.timer);
+        watched.delete(plan);
+      }
       log.warn("outbound call could not be placed", { status: result.status });
       return {
         ok: false,
@@ -783,8 +907,36 @@ export function createTelephony(
     }
     // Not every carrier names the call when it accepts it.
     const callSid = result.callId ?? "";
+    if (entry && !entry.callSid) entry.callSid = callSid || undefined;
     log.info("outbound call placed", { callSid });
     return { ok: true, callSid };
+  }
+
+  function statusWebhook(input: { url: string; params: Record<string, string>; signature: string | undefined }): {
+    status: number;
+  } {
+    if (!carrier.authentic(input)) return { status: 403 };
+    let planId: string | null;
+    try {
+      planId = new URL(input.url).searchParams.get("plan");
+    } catch {
+      return { status: 400 };
+    }
+    prune();
+    const entry = planId ? watched.get(planId) : undefined;
+    const outcome = input.params.CallStatus;
+    // An answered call ends through its media stream; this callback is the
+    // only word there will be on a call that never reached a person.
+    if (
+      entry &&
+      !entry.answeredAt &&
+      (outcome === "busy" || outcome === "no-answer" || outcome === "failed" || outcome === "canceled")
+    ) {
+      const callSid = input.params.CallSid;
+      const known = callSid && carrier.validCallId(callSid) ? callSid : entry.callSid;
+      conclude(entry, { type: "unanswered", ...(known ? { callSid: known } : {}), status: outcome });
+    }
+    return { status: 200 };
   }
 
   const expectsStream = (): boolean => {
@@ -793,5 +945,13 @@ export function createTelephony(
     return false;
   };
 
-  return { voiceWebhook, handleStream, expectsStream, placeCall, activeCalls: () => active };
+  return {
+    voiceWebhook,
+    statusWebhook,
+    handleStream,
+    expectsStream,
+    placeCall,
+    placeProblem,
+    activeCalls: () => active
+  };
 }

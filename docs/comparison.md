@@ -46,15 +46,16 @@ it is not built; see [not built yet](#not-built-yet).
 
 ### Phone calls
 
-| Capability                                  | Max | Notes                                                                                                                       |
-| ------------------------------------------- | --- | --------------------------------------------------------------------------------------------------------------------------- |
-| Inbound and outbound calls                  | Yes | Through Twilio or Telnyx. See [phone calls](telephony.md).                                                                  |
-| Transfer to a person, keypad input, hang up | Yes | Cold transfer to numbers you list. No warm (announced) transfer.                                                            |
-| Answering-machine detection                 | Yes | Twilio's; a voicemail message can be left. Not on Telnyx yet.                                                               |
-| A second carrier                            | Yes | Telnyx, written to its documentation; not run on a real call.                                                               |
-| Direct SIP trunks, further carriers         | No  |                                                                                                                             |
-| Call recording                              | Yes | Stereo WAV, user and assistant on separate channels, off by default. See [recording](conversations.md#recording-the-audio). |
-| Buying numbers, batch campaigns             | No  | Numbers stay in your carrier account.                                                                                       |
+| Capability                                  | Max | Notes                                                                                                                                               |
+| ------------------------------------------- | --- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Inbound and outbound calls                  | Yes | Through Twilio or Telnyx. See [phone calls](telephony.md).                                                                                          |
+| Transfer to a person, keypad input, hang up | Yes | Cold transfer to numbers you list. No warm (announced) transfer.                                                                                    |
+| Answering-machine detection                 | Yes | Twilio's; a voicemail message can be left. Not on Telnyx yet.                                                                                       |
+| A second carrier                            | Yes | Telnyx, written to its documentation; not run on a real call.                                                                                       |
+| Direct SIP trunks, further carriers         | No  |                                                                                                                                                     |
+| Call recording                              | Yes | Stereo WAV, user and assistant on separate channels, off by default. See [recording](conversations.md#recording-the-audio).                         |
+| Batch outbound campaigns                    | Yes | A list of numbers, retries and calling hours. Tested against stand-ins, not on real calls. See [campaigns](telephony.md#calling-a-list-of-numbers). |
+| Buying numbers                              | No  | Numbers stay in your carrier account.                                                                                                               |
 
 ### Operating it
 
@@ -117,7 +118,7 @@ In rough order of how much they would matter to most users:
    while the assistant speaks, so the start of an answer that breaks one is usually heard before it is cut. Tool
    arguments and results are not checked.
 6. **A visual flow builder, agent versions and A/B tests.**
-7. **Warm transfers and batch outbound campaigns.**
+7. **Warm transfers.**
 8. **WebRTC in the native iOS and Android clients.** The web SDK has it; the native clients use the WebSocket.
 9. **Avatars.**
 

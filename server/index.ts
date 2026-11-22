@@ -143,6 +143,7 @@ import type { Logger } from "./logger";
 import { staticCacheControl } from "./static-cache";
 import { clearUserConversationMemory, externalUserMemoryKey, flushUserMemory, userMemorySummary } from "./user-memory";
 import { registerAmapRoutes } from "./amap-proxy";
+import { createCampaigns } from "./telephony/campaigns";
 import { createCompanionBindingStore } from "./companion-store";
 import { createCompanionRegistry } from "./companion-registry";
 import { createCompanionSocketServer } from "./companion-socket";
@@ -265,6 +266,15 @@ app.use((req, res, next) => {
 registerCloudPaymentRoutes(app);
 // A Cloud project carries up to 20,000 characters of knowledge (3 bytes each in Chinese) and its tools.
 app.use("/cloud/api/projects", express.json({ limit: "512kb", strict: true }));
+// A campaign lists up to 5,000 calls, which the small default does not hold. Its
+// limit applies after the owner check, so nobody else can make the relay buffer it.
+app.use(
+  "/v1/campaigns",
+  (req, res, next) => {
+    if (ownerRequest(req, res)) next();
+  },
+  express.json({ limit: "4mb", strict: true })
+);
 // The Studio's voice routes set their own limits (a recording is megabytes), after the admin check.
 app.use(jsonParserExceptStudioVoices("32kb"));
 // Errors go out in English to a client that asks for it.
@@ -457,6 +467,45 @@ app.all("/telephony/telnyx/voice", express.urlencoded({ extended: false, limit: 
   res.status(answer.status).set("Cache-Control", "no-store").type("text/xml").send(answer.body);
 });
 
+// Where the carriers report what became of a call placed for a campaign. Twilio
+// signs the request as it does the voice webhook.
+app.post("/telephony/twilio/status", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  if (!telephony) {
+    res.status(404).end();
+    return;
+  }
+  const params: Record<string, string> = {};
+  for (const [name, value] of Object.entries((req.body ?? {}) as Record<string, unknown>)) {
+    if (typeof value === "string") params[name] = value;
+  }
+  const origin = telephonyConfig.settings?.publicUrl ?? requestOrigin(req);
+  const signature = req.headers["x-twilio-signature"];
+  const answer = telephony.statusWebhook({
+    url: `${origin}${req.originalUrl}`,
+    params,
+    signature: Array.isArray(signature) ? signature[0] : signature
+  });
+  if (answer.status === 403)
+    log.warn("rejected a telephony status callback: bad signature", { address: clientAddress(req) });
+  res.status(answer.status).end();
+});
+
+// The same for Telnyx, authenticated by the secret in the URL.
+app.post("/telephony/telnyx/status", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  if (!telnyx) {
+    res.status(404).end();
+    return;
+  }
+  const params: Record<string, string> = {};
+  for (const [name, value] of Object.entries((req.body ?? {}) as Record<string, unknown>)) {
+    if (typeof value === "string") params[name] = value;
+  }
+  const origin = telnyxConfig.settings?.publicUrl ?? requestOrigin(req);
+  const answer = telnyx.statusWebhook({ url: `${origin}${req.originalUrl}`, params, signature: undefined });
+  if (answer.status === 403) log.warn("rejected a Telnyx status callback: wrong key", { address: clientAddress(req) });
+  res.status(answer.status).end();
+});
+
 // WebRTC signalling for /agent: the client's offer in, the relay's answer out.
 // The same checks as the WebSocket upgrade apply, and the session that follows
 // is the same session: only its transport differs (server/webrtc/gateway.ts).
@@ -522,6 +571,19 @@ app.post("/agent/webrtc", webRtcCors, express.json({ limit: "64kb" }), async (re
   else res.status(answer.status).json({ ok: false, error: answer.error });
 });
 
+// With both carriers set up, Twilio places the call unless the request names Telnyx.
+function telephonyFor(wanted: "twilio" | "telnyx" | undefined): Telephony | undefined {
+  return wanted === "telnyx" ? telnyx : wanted === "twilio" ? telephony : (telephony ?? telnyx);
+}
+
+function telephonyMissing(wanted: "twilio" | "telnyx" | undefined): string {
+  return wanted === "telnyx"
+    ? "Telnyx is not configured. Set TELNYX_WEBHOOK_SECRET."
+    : wanted === "twilio"
+      ? "Twilio is not configured. Set TWILIO_AUTH_TOKEN."
+      : "Telephony is not configured. Set TWILIO_AUTH_TOKEN or TELNYX_WEBHOOK_SECRET.";
+}
+
 // Places a phone call for the assistant to hold. Owner-only, and never open:
 // a relay without a token must not let strangers dial numbers on its account.
 app.post("/v1/calls", async (req, res) => {
@@ -539,23 +601,48 @@ app.post("/v1/calls", async (req, res) => {
     res.status(400).json({ ok: false, error: "carrier must be twilio or telnyx." });
     return;
   }
-  // With both carriers set up, Twilio places the call unless the request names Telnyx.
-  const calls = wanted === "telnyx" ? telnyx : wanted === "twilio" ? telephony : (telephony ?? telnyx);
+  const calls = telephonyFor(wanted);
   if (!calls) {
-    res.status(503).json({
-      ok: false,
-      error:
-        wanted === "telnyx"
-          ? "Telnyx is not configured. Set TELNYX_WEBHOOK_SECRET."
-          : wanted === "twilio"
-            ? "Twilio is not configured. Set TWILIO_AUTH_TOKEN."
-            : "Telephony is not configured. Set TWILIO_AUTH_TOKEN or TELNYX_WEBHOOK_SECRET."
-    });
+    res.status(503).json({ ok: false, error: telephonyMissing(wanted) });
     return;
   }
   const placed = await calls.placeCall(input, requestOrigin(req));
   if (placed.ok) res.status(201).json({ ok: true, callSid: placed.callSid });
   else res.status(placed.status).json({ ok: false, error: placed.error });
+});
+
+// Batch outbound calls (server/telephony/campaigns.ts). Owner-only: the check
+// runs before the body is read, with the larger limit set above.
+app.post("/v1/campaigns", (req, res) => {
+  const created = campaigns.create(req.body, requestOrigin(req));
+  if (created.ok) res.status(201).json({ ok: true, campaign: created.campaign });
+  else res.status(created.status).json({ ok: false, error: created.problem });
+});
+
+app.get("/v1/campaigns", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  res.json({ ok: true, campaigns: campaigns.list() });
+});
+
+app.get("/v1/campaigns/:id", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const campaign = campaigns.get(req.params.id);
+  if (campaign) res.json({ ok: true, campaign });
+  else res.status(404).json({ ok: false, error: "There is no such campaign." });
+});
+
+app.post("/v1/campaigns/:id/cancel", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const campaign = campaigns.cancel(req.params.id);
+  if (campaign) res.json({ ok: true, campaign });
+  else res.status(404).json({ ok: false, error: "There is no such campaign." });
+});
+
+app.delete("/v1/campaigns/:id", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const removed = campaigns.remove(req.params.id);
+  if (removed.ok) res.json({ ok: true });
+  else res.status(removed.status).json({ ok: false, error: removed.problem });
 });
 
 // What the relay remembers about one of your users between conversations
@@ -1614,6 +1701,19 @@ if (telnyxConfig.settings) {
   });
 }
 
+// Batch calls go through the same placing as POST /v1/calls.
+const campaigns = createCampaigns({
+  log: createLogger("campaigns"),
+  ...(process.env.CAMPAIGNS_FILE?.trim() ? { file: process.env.CAMPAIGNS_FILE.trim() } : {}),
+  notReady: (wanted) =>
+    telephonyFor(wanted)?.placeProblem() ?? (telephonyFor(wanted) ? undefined : telephonyMissing(wanted)),
+  place: async (wanted, input, watch, origin) => {
+    const calls = telephonyFor(wanted);
+    if (!calls) return { ok: false, status: 503, error: telephonyMissing(wanted) };
+    return calls.placeCall(input, origin ?? "", watch);
+  }
+});
+
 wss.on("connection", (client, request) => {
   const sessionLog = createLogger(`sess:${shortSessionId(randomUUID())}`);
   const address = clientAddress(request);
@@ -1950,6 +2050,7 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     // Conversations that just ended still owe their webhook and their traces.
     await conversations.drain(3_000);
     await recordings?.close();
+    await campaigns.close();
     await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);
     closeTestingStore();
     await serverClosed;

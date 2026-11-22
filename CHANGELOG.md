@@ -49,6 +49,11 @@
 
 ### Phone calls
 
+- `POST /v1/campaigns` calls a list of numbers: up to 5,000 numbers, a limit on calls at once, retries for busy and
+  unanswered calls, and calling hours in a time zone you name. `GET /v1/campaigns/:id` shows what became of each call.
+  Campaigns live in memory unless `CAMPAIGNS_FILE` is set. The relay now also gives the carrier a status callback
+  (`/telephony/twilio/status`, `/telephony/telnyx/status`) for calls placed this way. Tested against stand-ins for
+  Twilio and Telnyx, not on real calls. See [calling a list of numbers](docs/telephony.md#calling-a-list-of-numbers).
 - Telnyx is a second carrier beside Twilio: set `TELNYX_WEBHOOK_SECRET` and `TELNYX_PUBLIC_KEY`, and point a TeXML
   application at `/telephony/telnyx/voice?key=<secret>`. Inbound calls, transfers, keypad input and outbound calls work as on
   Twilio. Answering-machine detection does not yet. Both carriers can be set up at once, and `POST /v1/calls` takes

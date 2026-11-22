@@ -241,21 +241,22 @@ Set `TWILIO_AUTH_TOKEN` to turn phone calls on through Twilio, or `TELNYX_WEBHOO
 Telnyx. Both carriers can be set.
 See [phone calls](telephony.md).
 
-| Variable                     | Default | What it does                                                                                                        |
-| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
-| `TWILIO_AUTH_TOKEN`          | none    | Your Twilio auth token. Turns telephony on and checks Twilio's webhook signatures.                                  |
-| `TWILIO_ACCOUNT_SID`         | none    | Needed to transfer calls and place outbound calls.                                                                  |
-| `TWILIO_PHONE_NUMBER`        | none    | The number outbound calls come from, in E.164 form.                                                                 |
-| `TELEPHONY_PUBLIC_URL`       | derived | The relay's public address as Twilio reaches it. Set it behind a proxy or a tunnel.                                 |
-| `TELEPHONY_TRANSFER_NUMBERS` | none    | Where the assistant may transfer a call: `support=+14155550100,sales=sip:sales@example.com`.                        |
-| `TELEPHONY_MAX_CALLS`        | `20`    | Simultaneous calls, 1 to 1000, on each carrier.                                                                     |
-| `TELNYX_WEBHOOK_SECRET`      | none    | The secret in the voice URL you give Telnyx. With the public key, turns Telnyx calls on.                            |
-| `TELNYX_PUBLIC_KEY`          | none    | Your Telnyx account's public key. Required: it checks Telnyx's signature on every media stream.                     |
-| `TELNYX_API_KEY`             | none    | With `TELNYX_ACCOUNT_SID`: needed to transfer calls and place outbound calls.                                       |
-| `TELNYX_ACCOUNT_SID`         | none    | Your Telnyx account id.                                                                                             |
-| `TELNYX_APPLICATION_SID`     | none    | The TeXML application outbound calls are placed through.                                                            |
-| `TELNYX_PHONE_NUMBER`        | none    | The Telnyx number outbound calls come from, in E.164 form.                                                          |
-| `TELNYX_UNSIGNED_STREAMS`    | off     | `allow` runs Telnyx without the public key. See [phone calls](telephony.md#how-the-relay-knows-it-is-telnyx) first. |
+| Variable                     | Default | What it does                                                                                                                     |
+| ---------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `TWILIO_AUTH_TOKEN`          | none    | Your Twilio auth token. Turns telephony on and checks Twilio's webhook signatures.                                               |
+| `TWILIO_ACCOUNT_SID`         | none    | Needed to transfer calls and place outbound calls.                                                                               |
+| `TWILIO_PHONE_NUMBER`        | none    | The number outbound calls come from, in E.164 form.                                                                              |
+| `TELEPHONY_PUBLIC_URL`       | derived | The relay's public address as Twilio reaches it. Set it behind a proxy or a tunnel.                                              |
+| `TELEPHONY_TRANSFER_NUMBERS` | none    | Where the assistant may transfer a call: `support=+14155550100,sales=sip:sales@example.com`.                                     |
+| `TELEPHONY_MAX_CALLS`        | `20`    | Simultaneous calls, 1 to 1000, on each carrier.                                                                                  |
+| `CAMPAIGNS_FILE`             | none    | Where [call campaigns](telephony.md#calling-a-list-of-numbers) are kept between restarts. Without it they are lost at a restart. |
+| `TELNYX_WEBHOOK_SECRET`      | none    | The secret in the voice URL you give Telnyx. With the public key, turns Telnyx calls on.                                         |
+| `TELNYX_PUBLIC_KEY`          | none    | Your Telnyx account's public key. Required: it checks Telnyx's signature on every media stream.                                  |
+| `TELNYX_API_KEY`             | none    | With `TELNYX_ACCOUNT_SID`: needed to transfer calls and place outbound calls.                                                    |
+| `TELNYX_ACCOUNT_SID`         | none    | Your Telnyx account id.                                                                                                          |
+| `TELNYX_APPLICATION_SID`     | none    | The TeXML application outbound calls are placed through.                                                                         |
+| `TELNYX_PHONE_NUMBER`        | none    | The Telnyx number outbound calls come from, in E.164 form.                                                                       |
+| `TELNYX_UNSIGNED_STREAMS`    | off     | `allow` runs Telnyx without the public key. See [phone calls](telephony.md#how-the-relay-knows-it-is-telnyx) first.              |
 
 ### Noise suppression
 

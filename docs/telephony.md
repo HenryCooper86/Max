@@ -176,6 +176,112 @@ so no model time is spent. A fax machine is hung up on without a message. Detect
 answering machine can be taken for a person, and a person for a machine. The relay keeps the plan for an outbound
 call for 5 minutes, so Twilio has to fetch the call's instructions within that time.
 
+## Calling a list of numbers
+
+`POST /v1/campaigns` places the same kind of call as [`POST /v1/calls`](#outbound-calls) for each number in a list. It
+needs the same settings and is owner-only in the same way: without `RELAY_AUTH_TOKEN` set the relay answers 401.
+
+```bash
+curl -X POST https://voice.example.com/v1/campaigns \
+  -H "Authorization: Bearer $RELAY_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Delivery windows, week 48",
+    "context": "You are calling to confirm a delivery window on Friday between 9 and 12.",
+    "voicemailMessage": "Hello, this is Acme Outdoor about your delivery. Please call us back on 415 555 0100.",
+    "concurrency": 3,
+    "attempts": 2,
+    "retryAfterMinutes": 60,
+    "window": { "from": "09:00", "to": "18:00", "timeZone": "Europe/Berlin", "days": ["mon", "tue", "wed", "thu", "fri"] },
+    "calls": [
+      { "to": "+4915112345678", "userId": "cus_8f2", "context": "You are calling Sam Lee about order A-1042." },
+      { "to": "+4915187654321" }
+    ]
+  }'
+```
+
+The answer is `201` with `{ "ok": true, "campaign": { "id": "...", "status": "running", ... } }`.
+
+| Field                         | Required | What it is                                                                                                                                                                  |
+| ----------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `calls`                       | yes      | 1 to 5,000 items. Each has `to` (E.164) and may have `context`, `userId` and `voicemailMessage`. A number may appear only once.                                             |
+| `name`                        | no       | Up to 120 characters.                                                                                                                                                       |
+| `context`, `voicemailMessage` | no       | Defaults for every call. A call's own value replaces them. The same length limits as `POST /v1/calls`.                                                                      |
+| `carrier`                     | no       | `twilio` or `telnyx`, as for `POST /v1/calls`.                                                                                                                              |
+| `concurrency`                 | no       | Calls at once in this campaign, 1 to 50. Default 1.                                                                                                                         |
+| `attempts`                    | no       | Tries for a number that is busy or does not answer, 1 to 5. Default 1.                                                                                                      |
+| `retryAfterMinutes`           | no       | How long to wait before trying again, 1 to 1440. Default 30.                                                                                                                |
+| `window`                      | no       | When calls may be placed: `from` and `to` as `HH:MM` (`from` before `to`), a `timeZone` name, and optionally `days` (`mon` to `sun`). One time zone for the whole campaign. |
+| `startAt`                     | no       | An ISO time such as `2026-12-01T09:00:00Z`, at most 30 days ahead. Without it the campaign starts at once.                                                                  |
+
+The request body may be up to 4 MB. This route has its own limit because 5,000 calls with their own contexts do not fit
+in the 32 KB the other routes allow.
+
+Other routes, all owner-only and never cached:
+
+- `GET /v1/campaigns` lists campaigns, newest first, with their counts.
+- `GET /v1/campaigns/:id` is the same summary plus `calls`: for each, `to`, `status`, `attempts`, `callSid`,
+  `durationMs`, `endedReason`, `answeredBy` and `lastAttemptAt`. It holds the numbers you sent, so treat it as private.
+- `POST /v1/campaigns/:id/cancel` stops the campaign.
+- `DELETE /v1/campaigns/:id` removes a campaign that is finished or cancelled and has no call in progress. Otherwise `409`.
+
+An unknown id is `404`. A bad request is `400`, with the first problem found. A fourth active campaign is `409`. If the
+carrier cannot place calls at all (not set up), creating the campaign is `503` with what to set.
+
+**Statuses.** A campaign is `scheduled` (before `startAt`), `running`, `done` or `cancelled`. While it is running
+outside its window it also says `waitingForWindow: true`. A call is:
+
+| Status              | Meaning                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------- |
+| `waiting`           | Not placed yet, or waiting to be tried again.                                                             |
+| `calling`           | Placed; nobody has answered yet.                                                                          |
+| `answered`          | A person is on the line.                                                                                  |
+| `completed`         | The conversation happened and is over. `durationMs` and `endedReason` say how long and why.               |
+| `voicemail`         | A machine or a fax answered. Not tried again.                                                             |
+| `no-answer`, `busy` | Nobody answered, and no tries are left.                                                                   |
+| `failed`            | The carrier could not place or complete the call, or refused it. `endedReason` says why. Not tried again. |
+| `cancelled`         | The campaign was cancelled before the call was placed.                                                    |
+| `unknown`           | The relay never learned what became of the call, or restarted during it. Not tried again.                 |
+
+**How calls are placed.** At most `concurrency` calls of a campaign are on the line at once, and at least one second
+passes between two placements on the relay, because carriers limit how fast calls may start. `busy` and `no-answer`
+are tried again after `retryAfterMinutes` while tries are left. `failed`, `voicemail`, `completed` and `unknown` never
+are. A refusal because every line is busy (`TELEPHONY_MAX_CALLS`, shared with inbound calls) is not a try: the relay
+waits a few seconds and tries again. A call the relay cannot place at all (for example a `voicemailMessage` on Telnyx)
+is marked `failed` with the reason, and the campaign goes on.
+
+**The window.** Calls are placed only from `from` up to, not including, `to`, on the listed `days`, in the time zone you
+name. The day is the day in that time zone, not the server's. Outside the window the campaign waits, and calls already
+on the line finish.
+
+**Cancelling.** Calls that are waiting become `cancelled`. Calls in progress finish and keep their real outcome; a busy
+one is not tried again.
+
+**Limits.** At most 3 campaigns are `scheduled` or `running` at once. The relay keeps the 50 most recent finished ones
+and drops the oldest.
+
+**How the relay learns what happened.** When it places a call for a campaign it also gives the carrier a status
+callback: `/telephony/twilio/status` or `/telephony/telnyx/status`. The carrier posts there when a call ends without
+anyone answering (busy, no answer, failed, canceled). The callback is checked like the voice webhook: Twilio's signature
+on Twilio, the secret in the URL on Telnyx. The carrier must be able to reach it, so the same rule applies as for
+outbound calls: set `TELEPHONY_PUBLIC_URL`, or the relay uses the address your `POST /v1/campaigns` request came in on
+(Telnyx cannot use that, because its URL holds a secret). A call that is answered ends through its media stream
+instead. If nothing is heard about a call for about 3 minutes, it becomes `unknown`.
+
+**Keeping campaigns.** Without `CAMPAIGNS_FILE` campaigns live in memory and are lost when the relay restarts. With it,
+the whole state is written to that file (mode 0600, at most about once a second) and read again at startup. A call that
+was in progress at the restart becomes `unknown` with the reason "the relay restarted during the call", and is not
+dialled again, because the person may already have been spoken to. Waiting calls carry on. The file holds the numbers
+you sent. If it cannot be read, the relay logs a problem, starts with no campaigns and leaves the file alone until you
+create a campaign.
+
+**Before you call a list.** In many places automated calls need the called person's consent given beforehand, are
+limited to certain hours, and must respect do-not-call lists. The relay enforces none of that beyond the window you set.
+Checking the law where you and the people you call are, and your lists, is up to you.
+
+**What was tested.** Campaigns were tested against stand-ins for the carriers, with timers driven by the test. They have
+not been run on real Twilio or Telnyx calls.
+
 ## Audio
 
 Phone networks carry G.711 μ-law at 8 kHz. The relay converts it both ways: the caller's audio is decoded and

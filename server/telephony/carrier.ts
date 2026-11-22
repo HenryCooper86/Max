@@ -57,6 +57,8 @@ export type Carrier = {
   authentic(input: { url: string; params: Record<string, string>; signature: string | undefined }): boolean;
   /** The URL the carrier fetches an outbound call's instructions from. */
   voiceUrl(base: string, plan: string): string;
+  /** The URL the carrier reports an outbound call's outcome to. Holds a secret exactly when the voice URL does. */
+  statusUrl(base: string, plan: string): string;
   /**
    * Whether that URL holds a secret. It is then built only from the relay's
    * configured public address, never from the address a request came in on,
@@ -83,6 +85,8 @@ export type Carrier = {
     to: string;
     from: string;
     url: string;
+    /** Where the carrier reports the call's final status, when someone is watching. */
+    statusUrl?: string;
   }): Promise<{ ok: boolean; status: number; callId?: string }>;
   /** What to set to be able to place calls, for the error a caller of the API sees. */
   placeCallHelp: string;

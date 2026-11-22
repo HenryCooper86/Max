@@ -64,18 +64,49 @@ describe("guardrailsConfigFrom", () => {
   });
 
   it("says what is wrong with the tools to check", () => {
-    expect(guardrailsConfigFrom({ toolRules: ["No refunds."], checkedTools: ["refund order"] }).problem).toBe(
+    expect(guardrailsConfigFrom({ toolRules: ["No refunds."], checkedTools: ["refund order"] }).problem).toContain(
       'guardrails.checkedTools: "refund order" is not a tool\'s name'
     );
-    expect(guardrailsConfigFrom({ checkedTools: ["refund"] }).problem).toBe(
+    expect(guardrailsConfigFrom({ checkedTools: ["refund"] }).problem).toContain(
       "guardrails.checkedTools names tools, and there are no toolRules to check them against"
     );
-    expect(guardrailsConfigFrom({ toolRules: "No refunds." }).problem).toBe(
+    expect(guardrailsConfigFrom({ toolRules: "No refunds." }).problem).toContain(
       "guardrails.toolRules must be a list of texts"
     );
-    expect(guardrailsConfigFrom({ toolRules: Array.from({ length: 11 }, (_, i) => `Rule ${i}.`) }).problem).toBe(
+    expect(guardrailsConfigFrom({ toolRules: Array.from({ length: 11 }, (_, i) => `Rule ${i}.`) }).problem).toContain(
       "guardrails.toolRules takes at most 10 entries"
     );
+  });
+
+  it("runs no tool at all while rules for tools that were asked for cannot be read", () => {
+    // A mistake anywhere in the key, with rules for tools in it.
+    for (const raw of [
+      { toolRules: ["No refunds."], checkedTools: ["refund tool"] },
+      { toolRules: ["No refunds."], rules: "Be kind." },
+      { toolRules: ["x".repeat(301)] },
+      { toolRules: ["No refunds."], sya: "Sorry." },
+      { toolRules: "No refunds." },
+      { checkedTools: ["refund"] }
+    ]) {
+      const read = guardrailsConfigFrom(raw);
+      expect(read.problem).toContain("no tool is run until this is fixed");
+      expect(read.config).toEqual({
+        blockedTerms: [],
+        rules: [],
+        userRules: [],
+        toolRules: [],
+        endConversation: false,
+        toolsUnchecked: true
+      });
+      expect(toolIsChecked(read.config, "refund")).toBe(true);
+      expect(toolIsChecked(read.config, "anything_else")).toBe(true);
+    }
+    // A mistake in a key that asks nothing of tools turns the key off, as before.
+    for (const raw of [{ rules: "Be kind." }, { blockedTerms: ["x"], toolRules: [], sya: "Sorry." }, "rules"]) {
+      const read = guardrailsConfigFrom(raw);
+      expect(read.problem).not.toContain("no tool is run");
+      expect(read.config).toBeUndefined();
+    }
   });
 
   it("turns nothing on when a part of it is wrong, and says which", () => {

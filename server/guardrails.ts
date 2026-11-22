@@ -45,6 +45,12 @@ export type GuardrailsConfig = {
   toolRules: string[];
   /** The tools those rules are for. Absent: every tool. */
   checkedTools?: string[];
+  /**
+   * The config asked for rules for tools and they could not be read. No tool
+   * is run until that is put right: a mistake in the config must not be what
+   * lets every call through.
+   */
+  toolsUnchecked?: true;
   /** What the assistant says in place of what was stopped. Absent: a line of the relay's own. */
   say?: string;
   /** End the conversation after that line. */
@@ -74,8 +80,24 @@ function textList(raw: unknown, name: string, max: number, maxChars: number): { 
   return { list };
 }
 
-/** Reads the `guardrails` key of the assistant config. A key that is wrong in any part turns nothing on. */
+/**
+ * Reads the `guardrails` key of the assistant config. A key that is wrong in
+ * any part turns nothing on, with one exception: when it asks for rules for
+ * tools, no tool is run until it is right.
+ */
 export function guardrailsConfigFrom(raw: unknown): { config?: GuardrailsConfig; problem?: string } {
+  const read = readGuardrails(raw);
+  if (!read.problem || !isRecord(raw)) return read;
+  const asked = (value: unknown): boolean =>
+    value !== undefined && value !== null && !(Array.isArray(value) && value.length === 0);
+  if (!asked(raw.toolRules) && !asked(raw.checkedTools)) return read;
+  return {
+    problem: `${read.problem}. The config asks for rules for tools, which could not be read: no tool is run until this is fixed`,
+    config: { blockedTerms: [], rules: [], userRules: [], toolRules: [], endConversation: false, toolsUnchecked: true }
+  };
+}
+
+function readGuardrails(raw: unknown): { config?: GuardrailsConfig; problem?: string } {
   if (raw === undefined || raw === null) return {};
   if (!isRecord(raw)) return { problem: "guardrails must be an object" };
   const known = ["blockedTerms", "rules", "userRules", "toolRules", "checkedTools", "say", "endConversation", "hold"];
@@ -251,6 +273,7 @@ type ToolVerdict = GuardrailVerdict | { broken: false; unchecked: string };
 
 /** Whether the rules for tools apply to this tool. */
 export function toolIsChecked(config: GuardrailsConfig | undefined, name: string): boolean {
+  if (config?.toolsUnchecked) return true;
   if (!config || config.toolRules.length === 0) return false;
   return !config.checkedTools || config.checkedTools.includes(name);
 }
@@ -440,7 +463,7 @@ export function createGuardrailJudge(
         toolJudgePrompt(rules),
         {
           ...(before?.trim() ? { user_said_before: before.trim().slice(-500) } : {}),
-          tool: name,
+          tool: name.slice(0, 64),
           ...(description?.trim() ? { what_the_tool_does: description.trim().slice(0, 500) } : {}),
           arguments: written
         },

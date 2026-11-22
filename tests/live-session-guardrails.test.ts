@@ -707,6 +707,59 @@ describe("rules for tools", () => {
     expect(toolResults[0]!.output.error).toContain("not allowed");
   });
 
+  it("leaves a name that is no tool to the broker, and asks the judge nothing", async () => {
+    const judge = fakeJudge();
+    const { tools } = refunds();
+    const { events, toolResults, noted, userSays } = await setup(rules, judge, tools);
+    userSays("Refund order 1182.");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "refund_everything_now", arguments: "{}" });
+    await settle();
+    expect(judge.asked).toEqual([]);
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]!.output.error).toBeDefined();
+    expect(noted).toEqual([]);
+  });
+
+  it("runs nothing and answers nothing when the conversation ends while the judge reads", async () => {
+    const judge = fakeJudge();
+    const { done, tools } = refunds();
+    const { events, provider, toolResults, userSays } = await setup(rules, judge, tools);
+    userSays("Refund order 1182, 40 dollars.");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "refund", arguments: '{"order":"1182","amount":40}' });
+    await settle();
+    await provider.close();
+    await judge.answer(0);
+    await settle();
+    expect(done).toEqual([]);
+    expect(toolResults).toEqual([]);
+  });
+
+  it("runs no tool while the config's rules for tools cannot be read", async () => {
+    const judge = fakeJudge();
+    const { done, tools } = refunds();
+    const { events, toolResults, userSays } = await setup(
+      { toolRules: ["Do not refund more than 100 dollars."], checkedTools: ["refund tool"] },
+      judge,
+      tools,
+      { conversation: { endSession: true } }
+    );
+    userSays("What did order 1182 cost?");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "find_order", arguments: '{"order":"1182"}' });
+    events().onToolCall!({ callId: "c2", name: "refund", arguments: '{"order":"1182","amount":5}' });
+    await settle();
+    expect(judge.asked).toEqual([]);
+    expect(done).toEqual([]);
+    expect(toolResults.map((result) => result.callId)).toEqual(["c1", "c2"]);
+    for (const result of toolResults) expect(result.output.error).toContain("cannot be checked");
+    // The conversation can still be ended.
+    events().onToolCall!({ callId: "c3", name: "end_session", arguments: "{}" });
+    await settle();
+    expect(toolResults.at(-1)!.output.error).toBeUndefined();
+  });
+
   it("does not have the relay's own end of the conversation judged", async () => {
     const judge = fakeJudge();
     const { tools } = refunds();

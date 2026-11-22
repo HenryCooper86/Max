@@ -649,13 +649,20 @@ was said that has to be taken back.
   characters, the tool does not run, the model is told the action could not be checked, and the relay logs "a tool
   call was not run". With `toolRules` set and no model to judge them, the tools they cover never run, and the relay
   says so at startup.
+- **A mistake in the key stops every tool.** Any other mistake in `guardrails` turns the whole key off with a warning.
+  When the key has `toolRules` or `checkedTools` in it, the relay instead runs no tool at all until the mistake is
+  fixed, and the startup log says so: a typing error must not be what lets every call through.
 - **Name the tools that matter.** Every checked call waits for the judge, which takes as long as a check of `rules`.
   With `checkedTools` only the tools you name wait, and only they stop working when the judge is down. Leave lookups
-  out and list the tools that change something: refunds, bookings, messages.
+  out and list the tools that change something: refunds, bookings, messages. A name that is none of the relay's tools
+  is reported at startup, because the tool you meant is then not checked. The relay cannot know a client's tools at
+  startup, so it reports those too: check the spelling yourself.
 - The relay's own two tools for the conversation itself, ending it and [handing over](#several-agents-and-handing-over)
   to another agent, are never checked. Every other tool can be: code tools, webhook tools, MCP tools, the knowledge
   base, client tools and a phone call's `transfer_call`.
-- If the user speaks over the assistant while the judge reads, the tool is not started.
+- If the user's next turn cancels the answer while the judge reads (they speak over the assistant, or type), the tool
+  is not started.
+- The demo backend (`VOICE_PROVIDER=mock`) has no judge: it does not run a tool that the rules cover, and says so.
 - A rule is a sentence for a model, and a model can misjudge a call either way. A limit that must hold, such as a
   maximum refund, belongs in the tool's own code or behind the webhook as well. Use `toolRules` for what your tools
   cannot check themselves, or as a second line in front of them.

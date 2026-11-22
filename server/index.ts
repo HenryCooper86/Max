@@ -40,7 +40,7 @@ import { buildHealth, config, describeConfig, readinessIssues, readinessWarnings
 import { metricsResponse, registerMetricsSource } from "./prometheus";
 import { cloudCounters } from "./cloud/counters";
 import { cloudSessionTokens, sessionTokens } from "./session-tokens";
-import { installServerTools } from "./tools/registry";
+import { installServerTools, serverTools as installedServerTools } from "./tools/registry";
 import { createConversationLifecycle } from "./conversation-lifecycle";
 import { createRecordings, recordingSettingsFromEnv } from "./recording";
 import { guardrailModelFromEnv, guardrailProblems } from "./guardrails";
@@ -2099,6 +2099,15 @@ authSessionSweepTimer.unref();
 // The relay's own tools (assistant.config.json → tools / toolsModule) load
 // before the first session can start.
 await installServerTools(assistant().tools);
+// A name in guardrails.checkedTools that is no tool is most likely a tool that is not being checked.
+for (const profile of [assistant(), ...assistant().variants.map((variant) => variant.profile)]) {
+  const known = new Set([...installedServerTools().map((tool) => tool.name), "transfer_call"]);
+  const strangers = (profile.guardrails?.checkedTools ?? []).filter((name) => !known.has(name));
+  if (strangers.length === 0) continue;
+  log.warn(
+    `${profile.variant ? `variants: ${profile.variant}: ` : ""}guardrails.checkedTools names ${strangers.join(", ")}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the tool you meant is not checked.`
+  );
+}
 // Max Cloud sessions a crash or restart left unbooked are charged up to their last checkpoint, and
 // bookings that failed are retried: now, and from then on every 15 seconds.
 recoverCloudSessions();

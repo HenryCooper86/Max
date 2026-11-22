@@ -1205,7 +1205,9 @@ export function createLiveProvider(
     const config = guard();
     // The relay's own tools for the conversation itself (ending it, handing over) are not actions of the owner's.
     if (!toolIsChecked(config, call.name) || builtinTools.some((tool) => tool.name === call.name)) return undefined;
-    if (!guardJudge) {
+    // A name that is no tool, or not one of the agent the conversation is with: the broker refuses it itself.
+    if (!tools?.specs().some((tool) => tool.name === call.name)) return undefined;
+    if (!guardJudge || config?.toolsUnchecked) {
       return Promise.resolve(
         "this action cannot be checked against the rules of this service, so it was not done. Tell the user you cannot do that right now."
       );

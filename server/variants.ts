@@ -137,6 +137,103 @@ export type VariantResults = {
   reading(): boolean;
 };
 
+// ---- is a difference larger than chance? ----------------------------------------
+
+/** ln Γ(x) for x > 0 (Lanczos), to about fifteen digits: ln n! = lnGamma(n + 1). */
+function lnGamma(x: number): number {
+  const c = [
+    0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
+    12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7
+  ];
+  const y = x - 1;
+  let sum = c[0]!;
+  for (let i = 1; i < 9; i += 1) sum += c[i]! / (y + i);
+  const t = y + 7.5;
+  return 0.5 * Math.log(2 * Math.PI) + (y + 0.5) * Math.log(t) - t + Math.log(sum);
+}
+
+/**
+ * Fisher's exact test, two-sided: how likely a difference at least this
+ * large is between two groups that in truth succeed equally often. Exact for
+ * any counts, which matters for the small numbers a test starts with.
+ */
+export function fisherExact(successA: number, failA: number, successB: number, failB: number): number {
+  const a = successA + failA;
+  const successes = successA + successB;
+  const total = a + successB + failB;
+  if (a === 0 || total === a || successes === 0 || successes === total) return 1;
+  const lnChoose = (n: number, k: number): number => lnGamma(n + 1) - lnGamma(k + 1) - lnGamma(n - k + 1);
+  const all = lnChoose(total, a);
+  /** The chance of `x` successes in the first group, the totals being what they are. */
+  const chance = (x: number): number => Math.exp(lnChoose(successes, x) + lnChoose(total - successes, a - x) - all);
+  const observed = chance(successA);
+  let p = 0;
+  for (let x = Math.max(0, a - (total - successes)); x <= Math.min(successes, a); x += 1) {
+    const here = chance(x);
+    if (here <= observed * (1 + 1e-7)) p += here;
+  }
+  return Math.min(1, p);
+}
+
+type VariantComparison = {
+  variant: string;
+  /** The variant it is compared with: the first in the list. */
+  against: string;
+  /** Conversations whose analysis said whether they succeeded, here and there. */
+  decided: number;
+  againstDecided: number;
+  /** The share of those that succeeded. Absent when none was decided. */
+  successRate?: number;
+  againstSuccessRate?: number;
+  /** How likely a difference at least this large is by chance alone. Absent when either has nothing decided. */
+  pValue?: number;
+  /** The difference is larger than chance explains, at the level `level` says. */
+  beyondChance: boolean;
+};
+
+const round = (value: number, digits: number): number => Number(value.toPrecision(digits));
+
+/**
+ * Each variant's success rate against the first variant's, for the
+ * conversations of one version. One in twenty differences between equal
+ * variants looks real at 0.05, so the level is divided by the number of
+ * comparisons made.
+ */
+export function compareVariants(
+  tallies: readonly Pick<VariantTally, "version" | "variant" | "succeeded" | "failed">[],
+  ids: readonly string[],
+  version: string | undefined
+): { level: number; comparisons: VariantComparison[] } | undefined {
+  const [first, ...others] = ids;
+  if (first === undefined || others.length === 0) return undefined;
+  const of = (id: string): { succeeded: number; failed: number } =>
+    tallies.find((tally) => tally.variant === id && tally.version === version) ?? { succeeded: 0, failed: 0 };
+  const level = 0.05 / others.length;
+  const base = of(first);
+  const baseDecided = base.succeeded + base.failed;
+  return {
+    level: round(level, 3),
+    comparisons: others.map((id) => {
+      const mine = of(id);
+      const decided = mine.succeeded + mine.failed;
+      const pValue =
+        decided > 0 && baseDecided > 0
+          ? fisherExact(mine.succeeded, mine.failed, base.succeeded, base.failed)
+          : undefined;
+      return {
+        variant: id,
+        against: first,
+        decided,
+        againstDecided: baseDecided,
+        ...(decided > 0 ? { successRate: round(mine.succeeded / decided, 3) } : {}),
+        ...(baseDecided > 0 ? { againstSuccessRate: round(base.succeeded / baseDecided, 3) } : {}),
+        ...(pValue !== undefined ? { pValue: round(pValue, 3) } : {}),
+        beyondChance: pValue !== undefined && pValue < level
+      };
+    })
+  };
+}
+
 /** A reason is the relay's own word, or a tool's: keep the table small whatever it holds. */
 const MAX_END_REASONS = 20;
 const MAX_GROUPS = 200;

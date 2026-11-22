@@ -841,9 +841,44 @@ is not a conversation and is not counted.
   answer means the file is still being read.
 - Without it the counts are kept in memory and start from zero at a restart. The
   [webhook](#the-conversation-webhook) still delivers every record with its `variant`, so your own system can count.
-- The relay reports the numbers and leaves the judging to you. It does not work out whether a difference is larger
-  than chance: with a few dozen conversations per variant it usually is not. The success figure is a model's reading
-  of your criteria, so read some of the conversations behind it.
+- The success figure is a model's reading of your criteria, so read some of the conversations behind it.
+
+**Is the difference real?** With two or more variants the answer also has a `comparison`: each variant's success rate
+against the first variant's, for the conversations of the config's current `version`.
+
+```json
+{
+  "comparison": {
+    "level": 0.05,
+    "comparisons": [
+      {
+        "variant": "warm",
+        "against": "control",
+        "decided": 209,
+        "againstDecided": 750,
+        "successRate": 0.818,
+        "againstSuccessRate": 0.747,
+        "pValue": 0.0345,
+        "beyondChance": true
+      }
+    ]
+  }
+}
+```
+
+- `decided` counts the conversations whose analysis said whether they succeeded, so this needs
+  `analysis.successCriteria`. Without it there is nothing to compare and `pValue` is absent.
+- `pValue` is how likely a difference at least this large would be if the two variants in truth succeeded equally
+  often (Fisher's exact test, two-sided). It is exact for small numbers too, so it can be read from the first day: it
+  simply stays large until there are enough conversations.
+- `beyondChance` is true when `pValue` is below `level`. The level is 0.05 divided by the number of comparisons: with
+  three variants there are two comparisons and each must be below 0.025, because the more differences you look at, the
+  more often one looks real by accident.
+- List your control first: every other variant is compared with the first one.
+- What it does not tell you: how large the difference really is, or whether it matters. Looking at the answer every
+  day and stopping the test the first time `beyondChance` is true finds differences that are not there more often
+  than the level says; decide beforehand how many conversations the test gets. The durations, end reasons and
+  sentiment are not compared.
 
 **Ending a test.** Move the winning variant's keys into the config, remove `variants`, and change `version`.
 

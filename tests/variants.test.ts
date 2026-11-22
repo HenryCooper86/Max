@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { assistantProfileFrom } from "../server/assistant";
 import type { ConversationEndedPayload } from "../server/conversation-webhook";
-import { createVariantResults, pickVariant, variantSpecsFrom } from "../server/variants";
+import { compareVariants, createVariantResults, fisherExact, pickVariant, variantSpecsFrom } from "../server/variants";
 
 describe("variantSpecsFrom", () => {
   it("is off without a list", () => {
@@ -302,5 +302,105 @@ describe("createVariantResults", () => {
     expect([count("a"), count("b")]).toEqual([2, 1]);
     // No file yet: nothing to count, and no error.
     expect(await createVariantResults().readLog(path.join(dir, "missing.jsonl"))).toBe(0);
+  });
+});
+
+describe("whether a difference is larger than chance", () => {
+  it("works out Fisher's exact test as the textbooks have it", () => {
+    expect(fisherExact(8, 2, 1, 5)).toBeCloseTo(0.034965035, 8);
+    expect(fisherExact(3, 1, 1, 3)).toBeCloseTo(0.485714286, 8);
+    expect(fisherExact(10, 0, 0, 10)).toBeCloseTo(1.0825088e-5, 11);
+    expect(fisherExact(171, 38, 560, 190)).toBeCloseTo(0.034457431, 7);
+    expect(fisherExact(600, 400, 650, 350)).toBeCloseTo(0.023592221, 7);
+    // The same whichever group is named first, and whichever outcome is called success.
+    expect(fisherExact(1, 5, 8, 2)).toBeCloseTo(0.034965035, 8);
+    expect(fisherExact(2, 8, 5, 1)).toBeCloseTo(0.034965035, 8);
+  });
+
+  it("finds no difference where none can show", () => {
+    expect(fisherExact(5, 0, 5, 0)).toBe(1);
+    expect(fisherExact(0, 5, 0, 7)).toBe(1);
+    expect(fisherExact(0, 0, 4, 2)).toBe(1);
+    expect(fisherExact(4, 2, 0, 0)).toBe(1);
+    expect(fisherExact(50, 50, 50, 50)).toBeCloseTo(1, 9);
+    expect(fisherExact(50, 50, 50, 50)).toBeLessThanOrEqual(1);
+  });
+
+  /** One group's verdicts. `null` for a record without a version. */
+  const tally = (variant: string | undefined, succeeded: number, failed: number, version: string | null = "v2") => ({
+    ...(version !== null ? { version } : {}),
+    ...(variant !== undefined ? { variant } : {}),
+    succeeded,
+    failed
+  });
+
+  it("compares each variant with the first, for the conversations of one version", () => {
+    const tallies = [
+      tally("control", 560, 190),
+      tally("warm", 171, 38),
+      // Another version's conversations, and those from before the test, are not part of it.
+      tally("control", 0, 500, "v1"),
+      tally("warm", 500, 0, "v1"),
+      tally(undefined, 3, 300)
+    ];
+    expect(compareVariants(tallies, ["control", "warm"], "v2")).toEqual({
+      level: 0.05,
+      comparisons: [
+        {
+          variant: "warm",
+          against: "control",
+          decided: 209,
+          againstDecided: 750,
+          successRate: 0.818,
+          againstSuccessRate: 0.747,
+          pValue: 0.0345,
+          beyondChance: true
+        }
+      ]
+    });
+  });
+
+  it("asks more of each difference when several are looked at", () => {
+    const tallies = [tally("control", 560, 190), tally("warm", 171, 38), tally("brisk", 150, 50)];
+    const compared = compareVariants(tallies, ["control", "warm", "brisk"], "v2")!;
+    expect(compared.level).toBe(0.025);
+    // 0.034 would do for one comparison, and does not for two.
+    expect(compared.comparisons[0]).toMatchObject({ variant: "warm", pValue: 0.0345, beyondChance: false });
+    expect(compared.comparisons[1]).toMatchObject({ variant: "brisk", against: "control", beyondChance: false });
+  });
+
+  it("says nothing of a variant that has no conversation with a verdict yet", () => {
+    const compared = compareVariants([tally("control", 20, 5)], ["control", "warm"], "v2")!;
+    expect(compared.comparisons).toEqual([
+      {
+        variant: "warm",
+        against: "control",
+        decided: 0,
+        againstDecided: 25,
+        againstSuccessRate: 0.8,
+        beyondChance: false
+      }
+    ]);
+    expect(compareVariants([], ["control", "warm"], undefined)!.comparisons[0]).toEqual({
+      variant: "warm",
+      against: "control",
+      decided: 0,
+      againstDecided: 0,
+      beyondChance: false
+    });
+  });
+
+  it("counts a config without a version with the records that have none", () => {
+    const tallies = [tally("control", 10, 0, null), tally("warm", 0, 10, null), tally("warm", 10, 0, "v2")];
+    expect(compareVariants(tallies, ["control", "warm"], undefined)!.comparisons[0]).toMatchObject({
+      decided: 10,
+      successRate: 0,
+      beyondChance: true
+    });
+  });
+
+  it("has nothing to compare without at least two variants", () => {
+    expect(compareVariants([], [], "v2")).toBeUndefined();
+    expect(compareVariants([], ["only"], "v2")).toBeUndefined();
   });
 });

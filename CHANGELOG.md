@@ -77,8 +77,8 @@
 - `variants` runs two to eight versions of the assistant side by side: each replaces a few config keys (instructions,
   greeting, persona, conversation settings, guardrails, agents) and takes a share of conversations by `weight`. The
   same user gets the same variant every time, the record names it as `session.variant`, and `GET /v1/variants` counts
-  conversations, length, end reasons, analysis success and sentiment for each. The relay does not test whether a
-  difference is significant. See [versions and A/B tests](docs/conversations.md#versions-and-ab-tests).
+  conversations, length, end reasons, analysis success and sentiment for each. Its `comparison` says whether each
+  variant's success rate differs from the first variant's by more than chance (Fisher's exact test). See [versions and A/B tests](docs/conversations.md#versions-and-ab-tests).
 
 ### Guardrails
 

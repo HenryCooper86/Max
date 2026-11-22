@@ -68,7 +68,7 @@ it is not built; see [not built yet](#not-built-yet).
 | Traces                                 | Yes    | OpenTelemetry (OTLP/HTTP), a span per session, turn and tool call.                                                                                                                                                                                                                                                                               |
 | Metrics, latency per turn              | Yes    | Prometheus `/metrics` and per-turn telemetry events.                                                                                                                                                                                                                                                                                             |
 | Usage metering and limits              | Yes    | Per user and month. See [usage and billing](usage-and-billing.md).                                                                                                                                                                                                                                                                               |
-| Agent versions and A/B tests           | Partly | A `version` label on every record, and `variants` that split conversations by weight, with counts per variant. No stored config history, and no significance test. See [versions and A/B tests](conversations.md#versions-and-ab-tests).                                                                                                         |
+| Agent versions and A/B tests           | Partly | A `version` label on every record, and `variants` that split conversations by weight, with counts per variant and a test of whether their success rates differ by more than chance. No stored config history. See [versions and A/B tests](conversations.md#versions-and-ab-tests).                                                              |
 | Compliance attestations (SOC 2, HIPAA) | No     | Self-hosting puts compliance in your hands; we hold no attestations.                                                                                                                                                                                                                                                                             |
 
 ### Reaching users
@@ -120,8 +120,8 @@ In rough order of how much they would matter to most users:
    while the assistant speaks and the start of an answer that breaks one is usually heard before it is cut. Tool
    calls can be judged before they run (`guardrails.toolRules`); what tools return is not checked.
 6. **A visual flow builder, and stored agent versions.** The config is a file with a `version` label, and variants of
-   it can be compared; the relay keeps no history of configs to roll back to, and does not say whether a difference
-   between two variants is larger than chance.
+   it can be compared, and the relay says whether their success rates differ by more than chance; it keeps no history
+   of configs to roll back to.
 7. **Warm transfers in which the assistant talks to the person first, and warm transfers on Telnyx.** On Twilio the
    person who picks up hears a summary the assistant wrote, and the caller comes back when nobody takes the call. The
    assistant does not hold a conversation with that person before connecting the two.

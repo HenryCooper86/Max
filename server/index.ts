@@ -44,7 +44,7 @@ import { installServerTools } from "./tools/registry";
 import { createConversationLifecycle } from "./conversation-lifecycle";
 import { createRecordings, recordingSettingsFromEnv } from "./recording";
 import { guardrailModelFromEnv, guardrailProblems } from "./guardrails";
-import { createVariantResults, pickVariant } from "./variants";
+import { compareVariants, createVariantResults, pickVariant } from "./variants";
 import {
   telnyxCarrier,
   telnyxSettingsFromEnv,
@@ -701,12 +701,20 @@ app.get("/v1/variants", (req, res) => {
   if (!ownerRequest(req, res)) return;
   const { variants, version } = assistant();
   const total = variants.reduce((sum, variant) => sum + variant.weight, 0);
+  const results = variantResults.tallies();
+  const compared = compareVariants(
+    results,
+    variants.map((variant) => variant.id),
+    version
+  );
   res.setHeader("Cache-Control", "private, no-store");
   res.json({
     ok: true,
     ...(version ? { version } : {}),
     variants: variants.map(({ id, weight }) => ({ id, weight, share: Math.round((weight / total) * 1000) / 1000 })),
-    results: variantResults.tallies(),
+    results,
+    // Whether the variants' success rates differ by more than chance, for the config's own version.
+    ...(compared ? { comparison: compared } : {}),
     // False when nothing is counted because no conversation records are kept.
     counting: conversations.keepsRecords(),
     ...(variantResults.reading() ? { readingLog: true } : {})

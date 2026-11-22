@@ -1779,6 +1779,7 @@ const campaigns = createCampaigns({
   ...(process.env.CAMPAIGNS_FILE?.trim() ? { file: process.env.CAMPAIGNS_FILE.trim() } : {}),
   notReady: (wanted) =>
     telephonyFor(wanted)?.placeProblem() ?? (telephonyFor(wanted) ? undefined : telephonyMissing(wanted)),
+  lineFree: (wanted) => telephonyFor(wanted)?.hasFreeLine() ?? true,
   place: async (wanted, input, watch, origin) => {
     const calls = telephonyFor(wanted);
     if (!calls) return { ok: false, status: 503, error: telephonyMissing(wanted) };

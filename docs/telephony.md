@@ -259,10 +259,13 @@ after `retryAfterMinutes` if tries are left, and is `failed` with the reason if 
 you choose `concurrency`.
 
 **When calls cannot be placed.** A number the carrier will not call (HTTP 400 and the like) is marked `failed` with the
-reason, and the campaign goes on. Five calls in a row that fail for a reason that holds for every call (the carrier
-cannot be reached, answers with a server error, or refuses the relay's credentials) stop the campaign: its waiting
-calls become `cancelled`, and `stoppedReason` says what the last answer was. Fix the cause and create a new campaign
-with the numbers that were not called.
+reason, and the campaign goes on. When the carrier says the relay is calling too fast (HTTP 429), the number is not
+marked: the relay waits 30 seconds and tries it again. The relay stops a campaign itself in two cases: five calls in a
+row fail for a reason that holds for every call (the carrier cannot be reached, answers with a server error or 429,
+refuses the relay's credentials, or the relay itself cannot place calls), or ten calls in a row are refused for any
+reason with none placed in between, which is what a wrong caller number looks like. Its waiting calls become
+`cancelled`, and `stoppedReason` says what the last answer was. Fix the cause and create a new campaign with the
+numbers that were not called.
 
 **The window.** Calls are placed only from `from` up to, not including, `to`, on the listed `days`, in the time zone you
 name. The day is the day in that time zone, not the server's. Outside the window the campaign waits, and calls already
@@ -286,16 +289,23 @@ the relay hangs up.
 **Keeping campaigns.** Without `CAMPAIGNS_FILE` campaigns live in memory and are lost when the relay restarts. With it,
 the whole state is written to that file (mode 0600, at most about once a second, less often when the file is large) and
 read again at startup. Before each call is placed, the relay also writes one line to a journal beside it
-(`<CAMPAIGNS_FILE>.journal`, mode 0600) and waits until that line is on disk. So a call that was placed or in progress
-when the relay stopped, even one placed a moment before a crash, becomes `unknown` with the reason "the relay restarted
-during the call" and is not dialled again, because the person may already have been spoken to. Waiting calls carry on.
-If the journal line cannot be written (a full disk, a missing directory), the call is not placed and the relay tries
-again every 30 seconds. Both files hold the numbers you sent. If the file cannot be read, the relay logs a problem,
-starts with no campaigns and leaves the file alone until you create a campaign. This protects against the relay
-stopping; it does not make two relays that share one file safe. Run campaigns on one relay.
+(`<CAMPAIGNS_FILE>.journal`, mode 0600) and waits until that line is on disk, and it places a new campaign's first call
+only once the file holds the campaign. So a call that was placed or in progress when the relay stopped, even one placed
+a moment before a crash, becomes `unknown` with the reason "the relay restarted during the call" and is not dialled
+again, because the person may already have been spoken to. Waiting calls carry on. If the journal line or the file
+cannot be written (a full disk, a missing directory), calls are not placed and the relay tries again every 30 seconds.
+Both files hold the numbers you sent.
 
-**Shutting down.** When the relay is told to stop it places no more calls, lets the calls on the line end with the rest
-of its sessions, and writes the file. Waiting calls carry on after the restart.
+- If the file cannot be read at startup, the relay logs a problem, starts with no campaigns and leaves the file alone
+  until you create a campaign.
+- If the file can be read and the journal cannot, the relay cannot know which calls were placed last. It cancels the
+  campaigns that still had calls waiting and says so in the log and in their `stoppedReason`.
+- This protects against the relay stopping. It does not make two relays that share one file safe: run campaigns on
+  one relay.
+
+**Shutting down.** When the relay is told to stop it places no more calls. Calls on the line are hung up with the rest
+of its sessions and recorded as `completed`. A call that is still ringing at that moment becomes `unknown` after the
+restart and is not dialled again. Waiting calls carry on after the restart.
 
 **Before you call a list.** In many places automated calls need the called person's consent given beforehand, are
 limited to certain hours, and must respect do-not-call lists. The relay enforces none of that beyond the window you set.

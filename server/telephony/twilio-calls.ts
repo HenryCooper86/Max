@@ -364,6 +364,8 @@ export type Telephony = {
         carrierStatus?: number;
       }
   >;
+  /** True when a call placed now would have a line: none is taken or spoken for by a call that is ringing. */
+  hasFreeLine(): boolean;
   activeCalls(): number;
 };
 
@@ -797,6 +799,9 @@ export function createTelephony(
           return;
         }
         if (active >= settings.maxCalls) {
+          // Another call took the last line between the answer and this stream.
+          const refused = watchedByCall.get(ticket.call.callSid);
+          if (refused) conclude(refused, { type: "refused", callSid: ticket.call.callSid });
           finish("busy");
           return;
         }
@@ -995,6 +1000,7 @@ export function createTelephony(
     expectsStream,
     placeCall,
     placeProblem,
+    hasFreeLine: () => active + linesSpokenFor() < settings.maxCalls,
     activeCalls: () => active
   };
 }

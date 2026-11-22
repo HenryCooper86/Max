@@ -319,6 +319,25 @@ describe("the relay's lines and watched calls", () => {
     expect(placed.events).toHaveLength(1);
   });
 
+  it("tells the watcher when the last line went between the answer and the stream", async () => {
+    const harness = twilio({ maxCalls: 1 });
+    const placed = await placeWatched(harness);
+    const inboundUrl = `${ORIGIN}/telephony/twilio/voice`;
+    const inbound = twilioVoice(harness, inboundUrl, { CallSid: "CAin1", From: "+14155550150", To: "+14155550199" });
+    // Both are answered while the line is free; the inbound call's stream is first.
+    const answer = twilioVoice(harness, placed.voiceUrl);
+    expect(placed.events).toEqual([{ type: "answered", callSid: "CAout1" }]);
+    await connectStream(harness, inbound.body, "CAin1");
+    await connectStream(harness, answer.body);
+    expect(placed.events).toEqual([
+      { type: "answered", callSid: "CAout1" },
+      { type: "refused", callSid: "CAout1" }
+    ]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(placed.events).toHaveLength(2);
+    expect(harness.telephony.hasFreeLine()).toBe(false);
+  });
+
   it("takes the call as placed when it is answered before the carrier's error arrives", async () => {
     const harness = twilio();
     const events: CallProgress[] = [];

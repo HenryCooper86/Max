@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { open, rename, rm } from "node:fs/promises";
+import path from "node:path";
 import type { Logger } from "../logger";
 import { E164, MAX_CONTEXT_CHARS, MAX_VOICEMAIL_CHARS, type CallProgress } from "./twilio-calls";
 
@@ -111,6 +112,8 @@ export type CampaignOptions = {
     watch: (progress: CallProgress) => void,
     origin: string | undefined
   ): Promise<PlaceResult>;
+  /** False while every line of this carrier is taken or spoken for: placing waits, and nothing is written down. */
+  lineFree?(carrier: CampaignCarrier | undefined): boolean;
   /** Why calls cannot be placed through this carrier at all (not set up), checked when a campaign is created. */
   notReady?(carrier: CampaignCarrier | undefined): string | undefined;
   log: Logger;
@@ -156,6 +159,10 @@ const STORAGE_RETRY_MS = 30_000;
 const MAX_WAKE_MS = 60 * 60_000;
 /** This many calls in a row that cannot be placed stop a campaign: it is the setup, not the numbers. */
 const MAX_PLACE_FAILURES = 5;
+/** And this many in a row that the carrier refused for whatever reason, with none placed in between. */
+const MAX_REFUSALS = 10;
+/** When the carrier says we are calling too fast. */
+const CARRIER_BUSY_RETRY_MS = 30_000;
 const RESTART_REASON = "the relay restarted during the call";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -358,8 +365,10 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
   let wakeAt = 0;
   let stopped = false;
   let closed = false;
-  /** Calls in a row that could not be placed, by campaign. */
-  const placeFailures = new WeakMap<Campaign, number>();
+  /** Calls in a row that could not be placed, by campaign: for a reason that holds for every call, and for any reason. */
+  const placeFailures = new WeakMap<Campaign, { everyCall: number; any: number }>();
+  /** Campaigns the file holds. A campaign's calls are placed only once it is one of them. */
+  const onDisk = new WeakSet<Campaign>();
 
   // Persistence: the whole state in the file, now and then, and one line in a
   // journal beside it before each call is placed. The journal is what makes
@@ -370,9 +379,13 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
   let saveGap = SAVE_GAP_MS;
   /** Everything that touches the two files, one after the other. */
   let writing: Promise<void> = Promise.resolve();
+  /** A call is being written to the journal, and what follows from that is being decided. */
+  let recording: Promise<boolean> | undefined;
   /** The number of the last line written to the journal. The file says up to which line it knows. */
   let journalSeq = 0;
   const journalFile = options.file ? `${options.file}.journal` : undefined;
+  /** The journal's place in its directory is known to be on disk. */
+  let journalSynced = false;
 
   const formatters = new Map<string, Intl.DateTimeFormat>();
 
@@ -440,7 +453,8 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     // campaign does not change any more, so it is turned into text only when
     // its turn comes: a long history is never one long pause.
     const seq = journalSeq;
-    const snapshot = campaigns.map((campaign) => (isFinished(campaign, started) ? campaign : JSON.stringify(campaign)));
+    const written = [...campaigns];
+    const snapshot = written.map((campaign) => (isFinished(campaign, started) ? campaign : JSON.stringify(campaign)));
     const temporary = `${file}.tmp`;
     try {
       const handle = await open(temporary, "w", 0o600);
@@ -455,13 +469,55 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
         await handle.close();
       }
       await rename(temporary, file);
+      // The new file is in its place for good before the journal it replaces goes.
+      await syncDirectory(file);
       // Nothing was placed meanwhile: the file knows all the journal does.
-      if (journalFile && seq === journalSeq) await rm(journalFile, { force: true });
+      if (journalFile && seq === journalSeq) {
+        await rm(journalFile, { force: true });
+        journalSynced = false;
+      }
+      let fresh = false;
+      for (const campaign of written) {
+        fresh ||= !onDisk.has(campaign);
+        onDisk.add(campaign);
+      }
+      // A campaign waits for this before its first call.
+      if (fresh) wake(0);
     } catch (error) {
       dirty = true;
       log.warn("campaigns could not be saved", { reason: reasonOf(error) });
     }
     saveGap = Math.max(SAVE_GAP_MS, (now() - started) * SAVE_COST_FACTOR);
+  }
+
+  /** Makes a new or renamed file's place in its directory last through a power cut. */
+  async function syncDirectory(file: string): Promise<void> {
+    try {
+      const handle = await open(path.dirname(file), "r");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      /* not every system lets a directory be synced */
+    }
+  }
+
+  /** One line of the journal, written and synced. Throws when it cannot be. */
+  async function appendToJournal(entry: Record<string, unknown>): Promise<void> {
+    const handle = await open(journalFile as string, "a", 0o600);
+    try {
+      // A line of its own even after one that a crash cut short.
+      await handle.appendFile(`\n${JSON.stringify(entry)}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    if (!journalSynced) {
+      await syncDirectory(journalFile as string);
+      journalSynced = true;
+    }
   }
 
   /**
@@ -471,16 +527,10 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
    */
   function recordAttempt(campaign: Campaign, call: CampaignCall, seq: number): Promise<boolean> {
     if (!journalFile) return Promise.resolve(true);
-    const line = `${JSON.stringify({ seq, campaign: campaign.id, to: call.to, attempts: call.attempts, at: call.lastAttemptAt })}\n`;
+    const entry = { seq, campaign: campaign.id, to: call.to, attempts: call.attempts, at: call.lastAttemptAt };
     const written = writing.then(async () => {
       try {
-        const handle = await open(journalFile, "a", 0o600);
-        try {
-          await handle.appendFile(line);
-          await handle.sync();
-        } finally {
-          await handle.close();
-        }
+        await appendToJournal(entry);
         return true;
       } catch (error) {
         log.warn("a call was not placed: it could not be written to the campaigns journal first", {
@@ -491,6 +541,25 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     });
     writing = written.then(() => undefined);
     return written;
+  }
+
+  /**
+   * Takes a line of the journal back: the call it announced was not placed
+   * after all. Not waited for; if it is lost, the call counts as placed.
+   */
+  function recordUndo(seq: number): void {
+    if (!journalFile) return;
+    writing = writing.then(() => appendToJournal({ undo: seq })).catch(() => undefined);
+  }
+
+  /** Writes the file now, whatever was written when. For what must not wait: a new campaign. */
+  function saveNow(): void {
+    if (!options.file || closed) return;
+    dirty = true;
+    clearTimeout(saveTimer);
+    saveTimer = undefined;
+    lastSavedAt = now();
+    writing = writing.then(writeFileNow);
   }
 
   /** Saves what changed, not more often than every second. */
@@ -548,6 +617,7 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
       }
     }
     campaigns = revived;
+    for (const campaign of revived) onDisk.add(campaign);
     const known =
       isRecord(parsedFile) && Number.isInteger(parsedFile.journalSeq) ? (parsedFile.journalSeq as number) : 0;
     journalSeq = known;
@@ -574,18 +644,26 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
       return;
     }
     let applied = 0;
+    const entries: Record<string, unknown>[] = [];
+    const undone = new Set<number>();
     for (const line of text.split("\n")) {
       if (!line.trim()) continue;
-      let entry: unknown;
       try {
-        entry = JSON.parse(line);
+        const entry: unknown = JSON.parse(line);
+        if (!isRecord(entry)) continue;
+        if (typeof entry.undo === "number") {
+          undone.add(entry.undo);
+          // Its number is not given to another line: a late "undo" must never take back a later call.
+          journalSeq = Math.max(journalSeq, entry.undo);
+        } else entries.push(entry);
       } catch {
         // A line cut short by the crash: its call was not placed, the line comes first.
-        continue;
       }
-      if (!isRecord(entry) || typeof entry.seq !== "number" || typeof entry.attempts !== "number") continue;
+    }
+    for (const entry of entries) {
+      if (typeof entry.seq !== "number" || typeof entry.attempts !== "number") continue;
       journalSeq = Math.max(journalSeq, entry.seq);
-      if (entry.seq <= known) continue;
+      if (entry.seq <= known || undone.has(entry.seq)) continue;
       const call = campaigns
         .find((campaign) => campaign.id === entry.campaign)
         ?.calls.find((other) => other.to === entry.to);
@@ -625,8 +703,13 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
   }
 
   /** The next call that may be placed now, and otherwise how long until something might change. */
-  function nextDue(at: number): { due?: { campaign: Campaign; call: CampaignCall }; retryIn?: number } {
+  function nextDue(at: number): {
+    due?: { campaign: Campaign; call: CampaignCall };
+    retryIn?: number;
+    unsaved?: boolean;
+  } {
     let retryIn: number | undefined;
+    let unsaved = false;
     const soonest = (ms: number): void => {
       retryIn = retryIn === undefined ? ms : Math.min(retryIn, ms);
     };
@@ -645,6 +728,13 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
         soonest(WINDOW_CHECK_MS);
         continue;
       }
+      // Not before the file holds the campaign: a crash must not leave calls that
+      // were placed for a campaign nobody knows of. The write that does it wakes the scheduler.
+      if (options.file && !onDisk.has(campaign)) {
+        unsaved = true;
+        soonest(STORAGE_RETRY_MS);
+        continue;
+      }
       // A finished call wakes the scheduler, so a full campaign waits for that.
       if (campaign.calls.filter(inProgress).length >= campaign.concurrency) continue;
       for (const call of campaign.calls) {
@@ -655,16 +745,22 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
         soonest((call.notBefore as number) - at);
       }
     }
-    return { ...(retryIn !== undefined ? { retryIn } : {}) };
+    return { ...(retryIn !== undefined ? { retryIn } : {}), ...(unsaved ? { unsaved } : {}) };
   }
 
   async function tick(): Promise<void> {
     if (placing || closed || stopped) return;
     const at = now();
-    const { due, retryIn } = nextDue(at);
+    const { due, retryIn, unsaved } = nextDue(at);
+    // A write that failed is tried again.
+    if (unsaved) changed();
     if (!due) {
       if (retryIn !== undefined) wake(Math.max(retryIn, 0));
       return;
+    }
+    // Asked before anything is written down: a full relay is not a call that was tried.
+    if (linesBusyUntil <= at && options.lineFree?.(due.campaign.carrier) === false) {
+      linesBusyUntil = at + LINE_BUSY_RETRY_MS;
     }
     const wait = Math.max(lastPlacedAt + PLACE_GAP_MS - at, linesBusyUntil - at, storageBusyUntil - at);
     if (wait > 0) {
@@ -689,6 +785,7 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     const earlierNotBefore = call.notBefore;
     delete call.notBefore;
     journalSeq += 1;
+    const seq = journalSeq;
     const backOut = (): void => {
       call.status = campaign.cancelled ? "cancelled" : "waiting";
       call.attempts -= 1;
@@ -697,17 +794,26 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
       if (earlierNotBefore !== undefined && !campaign.cancelled) call.notBefore = earlierNotBefore;
     };
     // On disk before the carrier hears of it: a crash right after must not lead to a second call.
-    if (!(await recordAttempt(campaign, call, journalSeq))) {
-      backOut();
-      storageBusyUntil = now() + STORAGE_RETRY_MS;
-      return;
-    }
-    // The relay began to shut down while that was written: nobody would be there to answer.
-    if (stopped || closed) {
-      backOut();
-      changed();
-      return;
-    }
+    const recorded = recordAttempt(campaign, call, seq).then((written) => {
+      if (!written) {
+        backOut();
+        storageBusyUntil = now() + STORAGE_RETRY_MS;
+        return false;
+      }
+      // The relay began to shut down while that was written: nobody would be there to answer.
+      if (stopped || closed) {
+        backOut();
+        recordUndo(seq);
+        changed();
+        return false;
+      }
+      return true;
+    });
+    // `close` waits for this, so that what it writes last is what was decided here.
+    recording = recorded;
+    const go = await recorded;
+    if (recording === recorded) recording = undefined;
+    if (!go) return;
     changed();
     const context = call.context ?? campaign.context;
     const voicemailMessage = call.voicemailMessage ?? campaign.voicemailMessage;
@@ -736,24 +842,36 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     } else if (result.status === 429) {
       // The relay's own lines are full. That is not an attempt at this person.
       backOut();
+      recordUndo(seq);
       linesBusyUntil = now() + LINE_BUSY_RETRY_MS;
     } else {
-      call.status = "failed";
-      call.endedReason = result.error;
-      // A number the carrier will not call says nothing about the next one. A
-      // carrier that cannot be reached, or will not have us, says the same for all.
       const carrier = result.carrierStatus;
+      if (result.status === 502 && carrier === 429) {
+        // The carrier says we call too fast. It placed nothing: the number is tried again later.
+        backOut();
+        recordUndo(seq);
+        linesBusyUntil = now() + CARRIER_BUSY_RETRY_MS;
+      } else {
+        call.status = "failed";
+        call.endedReason = result.error;
+      }
+      // A number the carrier will not call says nothing about the next one. A
+      // carrier that cannot be reached, or will not have us, says the same for
+      // all. So does one that refuses number after number without taking any.
       const everyCall =
         result.status !== 502 ||
         carrier === undefined ||
         carrier === 0 ||
         carrier >= 500 ||
         [401, 403, 429].includes(carrier);
-      const failures = everyCall ? (placeFailures.get(campaign) ?? 0) + 1 : 0;
+      const earlier = placeFailures.get(campaign) ?? { everyCall: 0, any: 0 };
+      const failures = { everyCall: everyCall ? earlier.everyCall + 1 : 0, any: earlier.any + 1 };
       placeFailures.set(campaign, failures);
-      if (failures >= MAX_PLACE_FAILURES && !campaign.cancelled) {
+      const count =
+        failures.everyCall >= MAX_PLACE_FAILURES ? failures.everyCall : failures.any >= MAX_REFUSALS ? failures.any : 0;
+      if (count > 0 && !campaign.cancelled) {
         campaign.cancelled = true;
-        campaign.stoppedReason = `Stopped: ${MAX_PLACE_FAILURES} calls in a row could not be placed. The last answer was: ${result.error}`;
+        campaign.stoppedReason = `Stopped: ${count} calls in a row could not be placed. The last answer was: ${result.error}`;
         for (const other of campaign.calls) if (other.status === "waiting") other.status = "cancelled";
         log.warn("campaign stopped: calls cannot be placed", { campaignId: campaign.id });
       }
@@ -833,7 +951,9 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     campaigns.push(parsed.campaign);
     saveBlocked = false;
     log.info("campaign created", { campaignId: parsed.campaign.id, calls: parsed.campaign.calls.length });
-    changed();
+    dropOldFinished();
+    // At once: its first call waits for the file to hold it.
+    saveNow();
     wake(0);
     return { ok: true, campaign: summarise(parsed.campaign, at) };
   }
@@ -903,6 +1023,17 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     return { ok: true };
   }
 
+  /** Resolves when no write to the files is under way any more. */
+  async function settled(): Promise<void> {
+    let seen: Promise<void>;
+    do {
+      seen = writing;
+      await seen;
+      // What waited for that write may queue another: give it its turn first.
+      await Promise.resolve();
+    } while (seen !== writing);
+  }
+
   function stop(): void {
     stopped = true;
     clearTimeout(wakeTimer);
@@ -914,8 +1045,14 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     clearTimeout(wakeTimer);
     clearTimeout(saveTimer);
     saveTimer = undefined;
-    writing = writing.then(writeFileNow);
-    await writing;
+    // A placement that was being written down when this was called backs out
+    // and says so in the journal: wait for that too, and write what it changed.
+    await recording;
+    for (let round = 0; round < 3; round += 1) {
+      writing = writing.then(writeFileNow);
+      await settled();
+      if (!dirty) break;
+    }
   }
 
   load();
@@ -934,13 +1071,7 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
       return loadProblem;
     },
     stop,
-    async settled() {
-      let seen: Promise<void>;
-      do {
-        seen = writing;
-        await seen;
-      } while (seen !== writing);
-    },
+    settled,
     close
   };
 }

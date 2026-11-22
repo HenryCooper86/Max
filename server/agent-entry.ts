@@ -67,6 +67,40 @@ const VALUE_NAME = /^[a-z][a-z0-9_]{0,39}$/;
 const PLACEHOLDER = /\{\{\s*([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?)\s*\}\}/g;
 /** Values every conversation has, which no step can set. */
 export const SESSION_VALUES = ["user.id", "session.id", "channel"] as const;
+/** Names a value cannot have: the relay's own, and the parameters of the handover a value travels in. */
+const TAKEN_NAMES = new Set(["channel", "agent", "values"]);
+/** `{{…}}` of any kind, to find the ones that are no placeholder: a slip of the pen would be said aloud. */
+const BRACES = /\{\{[^{}]*\}\}/g;
+const WHOLE_PLACEHOLDER = /^\{\{\s*[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?\s*\}\}$/;
+
+/**
+ * A value as it is kept: one line of at most 200 characters, without the
+ * characters that are not seen but change how text reads (control characters,
+ * marks that turn the direction of writing, spaces of no width). A value comes
+ * from what a model heard or from a tool's answer, and goes into what is said
+ * and into what a model reads.
+ */
+function cleanValue(text: string): string {
+  return [
+    ...text
+      .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  ]
+    .slice(0, 200)
+    .join("")
+    .trim();
+}
+
+function wrongBraces(value: unknown): string | undefined {
+  if (typeof value === "string") return (value.match(BRACES) ?? []).find((one) => !WHOLE_PLACEHOLDER.test(one));
+  if (Array.isArray(value)) return value.map(wrongBraces).find(Boolean);
+  if (value && typeof value === "object") return Object.values(value).map(wrongBraces).find(Boolean);
+  return undefined;
+}
+
+const notAPlaceholder = (found: string): string =>
+  `${found.slice(0, 60)} is not a value: write {{name}}, with a name of lower-case letters, digits and _`;
 const TESTS = ["is", "in", "above", "below", "exists", "failed"] as const;
 /** The conversation's own tools: ending it and handing it over are not a step's to call. */
 const NOT_FOR_A_STEP = new Set(["end_session", "transfer_to_agent"]);
@@ -143,6 +177,8 @@ export function agentEntryFrom(raw: unknown): { entry?: AgentEntry; problem?: st
     if (typeof raw.say !== "string") return { problem: "onEnter: say must be text" };
     const say = raw.say.replace(/\s+/g, " ").trim();
     if (say.length > MAX_SAY) return { problem: `onEnter: say can be at most ${MAX_SAY} characters` };
+    const wrong = wrongBraces(say);
+    if (wrong) return { problem: `onEnter: say: ${notAPlaceholder(wrong)}` };
     if (say) entry.say = say;
   }
   if (raw.call !== undefined && raw.call !== null) {
@@ -164,6 +200,8 @@ export function agentEntryFrom(raw: unknown): { entry?: AgentEntry; problem?: st
     if (JSON.stringify(args).length > MAX_ARGUMENTS) {
       return { problem: `onEnter: the arguments of a call can be at most ${MAX_ARGUMENTS} characters of JSON` };
     }
+    const wrong = wrongBraces(args);
+    if (wrong) return { problem: `onEnter: the arguments of a call: ${notAPlaceholder(wrong)}` };
     entry.call = { tool: call.tool.trim(), arguments: args };
   }
   if (raw.save !== undefined && raw.save !== null) {
@@ -180,6 +218,7 @@ export function agentEntryFrom(raw: unknown): { entry?: AgentEntry; problem?: st
           problem: `onEnter: save: a value's name is lower-case letters, digits and _, starting with a letter; "${name.slice(0, 40)}" is not`
         };
       }
+      if (TAKEN_NAMES.has(name)) return { problem: `onEnter: save: a value cannot be called ${name}` };
       if (typeof path !== "string" || !path.trim() || path.trim().length > MAX_PATH) {
         return { problem: `onEnter: save: ${name} needs a path into the tool's answer, such as "order.status"` };
       }
@@ -308,6 +347,7 @@ export function collectFrom(raw: unknown): { collect?: CollectedValue[]; problem
     if (!VALUE_NAME.test(name)) {
       return { problem: "collect: a value's name is lower-case letters, digits and _, starting with a letter" };
     }
+    if (TAKEN_NAMES.has(name)) return { problem: `collect: a value cannot be called ${name}` };
     if (collect.some((one) => one.name === name)) return { problem: `collect: ${name} is there twice` };
     const description = typeof item.description === "string" ? item.description.replace(/\s+/g, " ").trim() : "";
     if (!description || description.length > 200) {
@@ -329,7 +369,10 @@ export function collectFrom(raw: unknown): { collect?: CollectedValue[]; problem
 export function collected(value: unknown, type: CollectedValue["type"]): Plain | undefined {
   if (type === "number") {
     if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
-    return typeof value === "string" && /^[+-]?\d+(\.\d+)?$/.test(value.trim()) ? Number(value) : undefined;
+    // An amount or a count. What a number would write differently is no number here: "00123" is
+    // an identifier, and so is a row of digits too long for a number to hold. Those are text.
+    const digits = typeof value === "string" ? value.trim() : "";
+    return /^[+-]?(0|[1-9]\d{0,14})(\.\d{1,10})?$/.test(digits) ? Number(digits) : undefined;
   }
   if (type === "boolean") {
     if (typeof value === "boolean") return value;
@@ -338,8 +381,7 @@ export function collected(value: unknown, type: CollectedValue["type"]): Plain |
   }
   const text =
     typeof value === "string" ? value : typeof value === "number" && Number.isFinite(value) ? String(value) : "";
-  const clean = text.replace(/\s+/g, " ").trim().slice(0, 200);
-  return clean || undefined;
+  return cleanValue(text) || undefined;
 }
 
 /** The names written as `{{name}}` in a text. */
@@ -416,7 +458,10 @@ export function savedFrom(save: Record<string, string> | undefined, output: stri
   const kept: Record<string, Plain> = {};
   for (const [name, path] of Object.entries(save)) {
     const value = valueAt(answer, path);
-    if (isPlain(value) && value !== "") kept[name] = typeof value === "string" ? value.trim().slice(0, 200) : value;
+    if (typeof value === "string") {
+      const clean = cleanValue(value);
+      if (clean) kept[name] = clean;
+    } else if (isPlain(value)) kept[name] = value;
   }
   return kept;
 }

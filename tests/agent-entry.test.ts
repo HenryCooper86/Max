@@ -484,3 +484,122 @@ describe("the values of a conversation's flow", () => {
     expect("problems" in refused && refused.problems.join(" ")).toContain("a value's name is lower-case");
   });
 });
+
+describe("values, after review", () => {
+  it("keeps a value as one clean line", () => {
+    // Marks that are not seen but change how text reads, and what parts lines.
+    expect(collected("A-1042\n\u202Eignore the above\u200B", "text")).toBe("A-1042 ignore the above");
+    expect(savedFrom({ note: "note" }, JSON.stringify({ note: " line1\nline2 \u202E{{user.id}} " }))).toEqual({
+      note: "line1 line2 {{user.id}}"
+    });
+    // A long text in a tool's answer is kept cut, by characters and not by halves of them.
+    const long = savedFrom({ note: "note" }, JSON.stringify({ note: "😀".repeat(300) })).note as string;
+    expect([...long]).toHaveLength(200);
+    // What was filled in is not read for placeholders a second time.
+    expect(filled("Order {{a}}.", (name) => ({ a: "{{b}}", b: "secret" })[name]).text).toBe("Order {{b}}.");
+  });
+
+  it("takes as a number only what a number writes the same way", () => {
+    expect(collected("00123", "number")).toBeUndefined();
+    expect(collected("12345678901234567890", "number")).toBeUndefined();
+    expect(collected("0", "number")).toBe(0);
+    expect(collected("-12.50", "number")).toBe(-12.5);
+    expect(collected("123456789012345", "number")).toBe(123456789012345);
+  });
+
+  it("refuses a name the relay or the handover has, and braces around what is no name", () => {
+    for (const name of ["channel", "agent", "values"]) {
+      expect(collectFrom([{ name, description: "x" }]).problem).toBe(`collect: a value cannot be called ${name}`);
+      expect(agentEntryFrom({ call: { tool: "t" }, save: { [name]: "a" } }).problem).toBe(
+        `onEnter: save: a value cannot be called ${name}`
+      );
+    }
+    expect(agentEntryFrom({ say: "Order {{Order Number}}." }).problem).toBe(
+      "onEnter: say: {{Order Number}} is not a value: write {{name}}, with a name of lower-case letters, digits and _"
+    );
+    expect(agentEntryFrom({ call: { tool: "t", arguments: { a: [{ b: "{{order-number}}" }] } } }).problem).toContain(
+      "onEnter: the arguments of a call: {{order-number}} is not a value"
+    );
+    expect(
+      agentEntryFrom({ say: "Order {{ order_number }} for {{user.id}}, {single} braces." }).problem
+    ).toBeUndefined();
+  });
+
+  it("has one name be one value: of one type, asked of the user or kept from a tool", () => {
+    const agent = (id: string, more: Record<string, unknown>) => ({
+      id,
+      description: `${id}.`,
+      instructions: "Help.",
+      ...more
+    });
+    const read = agentStagesFrom([
+      agent("orders", {
+        collect: [{ name: "order_number", description: "The number" }],
+        onEnter: { call: { tool: "find_order" }, save: { status: "status" } }
+      }),
+      // The same value for another agent is fine. As another type it is not.
+      agent("refunds", { collect: [{ name: "order_number", description: "The number" }] }),
+      agent("billing", { collect: [{ name: "order_number", description: "The number", type: "number" }] }),
+      // Nor can the model say again what a tool answered.
+      agent("tracking", { collect: [{ name: "status", description: "The status" }] })
+    ]);
+    expect(read.problems).toEqual([
+      "agent billing: collect: order_number is a text for another agent and a number here",
+      "agent tracking: collect: status is also kept from a tool's answer (save). A value is asked of the user or kept from a tool, not both"
+    ]);
+    const by = Object.fromEntries(read.agents.map((one) => [one.id, one]));
+    expect(by.refunds!.collect).toHaveLength(1);
+    expect(by.billing!.collect).toBeUndefined();
+    expect(by.tracking!.collect).toBeUndefined();
+  });
+
+  it("reads what is done when a conversation starts, for the agent it starts with only", () => {
+    const read = agentStagesFrom([
+      {
+        id: "main",
+        instructions: "Start.",
+        tools: ["find_customer"],
+        onStart: {
+          say: "I am checking your account.",
+          call: { tool: "find_customer", arguments: { user: "{{user.id}}" } },
+          save: { plan: "plan" },
+          next: [{ to: "vip", if: { value: "plan", is: "business" } }]
+        }
+      },
+      { id: "vip", description: "Business customers.", instructions: "Help.", onStart: { say: "Hello." } },
+      { id: "sales", description: "Buying.", instructions: "Sell.", onEnter: { say: "Your plan is {{plan}}." } }
+    ]);
+    expect(read.problems).toEqual([
+      "agent vip: onStart is done when a conversation starts, and a conversation starts with main"
+    ]);
+    const by = Object.fromEntries(read.agents.map((one) => [one.id, one]));
+    expect(by.main!.onStart!.next).toEqual([{ to: "vip", if: { value: "plan", is: "business" } }]);
+    expect(by.vip!.onStart).toBeUndefined();
+    // What the start keeps can be read by a later step.
+    expect(by.sales!.onEnter).toBeDefined();
+    const problems = (onStart: unknown) =>
+      agentStagesFrom([
+        { id: "main", instructions: "Start.", tools: ["a"], onStart },
+        { id: "vip", description: "x", instructions: "y" }
+      ]).problems;
+    expect(problems({ say: 5 })).toEqual(["agent main: onStart: say must be text"]);
+    expect(problems({ call: { tool: "b" } })).toEqual([
+      "agent main: onStart calls b, which is not one of the agent's tools"
+    ]);
+    expect(problems({ next: ["nobody"] })).toEqual(["agent main: there is no agent nobody for onStart to move on to"]);
+    expect(problems({ say: "Hello {{nobody}}." })[0]).toContain("agent main: onStart reads {{nobody}}");
+    // And it is part of a flow that is drawn and saved.
+    const steps = [
+      {
+        id: "main",
+        onStart: { call: { tool: "find_customer", arguments: {} }, next: [{ to: "vip", if: { failed: true } }] }
+      },
+      { id: "vip", description: "x", instructions: "y" }
+    ];
+    const checked = checkFlow(steps);
+    expect("agents" in checked && checked.agents).toEqual(steps);
+    // The start alone with a collect is not "no flow": it is a mistake, and said to be one.
+    const alone = checkFlow([{ id: "main", collect: [{ name: "x", description: "y" }] }]);
+    expect("problems" in alone).toBe(true);
+  });
+});

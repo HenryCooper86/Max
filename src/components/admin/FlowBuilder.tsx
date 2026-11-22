@@ -24,6 +24,7 @@ import {
   tidy,
   valueOf,
   type BranchTest,
+  type EntryKey,
   type FlowBranch,
   type FlowCollected,
   type FlowEntry,
@@ -232,6 +233,96 @@ function BranchRow({
   );
 }
 
+/**
+ * What a step keeps from its tool's answer: a name and where the part is. The
+ * rows are the component's own while they are edited: a name that is still
+ * being typed can pass through the name of another row, and neither is lost.
+ */
+function SaveRows({
+  value,
+  say,
+  onChange
+}: {
+  value: Record<string, string> | undefined;
+  say: Say;
+  onChange(value: Record<string, string>): void;
+}) {
+  const [rows, setRows] = useState<Array<[string, string]>>(() => Object.entries(value ?? {}));
+  const names = rows.map(([name]) => name.trim()).filter(Boolean);
+  const twice = new Set(names).size < names.length;
+  const change = (next: Array<[string, string]>) => {
+    setRows(next);
+    // A row without a name yet is kept here and not in the step: the step is told of it once it has one.
+    onChange(Object.fromEntries(next.filter(([name, path]) => name.trim() || path.trim())));
+  };
+  return (
+    <div className="studioField">
+      <span className="studioLabel" id="flow-entry-save">
+        {say("从答复里保存下来的值", "Keep from its answer")}
+      </span>
+      <ul className="flowBranches flowValues" aria-labelledby="flow-entry-save">
+        {rows.map(([name, path], index) => (
+          <li key={index}>
+            <input
+              className="studioInput mono"
+              aria-label={say(`保存 ${index + 1}：名字`, `Kept value ${index + 1}: name`)}
+              aria-invalid={twice && names.filter((one) => one === name.trim()).length > 1 ? true : undefined}
+              placeholder="status"
+              maxLength={40}
+              spellCheck={false}
+              value={name}
+              onChange={(event) =>
+                change(rows.map((pair, at) => (at === index ? [event.currentTarget.value, pair[1]] : pair)))
+              }
+            />
+            <ArrowRight size={14} aria-hidden="true" style={{ transform: "rotate(180deg)" }} />
+            <input
+              className="studioInput mono flowValueWide"
+              aria-label={say(
+                `保存 ${index + 1}：在答复里的位置`,
+                `Kept value ${index + 1}: where it is in the answer`
+              )}
+              placeholder="order.status"
+              maxLength={120}
+              spellCheck={false}
+              value={path}
+              onChange={(event) =>
+                change(rows.map((pair, at) => (at === index ? [pair[0], event.currentTarget.value] : pair)))
+              }
+            />
+            <button
+              type="button"
+              className="studioButton"
+              aria-label={say(`保存 ${index + 1}：删除`, `Kept value ${index + 1}: remove`)}
+              onClick={() => change(rows.filter((_, at) => at !== index))}
+            >
+              <Trash size={14} aria-hidden="true" />
+            </button>
+          </li>
+        ))}
+      </ul>
+      {twice ? (
+        <p className="studioHint flowNameRefused" role="alert">
+          {say(
+            "有两个值用了同一个名字：只会保存后面的那个。",
+            "Two kept values have the same name: only the later one is kept."
+          )}
+        </p>
+      ) : null}
+      <div>
+        <button
+          type="button"
+          className="studioButton"
+          disabled={rows.length >= 8}
+          onClick={() => setRows([...rows, ["", ""]])}
+        >
+          <Plus size={14} aria-hidden="true" /> {say("保存一个值", "Keep a value")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function StepName({
   steps,
   id,
@@ -328,6 +419,8 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
   const [skipped, setSkipped] = useState<string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  /** For the start: whether the editor shows what is done when a conversation starts, or when one is handed back. */
+  const [atStart, setAtStart] = useState(true);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [showProblems, setShowProblems] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -452,8 +545,8 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
         ),
         many: say(`${step}：最多先问 8 个值。`, `${step}: at most 8 values can be asked for first.`),
         name: say(
-          `${step}：值的名字用小写字母、数字和下划线，以字母开头。`,
-          `${step}: a value's name is lower-case letters, digits and _, starting with a letter.`
+          `${step}：值的名字用小写字母、数字和下划线，以字母开头，不能叫 channel、agent 或 values。`,
+          `${step}: a value's name is lower-case letters, digits and _, starting with a letter, and not channel, agent or values.`
         ),
         twice: say(`${step}：有两个值用了同一个名字。`, `${step}: two values have the same name.`),
         description: say(
@@ -463,8 +556,16 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
       };
       return texts[problem.kind] ?? `${step}: collect`;
     }
-    if (problem.field === "onEnter") {
+    if (problem.field === "onEnter" || problem.field === "onStart") {
       const texts: Record<string, string> = {
+        notStart: say(
+          `${step}：只有“开始”有对话开始时做的事。`,
+          `${step}: only Start has something done when a conversation starts.`
+        ),
+        placeholder: say(
+          `${step}：${problem.detail ?? "{{…}}"} 不是一个值的写法。写成 {{名字}}，名字用小写字母、数字和下划线。`,
+          `${step}: ${problem.detail ?? "{{…}}"} is not a value. Write {{name}}, with a name of lower-case letters, digits and _.`
+        ),
         valueName: say(
           `${step}：有一个分支要看的值没有写名字，或名字不对。`,
           `${step}: a branch reads a value whose name is missing or is not a name.`
@@ -475,12 +576,12 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
         ),
         saves: say(`${step}：最多保存 8 个值。`, `${step}: at most 8 values can be kept.`),
         save: say(
-          `${step}：保存的每个值都要有名字（小写字母、数字、下划线）和它在答复里的位置。`,
-          `${step}: every kept value needs a name (lower-case letters, digits, _) and where it is in the answer.`
+          `${step}：保存的每个值都要有名字（小写字母、数字、下划线，不能叫 channel、agent 或 values）和它在答复里的位置。`,
+          `${step}: every kept value needs a name (lower-case letters, digits, _; not channel, agent or values) and where it is in the answer.`
         ),
         unknownValue: say(
-          `${step}：用到了一个没有哪一步先问或保存的值。`,
-          `${step}: it uses a value that no step asks for or keeps.`
+          `${step}：用到了 ${problem.detail ?? "一个值"}，没有哪一步先问或保存它。`,
+          `${step}: it uses ${problem.detail ?? "a value"}, which no step asks for or keeps.`
         ),
         say: say(
           `${step}：到达时说的话最多 500 个字符。`,
@@ -631,7 +732,9 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
     ? steps.filter((step) => step.id !== current.id && !current.handoffs?.some((handoff) => handoff.to === step.id))
     : [];
   const toolChoices = current ? [...new Set([...tools, ...(current.tools ?? [])])] : [];
-  const entry: FlowEntry = current?.onEnter ?? {};
+  // The start has two things it does by rule: on a conversation starting, and on one being handed back to it.
+  const entryKey: EntryKey = current && isStart(current.id) && atStart ? "onStart" : "onEnter";
+  const entry: FlowEntry = current?.[entryKey] ?? {};
   const branches = entry.next ?? [];
   // The call is made as this step, with the tools this step may use.
   const entryTools = current
@@ -639,15 +742,12 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
     : [];
   const others = current ? steps.filter((step) => step.id !== current.id).map((step) => step.id) : [];
   const patchEntry = (values: Partial<FlowEntry>) => {
-    if (current) patch(current.id, { onEnter: { ...entry, ...values } });
+    if (current) patch(current.id, { [entryKey]: { ...entry, ...values } });
   };
   const collect: FlowCollected[] = current?.collect ?? [];
   const patchCollect = (index: number, values: Partial<FlowCollected>) => {
     if (current) patch(current.id, { collect: collect.map((one, at) => (at === index ? { ...one, ...values } : one)) });
   };
-  /** Kept as pairs while they are edited: a name that is still being typed is no key yet. */
-  const saves = Object.entries(entry.save ?? {});
-  const patchSaves = (pairs: Array<[string, string]>) => patchEntry({ save: Object.fromEntries(pairs) });
 
   return (
     <section className="flowBuilder studioScope" aria-labelledby="studio-flow">
@@ -1145,13 +1245,41 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
 
               <fieldset className="flowFieldset">
                 <legend className="studioLabel">
-                  {say("对话到这一步时，中继自己做的事", "What the relay does itself when a conversation comes here")}
+                  {entryKey === "onStart"
+                    ? say("对话开始时，中继自己做的事", "What the relay does itself when a conversation starts")
+                    : say(
+                        "对话到这一步时，中继自己做的事",
+                        "What the relay does itself when a conversation comes here"
+                      )}
                 </legend>
+                {isStart(current.id) ? (
+                  <div className="studioField">
+                    <label className="studioLabel" htmlFor="flow-entry-when">
+                      {say("什么时候", "When")}
+                    </label>
+                    <select
+                      id="flow-entry-when"
+                      className="studioInput"
+                      value={entryKey}
+                      onChange={(event) => setAtStart(event.currentTarget.value === "onStart")}
+                    >
+                      <option value="onStart">{say("对话开始时", "A conversation starts")}</option>
+                      <option value="onEnter">
+                        {say("对话被转交回这一步时", "A conversation is handed back here")}
+                      </option>
+                    </select>
+                  </div>
+                ) : null}
                 <p className="studioHint">
-                  {say(
-                    "这些都不由模型决定：先说一句固定的话，再调用一个工具，然后按工具的答复转到下一步。它在对话被转交到这一步时发生，不在对话开始时发生。",
-                    "No model decides any of this: a fixed sentence, then a tool call, then on to another step by what the tool answered. It happens when a conversation is handed to this step, not when a conversation starts."
-                  )}
+                  {entryKey === "onStart"
+                    ? say(
+                        "这些都不由模型决定，在模型接入之前完成：调用一个工具，按它的答复转到某一步，那句固定的话接在问候语后面说。工具慢，第一句话就来得晚。",
+                        "No model decides any of this, and it is done before the model is connected: a tool call, on to a step by what it answered, and the fixed sentence said after the greeting. A slow tool makes the first word late."
+                      )
+                    : say(
+                        "这些都不由模型决定：先说一句固定的话，再调用一个工具，然后按工具的答复转到下一步。它在对话被转交到这一步时发生。",
+                        "No model decides any of this: a fixed sentence, then a tool call, then on to another step by what the tool answered. It happens when a conversation is handed to this step."
+                      )}
                 </p>
                 <div className="studioField">
                   <label className="studioLabel" htmlFor="flow-entry-say">
@@ -1194,78 +1322,24 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
                 </div>
                 {entry.call ? (
                   <EntryArguments
-                    key={`${current.id}:${entry.call.tool}`}
+                    key={`${current.id}:${entryKey}:${entry.call.tool}`}
                     value={entry.call.arguments}
                     say={say}
                     onChange={(value) => patchEntry({ call: { tool: entry.call!.tool, arguments: value } })}
                   />
                 ) : null}
                 {entry.call ? (
-                  <div className="studioField">
-                    <span className="studioLabel" id="flow-entry-save">
-                      {say("从答复里保存下来的值", "Keep from its answer")}
-                    </span>
-                    <ul className="flowBranches flowValues" aria-labelledby="flow-entry-save">
-                      {saves.map(([name, path], index) => (
-                        <li key={index}>
-                          <input
-                            className="studioInput mono"
-                            aria-label={say(`保存 ${index + 1}：名字`, `Kept value ${index + 1}: name`)}
-                            placeholder="status"
-                            maxLength={40}
-                            spellCheck={false}
-                            value={name}
-                            onChange={(event) =>
-                              patchSaves(
-                                saves.map((pair, at) => (at === index ? [event.currentTarget.value, pair[1]] : pair))
-                              )
-                            }
-                          />
-                          <ArrowRight size={14} aria-hidden="true" style={{ transform: "rotate(180deg)" }} />
-                          <input
-                            className="studioInput mono flowValueWide"
-                            aria-label={say(
-                              `保存 ${index + 1}：在答复里的位置`,
-                              `Kept value ${index + 1}: where it is in the answer`
-                            )}
-                            placeholder="order.status"
-                            maxLength={120}
-                            spellCheck={false}
-                            value={path}
-                            onChange={(event) =>
-                              patchSaves(
-                                saves.map((pair, at) => (at === index ? [pair[0], event.currentTarget.value] : pair))
-                              )
-                            }
-                          />
-                          <button
-                            type="button"
-                            className="studioButton"
-                            aria-label={say(`保存 ${index + 1}：删除`, `Kept value ${index + 1}: remove`)}
-                            onClick={() => patchSaves(saves.filter((_, at) => at !== index))}
-                          >
-                            <Trash size={14} aria-hidden="true" />
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                    <div>
-                      <button
-                        type="button"
-                        className="studioButton"
-                        // One row without a name at a time: two would be one key.
-                        disabled={saves.length >= 8 || saves.some(([name]) => name === "")}
-                        onClick={() => patchSaves([...saves, ["", ""]])}
-                      >
-                        <Plus size={14} aria-hidden="true" /> {say("保存一个值", "Keep a value")}
-                      </button>
-                    </div>
-                  </div>
+                  <SaveRows
+                    key={`${current.id}:${entryKey}:${entry.call.tool}`}
+                    value={entry.save}
+                    say={say}
+                    onChange={(save) => patchEntry({ save })}
+                  />
                 ) : null}
                 <ul className="flowBranches" aria-label={say("到达后按规则转到哪一步", "Where it goes next by rule")}>
                   {branches.map((branch, index) => (
                     <BranchRow
-                      key={`${current.id}:${index}:${branches.length}`}
+                      key={`${current.id}:${entryKey}:${index}:${branches.length}`}
                       branch={branch}
                       position={index + 1}
                       targets={others}

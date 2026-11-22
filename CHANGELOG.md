@@ -87,6 +87,12 @@
   window of 24 remembered turns into a short text, which the assistant is given with the latest turns. Written when
   a conversation ends and during long ones; deleted with the rest when a user is forgotten. See
   [a summary of older turns](docs/conversations.md#a-summary-of-older-turns).
+- Flows: a step at the start of a conversation. `main`'s `onStart` is done by the relay before the model is
+  connected: a tool call, values kept from its answer, a move to the agent that fits, and a sentence said after the
+  greeting. See [at the start of a conversation](docs/conversations.md#at-the-start-of-a-conversation).
+- Values in flows, after review: a `next` branch does not lead to an agent that has to be told something first; a
+  value cannot be called `channel`, `agent` or `values`, is kept as one clean line, and is either asked of the user
+  or kept from a tool; `{{…}}` around what is no name is refused; a `number` is no identifier.
 - Values in flows. An agent's `collect` names what the assistant has to get from the user before it hands the
   conversation over (the handover is refused until it has); `onEnter.save` keeps parts of a tool's answer;
   `{{name}}` fills a step's sentence and arguments, and a branch can test a value. See

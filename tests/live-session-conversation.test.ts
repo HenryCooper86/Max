@@ -1281,3 +1281,162 @@ describe("what a conversation's flow knows: values collected from the user and s
     await again.provider.close();
   });
 });
+
+describe("what the relay does itself when a conversation starts", () => {
+  const calls: Array<Record<string, unknown>> = [];
+  let customer: unknown = { plan: "business", name: "Dana" };
+  const FIND: ToolDefinition = {
+    name: "find_customer",
+    description: "Finds the customer of this session",
+    parameters: { type: "object", properties: { user: { type: "string" } } },
+    handler: (args) => {
+      calls.push(args);
+      if (customer instanceof Error) throw customer;
+      return customer;
+    }
+  };
+  const config = (onStart: Record<string, unknown>, more: Record<string, unknown> = {}) => ({
+    instructions: "You work for Acme.",
+    greeting: "Hello, this is Ava.",
+    agents: [
+      { id: "main", instructions: "Help with anything.", onStart },
+      { id: "vip", description: "Business customers.", instructions: "Help a business customer first." },
+      {
+        id: "orders",
+        description: "Orders.",
+        instructions: "Help with the order.",
+        collect: [{ name: "order_number", description: "The number of the order" }]
+      }
+    ],
+    ...more
+  });
+  const START = {
+    say: "I am checking your account.",
+    call: { tool: "find_customer", arguments: { user: "{{user.id}}" } },
+    save: { plan: "plan" },
+    next: [{ to: "vip", if: { value: "plan", is: "business" } }]
+  };
+
+  beforeEach(() => {
+    calls.length = 0;
+    customer = { plan: "business", name: "Dana" };
+  });
+
+  it("calls the tool, moves on by its answer and connects the model as the agent it came to", async () => {
+    const { configs, client, said, provider } = await setup({
+      config: config(START),
+      serverTools: [FIND],
+      context: { userId: "user-7" }
+    });
+    expect(calls).toEqual([{ user: "user-7" }]);
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["vip"]);
+    // The model has never been main: its first instructions and tools are vip's.
+    expect(configs).toHaveLength(1);
+    expect(configs[0]!.instructions).toContain("Help a business customer first.");
+    expect(configs[0]!.instructions).toContain("[Start of this conversation]");
+    expect(configs[0]!.instructions).toContain(
+      '"doneOnStarting":[{"agent":"main","tool":"find_customer","result":{"plan":"business","name":"Dana"}}]'
+    );
+    expect(configs[0]!.instructions).toContain('"values":{"plan":"business"}');
+    expect(configs[0]!.instructions).toContain("do not call a tool again for what it has already answered");
+    // The sentence comes after the greeting, in one breath.
+    expect(said).toEqual(["Hello, this is Ava. I am checking your account."]);
+    // The client saw the call like any other.
+    expect(client.ofType("tool.activity").map((event) => [event.name, event.state])).toEqual([
+      ["find_customer", "started"],
+      ["find_customer", "succeeded"]
+    ]);
+    await provider.close();
+  });
+
+  it("stays with the start when no branch applies, and still tells the model what came back", async () => {
+    customer = { plan: "free" };
+    const { configs, client, provider } = await setup({
+      config: config(START),
+      serverTools: [FIND],
+      context: { userId: "user-7" }
+    });
+    expect(client.ofType("agent.changed")).toEqual([]);
+    expect(configs[0]!.instructions).toContain("Help with anything.");
+    expect(configs[0]!.instructions).toContain('"result":{"plan":"free"}');
+    await provider.close();
+  });
+
+  it("starts the conversation all the same when the tool fails", async () => {
+    customer = new Error("the customer service is down");
+    const { configs, said, client, provider } = await setup({
+      config: config({ ...START, next: [...START.next, { to: "vip", if: { failed: true } }] }),
+      serverTools: [FIND],
+      context: { userId: "user-7" }
+    });
+    expect(calls).toHaveLength(1);
+    expect(configs).toHaveLength(1);
+    expect(configs[0]!.instructions).toContain('"failed"');
+    // The branch for a failed call took over.
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["vip"]);
+    expect(said).toEqual(["Hello, this is Ava. I am checking your account."]);
+    await provider.close();
+  });
+
+  it("does not call a tool for a session it has no value for, and says so to the model", async () => {
+    // No user id on this session: the call that needs one is not made.
+    const { configs, client, provider } = await setup({ config: config(START), serverTools: [FIND] });
+    expect(calls).toEqual([]);
+    expect(client.ofType("agent.changed")).toEqual([]);
+    expect(configs[0]!.instructions).toContain("onStart did not call find_customer: there is no value for user.id");
+    await provider.close();
+  });
+
+  it("says its sentence without a greeting, and nothing at all without either", async () => {
+    const only = await setup({
+      config: config({ say: "This call may be recorded." }, { greeting: undefined }),
+      serverTools: [FIND]
+    });
+    expect(only.said).toEqual(["This call may be recorded."]);
+    expect(only.configs[0]!.instructions).toContain('"saidToTheUser":"This call may be recorded."');
+    await only.provider.close();
+    customer = { plan: "free" };
+    const silent = await setup({
+      config: config({ call: { tool: "find_customer" } }, { greeting: undefined }),
+      serverTools: [FIND]
+    });
+    expect(silent.said).toEqual([]);
+    await silent.provider.close();
+  });
+
+  it("does not come by rule to an agent that has to be told something first", async () => {
+    const { configs, client, provider } = await setup({
+      config: config({ next: ["orders"] }),
+      serverTools: [FIND]
+    });
+    // Orders needs an order number, and nobody has asked the user for one.
+    expect(client.ofType("agent.changed")).toEqual([]);
+    expect(configs[0]!.instructions).toContain("Help with anything.");
+    await provider.close();
+  });
+
+  it("is not done again for a conversation that is carried on", async () => {
+    const { configs, said, client, provider } = await setup({
+      config: config(START),
+      serverTools: [FIND],
+      context: { resume: { history: [{ speaker: "user", text: "Hi." }], agent: "main" } }
+    });
+    expect(calls).toEqual([]);
+    expect(client.ofType("agent.changed")).toEqual([]);
+    expect(configs[0]!.instructions).not.toContain("[Start of this conversation]");
+    expect(said).toEqual([]);
+    await provider.close();
+  });
+
+  it("does nothing for a flow without it", async () => {
+    const { configs, said, provider } = await setup({
+      // An empty onStart is none.
+      config: config({}),
+      serverTools: [FIND]
+    });
+    expect(calls).toEqual([]);
+    expect(configs[0]!.instructions).not.toContain("[Start of this conversation]");
+    expect(said).toEqual(["Hello, this is Ava."]);
+    await provider.close();
+  });
+});

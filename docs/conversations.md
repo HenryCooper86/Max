@@ -272,9 +272,7 @@ without a path, the whole answer) and one test:
   exactly these words, which it usually but not provably does, and it is told only once the call has answered: there
   the sentence comes after the wait, not before it. Give the model a line to say before it hands over (in the
   instructions of the agent that hands over) if the wait matters on those backends.
-- **When it runs.** On a handover: one the model makes with `transfer_to_agent`, or a `next` branch. Not at the
-  start of a conversation (`main`'s `onEnter` runs when a conversation is handed back to it; the first words of a
-  conversation are the [greeting](configuration.md#identity-and-behaviour)), and not when a conversation is resumed. If the user talks over the
+- **When it runs.** On a handover: one the model makes with `transfer_to_agent`, or a `next` branch. `main`'s `onEnter` runs when a conversation is handed back to it; what is done when a conversation starts is `main`'s [`onStart`](#at-the-start-of-a-conversation). Not when a conversation is resumed. If the user talks over the
   reply while the tool is running, nothing more is said or moved; the agent is still told what the tool answered,
   so that it does not call it a second time. A model that asks for two handovers in one reply gets the second:
   what the first agent would have done on arriving is given up.
@@ -331,6 +329,44 @@ name.
   `main` has no `collect`: no handover leads to the start of a conversation.
 - Instructions are not filled in: `{{name}}` works in `say` and in arguments. An agent's model sees the values in
   the handover's result.
+- **One name is one value.** Two agents can ask for the same value, as the same type. A name cannot be both asked
+  of the user and kept from a tool: the model would then have the last word on what a tool answered. A value cannot
+  be called `channel`, `agent` or `values`. A `number` is an amount or a count: `00123` and a 20-digit id are not
+  numbers, so ask for those as `text`.
+- **A value is kept as one clean line**: control characters, marks that turn the direction of writing and spaces of
+  no width are taken out, in what the model passed and in what a tool answered. `{{…}}` around anything that is no
+  name is refused when the config is loaded, since it would be said aloud as written.
+- **A branch does not lead past the question.** A `next` branch to an agent that has to be told something the
+  conversation does not have yet is not taken, with a line in the log: the conversation stays where it is.
+
+#### At the start of a conversation
+
+`main` can also have an `onStart`, with the same keys as `onEnter`. It is what the relay does when a conversation
+starts, before the model is connected: look the user up, and start the conversation with the agent that fits.
+
+```json
+{
+  "id": "main",
+  "instructions": "Help with questions about hiking gear.",
+  "tools": ["find_customer"],
+  "onStart": {
+    "say": "I have your account in front of me.",
+    "call": { "tool": "find_customer", "arguments": { "user": "{{user.id}}" } },
+    "save": { "plan": "plan" },
+    "next": [{ "to": "vip", "if": { "value": "plan", "is": "business" } }]
+  }
+}
+```
+
+- **The model is connected when it is done.** Its first instructions are those of the agent the conversation came
+  to, with what the tools answered and the values, so the user's first words meet that agent. The price is time:
+  the first word waits for the tool. After ten seconds no further step is begun.
+- **The sentence is said after the [greeting](configuration.md#identity-and-behaviour)**, in the same breath, in
+  your words on every backend: the relay says it as it says the greeting.
+- **A call that fails does not stop the conversation.** It starts with `main`, or with the agent a `failed` branch
+  names, and the model is told what went wrong.
+- **Not for a resumed conversation**, which carries on where it was. Only `main` has an `onStart`.
+- `{{user.id}}` is there when the session token has a `userId`. Without one, a call that needs it is not made.
 
 **The flow builder.** Admin → Flow draws the same thing. Each agent is a step on a canvas; Start is `main`. Add a
 step, write when to come to it and what it does, tick its tools, and draw an arrow by dragging from the dot on a
@@ -344,7 +380,7 @@ name used twice) is not saved, and the builder says what to fix. It also points 
 step that no arrow leads to from Start. A step's name is taken when you leave the field, and the arrows that lead to
 the step follow it. Where each step sits is stored with it as `at`, which the relay itself does not read. A step's
 editor also has what the relay does itself on arriving: the sentence, the tool and its arguments, and the branches,
-which are drawn as dashed arrows with their conditions. It has the values too: what the assistant asks for before it hands over to the step, what the step keeps from its tool's answer, and branches that read a value.
+which are drawn as dashed arrows with their conditions. For Start it has the same for when a conversation starts. It has the values too: what the assistant asks for before it hands over to the step, what the step keeps from its tool's answer, and branches that read a value.
 
 The builder edits the config's own `agents`. A [variant](#versions-and-ab-tests) that replaces `agents` keeps its own
 and is edited in the file. Tools are chosen by name from the relay's tools; a client's own tool is typed in. Max
@@ -376,7 +412,13 @@ asked what they needed. The sentence was said with the number in it, the lookup 
 conversation went on by the saved status: to `tracking` for a shipped order, to `refunds` for a delivered one, and
 to `human` for a number the service did not know. A user who said they had no number was asked for another way to
 find the order, and no number was made up. In one run the next agent said part of the fixed sentence again in
-other words, which the cut of exact repeats does not catch. With an
+other words, which the cut of exact repeats does not catch.
+
+The start of a conversation was run the same way, four conversations: a customer service that answers in 0.4
+seconds with the user's plan and name, read by `{{user.id}}`. For a business customer the conversation began with
+`vip` before the user had said anything, and the first answer used the name and what that agent's instructions say
+a business customer gets, twice of twice. For another plan it stayed with `main`. With the service answering an
+error the conversation started with `main` all the same. With an
 order service that takes three seconds to answer, the sentence reached the client 1.5 seconds after the user's
 question, before the lookup started, and the agent's answer followed when the lookup had answered at 4.6 seconds.
 

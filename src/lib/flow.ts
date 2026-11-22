@@ -40,6 +40,18 @@ const VALUE_NAME = /^[a-z][a-z0-9_]{0,39}$/;
 /** The values every conversation has without a step setting them. */
 const SESSION_VALUES = ["user.id", "session.id", "channel"];
 const PLACEHOLDER = /\{\{\s*([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?)\s*\}\}/g;
+/** Names a value cannot have: the relay's own, and the parameters of the handover. */
+const TAKEN_NAMES = new Set(["channel", "agent", "values"]);
+const BRACES = /\{\{[^{}]*\}\}/g;
+const WHOLE_PLACEHOLDER = /^\{\{\s*[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?\s*\}\}$/;
+
+/** A `{{…}}` that names no value, which the relay refuses: it would be said aloud as it is written. */
+function wrongBraces(value: unknown): string | undefined {
+  if (typeof value === "string") return (value.match(BRACES) ?? []).find((one) => !WHOLE_PLACEHOLDER.test(one));
+  if (Array.isArray(value)) return value.map(wrongBraces).find(Boolean);
+  if (value && typeof value === "object") return Object.values(value).map(wrongBraces).find(Boolean);
+  return undefined;
+}
 
 /** The tests a branch can make, as the builder offers them. `always` is a branch without a condition. */
 export const BRANCH_TESTS = ["always", "is", "in", "above", "below", "exists", "missing", "failed"] as const;
@@ -124,8 +136,14 @@ export type FlowStep = {
   /** What the assistant has to get from the user before it hands a conversation to this step. */
   collect?: FlowCollected[];
   onEnter?: FlowEntry;
+  /** The start only: what the relay does itself when a conversation starts, before the model has a turn. */
+  onStart?: FlowEntry;
   at?: [number, number];
 };
+
+/** The two things a step can do by rule: on a conversation coming to it, and (the start) on one starting. */
+const ENTRY_KEYS = ["onEnter", "onStart"] as const;
+export type EntryKey = (typeof ENTRY_KEYS)[number];
 
 /** The step every conversation starts in. */
 export const START = "main";
@@ -256,7 +274,7 @@ export function arrowsOf(steps: readonly FlowStep[]): FlowArrow[] {
         ...curve(step.at, target.at)
       });
     }
-    for (const branch of step.onEnter?.next ?? []) {
+    for (const branch of ENTRY_KEYS.flatMap((key) => step[key]?.next ?? [])) {
       const target = steps.find((candidate) => same(candidate.id, branch.to));
       if (!target || !step.at || !target.at) continue;
       // Drawn a little lower than a handoff between the same two steps, so that both can be seen.
@@ -334,15 +352,18 @@ export function renameStep(steps: readonly FlowStep[], from: string, to: string)
     ...(step.handoffs
       ? { handoffs: step.handoffs.map((handoff) => (handoff.to === from ? { ...handoff, to } : handoff)) }
       : {}),
-    ...(step.onEnter?.next
-      ? {
-          onEnter: {
-            ...step.onEnter,
-            next: step.onEnter.next.map((branch) => (branch.to === from ? { ...branch, to } : branch))
-          }
-        }
-      : {})
+    ...withBranches(step, (next) => next.map((branch) => (branch.to === from ? { ...branch, to } : branch)))
   }));
+}
+
+/** A step's two entries with their branches changed, where it has any. */
+function withBranches(step: FlowStep, change: (next: FlowBranch[]) => FlowBranch[]): Partial<FlowStep> {
+  const changed: Partial<FlowStep> = {};
+  for (const key of ENTRY_KEYS) {
+    const entry = step[key];
+    if (entry?.next) changed[key] = { ...entry, next: change(entry.next) };
+  }
+  return changed;
 }
 
 /** Removes a step and the arrows that led to it. The start cannot be removed. */
@@ -353,9 +374,7 @@ export function removeStep(steps: readonly FlowStep[], id: string): FlowStep[] {
     .map((step) => ({
       ...step,
       ...(step.handoffs ? { handoffs: step.handoffs.filter((handoff) => handoff.to !== id) } : {}),
-      ...(step.onEnter?.next
-        ? { onEnter: { ...step.onEnter, next: step.onEnter.next.filter((branch) => branch.to !== id) } }
-        : {})
+      ...withBranches(step, (next) => next.filter((branch) => branch.to !== id))
     }));
 }
 
@@ -376,8 +395,10 @@ export function connect(steps: readonly FlowStep[], from: string, to: string): F
 
 export type FlowProblem = {
   step: string;
-  field: "id" | "description" | "instructions" | "handoffs" | "collect" | "onEnter" | "flow";
+  field: "id" | "description" | "instructions" | "handoffs" | "collect" | "onEnter" | "onStart" | "flow";
   kind: string;
+  /** The thing the problem is with, where naming it helps: a value, a piece of text. */
+  detail?: string;
 };
 
 /** What has to be put right before the flow can be saved, in the order of the steps. */
@@ -407,17 +428,30 @@ export function flowProblems(steps: readonly FlowStep[]): FlowProblem[] {
     }
     const asked = collectProblem(step);
     if (asked) problems.push({ step: step.id, field: "collect", kind: asked });
-    const kind = entryProblem(step) ?? (unknownValue(step, steps) ? "unknownValue" : undefined);
-    if (kind) problems.push({ step: step.id, field: "onEnter", kind });
+    for (const key of ENTRY_KEYS) {
+      const unknown = unknownValue(step[key], steps);
+      const kind = entryProblem(step, key) ?? (unknown ? "unknownValue" : undefined);
+      if (kind) {
+        problems.push({
+          step: step.id,
+          field: key,
+          kind,
+          ...(kind === "unknownValue" && unknown ? { detail: `{{${unknown}}}` } : {}),
+          ...(kind === "placeholder" ? { detail: wrongBraces([step[key]?.say, step[key]?.call?.arguments]) } : {})
+        });
+      }
+    }
   }
   return problems;
 }
 
-/** What is wrong with a step's `onEnter`, as the relay would say it, if anything is. */
-function entryProblem(step: FlowStep): string | undefined {
-  const entry = step.onEnter;
+/** What is wrong with what a step does by rule, as the relay would say it, if anything is. */
+function entryProblem(step: FlowStep, key: EntryKey): string | undefined {
+  const entry = step[key];
   if (!entry) return undefined;
+  if (key === "onStart" && !same(step.id, START)) return "notStart";
   if ((entry.say?.trim().length ?? 0) > 500) return "say";
+  if (wrongBraces([entry.say, entry.call?.arguments])) return "placeholder";
   const tool = entry.call?.tool.trim();
   if (entry.call && !tool) return "tool";
   if (tool && step.tools && !step.tools.includes(tool)) return "notOffered";
@@ -428,7 +462,9 @@ function entryProblem(step: FlowStep): string | undefined {
   const save = Object.entries(entry.save ?? {});
   if (save.length > 0 && !tool) return "saveNoCall";
   if (save.length > 8) return "saves";
-  if (save.some(([name, path]) => !VALUE_NAME.test(name) || !path.trim())) return "save";
+  if (save.some(([name, path]) => !VALUE_NAME.test(name.trim()) || TAKEN_NAMES.has(name.trim()) || !path.trim())) {
+    return "save";
+  }
   if (next.slice(0, -1).some((branch) => !branch.if)) return "alwaysFirst";
   if (next.length > 8) return "branches";
   for (const branch of next) {
@@ -451,7 +487,9 @@ function collectProblem(step: FlowStep): string | undefined {
   if (collect.length === 0) return undefined;
   if (same(step.id, START)) return "start";
   if (collect.length > 8) return "many";
-  if (collect.some((value) => !VALUE_NAME.test(value.name.trim()))) return "name";
+  if (collect.some((value) => !VALUE_NAME.test(value.name.trim()) || TAKEN_NAMES.has(value.name.trim()))) {
+    return "name";
+  }
   if (new Set(collect.map((value) => value.name.trim())).size < collect.length) return "twice";
   if (collect.some((value) => !value.description.trim() || value.description.trim().length > 200)) return "description";
   return undefined;
@@ -464,13 +502,12 @@ function namesInside(value: unknown, into: Set<string>): void {
 }
 
 /** The first value a step reads that no step collects or saves: the relay would refuse the step for it. */
-function unknownValue(step: FlowStep, steps: readonly FlowStep[]): string | undefined {
-  const entry = step.onEnter;
+function unknownValue(entry: FlowEntry | undefined, steps: readonly FlowStep[]): string | undefined {
   if (!entry) return undefined;
   const set = new Set(SESSION_VALUES);
   for (const other of steps) {
     for (const value of other.collect ?? []) set.add(value.name.trim());
-    for (const name of Object.keys(other.onEnter?.save ?? {})) set.add(name);
+    for (const key of ENTRY_KEYS) for (const name of Object.keys(other[key]?.save ?? {})) set.add(name.trim());
   }
   const reads = new Set<string>();
   namesInside(entry.say, reads);
@@ -511,7 +548,7 @@ export function flowWarnings(steps: readonly FlowStep[]): FlowWarning[] {
     if (reached.has(step.id)) continue;
     reached.add(step.id);
     // Without arrows of its own a step is open to every other.
-    const byRule = step.onEnter?.next ?? [];
+    const byRule = ENTRY_KEYS.flatMap((key) => step[key]?.next ?? []);
     const next = step.handoffs
       ? steps.filter((other) => [...step.handoffs!, ...byRule].some((arrow) => same(arrow.to, other.id)))
       : steps;
@@ -546,6 +583,7 @@ export function flowToSave(steps: readonly FlowStep[]): FlowStep[] {
         }
       : {}),
     ...(entryToSave(step.onEnter) ? { onEnter: entryToSave(step.onEnter) } : {}),
+    ...(entryToSave(step.onStart) ? { onStart: entryToSave(step.onStart) } : {}),
     ...(step.at ? { at: step.at } : {})
   }));
 }

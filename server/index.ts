@@ -2264,17 +2264,19 @@ if (assistant().conversation.memorySummary && !analysisModelFromEnv()) {
   const said = new Set<string>();
   for (const profile of [assistant(), ...assistant().variants.map((variant) => variant.profile)]) {
     for (const agent of profile.agents) {
-      const tool = agent.onEnter?.call?.tool;
-      if (!tool || said.has(`${agent.id}:${tool}`)) continue;
-      said.add(`${agent.id}:${tool}`);
-      if (later.has(tool)) {
-        log.warn(
-          `agents: ${agent.id}: onEnter calls ${tool}, which runs in the background. A step goes by the tool's answer, so the call will not be made: use a tool that answers at once.`
-        );
-      } else if (!known.has(tool)) {
-        log.warn(
-          `agents: ${agent.id}: onEnter calls ${tool}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the call will fail.`
-        );
+      for (const key of ["onEnter", "onStart"] as const) {
+        const tool = agent[key]?.call?.tool;
+        if (!tool || said.has(`${agent.id}:${key}:${tool}`)) continue;
+        said.add(`${agent.id}:${key}:${tool}`);
+        if (later.has(tool)) {
+          log.warn(
+            `agents: ${agent.id}: ${key} calls ${tool}, which runs in the background. A step goes by the tool's answer, so the call will not be made: use a tool that answers at once.`
+          );
+        } else if (!known.has(tool)) {
+          log.warn(
+            `agents: ${agent.id}: ${key} calls ${tool}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the call will fail.`
+          );
+        }
       }
     }
   }

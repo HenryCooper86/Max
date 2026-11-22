@@ -517,7 +517,15 @@ describe("flow builder", () => {
       await type(labelled("它是什么")[0]!, "The number");
       // A value nobody asks for or keeps.
       await type(field("flow-entry-say"), "Order {{order_numbr}}.");
-      await refusedWith(/用到了一个没有哪一步先问或保存的值/);
+      await refusedWith(/用到了 \{\{order_numbr\}\}，没有哪一步先问或保存它/);
+      // Braces around what is no name would be said aloud as they are written.
+      await type(field("flow-entry-say"), "Order {{Order Number}}.");
+      await refusedWith(/\{\{Order Number\}\} 不是一个值的写法/);
+      // Nor can a value take a name the relay or the handover has.
+      await type(field("flow-entry-say"), "One moment.");
+      await type(labelled("名字")[0]!, "channel");
+      await refusedWith(/不能叫 channel、agent 或 values/);
+      await type(labelled("名字")[0]!, "order_number");
       await type(field("flow-entry-say"), "Order {{order_number}} for {{user.id}}.");
       await act(async () => button(/保存流程/).props.onClick());
       expect(api.saveStudioFlow).toHaveBeenCalledTimes(1);
@@ -536,6 +544,68 @@ describe("flow builder", () => {
       await act(async () => labelled("删除")[0]!.props.onClick());
       await act(async () => button(/保存流程/).props.onClick());
       expect(api.saveStudioFlow.mock.calls[0]![0][1]!.onEnter).toEqual({ say: "One moment.", next: [{ to: "main" }] });
+    });
+
+    it("keeps both rows while a kept value's name passes through the name of another", async () => {
+      const { api } = await mount(fakeApi(flow(withEntry())));
+      await select("orders");
+      await act(async () => button(/保存一个值/).props.onClick());
+      await type(labelled("名字")[0]!, "status");
+      await type(labelled("在答复里的位置")[0]!, "order.status");
+      await act(async () => button(/保存一个值/).props.onClick());
+      await type(labelled("在答复里的位置")[1]!, "order.status_code");
+      // On the way to "status_code" the second name is "status" for a moment.
+      await type(labelled("名字")[1]!, "status");
+      expect(labelled("名字").map((node) => node.props.value)).toEqual(["status", "status"]);
+      expect(
+        root()
+          .findAll((node) => node.props.role === "alert")
+          .map(textOf)
+          .join(" ")
+      ).toMatch(/同一个名字/);
+      await type(labelled("名字")[1]!, "status_code");
+      expect(
+        root()
+          .findAll((node) => node.props.role === "alert")
+          .map(textOf)
+          .join(" ")
+      ).not.toMatch(/同一个名字/);
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(api.saveStudioFlow.mock.calls[0]![0][1]!.onEnter!.save).toEqual({
+        status: "order.status",
+        status_code: "order.status_code"
+      });
+    });
+
+    it("writes what the start does when a conversation starts, apart from when one is handed back", async () => {
+      const { api } = await mount(fakeApi(flow(withEntry())));
+      await select("main");
+      // The start shows what is done when a conversation starts.
+      expect(field("flow-entry-when").props.value).toBe("onStart");
+      await type(field("flow-entry-say"), "I am checking your account.");
+      await type(field("flow-entry-tool"), "find_order");
+      await act(async () => button(/添加一个分支/).props.onClick());
+      await type(labelled("转到哪一步")[0]!, "refunds");
+      await type(labelled("条件")[0]!, "failed");
+      // And, apart from it, what is done when a conversation is handed back.
+      await type(field("flow-entry-when"), "onEnter");
+      expect(field("flow-entry-say").props.value).toBe("");
+      await type(field("flow-entry-say"), "Back with me.");
+      await type(field("flow-entry-when"), "onStart");
+      expect(field("flow-entry-say").props.value).toBe("I am checking your account.");
+      // The branch at the start is an arrow of its own.
+      expect(byClass("flowCondition").map(textOf)).toContain("call failed");
+      await act(async () => button(/保存流程/).props.onClick());
+      const main = api.saveStudioFlow.mock.calls[0]![0][0]!;
+      expect(main.onStart).toEqual({
+        say: "I am checking your account.",
+        call: { tool: "find_order", arguments: {} },
+        next: [{ to: "refunds", if: { failed: true } }]
+      });
+      expect(main.onEnter).toEqual({ say: "Back with me." });
+      // Another step has no such choice.
+      await select("orders");
+      expect(root().findAll((node) => node.props.id === "flow-entry-when")).toEqual([]);
     });
 
     it("will not save a branch with a condition and no call, or a tool the step may not use", async () => {

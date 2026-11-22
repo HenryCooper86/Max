@@ -75,6 +75,8 @@ export type AgentStage = {
   collect?: CollectedValue[];
   /** What the relay does itself when the conversation is handed to this agent. */
   onEnter?: AgentEntry;
+  /** `main` only: what the relay does itself when a conversation starts, before the model has a turn. */
+  onStart?: AgentEntry;
 };
 
 /** How the loader says that an agent's every handoff was dropped: a consequence of loading on regardless. */
@@ -223,6 +225,17 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
       problems.push(`agent ${id}: onEnter calls ${entered.entry.call.tool}, which is not one of the agent's tools`);
       delete entered.entry;
     }
+    // The same for what is done when a conversation starts, which only the agent it starts with has.
+    const started = agentEntryFrom(entry.onStart);
+    if (started.problem) problems.push(`agent ${id}: ${started.problem.replaceAll("onEnter", "onStart")}`);
+    if (started.entry && key !== MAIN_AGENT) {
+      problems.push(`agent ${id}: onStart is done when a conversation starts, and a conversation starts with main`);
+      delete started.entry;
+    }
+    if (started.entry?.call && tools && !tools.includes(started.entry.call.tool)) {
+      problems.push(`agent ${id}: onStart calls ${started.entry.call.tool}, which is not one of the agent's tools`);
+      delete started.entry;
+    }
     // A mistake here costs the agent what it asks for first, not the agent.
     const asked = collectFrom(entry.collect);
     if (asked.problem) problems.push(`agent ${id}: ${asked.problem}`);
@@ -239,7 +252,8 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
       ...(tools ? { tools } : {}),
       ...(handoffs ? { handoffs } : {}),
       ...(asked.collect ? { collect: asked.collect } : {}),
-      ...(entered.entry ? { onEnter: entered.entry } : {})
+      ...(entered.entry ? { onEnter: entered.entry } : {}),
+      ...(started.entry ? { onStart: started.entry } : {})
     });
   }
   if (raw.length > MAX_AGENTS) problems.push(`only the first ${MAX_AGENTS} agents are used`);
@@ -268,36 +282,72 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
   }
   // A branch leads to an agent there is, and not back to the agent it starts from.
   for (const agent of agents) {
-    const next = agent.onEnter?.next;
-    if (!next) continue;
-    const wrong = next
-      .map((branch) => {
-        const target = ids.get(branch.to.toLowerCase());
-        if (!target) return `there is no agent ${branch.to} for onEnter to move on to`;
-        if (target === agent.id) return "onEnter cannot move on to the agent itself";
-        branch.to = target;
-        return undefined;
+    for (const key of ["onEnter", "onStart"] as const) {
+      const next = agent[key]?.next;
+      if (!next) continue;
+      const wrong = next
+        .map((branch) => {
+          const target = ids.get(branch.to.toLowerCase());
+          if (!target) return `there is no agent ${branch.to} for ${key} to move on to`;
+          if (target === agent.id) return `${key} cannot move on to the agent itself`;
+          branch.to = target;
+          return undefined;
+        })
+        .find(Boolean);
+      if (wrong) {
+        problems.push(`agent ${agent.id}: ${wrong}`);
+        delete agent[key];
+      }
+    }
+  }
+  // One name is one value: of one type, and either asked of the user or kept from a tool. A model that could
+  // say again what a tool answered would have the last word on it.
+  const kept = new Set<string>();
+  for (const agent of agents) {
+    for (const key of ["onEnter", "onStart"] as const) {
+      const entry = agent[key];
+      if (entry) for (const name of entryValues(entry).sets) kept.add(name);
+    }
+  }
+  const types = new Map<string, string>();
+  for (const agent of agents) {
+    const wrong = (agent.collect ?? [])
+      .map((value) => {
+        if (kept.has(value.name)) {
+          return `collect: ${value.name} is also kept from a tool's answer (save). A value is asked of the user or kept from a tool, not both`;
+        }
+        const type = types.get(value.name) ?? value.type;
+        types.set(value.name, type);
+        return type === value.type
+          ? undefined
+          : `collect: ${value.name} is a ${type} for another agent and a ${value.type} here`;
       })
       .find(Boolean);
     if (wrong) {
       problems.push(`agent ${agent.id}: ${wrong}`);
-      delete agent.onEnter;
+      delete agent.collect;
     }
   }
   // A value that is read is one that some step can have set: a name nobody sets is a slip of the pen.
   const set = new Set<string>(SESSION_VALUES);
   for (const agent of agents) {
     for (const value of agent.collect ?? []) set.add(value.name);
-    if (agent.onEnter) for (const name of entryValues(agent.onEnter).sets) set.add(name);
+    for (const key of ["onEnter", "onStart"] as const) {
+      const entry = agent[key];
+      if (entry) for (const name of entryValues(entry).sets) set.add(name);
+    }
   }
   for (const agent of agents) {
-    if (!agent.onEnter) continue;
-    const unknown = entryValues(agent.onEnter).reads.find((name) => !set.has(name));
-    if (unknown) {
-      problems.push(
-        `agent ${agent.id}: onEnter reads {{${unknown}}}, which no agent collects or saves. The relay's own values are ${SESSION_VALUES.join(", ")}`
-      );
-      delete agent.onEnter;
+    for (const key of ["onEnter", "onStart"] as const) {
+      const entry = agent[key];
+      if (!entry) continue;
+      const unknown = entryValues(entry).reads.find((name) => !set.has(name));
+      if (unknown) {
+        problems.push(
+          `agent ${agent.id}: ${key} reads {{${unknown}}}, which no agent collects or saves. The relay's own values are ${SESSION_VALUES.join(", ")}`
+        );
+        delete agent[key];
+      }
     }
   }
   // One agent besides the starting one is the least a handover needs.

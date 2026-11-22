@@ -21,6 +21,8 @@ export type FlowStep = {
   collect?: CollectedValue[];
   /** What the relay does itself when a conversation comes to this step: a sentence, a tool call, where to next. */
   onEnter?: AgentEntry;
+  /** The starting step only: what the relay does itself when a conversation starts. */
+  onStart?: AgentEntry;
   /** Where the step sits on the canvas. The relay itself does not read it. */
   at?: [number, number];
 };
@@ -36,6 +38,7 @@ const STEP_KEYS: ReadonlySet<string> = new Set([
   "handoffs",
   "collect",
   "onEnter",
+  "onStart",
   "at"
 ]);
 const DEFAULT_MAIN_DESCRIPTION = "The agent every conversation starts with; handles everything else.";
@@ -74,6 +77,7 @@ export function flowFrom(raw: unknown): { steps: FlowStep[]; problems: string[] 
       ...(agent.handoffs ? { handoffs: agent.handoffs } : {}),
       ...(agent.collect ? { collect: agent.collect } : {}),
       ...(agent.onEnter ? { onEnter: agent.onEnter } : {}),
+      ...(agent.onStart ? { onStart: agent.onStart } : {}),
       ...(place ? { at: place } : {})
     };
   });
@@ -133,7 +137,7 @@ export function checkFlow(raw: unknown): { agents: FlowStep[] | undefined } | { 
     const main = raw.find(isRecord);
     const written =
       main &&
-      ["instructions", "tools", "handoffs", "onEnter"].some(
+      ["instructions", "tools", "handoffs", "collect", "onEnter", "onStart"].some(
         (key) => main[key] !== undefined && main[key] !== null && main[key] !== ""
       );
     // The start alone, with nothing written in it, is no flow: the assistant then works as one agent.

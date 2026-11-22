@@ -99,6 +99,7 @@ function EntryArguments({
         spellCheck={false}
         placeholder='{ "which": "latest" }'
         aria-invalid={refused ? true : undefined}
+        aria-describedby={refused ? "flow-entry-arguments-refused" : undefined}
         onChange={(event) => {
           setDraft(event.currentTarget.value);
           setRefused(false);
@@ -106,7 +107,7 @@ function EntryArguments({
         onBlur={commit}
       />
       {refused ? (
-        <p className="studioHint flowNameRefused" role="alert">
+        <p id="flow-entry-arguments-refused" className="studioHint flowNameRefused" role="alert">
           {say(
             '这不是一个 JSON 对象，参数没有改动。例如：{ "which": "latest" }',
             'This is not a JSON object, so the arguments were not changed. For example: { "which": "latest" }'
@@ -123,10 +124,13 @@ function BranchRow({
   targets,
   say,
   nameOf,
+  position,
   onChange,
   onRemove
 }: {
   branch: FlowBranch;
+  /** Which branch of the step this is, from 1: the rows are told apart by it. */
+  position: number;
   targets: string[];
   say: Say;
   nameOf(id: string): string;
@@ -149,12 +153,14 @@ function BranchRow({
   };
   const reads = test !== "always" && test !== "failed";
   const compares = reads && test !== "exists" && test !== "missing";
+  /** Every row has the same controls: each is named with the row it is in. */
+  const named = (zh: string, en: string): string => say(`分支 ${position}：${zh}`, `Branch ${position}: ${en}`);
   return (
     <li>
       <ArrowRight size={14} aria-hidden="true" />
       <select
         className="studioInput"
-        aria-label={say("转到哪一步", "Go to")}
+        aria-label={named("转到哪一步", "go to")}
         value={branch.to}
         onChange={(event) => onChange({ ...branch, to: event.currentTarget.value })}
       >
@@ -167,7 +173,7 @@ function BranchRow({
       {reads ? (
         <input
           className="studioInput mono"
-          aria-label={say("看答复里的哪一项", "Which part of the answer")}
+          aria-label={named("看答复里的哪一项", "which part of the answer")}
           placeholder="order.status"
           maxLength={120}
           value={path}
@@ -176,7 +182,7 @@ function BranchRow({
       ) : null}
       <select
         className="studioInput"
-        aria-label={say("条件", "Condition")}
+        aria-label={named("条件", "condition")}
         value={test}
         onChange={(event) => onChange(branchOf(branch.to, event.currentTarget.value as BranchTest, path, value))}
       >
@@ -189,7 +195,7 @@ function BranchRow({
       {compares ? (
         <input
           className="studioInput"
-          aria-label={say("比较的值", "The value to compare with")}
+          aria-label={named("比较的值", "the value to compare with")}
           placeholder={test === "in" ? "shipped, packed" : test === "is" ? "shipped" : "100"}
           maxLength={200}
           value={value}
@@ -199,12 +205,7 @@ function BranchRow({
           }}
         />
       ) : null}
-      <button
-        type="button"
-        className="studioButton"
-        aria-label={say("删除这个分支", "Remove this branch")}
-        onClick={onRemove}
-      >
+      <button type="button" className="studioButton" aria-label={named("删除", "remove")} onClick={onRemove}>
         <Trash size={14} aria-hidden="true" />
       </button>
     </li>
@@ -443,6 +444,8 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
           `${step}: an "otherwise" branch is always taken, so it has to be the last one.`
         ),
         value: say(`${step}：有一个分支没有写比较的值。`, `${step}: a branch has no value to compare with.`),
+        choices: say(`${step}：“是其中之一”最多写 16 个值。`, `${step}: "is one of" takes 16 values at most.`),
+        branches: say(`${step}：最多 8 个分支。`, `${step}: a step has 8 branches at most.`),
         number: say(
           `${step}：“大于”和“小于”要和一个数字比较。`,
           `${step}: "is above" and "is below" compare with a number.`
@@ -659,9 +662,9 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
                 <path d="M 0 0 L 10 5 L 0 10 z" />
               </marker>
             </defs>
-            {arrows.map((arrow) => (
+            {arrows.map((arrow, index) => (
               <path
-                key={`${arrow.from}>${arrow.to}${arrow.byRule ? ">rule" : ""}`}
+                key={`${arrow.from}>${arrow.to}${arrow.byRule ? `>rule${index}` : ""}`}
                 className={`${arrow.from === selected ? "selected" : ""}${arrow.byRule ? " byRule" : ""}`.trim()}
                 d={arrow.path}
                 markerEnd="url(#flow-arrowhead)"
@@ -672,10 +675,11 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
             ) : null}
           </svg>
           {arrows
-            .filter((arrow) => arrow.when)
-            .map((arrow) => (
+            .map((arrow, index) => ({ arrow, index }))
+            .filter(({ arrow }) => arrow.when)
+            .map(({ arrow, index }) => (
               <span
-                key={`${arrow.from}>${arrow.to}${arrow.byRule ? ">rule" : ""}`}
+                key={`${arrow.from}>${arrow.to}${arrow.byRule ? `>rule${index}` : ""}`}
                 className={`flowCondition${arrow.from === selected ? " selected" : ""}${arrow.byRule ? " byRule" : ""}`}
                 style={{ left: arrow.middle[0], top: arrow.middle[1] }}
                 title={arrow.when}
@@ -1042,11 +1046,12 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
                     onChange={(value) => patchEntry({ call: { tool: entry.call!.tool, arguments: value } })}
                   />
                 ) : null}
-                <ul className="flowBranches">
+                <ul className="flowBranches" aria-label={say("到达后按规则转到哪一步", "Where it goes next by rule")}>
                   {branches.map((branch, index) => (
                     <BranchRow
                       key={`${current.id}:${index}:${branches.length}`}
                       branch={branch}
+                      position={index + 1}
                       targets={others}
                       say={say}
                       nameOf={nameOf}

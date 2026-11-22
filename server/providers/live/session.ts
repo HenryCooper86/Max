@@ -1002,11 +1002,15 @@ export function createLiveProvider(
   async function entryCall(
     spec: NonNullable<AgentEntry["call"]>,
     cancelled: () => boolean
-  ): Promise<{ ok: boolean; output: string }> {
+  ): Promise<{ ok: boolean; output: string; ran?: true }> {
     if (!tools) return { ok: false, output: toolErrorText("tools are not available") };
     // Ending the conversation and handing it over are the conversation's own doing, not a step's.
     if (builtinTools.some((tool) => tool.name === spec.tool)) {
       return { ok: false, output: toolErrorText(`onEnter cannot call ${spec.tool}`) };
+    }
+    // A step waits for its answer to choose where to go: a tool that answers later has none to give.
+    if (tools.runsInBackground(spec.tool)) {
+      return { ok: false, output: toolErrorText(`onEnter cannot call ${spec.tool}, which runs in the background`) };
     }
     entryCalls += 1;
     const call = {
@@ -1017,7 +1021,7 @@ export function createLiveProvider(
     const refused = await toolRefusal(call);
     if (refused !== undefined) return { ok: false, output: toolErrorText(refused) };
     if (cancelled()) return { ok: false, output: JSON.stringify({ error: "cancelled" }) };
-    return checkedResult(call.name, await tools.run(call));
+    return { ...(await checkedResult(call.name, await tools.run(call))), ran: true };
   }
 
   /**
@@ -1025,40 +1029,64 @@ export function createLiveProvider(
    * what that says, with no model choosing any of it. A tool is called, the
    * conversation moves on by what it answered, and the agent it comes to rest
    * with is told what was done on the way. Resolves to the handover's result
-   * for the model, and the lines to say in the owner's own words.
+   * for the model. `sayNow` speaks a line in the owner's own words at once,
+   * before the call that follows it; without it the model is told the words.
    */
   async function entered(
     callId: string,
     outcome: { ok: boolean; output: string },
-    cancelled: () => boolean
-  ): Promise<{ outcome: { ok: boolean; output: string }; say?: string }> {
+    cancelled: () => boolean,
+    sayNow?: (line: string) => void
+  ): Promise<{ ok: boolean; output: string }> {
     const arrived = arrivals.get(callId);
     arrivals.delete(callId);
     let agent = arrived ? roster.find((one) => one.id === arrived) : undefined;
-    if (!agent?.onEnter || !outcome.ok) return { outcome };
+    // A second handover in the same reply has taken the conversation elsewhere: this arrival is no longer one.
+    if (!agent?.onEnter || !outcome.ok || activeAgent !== agent.id) return outcome;
     const lines: string[] = [];
     const done: Array<Record<string, unknown>> = [];
     const visited = new Set([agent.id]);
     try {
-      for (let moves = 0; agent.onEnter && !cancelled(); moves += 1) {
+      for (let moves = 0; agent.onEnter && !cancelled() && activeAgent === agent.id; moves += 1) {
         const entry: AgentEntry = agent.onEnter;
-        if (entry.say) lines.push(entry.say);
-        let result: { ok: boolean; output: string } | undefined;
+        const here = agent.id;
+        // The user has spoken, or a second handover in the same reply has taken the conversation elsewhere.
+        const gone = (): boolean => cancelled() || activeAgent !== here;
+        if (entry.say) {
+          lines.push(entry.say);
+          // Before the call, not after it: "one moment" is for the wait.
+          sayNow?.(entry.say);
+        }
+        let result: Awaited<ReturnType<typeof entryCall>> | undefined;
         if (entry.call) {
-          result = await entryCall(entry.call, cancelled);
-          if (cancelled()) break;
-          done.push({
-            agent: agent.id,
-            tool: entry.call.tool,
-            [result.ok ? "result" : "failed"]: readable(result.output)
-          });
+          result = await entryCall(entry.call, gone);
+          const stopped = gone();
+          // A tool that ran is told to the model even when the user has spoken since: it must not run twice.
+          if (!stopped || result.ran) {
+            done.push({
+              agent: here,
+              tool: entry.call.tool,
+              [result.ok ? "result" : "failed"]: readable(result.output)
+            });
+          }
+          if (stopped) break;
         }
         const to = branchTaken(entry.next, result);
         const target = to ? roster.find((one) => one.id === to) : undefined;
         if (!target) break;
         // A flow that leads back to where it has been would never stop of itself.
-        if (visited.has(target.id) || moves >= MAX_ENTRY_MOVES) {
+        if (visited.has(target.id)) {
           log.warn("onEnter did not move on: the flow goes round in a circle", { from: agent.id, to: target.id });
+          break;
+        }
+        if (moves >= MAX_ENTRY_MOVES) {
+          log.warn(
+            `onEnter did not move on: a conversation moves on by rule at most ${MAX_ENTRY_MOVES} times in a row`,
+            {
+              from: agent.id,
+              to: target.id
+            }
+          );
           break;
         }
         moveTo(target);
@@ -1070,7 +1098,7 @@ export function createLiveProvider(
     }
     // What the user said meanwhile has cancelled the reply: nothing more is said for it.
     const say = cancelled() || lines.length === 0 ? undefined : lines.join(" ");
-    const spoken = say !== undefined && engine?.saysWithToolResult === true;
+    const spoken = say !== undefined && sayNow !== undefined;
     const final = stage() ?? agent;
     const tools = done.map((one) => String(one.tool)).join(", ");
     const note = [
@@ -1087,15 +1115,12 @@ export function createLiveProvider(
           : [`Begin what you say next with exactly these words, changing none of them: "${say}"`])
     ].join(" ");
     return {
-      outcome: {
-        ok: true,
-        output: JSON.stringify({
-          ...arrivalResult(final),
-          ...(done.length > 0 ? { doneOnArriving: done } : {}),
-          note
-        })
-      },
-      ...(spoken ? { say } : {})
+      ok: true,
+      output: JSON.stringify({
+        ...arrivalResult(final),
+        ...(done.length > 0 ? { doneOnArriving: done } : {}),
+        note
+      })
     };
   }
 
@@ -2095,11 +2120,22 @@ export function createLiveProvider(
         : run();
       const settled =
         call.name === TRANSFER_AGENT_TOOL
-          ? answer.then((outcome) =>
-              entered(call.callId, outcome, () => closed || epoch !== toolEpoch || engine !== current)
-            )
-          : answer.then((outcome) => ({ outcome, say: undefined }));
-      void settled.then(({ outcome, say }) => {
+          ? answer.then((outcome) => {
+              const cancelled = (): boolean => closed || epoch !== toolEpoch || engine !== current;
+              return entered(
+                call.callId,
+                outcome,
+                cancelled,
+                // An engine that makes the speech itself says the owner's lines as they are, while the call runs.
+                current?.sayDuringTool
+                  ? (line) => {
+                      if (!cancelled()) current.sayDuringTool?.(call.callId, line);
+                    }
+                  : undefined
+              );
+            })
+          : answer;
+      void settled.then((outcome) => {
         toolsRunning = Math.max(0, toolsRunning - 1);
         if (closed || engine !== current) return;
         const stale = epoch !== toolEpoch;
@@ -2109,7 +2145,7 @@ export function createLiveProvider(
           toolFollowUp = true;
           toolFollowUpAt = now();
         }
-        current?.sendToolResult?.(call.callId, outcome.output, stale ? undefined : say);
+        current?.sendToolResult?.(call.callId, outcome.output);
         if (stale && toolsRunning === 0 && !responseActive) idleStatus();
       });
     },

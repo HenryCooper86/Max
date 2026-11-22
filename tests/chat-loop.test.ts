@@ -139,7 +139,7 @@ describe("chat loop", () => {
     expect(chats[2].messages.map((message: any) => message.role)).toEqual(["system", "user", "assistant", "user"]);
   });
 
-  it("speaks a line it is given with a tool's result, between what the model said and what it says next", async () => {
+  it("speaks a line it is given while a tool is waited for, between what the model said and what it says next", async () => {
     const { loop, chats, toolCalls, sentences, seen } = setup([
       () =>
         sseOf([
@@ -151,8 +151,16 @@ describe("chat loop", () => {
     ]);
     const done = loop.reply("where is my order");
     await vi.waitFor(() => expect(toolCalls).toEqual(["c1"]));
-    loop.sendToolResult("c1", "result", "One moment, I am looking up your order.");
+    loop.sayDuringTool("c1", "One moment, I am looking up your order.");
+    // Said at once: the user hears it while the tool runs, not after.
+    await vi.waitFor(() =>
+      expect(sentences).toEqual(["Let me pass you on.", "One moment, I am looking up your order."])
+    );
+    expect(chats).toHaveLength(1);
+    loop.sendToolResult("c1", "result");
     await done;
+    // A line for a call that is no longer waited for is nobody's to say.
+    loop.sayDuringTool("c1", "Too late.");
     // Spoken as it is: no model wrote it.
     expect(chats).toHaveLength(2);
     expect(sentences).toEqual([
@@ -172,6 +180,37 @@ describe("chat loop", () => {
     ]);
   });
 
+  it("puts no gap after a line in a script that is written without gaps", async () => {
+    const { loop, toolCalls, seen } = setup([
+      () => sseOf([toolPiece({ index: 0, id: "c1", function: { name: "lookup", arguments: "{}" } })]),
+      () => sseOf([text("已经发货了。")])
+    ]);
+    const done = loop.reply("我的订单呢");
+    await vi.waitFor(() => expect(toolCalls).toEqual(["c1"]));
+    loop.sayDuringTool("c1", "请稍等，我查一下您的订单");
+    loop.sayDuringTool("c1", "One moment");
+    loop.sendToolResult("c1", "result");
+    await done;
+    const shown = seen.filter((one) => one.startsWith("text:"));
+    expect(shown[0]).toBe("text:请稍等，我查一下您的订单");
+    // Between words that are parted by spaces there is one.
+    expect(shown[1]).toBe("text: One moment ");
+  });
+
+  it("cuts a repeat by its own length, whatever its lower case is", async () => {
+    const { loop, toolCalls, sentences } = setup([
+      () => sseOf([toolPiece({ index: 0, id: "c1", function: { name: "lookup", arguments: "{}" } })]),
+      // "İ" is two characters in lower case: the repeat is still as long as it was written.
+      () => sseOf([text("İyi günler.Siparişiniz yolda.")])
+    ]);
+    const done = loop.reply("siparişim nerede");
+    await vi.waitFor(() => expect(toolCalls).toEqual(["c1"]));
+    loop.sayDuringTool("c1", "İyi günler.");
+    loop.sendToolResult("c1", "result");
+    await done;
+    expect(sentences.slice(-1)).toEqual(["Siparişiniz yolda."]);
+  });
+
   it("does not let the model begin by repeating the line that was just spoken", async () => {
     const run = async (...pieces: string[]) => {
       const { loop, toolCalls, sentences, seen } = setup([
@@ -180,7 +219,8 @@ describe("chat loop", () => {
       ]);
       const done = loop.reply("where is my order");
       await vi.waitFor(() => expect(toolCalls).toEqual(["c1"]));
-      loop.sendToolResult("c1", "result", "One moment. I am sorry, the order system is down.");
+      loop.sayDuringTool("c1", "One moment. I am sorry, the order system is down.");
+      loop.sendToolResult("c1", "result");
       await done;
       return { sentences: sentences.slice(1), shown: seen.filter((one) => one.startsWith("text:")).slice(1) };
     };

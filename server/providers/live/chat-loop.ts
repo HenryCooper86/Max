@@ -76,8 +76,9 @@ export type ChatLoop = {
   addContext(text: string): void;
   /** Holds a picture for the next user turn; it starts nothing and stops nothing. */
   addImage(image: EngineImage): void;
-  /** `say`: a line to speak as it is, before the model carries on with the result. */
-  sendToolResult(callId: string, output: string, say?: string): void;
+  sendToolResult(callId: string, output: string): void;
+  /** A line to speak as it is while this call is waited for, before the model carries on with its result. */
+  sayDuringTool(callId: string, line: string): void;
 };
 
 type ChatToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
@@ -165,6 +166,8 @@ function withPictures(messages: ChatMessage[], keep: number): ChatMessage[] {
 }
 // Sentence boundaries for both Latin and CJK punctuation.
 const SENTENCE_END = /[。！？!?；;\n]|[.](?=\s|$)/u;
+/** A line that ends like this is not parted by a space from what follows: scripts written without gaps. */
+const NO_GAP_AFTER = /[。！？…，、；：\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]$/u;
 
 export function authHeaders(item: ChatStage): Record<string, string> {
   return item.apiKey ? { Authorization: `Bearer ${item.apiKey}` } : {};
@@ -198,7 +201,9 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   /** Pictures shown without words, waiting for the next user turn. */
   let pendingImages: EngineImage[] = [];
   /** Tool calls waiting for `sendToolResult`, by call id. */
-  const toolWaiters = new Map<string, (output: string, say?: string) => void>();
+  const toolWaiters = new Map<string, (output: string) => void>();
+  /** For each call being waited for: how the reply it belongs to speaks a line of the relay's own. */
+  const toolSayers = new Map<string, (line: string) => void>();
   /** Bumped whenever the current work must stop: barge-in, cancel, close. */
   let generation = 0;
   let abort: AbortController | undefined;
@@ -281,11 +286,14 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
       let kept: string = head + delta;
       for (;;) {
         const start = kept.trimStart();
-        const lower = start.toLowerCase();
-        const repeated = echoes.find((line) => lower.startsWith(line));
+        // Lower case can be longer than what it was made from ("İ"): a repeat is measured in the line as written.
+        const repeated = heard.find(
+          (line) => start.length >= line.length && start.slice(0, line.length).toLowerCase() === line.toLowerCase()
+        );
         if (repeated === undefined) {
           // Could still turn into one of them: wait for more.
-          if (echoes.some((line) => line.startsWith(lower))) head = kept;
+          const lower = start.toLowerCase();
+          if (heard.some((line) => line.slice(0, start.length).toLowerCase() === lower)) head = kept;
           else {
             head = undefined;
             if (cut) kept = kept.trimStart();
@@ -357,24 +365,24 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   }
 
   /** Hands one call to the session and waits for its result. */
-  function awaitTool(call: ChatToolCall, signal: AbortSignal): Promise<{ output: string; say?: string }> {
-    return new Promise<{ output: string; say?: string }>((resolve, reject) => {
+  function awaitTool(call: ChatToolCall, signal: AbortSignal): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
       const onAbort = () => {
         toolWaiters.delete(call.id);
         reject(new Error("aborted"));
       };
       if (signal.aborted) return onAbort();
       signal.addEventListener("abort", onAbort, { once: true });
-      toolWaiters.set(call.id, (output, say) => {
+      toolWaiters.set(call.id, (output) => {
         signal.removeEventListener("abort", onAbort);
-        resolve({ output, ...(say ? { say } : {}) });
+        resolve(output);
       });
       const events = options.events();
       if (events?.onToolCall) {
         events.onToolCall({ callId: call.id, name: call.function.name, arguments: call.function.arguments });
       } else {
         toolWaiters.delete(call.id);
-        resolve({ output: JSON.stringify({ error: "tools are not available" }) });
+        resolve(JSON.stringify({ error: "tools are not available" }));
       }
     });
   }
@@ -524,17 +532,14 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
           if (!result.toolCalls.length || !offerTools) break;
           turn.push({ role: "assistant", content: result.text || null, tool_calls: result.toolCalls });
           for (const call of result.toolCalls) {
-            const { output, say } = await awaitTool(call, controller.signal);
-            if (!current()) return;
-            turn.push({ role: "tool", tool_call_id: call.id, content: output });
-            if (say) {
-              // A line of the relay's own, in the owner's words: spoken as it is, after
-              // what the model has said so far and before what it says next.
+            // A line of the relay's own, in the owner's words: spoken as it is while the call
+            // is waited for, after what the model has said so far and before what it says next.
+            let saying: Promise<void> = Promise.resolve();
+            const speak = async (say: string): Promise<void> => {
               if (hold) await allRead();
-              if (!current()) return;
-              if (refused) continue;
+              if (!current() || refused) return;
               // With the gap that parts it from what the model says next, where the script has gaps.
-              const text = `${joined([full, say]).slice(full.length)}${/[。！？…]$/u.test(say) ? "" : " "}`;
+              const text = `${joined([full, say]).slice(full.length)}${NO_GAP_AFTER.test(say) ? "" : " "}`;
               full += text;
               // A model that is told what was said tends to say it again: its next words are read for that.
               heard.push(say, ...(say.match(/[^.!?。！？…]+[.!?。！？…]+/gu) ?? []).map((one) => one.trim()));
@@ -542,7 +547,20 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
               options.events()?.onAgentText(text);
               if (speaker.sentence) speaker.sentence(say);
               else speaker.delta?.(text);
+            };
+            toolSayers.set(call.id, (line) => {
+              saying = saying.then(() => speak(line)).catch(() => undefined);
+            });
+            let output: string;
+            try {
+              output = await awaitTool(call, controller.signal);
+            } finally {
+              toolSayers.delete(call.id);
             }
+            // The model's next words come after the line, never over it.
+            await saying;
+            if (!current()) return;
+            turn.push({ role: "tool", tool_call_id: call.id, content: output });
           }
         }
         if (hold) {
@@ -615,11 +633,14 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
     addImage(image) {
       pendingImages = [...pendingImages, image].slice(-MAX_PICTURES_IN_HISTORY);
     },
-    sendToolResult(callId, output, say) {
+    sendToolResult(callId, output) {
       const waiter = toolWaiters.get(callId);
       if (!waiter) return;
       toolWaiters.delete(callId);
-      waiter(output, say);
+      waiter(output);
+    },
+    sayDuringTool(callId, line) {
+      toolSayers.get(callId)?.(line);
     }
   };
 }

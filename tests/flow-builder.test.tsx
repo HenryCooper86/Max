@@ -344,7 +344,10 @@ describe("flow builder", () => {
     };
     const withEntry = (): FlowStep[] => [STEPS[0]!, { ...STEPS[1]!, onEnter: ENTRY }, STEPS[2]!];
     const labelled = (label: string) =>
-      root().findAll((node) => typeof node.type === "string" && node.props["aria-label"] === label);
+      // Each row names its controls with the branch it is: "分支 1：条件".
+      root().findAll(
+        (node) => typeof node.type === "string" && String(node.props["aria-label"] ?? "").endsWith(`：${label}`)
+      );
     const type = (node: ReactTestInstance, value: string) =>
       act(async () => node.props.onChange({ currentTarget: { value } }));
 
@@ -418,6 +421,44 @@ describe("flow builder", () => {
       });
     });
 
+    it("keeps as text what a number would write differently", async () => {
+      const { api } = await mount(fakeApi(flow(withEntry())));
+      await select("orders");
+      // A postcode, a price and an id longer than a number can hold: the relay compares "is" as text.
+      for (const [typedIn, saved] of [
+        ["02134", "02134"],
+        ["1.50", "1.50"],
+        ["12345678901234567890", "12345678901234567890"],
+        ["1e3", "1e3"],
+        ["40", 40],
+        ["-2.5", -2.5],
+        ["true", true]
+      ] as const) {
+        await type(labelled("比较的值")[0]!, typedIn);
+        await act(async () => button(/保存流程/).props.onClick());
+        expect(api.saveStudioFlow.mock.calls.at(-1)![0][1]!.onEnter!.next![0]!.if).toEqual({
+          path: "status",
+          is: saved
+        });
+      }
+      await type(labelled("条件")[0]!, "in");
+      await type(labelled("比较的值")[0]!, "02134, 10001");
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(api.saveStudioFlow.mock.calls.at(-1)![0][1]!.onEnter!.next![0]!.if).toEqual({
+        path: "status",
+        in: ["02134", 10001]
+      });
+    });
+
+    it("names the controls of each branch with the branch they belong to", async () => {
+      await mount(fakeApi(flow(withEntry())));
+      await select("orders");
+      const names = root()
+        .findAll((node) => node.type === "select" && String(node.props["aria-label"] ?? "").startsWith("分支"))
+        .map((node) => node.props["aria-label"]);
+      expect(names).toEqual(["分支 1：转到哪一步", "分支 1：条件", "分支 2：转到哪一步", "分支 2：条件"]);
+    });
+
     it("will not save a branch with a condition and no call, or a tool the step may not use", async () => {
       const { api } = await mount(fakeApi(flow(withEntry())));
       await select("orders");
@@ -433,7 +474,7 @@ describe("flow builder", () => {
     it("removes a branch, and with a step the branches that led to it", async () => {
       const { api } = await mount(fakeApi(flow(withEntry())));
       await select("orders");
-      await act(async () => labelled("删除这个分支")[1]!.props.onClick());
+      await act(async () => labelled("删除")[1]!.props.onClick());
       expect(labelled("转到哪一步").map((node) => node.props.value)).toEqual(["refunds"]);
       await select("refunds");
       confirmAnswer = true;

@@ -104,14 +104,15 @@ export type VoiceEngine = {
   updateInstructions?(instructions: string): void;
   /** Tell the model something happened without making it answer. */
   addContext?(text: string): void;
+  /** Give the model a tool's result (text, usually JSON) and let it carry on. */
+  sendToolResult?(callId: string, output: string): void;
   /**
-   * Give the model a tool's result (text, usually JSON) and let it carry on.
-   * `say` is a line of the relay's own to speak first, in these words, inside
-   * the reply under way: only engines with `saysWithToolResult` take it.
+   * Speak a line of the relay's own, in these words, while the model waits
+   * for the result of this tool call: inside the reply under way, after what
+   * the model has said and before what it says with the result. Only engines
+   * that make the speech themselves have it.
    */
-  sendToolResult?(callId: string, output: string, say?: string): void;
-  /** True when the engine makes the speech itself and can speak a line it is given with a tool's result. */
-  readonly saysWithToolResult?: boolean;
+  sayDuringTool?(callId: string, line: string): void;
   /** A turn the user typed: answer it as if it had been spoken. */
   sendText?(text: string): void;
   /** A picture from the user. With `text` it is a typed turn with the picture

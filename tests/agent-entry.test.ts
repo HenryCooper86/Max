@@ -60,6 +60,11 @@ describe("what an agent does on arriving, as it is written in the config", () =>
     expect(problem({ call: { tool: "t", arguments: { text: "x".repeat(2000) } } })).toBe(
       "onEnter: the arguments of a call can be at most 2000 characters of JSON"
     );
+    // Ending the conversation and handing it over are not a step's to call.
+    expect(problem({ call: { tool: "end_session" } })).toContain("onEnter cannot call end_session");
+    expect(problem({ call: { tool: "transfer_to_agent", arguments: { agent: "sales" } } })).toContain(
+      "onEnter cannot call transfer_to_agent: to move on to another agent use next"
+    );
     expect(problem({ next: "sales" })).toBe("onEnter: next must be a list of at most 8 branches");
     expect(problem({ next: [{}] })).toBe(
       'onEnter: every branch needs the id of an agent, as "billing" or { "to": "billing" }'
@@ -126,6 +131,11 @@ describe("where a conversation goes by what a tool answered", () => {
     // What is no number is neither above nor below one.
     expect(taken({ path: "total", below: 100 }, { total: "a lot" })).toBeUndefined();
     expect(taken({ path: "total", below: 100 }, { total: "" })).toBeUndefined();
+    // Nor is what only a program would read as one.
+    expect(taken({ path: "total", above: 10 }, { total: "0x20" })).toBeUndefined();
+    expect(taken({ path: "total", above: 10 }, { total: "1e3" })).toBeUndefined();
+    expect(taken({ path: "total", above: 10 }, { total: " 12.5 " })).toBe("there");
+    expect(taken({ path: "total", below: 0 }, { total: "-3" })).toBe("there");
     expect(taken({ path: "total", below: 100 }, { total: null })).toBeUndefined();
     expect(taken({ path: "total", above: 1 }, { total: [5] })).toBeUndefined();
     // An object is not equal to a text.

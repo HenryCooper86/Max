@@ -736,6 +736,17 @@ describe("what the relay does itself when a conversation comes to an agent", () 
       return order;
     }
   };
+  /** A tool that answers when the test lets it. */
+  let finishSlow: ((value: unknown) => void) | undefined;
+  const SLOW: ToolDefinition = {
+    name: "slow_lookup",
+    description: "Finds the user's order, slowly",
+    parameters: { type: "object", properties: {} },
+    handler: (args) => {
+      found.push(args);
+      return new Promise((resolve) => (finishSlow = resolve));
+    }
+  };
   const agents = (orders: Record<string, unknown>, more: Array<Record<string, unknown>> = []) => ({
     instructions: "You work for Acme.",
     agents: [
@@ -745,16 +756,29 @@ describe("what the relay does itself when a conversation comes to an agent", () 
       ...more
     ]
   });
-  /** A session whose engine records the line it is given with a tool's result. */
+  /** A session whose engine records the lines it is given to say while a tool is waited for. */
   async function arrive(config: Record<string, unknown>, says = true, extra: Record<string, unknown> = {}) {
     const results: Array<{ callId: string; output: Record<string, any>; say?: string }> = [];
+    /** Each line, and how many times the tool had been called when it was said. */
+    const said: Array<{ callId: string; line: string; callsBefore: number }> = [];
     const made = await setup({
       config: { ...config, ...extra },
-      serverTools: [FIND, REFUND],
+      serverTools: [FIND, REFUND, SLOW, { ...FIND, name: "find_order_later", background: true }],
       engine: {
-        ...(says ? { saysWithToolResult: true } : {}),
-        sendToolResult: (callId, output, say) =>
-          results.push({ callId, output: JSON.parse(output) as Record<string, any>, ...(say ? { say } : {}) })
+        ...(says
+          ? {
+              sayDuringTool: (callId: string, line: string) =>
+                void said.push({ callId, line, callsBefore: found.length })
+            }
+          : {}),
+        sendToolResult: (callId, output) => {
+          const lines = said.filter((one) => one.callId === callId).map((one) => one.line);
+          results.push({
+            callId,
+            output: JSON.parse(output) as Record<string, any>,
+            ...(lines.length > 0 ? { say: lines.join(" ") } : {})
+          });
+        }
       }
     });
     const handOver = async (id = "orders", callId = "c1") => {
@@ -764,7 +788,7 @@ describe("what the relay does itself when a conversation comes to an agent", () 
       made.events().onToolCall!({ callId, name: "transfer_to_agent", arguments: JSON.stringify({ agent: id }) });
       await vi.advanceTimersByTimeAsync(0);
     };
-    return { ...made, results, handOver };
+    return { ...made, results, said, handOver };
   }
 
   beforeEach(() => {
@@ -915,9 +939,9 @@ describe("what the relay does itself when a conversation comes to an agent", () 
       conversation: { endSession: true }
     });
     await handOver();
-    expect(results[0]!.output.doneOnArriving).toEqual([
-      { agent: "orders", tool: "end_session", failed: { error: "onEnter cannot call end_session" } }
-    ]);
+    // The config is refused that step: nothing is done on arriving.
+    expect(results[0]!.output.agent).toBe("orders");
+    expect(results[0]!.output.doneOnArriving).toBeUndefined();
     expect(client.ofType("session.ended")).toEqual([]);
     await provider.close();
   });
@@ -931,36 +955,118 @@ describe("what the relay does itself when a conversation comes to an agent", () 
     await provider.close();
   });
 
-  it("says nothing more, and moves no further, once the user has talked over it", async () => {
-    let answer!: (value: unknown) => void;
-    const SLOW: ToolDefinition = { ...FIND, handler: () => new Promise((resolve) => (answer = resolve)) };
-    const results: Array<{ output: Record<string, any>; say?: string }> = [];
-    const { events, client, provider } = await setup({
-      config: agents({ say: "One moment.", call: { tool: "find_order" }, next: ["tracking"] }),
-      serverTools: [SLOW, REFUND],
-      engine: {
-        saysWithToolResult: true,
-        sendToolResult: (_callId, output, say) =>
-          results.push({ output: JSON.parse(output) as Record<string, any>, ...(say ? { say } : {}) })
-      }
-    });
-    events().onSpeechStarted();
-    events().onRiderTranscript("Where is my order?", true);
-    events().onResponseStarted();
-    events().onAgentText("Let me pass you on.");
-    events().onAgentAudio(Buffer.alloc(960));
-    events().onToolCall!({ callId: "c1", name: "transfer_to_agent", arguments: '{"agent":"orders"}' });
+  it("says the sentence before it calls the tool, not after", async () => {
+    const { results, said, handOver, provider } = await arrive(
+      agents({ say: "One moment, I am looking up your order.", call: { tool: "slow_lookup" } })
+    );
+    await handOver();
+    // The tool is still running: the user has heard the sentence, and the model has no result yet.
+    expect(found).toHaveLength(1);
+    expect(said).toEqual([{ callId: "c1", line: "One moment, I am looking up your order.", callsBefore: 0 }]);
+    expect(results).toEqual([]);
+    finishSlow!({ status: "shipped" });
     await vi.advanceTimersByTimeAsync(0);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.output.doneOnArriving).toEqual([
+      { agent: "orders", tool: "slow_lookup", result: { status: "shipped" } }
+    ]);
+    expect(said).toHaveLength(1);
+    await provider.close();
+  });
+
+  it("moves no further once the user has talked over it, and still tells the model of the tool that ran", async () => {
+    const { results, said, handOver, events, client, provider } = await arrive(
+      agents({ say: "One moment.", call: { tool: "slow_lookup" }, next: ["tracking"] })
+    );
+    await handOver();
     expect(results).toEqual([]);
     // The user talks over the reply while the order is being looked up.
     events().onSpeechStarted();
     events().onRiderTranscript("Never mind.", true);
-    answer({ status: "shipped" });
+    finishSlow!({ status: "shipped" });
     await vi.advanceTimersByTimeAsync(0);
     expect(results).toHaveLength(1);
-    expect(results[0]!.say).toBeUndefined();
+    // The lookup ran: a model that did not know would run it again.
+    expect(results[0]!.output.doneOnArriving).toEqual([
+      { agent: "orders", tool: "slow_lookup", result: { status: "shipped" } }
+    ]);
+    expect(results[0]!.output.note).toContain("The relay has already called slow_lookup for you");
     expect(JSON.stringify(results[0]!.output)).not.toContain("just been told");
+    expect(said.map((one) => one.line)).toEqual(["One moment."]);
     expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["orders"]);
     await provider.close();
+  });
+
+  it("gives up what an agent does on arriving when the same reply hands the conversation on", async () => {
+    const { results, said, events, client, provider } = await arrive(
+      agents({ say: "One moment.", call: { tool: "find_order" }, next: ["tracking"] })
+    );
+    events().onSpeechStarted();
+    events().onRiderTranscript("I want my money back for my order.", true);
+    events().onResponseStarted();
+    // A speech-to-speech model can ask for two handovers in one reply.
+    events().onToolCall!({ callId: "c1", name: "transfer_to_agent", arguments: '{"agent":"orders"}' });
+    events().onToolCall!({ callId: "c2", name: "transfer_to_agent", arguments: '{"agent":"refunds"}' });
+    await vi.advanceTimersByTimeAsync(0);
+    // The conversation is with refunds, where the model took it: orders' rule did not take it to tracking.
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["orders", "refunds"]);
+    expect(results).toHaveLength(2);
+    // Nor did orders' lookup run as refunds, which may not use it.
+    expect(found).toEqual([]);
+    expect(results.every((one) => one.output.doneOnArriving === undefined)).toBe(true);
+    expect(said.length).toBeLessThanOrEqual(1);
+    await provider.close();
+  });
+
+  it("moves on by rule only so many times in a row", async () => {
+    const chain = ["a", "b", "c", "d", "e", "f"];
+    const { results, handOver, client, provider } = await arrive({
+      instructions: "You work for Acme.",
+      agents: chain.map((id, index) => ({
+        id,
+        description: `Step ${id}.`,
+        instructions: `You are step ${id}.`,
+        ...(index < chain.length - 1 ? { onEnter: { next: [chain[index + 1]] } } : {})
+      }))
+    });
+    await handOver("a");
+    // Four moves after the handover itself, and no further.
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["a", "b", "c", "d", "e"]);
+    expect(results[0]!.output.agent).toBe("e");
+    await provider.close();
+  });
+
+  it("does not call a tool that runs in the background", async () => {
+    const { results, handOver, provider } = await arrive(
+      agents({
+        call: { tool: "find_order_later" },
+        next: [{ to: "tracking", if: { path: "status", is: "delivered" } }]
+      })
+    );
+    await handOver();
+    // It answers later, and a step goes by the answer.
+    expect(found).toEqual([]);
+    expect(results[0]!.output.agent).toBe("orders");
+    expect(results[0]!.output.doneOnArriving).toEqual([
+      {
+        agent: "orders",
+        tool: "find_order_later",
+        failed: { error: "onEnter cannot call find_order_later, which runs in the background" }
+      }
+    ]);
+    await provider.close();
+  });
+
+  it("neither answers nor moves on for a conversation that ended while the tool ran", async () => {
+    const { results, handOver, client, provider } = await arrive(
+      agents({ say: "One moment.", call: { tool: "slow_lookup" }, next: ["tracking"] })
+    );
+    await handOver();
+    const closing = provider.close();
+    finishSlow!({ status: "shipped" });
+    await vi.advanceTimersByTimeAsync(0);
+    await closing;
+    expect(results).toEqual([]);
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["orders"]);
   });
 });

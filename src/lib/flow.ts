@@ -44,12 +44,16 @@ export function valueOf(branch: FlowBranch): string {
   return value === undefined ? "" : String(value);
 }
 
-/** A number or true/false when the text is one, else the text: "40" is compared as a number either way. */
+/**
+ * A number or true/false when the text is exactly one, else the text. "is" and
+ * "is one of" compare as text, so what a number would write differently stays
+ * text: "02134" is a postcode, "1.50" a price, and a long id is no number at all.
+ */
 function typed(text: string): string | number | boolean {
   const value = text.trim();
   if (value === "true") return true;
   if (value === "false") return false;
-  return value !== "" && Number.isFinite(Number(value)) ? Number(value) : value;
+  return value !== "" && String(Number(value)) === value ? Number(value) : value;
 }
 
 /** The branch a test, a path and a value make. A number that is none makes a condition the relay will refuse. */
@@ -395,10 +399,12 @@ function entryProblem(step: FlowStep): string | undefined {
   const next = entry.next ?? [];
   if (next.some((branch) => branch.if) && !tool) return "noCall";
   if (next.slice(0, -1).some((branch) => !branch.if)) return "alwaysFirst";
+  if (next.length > 8) return "branches";
   for (const branch of next) {
     const condition = branch.if;
     if (!condition || condition.failed || condition.exists !== undefined) continue;
     if (condition.in ? condition.in.length === 0 : condition.is === "") return "value";
+    if ((condition.in?.length ?? 0) > 16) return "choices";
     for (const test of ["above", "below"] as const) {
       if (condition[test] !== undefined && !Number.isFinite(condition[test])) return "number";
     }

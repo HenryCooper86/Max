@@ -2258,13 +2258,24 @@ if (assistant().conversation.memorySummary && !analysisModelFromEnv()) {
 }
 // The same for a tool an agent's onEnter calls: the step would arrive, call nothing and say why.
 {
-  const known = new Set(installedServerTools().map((tool) => tool.name));
-  for (const agent of assistant().agents) {
-    const tool = agent.onEnter?.call?.tool;
-    if (tool && !known.has(tool)) {
-      log.warn(
-        `agents: ${agent.id}: onEnter calls ${tool}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the call will fail.`
-      );
+  const installed = installedServerTools();
+  const known = new Set(installed.map((tool) => tool.name));
+  const later = new Set(installed.filter((tool) => tool.background).map((tool) => tool.name));
+  const said = new Set<string>();
+  for (const profile of [assistant(), ...assistant().variants.map((variant) => variant.profile)]) {
+    for (const agent of profile.agents) {
+      const tool = agent.onEnter?.call?.tool;
+      if (!tool || said.has(`${agent.id}:${tool}`)) continue;
+      said.add(`${agent.id}:${tool}`);
+      if (later.has(tool)) {
+        log.warn(
+          `agents: ${agent.id}: onEnter calls ${tool}, which runs in the background. A step goes by the tool's answer, so the call will not be made: use a tool that answers at once.`
+        );
+      } else if (!known.has(tool)) {
+        log.warn(
+          `agents: ${agent.id}: onEnter calls ${tool}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the call will fail.`
+        );
+      }
     }
   }
 }

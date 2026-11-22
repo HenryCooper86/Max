@@ -43,6 +43,8 @@ const MAX_CHOICES = 16;
 const MAX_PATH = 120;
 const TOOL_NAME = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 const TESTS = ["is", "in", "above", "below", "exists", "failed"] as const;
+/** The conversation's own tools: ending it and handing it over are not a step's to call. */
+const NOT_FOR_A_STEP = new Set(["end_session", "transfer_to_agent"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -114,6 +116,11 @@ export function agentEntryFrom(raw: unknown): { entry?: AgentEntry; problem?: st
     }
     const extra = Object.keys(call).find((key) => key !== "tool" && key !== "arguments");
     if (extra) return { problem: `onEnter: a call has no "${extra.slice(0, 40)}"` };
+    if (NOT_FOR_A_STEP.has(call.tool.trim())) {
+      return {
+        problem: `onEnter cannot call ${call.tool.trim()}: to move on to another agent use next, and a conversation is ended by the assistant or the user`
+      };
+    }
     if (call.arguments !== undefined && call.arguments !== null && !isRecord(call.arguments)) {
       return { problem: "onEnter: the arguments of a call must be an object" };
     }
@@ -181,9 +188,13 @@ function applies(condition: EntryCondition, answer: unknown): boolean {
     return (value !== undefined && value !== null && value !== "") === condition.exists;
   if (condition.is !== undefined) return isPlain(value) && text(value) === text(condition.is);
   if (condition.in) return isPlain(value) && condition.in.some((choice) => text(choice) === text(value));
-  // A number, or one written as text: "40" is above 30. Nothing else is above or below anything.
+  // A number, or one written out in digits as text: "40" is above 30. Nothing else is above or below anything.
   const number =
-    typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^[+-]?\d+(\.\d+)?$/.test(value.trim())
+        ? Number(value)
+        : Number.NaN;
   if (!Number.isFinite(number)) return false;
   if (condition.above !== undefined) return number > condition.above;
   if (condition.below !== undefined) return number < condition.below;

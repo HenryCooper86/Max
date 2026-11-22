@@ -87,6 +87,10 @@
   window of 24 remembered turns into a short text, which the assistant is given with the latest turns. Written when
   a conversation ends and during long ones; deleted with the rest when a user is forgotten. See
   [a summary of older turns](docs/conversations.md#a-summary-of-older-turns).
+- Flow steps, after review: an `onEnter` sentence is said before its tool is called (on the cascaded backends), not
+  after; a tool that ran is told to the model even when the user talked over the reply; a second handover in the
+  same reply gives up the first agent's `onEnter`; background tools, `end_session` and `transfer_to_agent` are
+  refused; the builder keeps `02134` and `1.50` as text.
 - Flow steps the relay does itself. An agent's new `onEnter` says a sentence in your words, calls a tool with fixed
   arguments and moves the conversation on by what the tool answered (`is`, `in`, `above`, `below`, `exists`,
   `failed`), with no model deciding any of it. On the cascaded backends the sentence is spoken as written. The

@@ -245,33 +245,39 @@ answered.
 A condition names a `path` into the tool's JSON answer (keys and list positions joined by dots, `order.items.0.sku`;
 without a path, the whole answer) and one test:
 
-| Test               | Applies when the value at the path                                             |
-| ------------------ | ------------------------------------------------------------------------------ |
-| `"is": "shipped"`  | is that text, number or `true`/`false`. Texts are compared without their case. |
-| `"in": ["a", "b"]` | is one of up to 16 such values.                                                |
-| `"above": 100`     | is a number, or a number written as text, greater than that.                   |
-| `"below": 100`     | is one less than that.                                                         |
-| `"exists": true`   | is there and not empty. `false`: is missing, `null` or empty.                  |
-| `"failed": true`   | (no path) the call failed, or its result was withheld by a rule.               |
+| Test               | Applies when the value at the path                                                                 |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| `"is": "shipped"`  | is that text, number or `true`/`false`. Texts are compared without their case.                     |
+| `"in": ["a", "b"]` | is one of up to 16 such values.                                                                    |
+| `"above": 100`     | is a number, or one written in digits as text (`"250.50"`), greater than that.                     |
+| `"below": 100`     | is one less than that.                                                                             |
+| `"exists": true`   | is there, and is not `null` or `""`. `0`, `false`, `[]` and `{}` are there. `false`: the opposite. |
+| `"failed": true`   | (no path) the call failed, or its result was withheld by a rule.                                   |
 
-- **The order is: say, call, move on.** Then the agent the conversation came to does what its own `onEnter` says,
-  and so on, for at most four moves and never back to an agent it has been through on the way: a flow that goes
-  round in a circle stops where it is, with a line in the log. The agent the conversation comes to rest with is
-  given the tool's answers (`doneOnArriving` in the handover's result) and carries on from there with its model.
+- **The order is: say, call, move on.** The sentence is said before the tool is called, so "one moment" covers the
+  wait. Then the agent the conversation came to does what its own `onEnter` says, and so on, for at most four moves
+  by rule in a row and never to an agent whose `onEnter` already ran on the way: a flow that goes round in a circle
+  stops where it is, with a line in the log. The agent the conversation comes to rest with is given the tool's
+  answers (`doneOnArriving` in the handover's result) and carries on from there with its model.
 - **A call that failed takes only a branch that asks for it.** Without one the conversation stays with the agent,
   which is told what went wrong. A failed call never takes the "otherwise" branch.
 - **The call is held to the same rules as a call the model makes**: [rules for tools and for what they
   return](#guardrails) apply, and the client sees it as `tool.activity`. `end_session` and `transfer_to_agent`
-  cannot be called from `onEnter`.
+  cannot be called from `onEnter`, and neither can a [background tool](tools.md#background-tools): a step goes by the tool's answer,
+  and a background tool gives none until later. The call waits for the tool as long as a model's call would.
 - **In your words where the relay makes the speech.** On the cascaded backends (pipeline, local, Max Speech) the
-  sentence goes to the speech engine as written, between what the model had said and what it says next, and a model
-  that begins its next words by repeating it has the repeat cut. On the speech-to-speech backends (OpenAI Realtime,
-  Gemini Live, Grok) the vendor's model makes all the speech, so the model is told to begin with exactly these
-  words, which it usually but not provably does.
+  sentence goes to the speech engine as written, at once, between what the model had said and what it says next,
+  and a model that begins its next words by repeating it has the repeat cut. On the speech-to-speech backends
+  (OpenAI Realtime, Gemini Live, Grok) the vendor's model makes all the speech, so the model is told to begin with
+  exactly these words, which it usually but not provably does, and it is told only once the call has answered: there
+  the sentence comes after the wait, not before it. Give the model a line to say before it hands over (in the
+  instructions of the agent that hands over) if the wait matters on those backends.
 - **When it runs.** On a handover: one the model makes with `transfer_to_agent`, or a `next` branch. Not at the
   start of a conversation (`main`'s `onEnter` runs when a conversation is handed back to it; the first words of a
   conversation are the [greeting](configuration.md#identity-and-behaviour)), and not when a conversation is resumed. If the user talks over the
-  reply while the tool is running, nothing more is said or moved.
+  reply while the tool is running, nothing more is said or moved; the agent is still told what the tool answered,
+  so that it does not call it a second time. A model that asks for two handovers in one reply gets the second:
+  what the first agent would have done on arriving is given up.
 - **A mistake in an `onEnter` drops the whole `onEnter`**, with a problem in the startup log, and keeps the agent:
   half of what was meant to happen by rule is worse than none of it. A tool name the relay does not have is
   warned about at startup.
@@ -313,7 +319,9 @@ and branches on `status`. With the order shipped the conversation went on to `tr
 `refunds` (and refunded after a yes), and with the order service down to `human`, each time with the sentence said
 as written and the tool's answer used by the agent that followed, 9 runs of 9. Before the repeat was cut, the same
 model said the sentence twice in 3 runs of 3 when the next agent had little else to say. A changed flow was saved
-through `PUT /auth/admin/studio/flow`, and one with a condition the relay does not know was refused.
+through `PUT /auth/admin/studio/flow`, and one with a condition the relay does not know was refused. With an
+order service that takes three seconds to answer, the sentence reached the client 1.5 seconds after the user's
+question, before the lookup started, and the agent's answer followed when the lookup had answered at 4.6 seconds.
 
 ### Backends that cannot change tools mid-session
 

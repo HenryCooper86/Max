@@ -1,4 +1,5 @@
 import { env } from "./engine";
+import { turnDetectorSettings } from "./turn-watcher";
 
 /**
  * Turn detection and noise reduction on the hosted speech-to-speech backends.
@@ -131,5 +132,9 @@ export function geminiRealtimeInput(read: Read = env): { config?: Record<string,
 
 /** Settings that could not be used, for the log at startup. */
 export function turnSettingProblems(read: Read = env): string[] {
-  return [...openAiInputSettings(false, read).problems, ...geminiRealtimeInput(read).problems];
+  return [
+    ...openAiInputSettings(false, read).problems,
+    ...geminiRealtimeInput(read).problems,
+    ...turnDetectorSettings(read).problems
+  ];
 }

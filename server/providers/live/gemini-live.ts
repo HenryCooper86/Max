@@ -1,6 +1,7 @@
 import WebSocket, { type RawData } from "ws";
 import type { Logger } from "../../logger";
 import { geminiRealtimeInput } from "./turn-settings";
+import { createTurnTaking, type TurnTaking, type TurnTakingHooks } from "./turn-watcher";
 import { CLIENT_INPUT_RATE, env, type EngineConfig, type EngineEvents, type VoiceEngine } from "./engine";
 
 /**
@@ -11,6 +12,11 @@ import { CLIENT_INPUT_RATE, env, type EngineConfig, type EngineEvents, type Voic
  * rather than preventing them (`responseMode: "auto"`). It reports no explicit
  * "speech started": the first transcription fragment after a finished turn, or
  * an `interrupted` notice, is what opens a new wearer turn here.
+ *
+ * With the relay's own turn detector (./turn-watcher.ts) Gemini's detection is
+ * switched off for the connection: the relay says where the user's speech
+ * begins and ends (`activityStart`, `activityEnd`), and only the audio in
+ * between is sent.
  */
 
 const DEFAULT_URL =
@@ -113,7 +119,9 @@ export function createGeminiLiveEngine(
   /** Overrides GEMINI_API_KEY (a Max Cloud project brings its own). */
   apiKeyOverride?: string,
   /** Overrides the gender-based voice (a Max Cloud project picks one). */
-  voiceOverride?: string
+  voiceOverride?: string,
+  /** The relay's own turn detector, when one is set up. Replaced in tests. */
+  turnTaking: (log: Logger, hooks: TurnTakingHooks) => TurnTaking = createTurnTaking
 ): VoiceEngine {
   let socket: WebSocket | undefined;
   let events: EngineEvents | undefined;
@@ -123,6 +131,9 @@ export function createGeminiLiveEngine(
   let replying = false;
   let riderText = "";
   let riderOpen = false;
+  /** The relay cut a reply off for the user, and Gemini has not yet said that it stopped:
+   *  what still arrives of that reply is not the start of a new one. */
+  let staleReply = false;
   /** Tool calls awaiting a result: id → function name (the response needs both). */
   const pendingCalls = new Map<string, string>();
 
@@ -148,6 +159,57 @@ export function createGeminiLiveEngine(
   let secrets: string[] = [];
   const redact = (text: string) => redactGeminiSecrets(text, secrets);
 
+  function sendMicrophone(pcm: Buffer): void {
+    sendMessage({
+      realtimeInput: { audio: { data: pcm.toString("base64"), mimeType: `audio/pcm;rate=${CLIENT_INPUT_RATE}` } }
+    });
+  }
+
+  const turns = turnTaking(log, {
+    forward: sendMicrophone,
+    onStart() {
+      if (!ready) return;
+      sendMessage({ realtimeInput: { activityStart: {} } });
+      // What Gemini's own `interrupted` does when it detects the speech itself.
+      events?.onSpeechStarted();
+      riderOpen = true;
+      riderText = "";
+      if (replying) {
+        replying = false;
+        staleReply = true;
+        events?.onResponseDone({ cancelled: true });
+      }
+    },
+    onEnd() {
+      if (!ready) return;
+      sendMessage({ realtimeInput: { activityEnd: {} } });
+      // Whatever comes now answers this turn.
+      staleReply = false;
+    },
+    onAbandon() {
+      if (!ready) return;
+      // Gemini cannot be told to forget what it was sent: the activity is ended, and what
+      // it makes of a noise is its own. For the session, the turn is over with nothing said.
+      sendMessage({ realtimeInput: { activityEnd: {} } });
+      staleReply = false;
+      closeRiderTurn();
+    },
+    onLost(reason) {
+      // Gemini was told at setup to detect nothing itself, and that cannot be changed on a
+      // connection: a new one is made, with whichever detector is there then.
+      if (closedByRelay || !ready) return;
+      ready = false;
+      closedByRelay = true;
+      try {
+        socket?.close();
+      } catch {
+        /* already gone */
+      }
+      socket = undefined;
+      events?.onClosed(`the turn detector went away (${reason})`);
+    }
+  });
+
   function handle(message: ServerMessage): void {
     if (message.goAway) log.info("gemini live session ending soon", { timeLeft: message.goAway.timeLeft });
     if (message.error?.message) events?.onError(redact(message.error.message));
@@ -167,10 +229,14 @@ export function createGeminiLiveEngine(
     if (!content) return;
 
     if (content.interrupted) {
-      // The wearer spoke over the reply.
-      events?.onSpeechStarted();
-      riderOpen = true;
-      riderText = "";
+      // The relay's detector already opened this turn and ended the reply: Gemini confirms it.
+      if (turns.on) staleReply = false;
+      else {
+        // The wearer spoke over the reply.
+        events?.onSpeechStarted();
+        riderOpen = true;
+        riderText = "";
+      }
       if (replying) {
         replying = false;
         events?.onResponseDone({ cancelled: true });
@@ -187,16 +253,17 @@ export function createGeminiLiveEngine(
       events?.onRiderTranscript(riderText, false);
     }
     for (const part of content.modelTurn?.parts ?? []) {
-      if (part.inlineData?.data) {
+      if (part.inlineData?.data && !staleReply) {
         beginReply();
         events?.onAgentAudio(Buffer.from(part.inlineData.data, "base64"));
       }
     }
     const spoken = content.outputTranscription?.text;
-    if (spoken) {
+    if (spoken && !staleReply) {
       beginReply();
       events?.onAgentText(spoken);
     }
+    if (content.turnComplete) staleReply = false;
     if (content.turnComplete && replying) {
       replying = false;
       events?.onResponseDone({ cancelled: false });
@@ -210,14 +277,17 @@ export function createGeminiLiveEngine(
     sendMessage({ toolResponse: { functionResponses: [{ id: callId, name, response: functionResponse(output) }] } });
   }
 
-  function setup(config: EngineConfig): Record<string, unknown> {
+  function setup(config: EngineConfig, relayTakesTurns: boolean): Record<string, unknown> {
     const model = env("GEMINI_LIVE_MODEL") ?? "gemini-3.8-live";
     const voice =
       voiceOverride ??
       (config.voiceGender === "male"
         ? (env("GEMINI_VOICE_MALE") ?? "Puck")
         : (env("GEMINI_VOICE", "GEMINI_VOICE_FEMALE") ?? "Aoede"));
-    const realtimeInput = geminiRealtimeInput().config;
+    // The relay's detector in charge: Gemini detects nothing, and its settings for that do not apply.
+    const realtimeInput = relayTakesTurns
+      ? { automaticActivityDetection: { disabled: true } }
+      : geminiRealtimeInput().config;
     return {
       setup: {
         model: model.startsWith("models/") ? model : `models/${model}`,
@@ -246,6 +316,61 @@ export function createGeminiLiveEngine(
     };
   }
 
+  function openUpstream(config: EngineConfig, apiKey: string, base: string, relayTakesTurns: boolean): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const fail = (error: Error) => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      };
+      let upstream: WebSocket;
+      try {
+        upstream = createSocket(`${base}?key=${encodeURIComponent(apiKey)}`);
+      } catch (error) {
+        // ws rejects a malformed URL by quoting it, key included.
+        fail(new Error(`Gemini Live: ${redact(error instanceof Error ? error.message : String(error))}`));
+        return;
+      }
+      socket = upstream;
+      upstream.on("open", () => sendMessage(setup(config, relayTakesTurns)));
+      // Gemini sends JSON in binary frames as well as text frames.
+      upstream.on("message", (raw) => {
+        let message: ServerMessage;
+        try {
+          message = JSON.parse(rawToString(raw)) as ServerMessage;
+        } catch {
+          return;
+        }
+        if (message.setupComplete !== undefined && !settled) {
+          ready = true;
+          settled = true;
+          resolve();
+          return;
+        }
+        handle(message);
+      });
+      upstream.on("unexpected-response", (_request, response) => {
+        const hint = response.statusCode === 401 || response.statusCode === 403 ? " — check the API key" : "";
+        fail(new Error(`Gemini Live: HTTP ${response.statusCode}${hint}`));
+      });
+      upstream.on("error", (error) => {
+        const message = redact(error.message);
+        log.warn("gemini live socket error", { message });
+        fail(new Error(`Gemini Live: ${message}`));
+      });
+      upstream.on("close", (code, reason) => {
+        // A rejected setup (bad model, bad key) arrives as a close with the reason.
+        // Redacted before trimming, so a cut cannot leave part of the key behind.
+        const text = reason.length ? ` ${redact(reason.toString("utf8")).slice(0, 160)}` : "";
+        const detail = `closed (${code}${text})`;
+        fail(new Error(`Gemini Live: ${detail}`));
+        if (!closedByRelay && ready) events?.onClosed(detail);
+      });
+    });
+  }
+
   return {
     responseMode: "auto",
     connect(config, engineEvents) {
@@ -254,64 +379,18 @@ export function createGeminiLiveEngine(
       if (!apiKey) return Promise.reject(new Error("Gemini Live: API key is not configured on the relay"));
       secrets = [apiKey];
       const base = env("GEMINI_LIVE_URL") ?? DEFAULT_URL;
-      return new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const fail = (error: Error) => {
-          if (!settled) {
-            settled = true;
-            reject(error);
-          }
-        };
-        let upstream: WebSocket;
-        try {
-          upstream = createSocket(`${base}?key=${encodeURIComponent(apiKey)}`);
-        } catch (error) {
-          // ws rejects a malformed URL by quoting it, key included.
-          fail(new Error(`Gemini Live: ${redact(error instanceof Error ? error.message : String(error))}`));
-          return;
-        }
-        socket = upstream;
-        upstream.on("open", () => sendMessage(setup(config)));
-        // Gemini sends JSON in binary frames as well as text frames.
-        upstream.on("message", (raw) => {
-          let message: ServerMessage;
-          try {
-            message = JSON.parse(rawToString(raw)) as ServerMessage;
-          } catch {
-            return;
-          }
-          if (message.setupComplete !== undefined && !settled) {
-            ready = true;
-            settled = true;
-            resolve();
-            return;
-          }
-          handle(message);
-        });
-        upstream.on("unexpected-response", (_request, response) => {
-          const hint = response.statusCode === 401 || response.statusCode === 403 ? " — check the API key" : "";
-          fail(new Error(`Gemini Live: HTTP ${response.statusCode}${hint}`));
-        });
-        upstream.on("error", (error) => {
-          const message = redact(error.message);
-          log.warn("gemini live socket error", { message });
-          fail(new Error(`Gemini Live: ${message}`));
-        });
-        upstream.on("close", (code, reason) => {
-          // A rejected setup (bad model, bad key) arrives as a close with the reason.
-          // Redacted before trimming, so a cut cannot leave part of the key behind.
-          const text = reason.length ? ` ${redact(reason.toString("utf8")).slice(0, 160)}` : "";
-          const detail = `closed (${code}${text})`;
-          fail(new Error(`Gemini Live: ${detail}`));
-          if (!closedByRelay && ready) events?.onClosed(detail);
-        });
+      if (!turns.wanted) return openUpstream(config, apiKey, base, false);
+      // The detector first: what Gemini is told at setup depends on whether it is there.
+      return turns.connect(config.languages).then((relayTakesTurns) => {
+        if (closedByRelay) throw new Error("Gemini Live: closed before it connected");
+        return openUpstream(config, apiKey, base, relayTakesTurns);
       });
     },
     sendAudio(pcm) {
-      if (!ready) return;
-      sendMessage({
-        realtimeInput: { audio: { data: pcm.toString("base64"), mimeType: `audio/pcm;rate=${CLIENT_INPUT_RATE}` } }
-      });
+      if (ready) turns.audio(pcm);
+    },
+    endInput() {
+      if (ready) turns.endInput();
     },
     respond() {
       /* Gemini answers on its own. */
@@ -358,6 +437,7 @@ export function createGeminiLiveEngine(
     close() {
       closedByRelay = true;
       ready = false;
+      turns.close();
       try {
         socket?.close();
       } catch {

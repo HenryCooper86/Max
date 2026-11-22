@@ -1,4 +1,5 @@
 import WebSocket, { type RawData } from "ws";
+import { createTurnTaking, type TurnTaking, type TurnTakingHooks } from "./turn-watcher";
 import type { VoiceGender } from "../../../shared/agent";
 import type { Logger } from "../../logger";
 import { openAiInputSettings } from "./turn-settings";
@@ -41,6 +42,10 @@ export type RealtimeDialect = {
   sessionType?: string;
   /** The upstream and its configured model take `input_image` content. */
   images?: boolean;
+  /** The session with the upstream's own turn detection switched off: the
+   *  relay then says where each turn of the user's ends (./turn-watcher.ts).
+   *  Dialects without it always use the upstream's detection. */
+  manualTurns?(session: Record<string, unknown>): Record<string, unknown>;
 };
 
 const SAY_INSTRUCTION = "Say exactly the following line and nothing else, in the language it is written in: ";
@@ -113,7 +118,12 @@ export function openAiDialect(apiKey?: string, voiceName?: string): RealtimeDial
     ],
     contextRole: "system",
     sessionType: "realtime",
-    images: openAiModelTakesImages(model)
+    images: openAiModelTakesImages(model),
+    manualTurns: (session) => {
+      const audio = (session.audio ?? {}) as Record<string, unknown>;
+      const input = (audio.input ?? {}) as Record<string, unknown>;
+      return { ...session, audio: { ...audio, input: { ...input, turn_detection: null } } };
+    }
   };
 }
 
@@ -157,7 +167,10 @@ export function grokDialect(apiKey?: string, voiceName?: string): RealtimeDialec
         item: { type: "force_message", role: "assistant", content: [{ type: "output_text", text }] }
       }
     ],
-    contextRole: "user"
+    contextRole: "user",
+    // xAI documents `turn_detection.type` as "server_vad" or null, and
+    // `input_audio_buffer.commit` for when it is null.
+    manualTurns: (session) => ({ ...session, turn_detection: { type: null } })
   };
 }
 
@@ -238,13 +251,19 @@ export function createRealtimeEngine(
   dialect: RealtimeDialect,
   log: Logger,
   createSocket: (url: string, headers: Record<string, string>) => WebSocket = (url, headers) =>
-    new WebSocket(url, { headers })
+    new WebSocket(url, { headers }),
+  /** The relay's own turn detector, when one is set up. Replaced in tests. */
+  turnTaking: (log: Logger, hooks: TurnTakingHooks) => TurnTaking = createTurnTaking
 ): VoiceEngine {
   let socket: WebSocket | undefined;
   let events: EngineEvents | undefined;
   let closedByRelay = false;
   let ready = false;
   let responseActive = false;
+  /** `response.cancel` went out for the reply under way: a second one would only draw an error. */
+  let cancelSent = false;
+  /** With the relay taking the turns: whether a turn's end is answered at once, or waits for `respond()`. */
+  let answerTurns = true;
   /** The newest frame of live video, until a turn of the user's begins. */
   let frame: EngineImage | undefined;
   /** The frames the conversation holds, oldest first, by the item ids given to them. */
@@ -304,6 +323,66 @@ export function createRealtimeEngine(
     if (responseActive || createPending) respondWhenIdle = true;
     else createResponse();
   }
+
+  function cancelResponse(): void {
+    if (!ready || !responseActive || cancelSent) return;
+    cancelSent = true;
+    sendEvent({ type: "response.cancel" });
+  }
+
+  function sendMicrophone(pcm: Buffer): void {
+    const audio = resamplePcm16(pcm, CLIENT_INPUT_RATE, dialect.inputRate);
+    sendEvent({ type: "input_audio_buffer.append", audio: audio.toString("base64") });
+  }
+
+  /** The user began to speak: the upstream said so, or the relay's detector did. */
+  function speechStarted(): void {
+    riderPending = false;
+    riderText = "";
+    riderItem = undefined;
+    // With live video on, the turn that begins is about what the camera or the screen shows now.
+    showFrame();
+    events?.onSpeechStarted();
+  }
+
+  const turns = turnTaking(log, {
+    forward: sendMicrophone,
+    onStart() {
+      if (!ready) return;
+      // Nothing from before this turn is part of it.
+      sendEvent({ type: "input_audio_buffer.clear" });
+      // What the upstream's own detection does when it hears the user: the reply under way stops.
+      cancelResponse();
+      speechStarted();
+    },
+    onEnd() {
+      if (!ready) return;
+      sendEvent({ type: "input_audio_buffer.commit" });
+      if (answerTurns) requestResponse();
+    },
+    onAbandon() {
+      if (!ready) return;
+      // Never committed, so never part of the conversation: there is nothing to answer.
+      sendEvent({ type: "input_audio_buffer.clear" });
+      riderPending = false;
+      riderText = "";
+      events?.onRiderTranscript("", true);
+    },
+    onLost(reason) {
+      // A new connection, with whichever detector is there then: simpler and surer than
+      // changing how a running session takes its turns.
+      if (closedByRelay || !ready) return;
+      ready = false;
+      closedByRelay = true;
+      try {
+        socket?.close();
+      } catch {
+        /* already gone */
+      }
+      socket = undefined;
+      events?.onClosed(`the turn detector went away (${reason})`);
+    }
+  });
 
   function functionCall(call: { call_id?: string; name?: string; arguments?: string }): void {
     if (!call.call_id || !call.name || announcedCalls.has(call.call_id)) return;
@@ -374,12 +453,8 @@ export function createRealtimeEngine(
       return;
     }
     if (type === "input_audio_buffer.speech_started") {
-      riderPending = false;
-      riderText = "";
-      riderItem = undefined;
-      // With live video on, the turn that begins is about what the camera or the screen shows now.
-      showFrame();
-      events?.onSpeechStarted();
+      // With the relay taking the turns its detector has said so already.
+      if (!turns.on) speechStarted();
       return;
     }
     if (type.startsWith(TRANSCRIPTION)) {
@@ -389,6 +464,7 @@ export function createRealtimeEngine(
     }
     if (type === "response.created") {
       responseActive = true;
+      cancelSent = false;
       createPending = false;
       // Upstreams that never send a "completed" transcript (cumulative
       // "updated" only) mark the end of the wearer's turn by answering it.
@@ -420,9 +496,62 @@ export function createRealtimeEngine(
       // Some servers only list function calls in the finished response.
       for (const item of event.response?.output ?? []) if (item.type === "function_call") functionCall(item);
       responseActive = false;
+      cancelSent = false;
       events?.onResponseDone({ cancelled: event.response?.status === "cancelled" });
       afterReply();
     }
+  }
+
+  function openUpstream(config: EngineConfig, relayTakesTurns: boolean): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const settle = {
+        resolve: () => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        },
+        reject: (error: Error) => {
+          if (!settled) {
+            settled = true;
+            reject(error);
+          }
+        }
+      };
+      const upstream = createSocket(dialect.url, { Authorization: `Bearer ${dialect.apiKey}` });
+      socket = upstream;
+      upstream.on("open", () => {
+        const session = dialect.session(config, dialect.voice(config.voiceGender));
+        sendEvent({
+          type: "session.update",
+          session: relayTakesTurns && dialect.manualTurns ? dialect.manualTurns(session) : session
+        });
+      });
+      upstream.on("message", (raw, isBinary) => {
+        if (isBinary) return;
+        let event: UpstreamEvent;
+        try {
+          event = JSON.parse(rawToString(raw)) as UpstreamEvent;
+        } catch {
+          return;
+        }
+        handle(event, settle);
+      });
+      upstream.on("unexpected-response", (_request, response) => {
+        const hint = response.statusCode === 401 || response.statusCode === 403 ? " — check the API key" : "";
+        settle.reject(new Error(`${dialect.name}: HTTP ${response.statusCode}${hint}`));
+      });
+      upstream.on("error", (error) => {
+        log.warn("realtime socket error", { backend: dialect.name, message: error.message });
+        settle.reject(new Error(`${dialect.name}: ${error.message}`));
+      });
+      upstream.on("close", (code, reason) => {
+        const detail = `closed (${code}${reason.length ? ` ${reason.toString("utf8").slice(0, 120)}` : ""})`;
+        settle.reject(new Error(`${dialect.name}: ${detail}`));
+        if (!closedByRelay && ready) events?.onClosed(detail);
+      });
+    });
   }
 
   return {
@@ -431,56 +560,19 @@ export function createRealtimeEngine(
     connect(config, engineEvents) {
       events = engineEvents;
       if (!dialect.apiKey) return Promise.reject(new Error(`${dialect.name}: API key is not configured on the relay`));
-      return new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const settle = {
-          resolve: () => {
-            if (!settled) {
-              settled = true;
-              resolve();
-            }
-          },
-          reject: (error: Error) => {
-            if (!settled) {
-              settled = true;
-              reject(error);
-            }
-          }
-        };
-        const upstream = createSocket(dialect.url, { Authorization: `Bearer ${dialect.apiKey}` });
-        socket = upstream;
-        upstream.on("open", () => {
-          sendEvent({ type: "session.update", session: dialect.session(config, dialect.voice(config.voiceGender)) });
-        });
-        upstream.on("message", (raw, isBinary) => {
-          if (isBinary) return;
-          let event: UpstreamEvent;
-          try {
-            event = JSON.parse(rawToString(raw)) as UpstreamEvent;
-          } catch {
-            return;
-          }
-          handle(event, settle);
-        });
-        upstream.on("unexpected-response", (_request, response) => {
-          const hint = response.statusCode === 401 || response.statusCode === 403 ? " — check the API key" : "";
-          settle.reject(new Error(`${dialect.name}: HTTP ${response.statusCode}${hint}`));
-        });
-        upstream.on("error", (error) => {
-          log.warn("realtime socket error", { backend: dialect.name, message: error.message });
-          settle.reject(new Error(`${dialect.name}: ${error.message}`));
-        });
-        upstream.on("close", (code, reason) => {
-          const detail = `closed (${code}${reason.length ? ` ${reason.toString("utf8").slice(0, 120)}` : ""})`;
-          settle.reject(new Error(`${dialect.name}: ${detail}`));
-          if (!closedByRelay && ready) events?.onClosed(detail);
-        });
+      answerTurns = !config.manualResponse;
+      if (!dialect.manualTurns || !turns.wanted) return openUpstream(config, false);
+      // The detector first: what the upstream is told about turns depends on whether it is there.
+      return turns.connect(config.languages).then((relayTakesTurns) => {
+        if (closedByRelay) throw new Error(`${dialect.name}: closed before it connected`);
+        return openUpstream(config, relayTakesTurns);
       });
     },
     sendAudio(pcm) {
-      if (!ready) return;
-      const audio = resamplePcm16(pcm, CLIENT_INPUT_RATE, dialect.inputRate);
-      sendEvent({ type: "input_audio_buffer.append", audio: audio.toString("base64") });
+      if (ready) turns.audio(pcm);
+    },
+    endInput() {
+      if (ready) turns.endInput();
     },
     respond() {
       if (ready) requestResponse();
@@ -491,7 +583,7 @@ export function createRealtimeEngine(
       continueAfterTools = false;
       awaitingCalls.clear();
       respondWhenIdle = false;
-      if (ready && responseActive) sendEvent({ type: "response.cancel" });
+      cancelResponse();
     },
     sendToolResult(callId, output) {
       if (!ready || !announcedCalls.has(callId)) return;
@@ -577,6 +669,7 @@ export function createRealtimeEngine(
     close() {
       closedByRelay = true;
       ready = false;
+      turns.close();
       try {
         socket?.close();
       } catch {

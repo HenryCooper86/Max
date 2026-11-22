@@ -94,6 +94,50 @@ something. Frames are not kept or recorded by the relay. The `local` backend was
 with `gemma3:4b`, from a script and from the widget in Chrome with a camera; the OpenAI and Gemini paths were built to
 the vendors' documentation and have not been run against their servers.
 
+## The relay's own turn detector
+
+OpenAI Realtime, Gemini Live and Grok each decide by themselves when the user has finished speaking, mostly from how
+long the silence is. A silence is a poor judge: someone reading out a phone number, or looking for a word, pauses in
+the middle and is answered too soon. With `TURN_DETECTOR=max-speech` the relay decides instead, with the voice
+detector and the learned turn detector (Smart Turn) of a [Max Speech](speech-server-deployment.md) server you run. It
+judges from the sound of the last words whether the speaker is done or only pausing.
+
+```dotenv
+TURN_DETECTOR=max-speech
+# The Max Speech server. MAX_SPEECH_URL is used when this is not set, and http://localhost:8790 when neither is.
+TURN_DETECTOR_URL=http://localhost:8790
+```
+
+| Setting                   | Default              | What it does                                                                                                          |
+| ------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `TURN_DETECTOR`           | `off`                | `max-speech`: the relay takes the turns on `openai`, `gemini` and `grok`. `off`: each backend's own detection.        |
+| `TURN_DETECTOR_URL`       | `MAX_SPEECH_URL`     | The Max Speech server to use for it.                                                                                  |
+| `TURN_DETECTOR_API_KEY`   | `MAX_SPEECH_API_KEY` | Its key, when it has one.                                                                                             |
+| `TURN_DETECTOR_EAGERNESS` | `normal`             | `low`, `normal` or `high`. A pause ends the turn whatever the detector thinks after 2, 1.5 or 0.8 seconds of silence. |
+
+How it works: the microphone audio goes to Max Speech as well. When it hears speech begin, the relay opens the turn on
+the backend and sends the audio from 600 ms before that moment on; when it judges the turn over, the relay closes it
+and the backend answers. Between turns the backend is sent no audio at all. The backend's own detection is switched
+off for the connection (`audio.input.turn_detection: null` on OpenAI, `turn_detection.type: null` on Grok,
+`automaticActivityDetection.disabled` on Gemini), so the settings for it in the sections below do not apply. Speech
+that begins while the assistant talks interrupts it, as before. A sound in which no words were heard, with no speech
+right after it, is not answered.
+
+What to know before turning it on:
+
+- It needs a Max Speech server: an Apple silicon Mac or a machine with a GPU. Each conversation takes one of its live
+  sessions (4 at a time on a Mac and 8 with a GPU by default, `SPEECH_MAX_SESSIONS`). The user's audio goes to that
+  server as well as to the backend; nothing is stored there.
+- The detector is a helper, not a requirement. When it cannot be reached as a conversation starts (not running, full,
+  still loading), that conversation uses the backend's own detection, and the log says so. When it goes away in the
+  middle of a conversation, the relay connects to the backend again and carries on with the backend's own.
+- It applies to `openai`, `gemini` and `grok`. `max-speech` already works this way; `pipeline` and `local` take turns
+  by silence, `doubao` and `local-realtime` by their own detection.
+
+Run on a Mac with Max Speech and the real detector, with stand-ins for the three vendors: a phone number spoken with
+a one-second pause in the middle was one turn, the end of a turn was reported about 0.4 seconds after the last word, and both fallbacks above happened as described. What is sent to OpenAI, Google and xAI follows their
+documentation for manual turns and was not run against their servers.
+
 ## Backend reference
 
 ### mock

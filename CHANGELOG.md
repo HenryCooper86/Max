@@ -90,6 +90,10 @@
 - Flows: a step at the start of a conversation. `main`'s `onStart` is done by the relay before the model is
   connected: a tool call, values kept from its answer, a move to the agent that fits, and a sentence said after the
   greeting. See [at the start of a conversation](docs/conversations.md#at-the-start-of-a-conversation).
+- The relay's own turn detector in front of OpenAI Realtime, Gemini Live and Grok (`TURN_DETECTOR=max-speech`). A
+  Max Speech server hears where the user's speech begins and judges, from how the last words sounded, whether they
+  have finished or are only pausing; the backend is told where each turn begins and ends and detects nothing itself.
+  A conversation falls back to the backend's own detection when the detector is not there.
 - Live video. A user can show the assistant their camera or their screen while they talk: the web SDK's `startVideo`
   sends a frame a second (`video.frame`, a new protocol event), the relay keeps the newest only, and the model sees it
   with the user's next turn (on Gemini Live, as it arrives). The widget has camera and screen buttons with a preview

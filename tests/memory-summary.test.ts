@@ -13,6 +13,7 @@ import {
   setUserMemorySummarizer,
   summarizeUserMemory,
   userConversationMemory,
+  userMemorySummariesOn,
   userMemorySummary,
   type UserMemoryTurn
 } from "../server/user-memory";
@@ -259,6 +260,99 @@ describe("a user's memory, with summaries of what is older than the turns it kee
     await vi.waitFor(() => expect(asked.length).toBeGreaterThan(0));
     expect(stored().older).toHaveLength(48);
     expect(stored().older![0]!.text).toBe("turn 13");
+  });
+
+  it("does not ask a model that is down again with every turn", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    reply = async () => {
+      throw new Error("down");
+    };
+    talk(24 + 12);
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    await summarizeUserMemory(user, 1_000);
+    // Twenty more turns of the same conversation: nobody is asked.
+    talk(20, 37);
+    await Promise.resolve();
+    expect(asked).toHaveLength(1);
+    // A minute later the conversation asks once more, and then waits again.
+    clock.mockReturnValue(1_000_000 + 60_000);
+    talk(1, 57);
+    await vi.waitFor(() => expect(asked).toHaveLength(2));
+    await summarizeUserMemory(user, 1_000);
+    talk(3, 58);
+    expect(asked).toHaveLength(2);
+    // The end of the conversation is one try of its own.
+    reply = async () => "at last";
+    expect(await summarizeUserMemory(user)).toBe(true);
+    expect(stored().summary!.text).toBe("at last");
+    clock.mockRestore();
+  });
+
+  it("drops what was waiting once summaries are turned off, and shows the old summary no more", async () => {
+    talk(30);
+    await summarizeUserMemory(user);
+    talk(3, 31);
+    expect(stored().older).toHaveLength(3);
+    expect(userMemorySummariesOn()).toBe(true);
+    on = false;
+    expect(userMemorySummariesOn()).toBe(false);
+    talk(1, 34);
+    expect(stored().older).toBeUndefined();
+    expect(stored().turns).toHaveLength(24);
+    // The text stays in the file until the user is forgotten: turning summaries on again finds it.
+    expect(stored().summary!.text).toBe("summary of 6 turns");
+  });
+
+  it("never rejects, whatever the summariser does", async () => {
+    talk(30);
+    setUserMemorySummarizer({
+      enabled: () => {
+        throw new Error("no config");
+      },
+      summarize: async () => "x"
+    });
+    expect(await summarizeUserMemory(user)).toBe(false);
+    setUserMemorySummarizer({
+      enabled: () => true,
+      summarize: () => {
+        throw new Error("thrown at once");
+      }
+    });
+    expect(await summarizeUserMemory(user)).toBe(false);
+  });
+
+  it("waits a moment at shutdown for a summary that is being written", async () => {
+    talk(30);
+    let finish!: (text: string) => void;
+    reply = () => new Promise((resolve) => (finish = resolve));
+    const running = summarizeUserMemory(user);
+    const flushed = flushUserMemory();
+    finish("written before the relay stopped");
+    await flushed;
+    await running;
+    const file = fs.readFileSync(path.join(directory, "memory.json"), "utf8");
+    expect(file).toContain("written before the relay stopped");
+  });
+
+  it("reads a summary and waiting turns from the file within their limits", async () => {
+    talk(2);
+    await flushUserMemory();
+    const file = path.join(directory, "memory.json");
+    const stored_ = JSON.parse(fs.readFileSync(file, "utf8")) as {
+      users: Array<Record<string, unknown>> | Record<string, Record<string, unknown>>;
+    };
+    const entry = Array.isArray(stored_.users) ? stored_.users[0]! : Object.values(stored_.users)[0]!;
+    entry.summary = { at: "soon", text: `${"long ".repeat(1000)}\u0007` };
+    entry.older = Array.from({ length: 80 }, (_, n) => ({ at: n, speaker: "rider", text: `old ${n}` })).concat([
+      { at: 1, speaker: "nobody", text: "x" } as never
+    ]);
+    fs.writeFileSync(file, JSON.stringify(stored_));
+    resetUserMemoryForTests();
+    setUserMemorySummarizer({ enabled: () => true, summarize: async () => "x" });
+    expect(stored().summary!.text.length).toBeLessThanOrEqual(1500);
+    expect(stored().summary!.at).toBe(0);
+    expect(stored().older!.length).toBeLessThanOrEqual(48);
+    expect(stored().older!.every((turn) => turn.speaker === "rider")).toBe(true);
   });
 
   it("is written to the file with the rest and read back", async () => {

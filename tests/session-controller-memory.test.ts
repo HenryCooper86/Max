@@ -6,6 +6,7 @@ import {
   clearUserConversationMemory,
   externalUserMemoryKey,
   resetUserMemoryForTests,
+  setUserMemorySummarizer,
   userConversationMemory
 } from "../server/user-memory";
 
@@ -95,6 +96,47 @@ describe("remembering a token-identified user between conversations", () => {
     const previous = second.context().previousConversation!;
     expect(previous.turns.map((turn) => turn.text)).toEqual(["My dog is called Biscuit.", "Lovely name."]);
     await second.controller.close();
+  });
+
+  it("summarises what has left the window when a conversation ends, and gives the next one the summary", async () => {
+    remember();
+    let on = true;
+    const asked: number[] = [];
+    setUserMemorySummarizer({
+      enabled: () => on,
+      summarize: async ({ turns }) => {
+        asked.push(turns.length);
+        return "The user's dog is called Biscuit.";
+      }
+    });
+    const first = await session(asUser("u-1"));
+    first.say("rider", "My dog is called Biscuit.");
+    for (let n = 0; n < 27; n += 1) first.say(n % 2 ? "rider" : "agent", `Turn number ${"x".repeat(n + 1)}`);
+    expect(asked).toEqual([]);
+    // Under the key the turns were recorded under: the end of this conversation asks for the summary.
+    await first.controller.close();
+    await vi.waitFor(() =>
+      expect(userConversationMemory(externalUserMemoryKey("u-1"))?.summary?.text).toBe(
+        "The user's dog is called Biscuit."
+      )
+    );
+    expect(asked).toEqual([4]);
+
+    const second = await session(asUser("u-1"));
+    expect(second.context().previousConversation!.summary).toBe("The user's dog is called Biscuit.");
+    expect(second.context().previousConversation!.turns).toHaveLength(24);
+    await second.controller.close();
+    // Another user's conversation ending asks for nothing.
+    const other = await session(asUser("u-2"));
+    other.say("rider", "Hello.");
+    await other.controller.close();
+    expect(asked).toEqual([4]);
+
+    // Turned off: the summary that was written is no longer shown.
+    on = false;
+    const third = await session(asUser("u-1"));
+    expect(third.context().previousConversation!.summary).toBeUndefined();
+    await third.controller.close();
   });
 
   it("never shows one user another user's conversation, and nothing to a session without a user", async () => {

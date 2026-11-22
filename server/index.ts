@@ -2244,7 +2244,7 @@ for (const profile of [assistant(), ...assistant().variants.map((variant) => var
 }
 // Summaries of what a user said longer ago, where the config asks for them and there is a model to write them.
 setUserMemorySummarizer({
-  enabled: () => assistant().conversation.memorySummary && analysisModelFromEnv() !== undefined,
+  enabled: () => assistant().conversation.memorySummary,
   summarize: (input) => {
     const model = analysisModelFromEnv();
     if (!model) throw new Error("there is no model for the memory summary");
@@ -2253,7 +2253,7 @@ setUserMemorySummarizer({
 });
 if (assistant().conversation.memorySummary && !analysisModelFromEnv()) {
   log.warn(
-    "conversation.memorySummary needs a chat model to write the summaries: set ANALYSIS_LLM_BASE_URL and ANALYSIS_LLM_MODEL, or a chat model for the conversation. Until then older turns are not summarised."
+    "conversation.memorySummary needs a chat model to write the summaries: set ANALYSIS_LLM_BASE_URL and ANALYSIS_LLM_MODEL, or a chat model for the conversation. Until then older turns wait, up to 48 for a user, and are not summarised."
   );
 }
 // The same for a tool an agent's onEnter calls: the step would arrive, call nothing and say why.

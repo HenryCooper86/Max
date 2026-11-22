@@ -83,8 +83,25 @@ const openTurns = new Map<string, { turnId: string }>();
 const REVISION_PERSIST_MS = 1_500;
 let revisionTimer: NodeJS.Timeout | undefined;
 let summarizer: UserMemorySummarizer | undefined;
-/** Users a summary is being made for right now. */
-const summarizing = new Set<string>();
+/** Users a summary is being made for right now, and the memory it is made for. */
+const summarizing = new Map<string, UserConversationMemory>();
+/** Summaries being written, for a relay that is shutting down to wait for. */
+const summaries = new Set<Promise<unknown>>();
+/** After a summary that could not be made: when a conversation under way may ask again. */
+const retryAt = new Map<string, number>();
+/** A model that is down is not asked again with every turn. */
+const RETRY_AFTER_MS = 60_000;
+/** How long a shutdown waits for a summary that is being written. */
+const SHUTDOWN_WAIT_MS = 3_000;
+
+/** Whether summaries of older turns are asked for: one that was written earlier is shown only then. */
+export function userMemorySummariesOn(): boolean {
+  try {
+    return summarizer?.enabled() === true;
+  } catch {
+    return false;
+  }
+}
 
 export function setUserMemorySummarizer(next: UserMemorySummarizer | undefined): void {
   summarizer = next;
@@ -416,8 +433,10 @@ export function recordUserMemoryEvent(userIdInput: unknown, payload: unknown, no
         current.turns.push(turn);
         const leaving = current.turns.slice(0, Math.max(0, current.turns.length - MAX_STORED_TURNS));
         current.turns = current.turns.slice(-MAX_STORED_TURNS);
-        // What leaves the window waits to be summarised, where summaries are made. Elsewhere it is gone, as before.
-        if (leaving.length > 0 && summarizer?.enabled()) {
+        // What leaves the window waits to be summarised, where summaries are made. Elsewhere it is gone, as
+        // before, and so is what was waiting when summaries were turned off.
+        if (!userMemorySummariesOn()) delete current.older;
+        else if (leaving.length > 0) {
           current.older = [...(current.older ?? []), ...leaving].slice(-MAX_OLDER_TURNS);
         }
         changed = true;
@@ -447,8 +466,10 @@ export function recordUserMemoryEvent(userIdInput: unknown, payload: unknown, no
   // A turn that is still growing is written once it settles, not on every word.
   if (revision) persistSoon();
   else persistMemories();
-  // A long conversation does not wait for its end.
-  if ((current.older?.length ?? 0) >= SUMMARIZE_AT_TURNS) void summarizeUserMemory(userId, SUMMARIZE_AT_TURNS);
+  // A long conversation does not wait for its end. Nor does it ask a model that just failed with every turn.
+  if ((current.older?.length ?? 0) >= SUMMARIZE_AT_TURNS && Date.now() >= (retryAt.get(userId) ?? 0)) {
+    void summarizeUserMemory(userId, SUMMARIZE_AT_TURNS);
+  }
 }
 
 /**
@@ -461,13 +482,26 @@ export async function summarizeUserMemory(
   least = SUMMARIZE_AT_END_TURNS,
   now: () => number = Date.now
 ): Promise<boolean> {
+  const running = summarizeOnce(userIdInput, least, now).catch((error: unknown) => {
+    // Nothing a caller could do about it: the callers do not wait for this.
+    log.warn("older turns could not be summarised", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return false;
+  });
+  summaries.add(running);
+  void running.finally(() => summaries.delete(running));
+  return running;
+}
+
+async function summarizeOnce(userIdInput: unknown, least: number, now: () => number): Promise<boolean> {
   const make = summarizer;
-  if (!userMemoryEnabled() || !make?.enabled()) return false;
+  if (!userMemoryEnabled() || !make || !userMemorySummariesOn()) return false;
   ensureLoaded();
   const userId = normalizeUserId(userIdInput);
   const memory = userId ? memories.get(userId) : undefined;
   if (!memory?.older || memory.older.length < least || summarizing.has(userId)) return false;
-  summarizing.add(userId);
+  summarizing.set(userId, memory);
   const taken = [...memory.older];
   try {
     const text = cleanText(await make.summarize({ summary: memory.summary?.text, turns: taken }), MAX_SUMMARY_CHARS);
@@ -477,15 +511,18 @@ export async function summarizeUserMemory(
     memory.summary = { at: now(), text };
     memory.older = (memory.older ?? []).filter((turn) => !done.has(turn));
     if (memory.older.length === 0) delete memory.older;
+    retryAt.delete(userId);
     persistMemories();
     return true;
   } catch (error) {
+    retryAt.set(userId, Date.now() + RETRY_AFTER_MS);
     log.warn("older turns could not be summarised; they are kept for the next try", {
       message: error instanceof Error ? error.message : String(error)
     });
     return false;
   } finally {
-    summarizing.delete(userId);
+    // Only its own mark: a user who was forgotten and came back may have a summary of their own under way.
+    if (summarizing.get(userId) === memory) summarizing.delete(userId);
   }
 }
 
@@ -495,6 +532,9 @@ export function clearUserConversationMemory(userIdInput: unknown): boolean {
   const userId = normalizeUserId(userIdInput);
   const removed = Boolean(userId) && memories.delete(userId);
   openTurns.delete(userId);
+  // A summary under way is for the memory that is gone, and is dropped when it arrives: it does not hold up a new one.
+  summarizing.delete(userId);
+  retryAt.delete(userId);
   if (removed) persistMemories();
   return removed;
 }
@@ -535,13 +575,25 @@ export function buildPreviousConversationPrompt(
 }
 
 /** Test hook: waits for queued writes. */
-export function flushUserMemory(): Promise<void> {
+export async function flushUserMemory(): Promise<void> {
+  // A summary that is nearly written is worth a moment: without it the turns wait for the user's next conversation.
+  if (summaries.size > 0) {
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      Promise.allSettled([...summaries]),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, SHUTDOWN_WAIT_MS);
+        timer.unref?.();
+      })
+    ]);
+    if (timer) clearTimeout(timer);
+  }
   if (revisionTimer) {
     clearTimeout(revisionTimer);
     revisionTimer = undefined;
     persistMemories();
   }
-  return persistQueue;
+  await persistQueue;
 }
 
 /** Test hook: resets module state without deleting a configured file. */
@@ -549,6 +601,8 @@ export function resetUserMemoryForTests(): void {
   memories.clear();
   openTurns.clear();
   summarizing.clear();
+  summaries.clear();
+  retryAt.clear();
   summarizer = undefined;
   if (revisionTimer) clearTimeout(revisionTimer);
   revisionTimer = undefined;

@@ -37,7 +37,8 @@ import {
   recordUserMemoryEvent,
   summarizeUserMemory,
   userConversationMemory,
-  userMemoryEnabled
+  userMemoryEnabled,
+  userMemorySummariesOn
 } from "./user-memory";
 import { redactText } from "./redact";
 import type { HelmetPeer } from "./companion-registry";
@@ -965,6 +966,8 @@ export class AgentSessionController {
             : undefined;
         const memoryKey = this.authenticatedUser?.id ?? this.tokenUserMemoryKey;
         const durableMemory = memoryKey ? userConversationMemory(memoryKey) : null;
+        // A summary written while summaries were on is not shown once they are off.
+        const earlier = userMemorySummariesOn() ? durableMemory?.summary?.text : undefined;
         // Once durable memory is enabled, the server is authoritative for a
         // login identity. A newly logged-in user must never inherit the
         // previous user's device-local snapshot merely because their own
@@ -1004,14 +1007,14 @@ export class AgentSessionController {
           // relative construction order above.
           routeActive: () => this.navHandler.activeRoute() !== undefined,
           captureNavigationStop: () => this.navHandler.captureStop(),
-          ...(durableMemory && (durableMemory.turns.length || durableMemory.facts.length || durableMemory.summary)
+          ...(durableMemory && (durableMemory.turns.length || durableMemory.facts.length || earlier)
             ? {
                 previousConversation: {
                   updatedAt: durableMemory.updatedAt,
                   // A resumed conversation already carries its own turns.
                   turns: resumed ? [] : durableMemory.turns,
                   facts: durableMemory.facts,
-                  ...(durableMemory.summary ? { summary: durableMemory.summary.text } : {})
+                  ...(earlier ? { summary: earlier } : {})
                 }
               }
             : {})

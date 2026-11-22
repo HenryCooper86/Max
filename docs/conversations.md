@@ -399,7 +399,8 @@ nobody. An outbound [phone call](telephony.md#outbound-calls) placed with a `use
   unless you turn on the [summary of older turns](#a-summary-of-older-turns).
 - **What the assistant sees.** At the start of the next conversation those turns and facts are added to its
   instructions, marked as an earlier conversation and not as instructions. A conversation that is
-  [resumed](#carrying-a-conversation-across-a-dropped-connection) already has its own turns, so it gets the facts only.
+  [resumed](#carrying-a-conversation-across-a-dropped-connection) already has its own turns, so it gets the facts
+  (and the [summary](#a-summary-of-older-turns), if there is one) only.
 - **Where it is kept.** In the file named by `USER_MEMORY_FILE` (default `~/.max-relay/user-memory.json`), readable by
   the relay's user only. `USER_MEMORY_FILE=off` turns all memory off. The file is keyed by a digest of the `userId`, so
   it does not list your users' ids.
@@ -439,15 +440,21 @@ latest turns.
   given whatever summary there is when a conversation starts.
 - **What it is made from.** The summary so far and the turns that have left the window since, so it is carried
   forward, not rebuilt. At most 1,500 characters. Up to 48 turns wait for a summary; if the model cannot be reached
-  they wait for the next try, and beyond 48 the oldest are lost, as all of them were before.
-- **Which model.** The model of the [analysis](#analysis): `ANALYSIS_LLM_*`, else the pipeline's chat model, else the
-  local one. The turns are sent to that endpoint, after [redaction](#redacting-personal-data) if you turned it on.
-  Without a model the relay says so at startup and keeps no turns beyond the window.
+  they wait for the next try (the end of the conversation, or a minute later in a conversation that goes on), and
+  beyond 48 the oldest are lost, as all of them were before.
+- **Which model.** The model of the [analysis](#analysis): `ANALYSIS_LLM_*`; else the pipeline's chat model, which
+  with only `OPENAI_API_KEY` set is OpenAI's; else the local one. The turns are sent to that endpoint, after
+  [redaction](#redacting-personal-data) if you turned it on: if that endpoint is somebody else's, your users' older
+  turns go there. Without a model the relay says so at startup, and the turns wait.
+- **Turning it off.** The summary is no longer given to the assistant, and the turns that were waiting are dropped
+  at the user's next turn. The summary that was written stays in the memory file until the user is forgotten, so
+  turning it on again finds it.
 - **What the assistant sees.** The summary, marked as written by the system from earlier conversations and as less
   exact than the turns kept word for word, and as data, not instructions. The facts a user asked to be remembered
-  are still kept word for word beside it.
+  are still kept word for word beside it. A [resumed](#carrying-a-conversation-across-a-dropped-connection)
+  conversation gets the summary too.
 - **It is a model's text.** It can leave something out or get something wrong, and what is wrong stays in it until
-  later turns correct it. The model is told to keep every personal detail and to guess nothing; a small local model
+  later turns correct it: it does not expire by itself. The model is told to keep every personal detail and to guess nothing; a small local model
   mostly does. Do not rely on it for what must be exact: keep that in your own system and give it to the assistant
   through a [tool](tools.md) or the session token.
 - **Forgetting a user** deletes the summary and the waiting turns with the rest, also when a summary was being
@@ -455,7 +462,8 @@ latest turns.
   own accounts. Not to Max Cloud projects.
 - Tested with a local model (`qwen3:8b`) for the assistant and the summary: a conversation of 16 exchanges in which
   the user gave their name, their dog's name, a trip and a budget in the first four. Those turns left the window;
-  in a new conversation the assistant answered all four from the summary. With an earlier wording of the
+  in a new conversation the assistant was asked for the dog's name, the destination and the budget, and answered
+  all three from the summary. With an earlier wording of the
   summariser's instructions the same model left the dog's name out, 2 runs of 2, which is why the summary is asked
   for in two parts, who the user is and what happened.
 

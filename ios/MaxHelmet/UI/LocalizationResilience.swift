@@ -22,6 +22,15 @@ extension LocalizationTable {
         ("typed.placeholder", "打字给 {name}", "Type to {name}"),
         ("typed.locked", "行驶中不能打字，停车后再试", "Typing is off while moving. Stop to type"),
         ("tool.activity.busy", "正在查询…", "Looking that up…"),
+        // pictures for the assistant
+        ("picture.show", "给 {name} 看一张图片", "Show {name} a picture"),
+        ("picture.sending", "正在发送图片…", "Sending the picture…"),
+        ("picture.sent", "{name} 已收到图片，接着说或输入你的问题。", "{name} has the picture. Say or type what you want to know."),
+        ("picture.notReady", "现在发不了图片，请稍后再试。", "A picture can't be sent right now. Try again in a moment."),
+        ("picture.moving", "行驶中不能发图片，停车后再试。", "Pictures are off while moving. Stop first."),
+        ("picture.tooFast", "每秒最多发一张图片。", "One picture a second at most."),
+        ("picture.tooMany", "这次对话的图片已达上限。", "This conversation has had as many pictures as it can take."),
+        ("picture.unreadable", "这张图片打不开，或者太大，发不了。", "That picture could not be opened, or is too large to send."),
         // unconfigured relay
         ("relay.unset.title", "未配置语音中继", "Relay not configured"),
         ("relay.unset.body", "这个版本没有中继地址。请在「设置 › 连接」里填写你的中继地址，或在 ios/Config/Secrets.xcconfig 中设置 MAX_RELAY_HOST 后重新构建。", "This build has no relay address. Enter your relay's address under Settings › Connection, or set MAX_RELAY_HOST in ios/Config/Secrets.xcconfig and rebuild."),

@@ -1070,6 +1070,8 @@ class AgentSession(
         when (event) {
             is AgentEvent.SessionStarted -> {
                 socketOpen = true
+                // The relay counts pictures per connection.
+                imageLimiter.reset()
                 // A live relay's ride.context speed is the phone's own echo: only a mock relay's counts.
                 rideSpeed.onSessionMode(event.mode)
                 if (audioStartPending && transmitting && !audioPaused) { audioStartPending = false; sourceSocket.send(AUDIO_START_EVENT) }
@@ -1364,6 +1366,24 @@ class AgentSession(
         if (!socketOpen || typedInputMode(_state.value) != TypedInputMode.READY) return false
         val payload = buildTextInput(text) ?: return false
         return webSocket?.send(payload) == true
+    }
+
+    private val imageLimiter = ImageInputLimiter()
+
+    /**
+     * Shows the model a picture (image.input): a JPEG as base64, already
+     * scaled to fit. With [text] it is a typed turn with the picture attached;
+     * without, the model sees it with the user's next turn. Null when it went
+     * out, else why it did not.
+     */
+    fun sendImageInput(jpegBase64: String, text: String? = null): ImageRefusal? {
+        if (!socketOpen || !imageInputReady(_state.value)) return ImageRefusal.NOT_READY
+        val now = android.os.SystemClock.elapsedRealtime()
+        imageLimiter.refusal(now)?.let { return it }
+        val payload = buildImageInput(jpegBase64, text) ?: return ImageRefusal.TOO_LARGE
+        if (webSocket?.send(payload) != true) return ImageRefusal.NOT_READY
+        imageLimiter.sent(now)
+        return null
     }
 
     /** Main thread only, like the refresh job it schedules. */

@@ -233,7 +233,7 @@ A picture for the conversation's model: a screenshot, a photo.
 | `text`     | Optional. The same rules as the text of `text.input`: trimmed, at most 2000 characters. Empty or blank counts as absent. |
 
 The 240,000-character limit keeps the whole JSON message under the relay's 256 KiB limit for client messages, which the
-WebRTC data channel shares. Scale a photo down first; the web SDK does that in `sendImage`.
+WebRTC data channel shares. Scale a photo down first; the web SDK does that in `sendImage`, and the iOS and Android clients before they send one.
 
 With `text`, it is a typed turn with the picture attached: the relay handles it exactly as it does `text.input` (it
 interrupts a reply in progress, shows the words as the user's final transcript, and the assistant answers aloud).

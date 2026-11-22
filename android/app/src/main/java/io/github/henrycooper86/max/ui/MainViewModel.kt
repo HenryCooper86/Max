@@ -12,6 +12,9 @@ import androidx.core.content.ContextCompat
 import android.Manifest
 import android.content.pm.PackageManager
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import io.github.henrycooper86.max.agent.ImageRefusal
 import io.github.henrycooper86.max.companion.*
 import androidx.lifecycle.AndroidViewModel
 import io.github.henrycooper86.max.BuildConfig
@@ -553,6 +556,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Sends a typed turn; true when it went out (the field then clears). */
     fun sendText(text: String): Boolean = session.sendTextInput(text)
+
+    /**
+     * Shows the assistant a picture the user chose, with what they had typed
+     * if anything. The picture is read and scaled off the main thread;
+     * [done] is told on the main thread why it did not go, or null when it did.
+     */
+    fun sendPicture(uri: android.net.Uri, text: String, done: (ImageRefusal?) -> Unit) {
+        viewModelScope.launch {
+            val jpeg = withContext(Dispatchers.Default) {
+                encodePictureForInput(getApplication<Application>().contentResolver, uri)
+            }
+            done(if (jpeg == null) ImageRefusal.TOO_LARGE else session.sendImageInput(jpeg, text.ifBlank { null }))
+        }
+    }
 
     /** Mutes/unmutes the mic mid-session (bottom mute control). */
     fun toggleMute() = session.toggleMute()

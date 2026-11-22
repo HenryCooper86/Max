@@ -30,6 +30,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Headset
+import androidx.compose.material.icons.filled.Image
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import io.github.henrycooper86.max.agent.ImageRefusal
+import io.github.henrycooper86.max.agent.imageInputReady
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -234,7 +243,8 @@ private fun AgentScreenContent(
                 if (viewModel.showCaptions) CaptionsOverlay(
                     items = state.transcript, assistantName = name,
                     canFlag = state::canFlagTurn, onFlag = viewModel::flagTurn,
-                    typedInput = typedInputMode(state), onSend = viewModel::sendText
+                    typedInput = typedInputMode(state), onSend = viewModel::sendText,
+                    pictures = imageInputReady(state), onPicture = viewModel::sendPicture
                 )
             }
             val visor: @Composable (Dp) -> Unit = { width ->
@@ -486,7 +496,9 @@ private fun CaptionsOverlay(
     canFlag: (TranscriptItem) -> Boolean = { false },
     onFlag: (TranscriptItem, String) -> Unit = { _, _ -> },
     typedInput: TypedInputMode = TypedInputMode.HIDDEN,
-    onSend: (String) -> Boolean = { false }
+    onSend: (String) -> Boolean = { false },
+    pictures: Boolean = false,
+    onPicture: (Uri, String, (ImageRefusal?) -> Unit) -> Unit = { _, _, _ -> }
 ) {
     val c = Visor.colors
     val listState = rememberLazyListState()
@@ -522,17 +534,46 @@ private fun CaptionsOverlay(
                 }
             }
         }
-        if (typedInput != TypedInputMode.HIDDEN) TypedTurnField(typedInput, onSend)
+        if (typedInput != TypedInputMode.HIDDEN) TypedTurnField(typedInput, onSend, pictures, onPicture)
     }
 }
 
 /** A typed turn for backends that accept text.input; disabled while the bike is moving. */
 @Composable
-private fun TypedTurnField(mode: TypedInputMode, onSend: (String) -> Boolean) {
+private fun TypedTurnField(
+    mode: TypedInputMode,
+    onSend: (String) -> Boolean,
+    pictures: Boolean,
+    onPicture: (Uri, String, (ImageRefusal?) -> Unit) -> Unit
+) {
     val c = Visor.colors
     var draft by rememberSaveable { mutableStateOf("") }
     val ready = mode == TypedInputMode.READY
     val send = { if (ready && draft.isNotBlank() && onSend(draft)) draft = "" }
+    // What became of the last picture, said under the field until the next one.
+    var pictureNote by rememberSaveable { mutableStateOf<Str?>(null) }
+    var sendingPicture by remember { mutableStateOf(false) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            sendingPicture = true
+            pictureNote = Str.PICTURE_SENDING
+            // What is typed goes with the picture, as one turn.
+            val words = draft
+            onPicture(uri, words) { refusal ->
+                sendingPicture = false
+                if (refusal == null && words.isNotBlank() && draft == words) draft = ""
+                pictureNote = when (refusal) {
+                    // With words the assistant answers at once: nothing more to say here.
+                    null -> if (words.isBlank()) Str.PICTURE_SENT else null
+                    ImageRefusal.NOT_READY -> Str.PICTURE_NOT_READY
+                    ImageRefusal.TOO_FAST -> Str.PICTURE_TOO_FAST
+                    ImageRefusal.TOO_MANY -> Str.PICTURE_TOO_MANY
+                    ImageRefusal.TOO_LARGE -> Str.PICTURE_UNREADABLE
+                }
+            }
+        }
+    }
+    Column(modifier = Modifier.fillMaxWidth()) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(VisorSpace.x2),
@@ -547,6 +588,20 @@ private fun TypedTurnField(mode: TypedInputMode, onSend: (String) -> Boolean) {
             keyboardActions = KeyboardActions(onSend = { send() }),
             modifier = Modifier.weight(1f)
         )
+        if (pictures) {
+            IconButton(
+                onClick = {
+                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                },
+                enabled = ready && !sendingPicture
+            ) {
+                Icon(
+                    Icons.Filled.Image,
+                    contentDescription = tr(Str.PICTURE_SHOW),
+                    tint = if (ready && !sendingPicture) c.textSecondary else c.textTertiary
+                )
+            }
+        }
         IconButton(onClick = send, enabled = ready && draft.isNotBlank()) {
             Icon(
                 Icons.AutoMirrored.Filled.Send,
@@ -554,6 +609,17 @@ private fun TypedTurnField(mode: TypedInputMode, onSend: (String) -> Boolean) {
                 tint = if (ready && draft.isNotBlank()) c.accent else c.textTertiary
             )
         }
+    }
+    pictureNote?.let { note ->
+        Text(
+            tr(note),
+            color = c.textSecondary,
+            style = VisorType.caption,
+            modifier = Modifier
+                .padding(top = VisorSpace.x1)
+                .semantics { liveRegion = LiveRegionMode.Polite }
+        )
+    }
     }
 }
 

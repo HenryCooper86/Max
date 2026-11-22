@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 // MARK: - presentation helpers
 
@@ -270,6 +271,11 @@ struct AgentScreen: View {
             onSendText: { text in
                 if case .success = session.sendTextInput(text) { return true }
                 return false
+            },
+            picturesEnabled: imageInputVisible(capabilities: state.capabilities, connection: state.connection),
+            onSendPicture: { jpegBase64, text in
+                if case let .failure(reason) = session.sendImageInput(jpegBase64: jpegBase64, text: text) { return reason }
+                return nil
             }
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -525,6 +531,9 @@ private struct CaptionsOverlay: View {
     var typingLocked = false
     /// Returns whether the turn went out, so the field keeps unsent text.
     var onSendText: (String) -> Bool = { _ in false }
+    var picturesEnabled = false
+    /// Sends a picture with the words typed so far; nil when it went, else why not.
+    var onSendPicture: (String, String) -> ImageInputRejection? = { _, _ in .notReady }
 
     private let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -540,7 +549,13 @@ private struct CaptionsOverlay: View {
             transcript
             if typingEnabled {
                 Rectangle().fill(Visor.line).frame(height: Visor.hairline)
-                TypedInputBar(assistantName: assistantName, locked: typingLocked, onSend: onSendText)
+                TypedInputBar(
+                    assistantName: assistantName,
+                    locked: typingLocked,
+                    onSend: onSendText,
+                    pictures: picturesEnabled,
+                    onSendPicture: onSendPicture
+                )
             }
         }
         .frame(maxWidth: .infinity)
@@ -603,12 +618,36 @@ private struct TypedInputBar: View {
     let assistantName: String
     let locked: Bool
     let onSend: (String) -> Bool
+    var pictures = false
+    var onSendPicture: (String, String) -> ImageInputRejection? = { _, _ in .notReady }
     @State private var text = ""
     @FocusState private var focused: Bool
+    @State private var picked: PhotosPickerItem?
+    @State private var sendingPicture = false
+    /// What became of the last picture, said under the field until the next one.
+    @State private var pictureNote: String?
 
     private var sendable: Bool { !locked && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: Visor.Space.s1) {
+            bar
+            if let pictureNote {
+                Text(pictureNote)
+                    .visorFont(.caption)
+                    .foregroundStyle(Visor.textSecondary)
+                    .padding(.horizontal, Visor.Space.s3)
+                    .accessibilityAddTraits(.updatesFrequently)
+            }
+        }
+        .onChange(of: picked) { _, item in
+            guard let item else { return }
+            picked = nil
+            sendPicture(item)
+        }
+    }
+
+    private var bar: some View {
         HStack(spacing: Visor.Space.s2) {
             TextField(locked ? L("typed.locked") : L("typed.placeholder", ("name", assistantName)), text: $text, axis: .vertical)
                 .disabled(locked)
@@ -624,6 +663,18 @@ private struct TypedInputBar: View {
                 }
                 .frame(minHeight: Visor.hit)
                 .accessibilityLabel(typedInputAccessibility.fieldLabel)
+            if pictures {
+                PhotosPicker(selection: $picked, matching: .images, photoLibrary: .shared()) {
+                    Image(systemName: "photo")
+                        .hudIcon(20, .semibold, relativeTo: .title3, maximum: 32)
+                        .foregroundStyle(locked || sendingPicture ? Visor.textTertiary : Visor.textSecondary)
+                        .frame(minWidth: Visor.hit, minHeight: Visor.hit)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(locked || sendingPicture)
+                .accessibilityLabel(L("picture.show", ("name", assistantName)))
+            }
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill")
                     .hudIcon(24, .semibold, relativeTo: .title3, maximum: 36)
@@ -641,6 +692,35 @@ private struct TypedInputBar: View {
     private func send() {
         guard sendable, onSend(text) else { return }
         text = ""
+    }
+
+    /// Reads and scales the picture off the main thread, then sends it with what is typed, as one turn.
+    private func sendPicture(_ item: PhotosPickerItem) {
+        sendingPicture = true
+        pictureNote = L("picture.sending")
+        let words = text
+        Task {
+            let data = try? await item.loadTransferable(type: Data.self)
+            let jpeg = await Task.detached(priority: .userInitiated) { data.flatMap(jpegBase64ForImageInput) }.value
+            let refused = jpeg.map { onSendPicture($0, words) } ?? .unreadable
+            sendingPicture = false
+            if refused == nil, !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text == words { text = "" }
+            pictureNote = pictureNoteText(refused, hadWords: !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, assistantName: assistantName)
+            if let pictureNote { UIAccessibility.post(notification: .announcement, argument: pictureNote) }
+        }
+    }
+}
+
+/// What the user is told about the picture they just chose. With words the
+/// assistant answers at once, and there is nothing more to say.
+func pictureNoteText(_ refused: ImageInputRejection?, hadWords: Bool, assistantName: String) -> String? {
+    switch refused {
+    case nil: return hadWords ? nil : L("picture.sent", ("name", assistantName))
+    case .unsupported, .notReady: return L("picture.notReady")
+    case .moving: return L("picture.moving")
+    case .tooFast: return L("picture.tooFast")
+    case .tooMany: return L("picture.tooMany")
+    case .unreadable: return L("picture.unreadable")
     }
 }
 

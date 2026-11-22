@@ -228,6 +228,8 @@ final class AgentSession: NSObject, ObservableObject {
     /// A transport-level open is not enough: streaming earlier builds a burst
     /// in the relay while Doubao is still starting its session.
     private var socketOpen = false
+    /// The relay's limits on pictures, counted per connection. Main thread.
+    fileprivate var imageLimiter = ImageInputLimiter()
     private let micSendLock = NSLock()
     private var micSendsInFlight = 0
     private static let maxMicSendsInFlight = 4
@@ -1234,6 +1236,7 @@ final class AgentSession: NSObject, ObservableObject {
         switch event {
         case let .sessionStarted(provider, mode, capabilities):
             withTransportLock { socketOpen = true }
+            imageLimiter.reset()
             // Only the mock demo's ride.context speed is a real scenario value;
             // a live relay just echoes the phone's own earlier GPS speed.
             rideSpeed.sessionStarted(mock: mode == "mock")
@@ -1928,6 +1931,33 @@ extension AgentSession {
         case let .success(json):
             // A new turn supersedes whatever the agent was still saying.
             stopAgentSpeech()
+            webSocket?.send(.string(json)) { _ in }
+            return .success(())
+        case let .failure(reason):
+            return .failure(reason)
+        }
+    }
+
+    /// Shows the model a picture: a JPEG as base64, already scaled to fit
+    /// (see jpegBase64ForImageInput). With `text` it is a typed turn with the
+    /// picture attached; without, the model sees it with the user's next turn.
+    @MainActor @discardableResult
+    func sendImageInput(jpegBase64: String, text: String? = nil) -> Result<Void, ImageInputRejection> {
+        let current = state
+        let ready = socketOpen && current.connection == .ready
+        let now = ProcessInfo.processInfo.systemUptime
+        switch prepareImageInput(
+            jpegBase64: jpegBase64,
+            text: text,
+            imageInputSupported: current.capabilities.imageInput,
+            ready: ready,
+            speedKmh: rideSpeed.currentSpeedKmh
+        ) {
+        case let .success(json):
+            if let refused = imageLimiter.rejection(at: now) { return .failure(refused) }
+            imageLimiter.didSend(at: now)
+            // With words it is a turn of the user's, which supersedes whatever the agent was still saying.
+            if !(text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { stopAgentSpeech() }
             webSocket?.send(.string(json)) { _ in }
             return .success(())
         case let .failure(reason):

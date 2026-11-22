@@ -176,6 +176,13 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 - Typed turns: when the backend reports `capabilities.textInput`, the captions panel shows a text
   field that sends `text.input`. It is locked at 5 km/h and above (phone GPS speed), and usable
   when speed is unknown.
+- Pictures: when the backend also reports `capabilities.imageInput`, the field has a picture button.
+  It opens the system photo picker (no storage permission), turns the photo upright by its EXIF
+  data, scales it to 1024 pixels on its longer side and sends it as `image.input`, a JPEG that fits
+  the relay's limit (quality and then size are lowered until it does, like the web SDK's
+  `sendImage`). What is typed in the field goes with the picture as one turn; with nothing typed
+  the assistant sees the picture with the next thing said. The relay's limits (one picture a
+  second, 50 per connection) are kept on the phone too, so the reason is shown at once.
 - Tool activity: `tool.activity` events show as a short status line ("Using get weather…"). The
   app declares no client tools, so an unexpected `tool.call` is answered at once with an
   `unknown tool` error, as the protocol requires.

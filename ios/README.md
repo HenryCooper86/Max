@@ -282,7 +282,13 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
   connecting or dropping) are debounced and re-assert the voice route without dropping the relay, and
   a media-services reset rebuilds the audio engine.
 - Typed turns: when the backend reports `capabilities.textInput`, the captions card has a text field
-  that sends `text.input` (for noise, or riders who cannot speak). `tool.activity` shows “Looking that
+  that sends `text.input` (for noise, or riders who cannot speak). When the backend also reports
+  `capabilities.imageInput`, the field has a picture button: it opens the system photo picker (which
+  needs no photo-library permission), reads the photo with ImageIO upright and at 1024 pixels on its
+  longer side, and sends it as `image.input`, a JPEG that fits the relay's limit (quality and then
+  size are lowered until it does, like the web SDK's `sendImage`). What is typed goes with the
+  picture as one turn; with nothing typed the assistant sees it with the next thing said. The
+  relay's limits (one picture a second, 50 per connection) are kept on the phone too. `tool.activity` shows “Looking that
   up…” while a relay-side tool runs. The app declares no client tools; an unexpected `tool.call` gets
   one `tool.result` error at once so the model does not wait out the timeout.
 - Ride speed comes from the phone's own GPS (`CLLocation.speed` from the session's existing location

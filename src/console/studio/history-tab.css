@@ -145,6 +145,13 @@
   margin: 0;
 }
 
+.cxsHistoryWebhookActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .cxsHistoryCheck {
   display: flex;
   align-items: center;

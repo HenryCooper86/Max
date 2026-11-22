@@ -8,6 +8,7 @@ import { checkAuthRateLimit, clientAddress, withLoginBackoff } from "../auth";
 import { createLogger } from "../logger";
 import { PACKS } from "./billing";
 import { cloudEnabled, cloudPaymentProvider, cloudPaymentProviders, now } from "./context";
+import { projectWebhooks } from "./conversation-webhook";
 import { listConversations, readConversation } from "./conversations";
 import {
   createProject,
@@ -216,6 +217,38 @@ export function registerCloudRoutes(app: express.Express): void {
           args ? (input.arguments as Record<string, unknown>) : {}
         )
       );
+    })
+  );
+  // The conversation webhook: how the last delivery went, and one test request to the saved address.
+  api.get(
+    "/projects/:id/conversation-webhook",
+    handle((req, res) => {
+      const row = liveProject(param(req, "id"), customerOf(res).id);
+      if (!row) {
+        res.status(404).json({ error: "Project not found." });
+        return;
+      }
+      res.json({ url: projectStudio(row).conversationWebhook, last: projectWebhooks.last(row.id) ?? null });
+    })
+  );
+  api.post(
+    "/projects/:id/conversation-webhook/test",
+    handle(async (req, res) => {
+      const row = liveProject(param(req, "id"), customerOf(res).id);
+      if (!row) {
+        res.status(404).json({ ok: false, error: "Project not found." });
+        return;
+      }
+      const url = projectStudio(row).conversationWebhook;
+      if (!url) {
+        res.status(400).json({ ok: false, error: "Save the address first." });
+        return;
+      }
+      if (!checkAuthRateLimit(`project:${row.id}`, Date.now(), "tool-test")) {
+        res.status(429).json({ ok: false, error: "Too many test requests. Try again in a minute." });
+        return;
+      }
+      res.json(await projectWebhooks.test({ projectId: row.id, url, secret: projectWebhookSecret(row) }));
     })
   );
   api.get(

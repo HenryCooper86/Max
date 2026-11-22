@@ -107,6 +107,11 @@ export type ProjectStudio = {
   /** Keep transcripts of conversations for 30 days. Off unless the customer turns it on
    *  (new projects made in the console start with it on, and say so). */
   keepConversations: boolean;
+  /**
+   * Where each conversation is sent when it ends: an https address of the customer's own server, or "" for
+   * nowhere. Signed with the project's signing secret, like its tools.
+   */
+  conversationWebhook: string;
 };
 
 export const DEFAULT_STUDIO: ProjectStudio = {
@@ -117,7 +122,8 @@ export const DEFAULT_STUDIO: ProjectStudio = {
   tools: [],
   publicEmbed: { enabled: false, origins: [] },
   widget: { label: "", accent: "", position: "bottom-right" },
-  keepConversations: false
+  keepConversations: false,
+  conversationWebhook: ""
 };
 
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
@@ -358,6 +364,11 @@ export function parseStudio(raw: unknown, backend: CloudBackend): Outcome<Projec
     return { error: "Position must be bottom-right or bottom-left." };
   }
 
+  const webhook = text(raw.conversationWebhook, "Conversation webhook", STUDIO_LIMITS.url);
+  if (webhook.error !== undefined) return { error: webhook.error };
+  const webhookProblem = webhook.value ? toolUrlProblem(webhook.value) : undefined;
+  if (webhookProblem) return { error: `The conversation webhook's address ${webhookProblem}` };
+
   return {
     value: {
       template: template.value,
@@ -367,7 +378,8 @@ export function parseStudio(raw: unknown, backend: CloudBackend): Outcome<Projec
       tools,
       publicEmbed: { enabled, origins },
       widget: { label: label.value, accent: accent.value.toLowerCase(), position },
-      keepConversations: raw.keepConversations === true
+      keepConversations: raw.keepConversations === true,
+      conversationWebhook: webhook.value
     }
   };
 }

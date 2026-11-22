@@ -7,7 +7,8 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import dns from "node:dns";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAuthRateLimit } from "../server/auth";
 import { config } from "../server/runtime-config";
 import {
@@ -105,6 +106,47 @@ async function createProject(token: string, name = "Shop") {
   expect(response.status).toBe(201);
   return response.body as { project: { id: string; keyPrefix: string }; apiKey: string };
 }
+
+describe("a project's conversation webhook over HTTP", () => {
+  it("tests the saved address, shows how the last delivery went, and is the owner's alone", async () => {
+    await startApp();
+    const owner = await signupCustomer();
+    const { project } = await createProject(owner.token);
+    const route = `/cloud/api/projects/${project.id}/conversation-webhook`;
+    // Nothing saved yet: nothing to test.
+    expect((await call("GET", route, { token: owner.token })).body).toEqual({ url: "", last: null });
+    expect(await call("POST", `${route}/test`, { token: owner.token })).toMatchObject({
+      status: 400,
+      body: { ok: false, error: "Save the address first." }
+    });
+    const saved = await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: owner.token,
+      json: { studio: { conversationWebhook: "https://hooks.example.com/max" } }
+    });
+    expect(saved.status).toBe(200);
+    expect((await call("GET", route, { token: owner.token })).body).toEqual({
+      url: "https://hooks.example.com/max",
+      last: null
+    });
+    // The request goes out by the rules of a tool call: a name that leads to a private address is refused.
+    const lookup = vi
+      .spyOn(dns, "lookup")
+      .mockImplementation(((
+        _host: string,
+        _options: unknown,
+        callback: (error: null, addresses: dns.LookupAddress[]) => void
+      ) => callback(null, [{ address: "127.0.0.1", family: 4 }])) as unknown as typeof dns.lookup);
+    const tested = await call("POST", `${route}/test`, { token: owner.token });
+    lookup.mockRestore();
+    expect(tested.status).toBe(200);
+    expect(tested.body).toMatchObject({ ok: false, error: "the address must be public, not a private one" });
+    // Another customer has no such project.
+    const other = await signupCustomer();
+    expect((await call("GET", route, { token: other.token })).status).toBe(404);
+    expect((await call("POST", `${route}/test`, { token: other.token })).status).toBe(404);
+    expect((await call("GET", route)).status).toBe(401);
+  });
+});
 
 // These suites exercise accounts, projects and money; signup by invitation has
 // its own tests (tests/cloud-invites.test.ts).

@@ -61,6 +61,15 @@ their website in a few minutes, without writing a backend:
 - **Conversations.** What was said in each session (final transcript lines and tool outcomes, never audio), kept 30
   days and deleted with the project. New projects keep them and say so; projects made before the Studio do not until
   their owner turns it on, and it can be turned off per project.
+  A project can also have each conversation sent to its own server when it ends: an https address in the same tab.
+  Max POSTs a `conversation.ended` record with the transcript, the same record and headers as the relay's own
+  [conversation webhook](conversations.md#the-conversation-webhook) plus `project.id` and `source` (`embed`, `api`
+  or `test`), signed with the project's signing secret, to a public https address by the rules of a tool call. A
+  delivery that fails is tried three more times, after 1, 5 and 25 seconds. "Send test request" sends one sample
+  record marked `"test": true`, and the tab shows how the last delivery went (kept in memory, so it is empty after
+  the relay restarts). Nothing is sent for a session in which nothing was said. Sending does not depend on keeping
+  transcripts: a project can do either, both or neither. The record has no analysis: Max Cloud projects have no
+  [conversation analysis](conversations.md#analysis) yet.
 
 ## How customers connect
 

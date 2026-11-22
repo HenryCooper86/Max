@@ -77,6 +77,7 @@ import {
   openCloudSession,
   projectForApiKey,
   projectLimitRefusal,
+  projectWebhooks,
   pruneOldConversations,
   projectServerTools,
   saveConversation,
@@ -2023,7 +2024,9 @@ wss.on("connection", (client, request) => {
   const usageSessionId = randomUUID();
   const meteredSession = usageMeter.open(usageSessionId, usageUserId);
   // The project's conversation history, when the customer keeps one.
-  const recorder = runtime?.studio.keepConversations ? conversationRecorder() : undefined;
+  // Or sends each one to their own server. (What is said is collected for no other reason.)
+  const recorder =
+    runtime?.studio.keepConversations || runtime?.studio.conversationWebhook ? conversationRecorder() : undefined;
   // Billed only while the voice model can talk, checkpointed and checked every few seconds.
   const cloudSession = cloudProject ? openCloudSession(usageSessionId, cloudProject, address) : undefined;
   const usageCheck = cloudSession
@@ -2138,13 +2141,32 @@ wss.on("connection", (client, request) => {
     const billedSeconds = cloudSession?.close(endedAt);
     if (cloudProject && recorder) {
       try {
-        saveConversation({
-          customerId: cloudProject.customerId,
-          projectId: cloudProject.projectId,
-          source: cloudProject.source ?? "api",
-          seconds: usage?.seconds ?? 0,
-          recorder
-        });
+        if (runtime?.studio.keepConversations) {
+          saveConversation({
+            customerId: cloudProject.customerId,
+            projectId: cloudProject.projectId,
+            source: cloudProject.source ?? "api",
+            seconds: usage?.seconds ?? 0,
+            recorder
+          });
+        }
+        // The project as it is now: an address changed or taken away while this conversation ran is the one
+        // that counts. (A project that was deleted has none.)
+        const current = projectRuntime(cloudProject.projectId);
+        if (current?.studio.conversationWebhook) {
+          projectWebhooks.ended({
+            projectId: cloudProject.projectId,
+            url: current.studio.conversationWebhook,
+            secret: current.webhookSecret,
+            backend: current.backend,
+            source: cloudProject.source ?? "api",
+            sessionId: usageSessionId,
+            startedAt: recorder.startedAt,
+            endedAt,
+            seconds: usage?.seconds ?? 0,
+            turns: recorder.turns()
+          });
+        }
       } catch (error) {
         sessionLog.warn("conversation could not be saved", {
           message: error instanceof Error ? error.message : String(error)
@@ -2352,7 +2374,7 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     closeServerTools();
     usageMeter.flush();
     // Conversations that just ended still owe their webhook and their traces.
-    await conversations.drain(3_000);
+    await Promise.all([conversations.drain(3_000), projectWebhooks.drain(3_000)]);
     await recordings?.close();
     await campaigns.close();
     await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);

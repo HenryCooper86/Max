@@ -241,6 +241,40 @@ describe("projects with Studio settings", () => {
     expect(patchProject(owner, created.id, { studio: { tools: "nope" } })).toMatchObject({ ok: false, status: 400 });
   });
 
+  it("takes a public https address to send conversations to, and makes a signing secret for it", async () => {
+    expect(DEFAULT_STUDIO.conversationWebhook).toBe("");
+    expect(parseStudio({}, "openai").value?.conversationWebhook).toBe("");
+    const owner = await customer();
+    const created = project(owner);
+    expect(created.hasWebhookSecret).toBe(false);
+    for (const [address, problem] of [
+      ["http://shop.example.com/hook", "must start with https://"],
+      ["https://10.0.0.5/hook", "must be a public address"],
+      ["https://localhost/hook", "must be a public address"],
+      ["https://user:pass@shop.example.com/hook", "cannot contain a user name or password"],
+      ["not an address", "must be a full https:// address"]
+    ] as const) {
+      const refused = patchProject(owner, created.id, { studio: { conversationWebhook: address } });
+      expect(refused).toMatchObject({ ok: false, status: 400 });
+      expect(!refused.ok && refused.error).toContain(`The conversation webhook's address ${problem}`);
+    }
+    // No tools, and still something of Max's to check the signature of.
+    const updated = patch(owner, created.id, { studio: { conversationWebhook: " https://shop.example.com/hook " } });
+    expect(updated.studio.conversationWebhook).toBe("https://shop.example.com/hook");
+    expect(updated.hasWebhookSecret).toBe(true);
+    const secret = revealWebhookSecret(owner, created.id);
+    expect(secret.ok && secret.value.secret).toMatch(/^whsec_/);
+    // Taking the address away keeps the secret: a tool added later is signed with the same one.
+    const cleared = patch(owner, created.id, { studio: { conversationWebhook: "" } });
+    expect(cleared.studio.conversationWebhook).toBe("");
+    expect(cleared.hasWebhookSecret).toBe(true);
+    // A project can start with one.
+    expect(
+      project(owner, { name: "Second", studio: { conversationWebhook: "https://shop.example.com/hook" } })
+        .hasWebhookSecret
+    ).toBe(true);
+  });
+
   it("falls back to the new backend's default voice when the backend changes", async () => {
     const owner = await customer();
     const created = project(owner);

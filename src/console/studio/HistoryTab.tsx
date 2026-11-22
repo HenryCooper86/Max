@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLanguage } from "../../components/LanguageToggle";
-import type { Conversation, ConversationSummary, ConversationTurn } from "../api";
+import { STUDIO_LIMITS, toolUrlProblem } from "../../../shared/cloud-studio";
+import type { Conversation, ConversationSummary, ConversationTurn, WebhookDelivery, WebhookTestResult } from "../api";
 import { useSay } from "../hooks";
 import type { StudioTabProps } from "./types";
 import "./history-tab.css";
@@ -85,7 +86,143 @@ function Turn({ turn, language, say }: { turn: ConversationTurn; language: strin
   );
 }
 
-export function HistoryTab({ session, project, draft, updateStudio, dirty, goTo }: StudioTabProps) {
+/** "Delivered · HTTP 200" or "Not delivered after 4 tries: HTTP 500". */
+export function deliveryLine(
+  delivery: Pick<WebhookDelivery, "ok" | "attempts" | "status" | "error">,
+  say: Say
+): string {
+  if (delivery.ok) return say(`已送达 · HTTP ${delivery.status ?? 200}`, `Delivered · HTTP ${delivery.status ?? 200}`);
+  const why = delivery.error ?? (delivery.status ? `HTTP ${delivery.status}` : say("未知原因", "unknown reason"));
+  return delivery.attempts > 1
+    ? say(`试了 ${delivery.attempts} 次仍未送达：${why}`, `Not delivered after ${delivery.attempts} tries: ${why}`)
+    : say(`未送达：${why}`, `Not delivered: ${why}`);
+}
+
+/** Where each conversation is sent when it ends: the address, a test request, and how the last delivery went. */
+function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioTabProps) {
+  const say = useSay();
+  const { language } = useLanguage();
+  const url = draft.studio.conversationWebhook ?? "";
+  const saved = project.studio.conversationWebhook ?? "";
+  const unsaved = url.trim() !== saved;
+  const problem = url.trim() ? toolUrlProblem(url.trim()) : undefined;
+  const [last, setLast] = useState<WebhookDelivery | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<WebhookTestResult | null>(null);
+  const [error, setError] = useState("");
+  const alive = useRef(true);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+
+  useEffect(() => {
+    alive.current = true;
+    if (saved) {
+      const { api, token } = sessionRef.current;
+      api
+        .conversationWebhook(token, project.id)
+        .then((answer) => {
+          if (alive.current) setLast(answer.last);
+        })
+        // The address works without this line: an older relay has no such route.
+        .catch(() => undefined);
+    }
+    return () => {
+      alive.current = false;
+    };
+  }, [project.id, saved]);
+
+  async function test() {
+    setTesting(true);
+    setResult(null);
+    setError("");
+    try {
+      const answer = await session.api.testConversationWebhook(session.token, project.id);
+      if (alive.current) setResult(answer);
+    } catch (caught) {
+      if (alive.current) setError(session.fail(caught));
+    } finally {
+      if (alive.current) setTesting(false);
+    }
+  }
+
+  return (
+    <div className="cxsHistorySetting">
+      <label className="cxField" htmlFor="cxsHistoryWebhook">
+        <span>{say("对话结束时发送到你的服务器", "Send each conversation to your server when it ends")}</span>
+        <input
+          id="cxsHistoryWebhook"
+          type="url"
+          inputMode="url"
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="https://example.com/max/conversations"
+          maxLength={STUDIO_LIMITS.url}
+          aria-invalid={problem ? true : undefined}
+          aria-describedby="cxsHistoryWebhookHint"
+          value={url}
+          onChange={(event) => updateStudio({ conversationWebhook: event.target.value })}
+        />
+        <small id="cxsHistoryWebhookHint">
+          {say(
+            "留空则不发送。Max 把最终文字和工具结果用 POST 发到这个地址（JSON，conversation.ended），用项目的签名密钥签名，失败时最多再试 3 次。它和“保存对话记录”互不影响。",
+            "Leave empty to send nothing. Max POSTs the final text and tool outcomes to this address (JSON, conversation.ended), signed with the project's signing secret, and tries up to 3 more times when it fails. It is separate from keeping transcripts."
+          )}
+        </small>
+      </label>
+      {problem ? (
+        <p className="cxWarn" role="status">
+          {say("这个地址不能用：", "This address cannot be used: it ")}
+          {problem}
+        </p>
+      ) : null}
+      {unsaved && !problem ? (
+        <p className="cxWarn" role="status">
+          {say("请保存以生效", "Save to apply")}
+        </p>
+      ) : null}
+      {saved ? (
+        <div className="cxsHistoryWebhookActions">
+          <button
+            type="button"
+            className="siteButton secondary small"
+            onClick={() => void test()}
+            disabled={testing || unsaved}
+            aria-busy={testing}
+          >
+            {testing ? say("发送中…", "Sending…") : say("发送测试请求", "Send test request")}
+          </button>
+          <button type="button" className="siteButton secondary small" onClick={() => goTo("tools")}>
+            {say("查看签名密钥", "Show the signing secret")}
+          </button>
+        </div>
+      ) : null}
+      <div aria-live="polite">
+        {result && !unsaved ? (
+          <p className={result.ok ? "cxMuted" : "cxWarn"}>
+            {result.ok
+              ? say(
+                  `你的服务器收到了测试对话（HTTP ${result.status ?? 200}，${result.ms} ms）。`,
+                  `Your server took the test conversation (HTTP ${result.status ?? 200}, ${result.ms} ms).`
+                )
+              : say(`测试没有送达：${result.error ?? ""}`, `The test did not arrive: ${result.error ?? ""}`)}
+          </p>
+        ) : null}
+        {saved && last && !unsaved ? (
+          <p className={last.ok ? "cxMuted" : "cxWarn"}>
+            {say("最近一次对话：", "Last conversation: ")}
+            {deliveryLine(last, say)} · {formatWhen(last.at, language)}
+          </p>
+        ) : null}
+      </div>
+      <p className="cxError" role="alert">
+        {error}
+      </p>
+    </div>
+  );
+}
+
+export function HistoryTab(props: StudioTabProps) {
+  const { session, project, draft, updateStudio, dirty, goTo } = props;
   const say = useSay();
   const { language } = useLanguage();
   const [list, setList] = useState<ConversationSummary[] | null>(null);
@@ -241,6 +378,7 @@ export function HistoryTab({ session, project, draft, updateStudio, dirty, goTo 
         </ul>
       ) : null}
       {setting}
+      <WebhookSetting {...props} />
     </div>
   );
 }

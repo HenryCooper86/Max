@@ -90,6 +90,9 @@
 - Flows: a step at the start of a conversation. `main`'s `onStart` is done by the relay before the model is
   connected: a tool call, values kept from its answer, a move to the agent that fits, and a sentence said after the
   greeting. See [at the start of a conversation](docs/conversations.md#at-the-start-of-a-conversation).
+- Max Cloud: a conversation webhook per project. Each conversation is POSTed to the project's own server when it
+  ends, signed with the project's signing secret, with three more tries when it fails, a test request in the
+  console and the outcome of the last delivery. See [the Studio](docs/cloud.md#the-studio).
 - The start of a conversation, after review: the start has ten seconds in all and does not wait longer for a tool;
   a user who types first is shown its sentence; a resumed conversation keeps what the start found out; a value
   keeps the joiners of emoji and of Persian, Arabic and Indic words; the builder says which of the two things Start

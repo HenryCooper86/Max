@@ -61,6 +61,9 @@ export type ConversationTurn = {
   ms?: number;
 };
 export type Conversation = ConversationSummary & { projectId: string; turns: ConversationTurn[] };
+/** How the last delivery of a conversation to the project's server went. */
+export type WebhookDelivery = { at: number; ok: boolean; attempts: number; status?: number; error?: string };
+export type WebhookTestResult = { ok: boolean; status?: number; error?: string; ms: number };
 export type ToolTestResult = { ok: true; result: unknown; ms: number } | { ok: false; error: string; ms: number };
 export type Usage = {
   month: string;
@@ -167,6 +170,10 @@ export function createCloudApi(fetcher?: FetchLike) {
       get<{ secret: string }>(token, `/projects/${id(projectId)}/webhook-secret`),
     rotateWebhookSecret: (token: string, projectId: string) =>
       send<{ secret: string }>(token, "POST", `/projects/${id(projectId)}/webhook-secret/rotate`),
+    conversationWebhook: (token: string, projectId: string) =>
+      get<{ url: string; last: WebhookDelivery | null }>(token, `/projects/${id(projectId)}/conversation-webhook`),
+    testConversationWebhook: (token: string, projectId: string) =>
+      send<WebhookTestResult>(token, "POST", `/projects/${id(projectId)}/conversation-webhook/test`),
     conversations: (token: string, projectId: string) =>
       get<{ conversations: ConversationSummary[] }>(token, `/projects/${id(projectId)}/conversations`),
     conversation: (token: string, conversationId: string) =>

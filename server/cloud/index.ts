@@ -13,6 +13,7 @@ export { cloudEnabled } from "./context";
 export { registerCloudPaymentRoutes, registerCloudRoutes, registerEmbedRoutes } from "./routes";
 export { conversationRecorder, pruneOldConversations, saveConversation } from "./conversations";
 export { projectServerTools } from "./tools";
+export { projectWebhooks } from "./conversation-webhook";
 export {
   createInvite as createCloudInvite,
   listInvites as listCloudInvites,

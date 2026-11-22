@@ -253,6 +253,10 @@ export function projectWebhookSecret(row: Pick<ProjectRow, "id" | "webhook_secre
   return decryptModelKey(row.webhook_secret_enc, cloudSecretKeys(), webhookSecretScope(row.id));
 }
 
+/** Whatever Max sends a project's own server is signed: its tool calls and its conversations. */
+const needsSigningSecret = (studio: ProjectStudio): boolean =>
+  studio.tools.length > 0 || Boolean(studio.conversationWebhook);
+
 function newWebhookSecret(projectId: string): string | undefined {
   const secret = cloudSecretKey();
   if (!secret) return undefined;
@@ -313,7 +317,7 @@ export function createProject(
     greeting: starters.greeting.value ?? "",
     studio: JSON.stringify(studio.value),
     public_id: newPublicId(),
-    webhook_secret_enc: studio.value.tools.length ? (newWebhookSecret(id) ?? null) : null,
+    webhook_secret_enc: needsSigningSecret(studio.value) ? (newWebhookSecret(id) ?? null) : null,
     monthly_minutes_cap: null,
     created_at: now(),
     deleted_at: null
@@ -362,7 +366,7 @@ export function patchProject(
     if (studio.error !== undefined) return fail(400, studio.error);
     changes.studio = JSON.stringify(studio.value);
     const next = JSON.parse(changes.studio) as ProjectStudio;
-    if (next.tools.length && !current.webhook_secret_enc) {
+    if (needsSigningSecret(next) && !current.webhook_secret_enc) {
       const secret = newWebhookSecret(projectId);
       if (!secret) return fail(503, "Max Cloud is not configured");
       changes.webhook_secret_enc = secret;
@@ -425,7 +429,7 @@ export function revealWebhookSecret(customerId: string, projectId: string): Resu
   const row = liveProject(projectId, customerId);
   if (!row) return fail(404, "Project not found.");
   const secret = projectWebhookSecret(row);
-  if (!secret) return fail(404, "This project has no signing secret yet: add a tool first.");
+  if (!secret) return fail(404, "This project has no signing secret yet: add a tool or a conversation webhook first.");
   return { ok: true, value: { secret } };
 }
 

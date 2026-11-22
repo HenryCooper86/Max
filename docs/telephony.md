@@ -1,4 +1,4 @@
-# Phone calls (Twilio)
+# Phone calls
 
 Let people phone the assistant, and let the assistant phone them. A call reaches the assistant exactly as a web session
 does, so every backend, tool and [conversation setting](conversations.md) that works on a web page works on the
@@ -6,15 +6,15 @@ phone, with nothing phone-specific to build.
 
 ## What you need
 
-- A Twilio account and a phone number that can take voice calls.
+- A Twilio account and a phone number that can take voice calls. [Telnyx](#telnyx) works too; the steps below are
+  for Twilio, and the Telnyx section says what differs.
 - The relay reachable from the internet over HTTPS and WSS, with a certificate Twilio accepts. See
   [deployment](deployment.md) for TLS.
 - A [voice backend](backends.md) that supports tools. Hanging up and transferring are tools, so Doubao, which has no
   function calling, cannot do them.
 
 The relay talks to Twilio over Media Streams: Twilio answers the call and streams the audio to the relay over a
-WebSocket. There is no SIP trunk and no other carrier yet (see
-[limits](#limits)).
+WebSocket. There is no SIP trunk (see [limits](#limits)).
 
 ## Set it up
 
@@ -129,7 +129,7 @@ conversation record ends with the reason `transfer`.
 ## Outbound calls
 
 `POST /v1/calls` makes the assistant phone someone. It needs `TWILIO_ACCOUNT_SID`, `TWILIO_PHONE_NUMBER` and the relay's
-token. It is never open: without `RELAY_AUTH_TOKEN` set the relay answers 401 ("Set RELAY_AUTH_TOKEN before placing
+token (on Telnyx: `TELNYX_API_KEY`, `TELNYX_ACCOUNT_SID`, `TELNYX_APPLICATION_SID` and `TELNYX_PHONE_NUMBER`). It is never open: without `RELAY_AUTH_TOKEN` set the relay answers 401 ("Set RELAY_AUTH_TOKEN before placing
 calls"), because otherwise anyone who found the URL could dial numbers on your Twilio account. Call it only from your
 own backend.
 
@@ -154,7 +154,8 @@ curl -X POST https://voice.example.com/v1/calls \
 | `to`               | yes      | The number to call, in E.164 form.                                                                                                                 |
 | `context`          | no       | Up to 2000 characters about what the call is for. The assistant treats it as facts from you, so put your own text here and never text from a user. |
 | `userId`           | no       | Up to 128 characters. The user the call is counted under for [usage](usage-and-billing.md), and the `userId` your tools see.                       |
-| `voicemailMessage` | no       | Up to 500 characters, spoken if a machine answers.                                                                                                 |
+| `voicemailMessage` | no       | Up to 500 characters, spoken if a machine answers. Twilio only.                                                                                    |
+| `carrier`          | no       | `twilio` or `telnyx`. Only matters with both set up: Twilio places the call unless you name Telnyx.                                                |
 
 The assistant is told that it placed the call, that the person did not expect it, and to say who it is and why it is
 calling, followed by your `context`.
@@ -207,6 +208,91 @@ See [noise suppression](configuration.md#noise-suppression).
 
 - **Traces.** Spans have `voice.channel` set to `phone`. See [tracing](conversations.md#tracing).
 
+## Telnyx
+
+Telnyx works as a second carrier, through TeXML (its dialect of TwiML) and its media streaming. What the caller
+experiences, transfers, keypad input, usage and records are the same as above. This section covers what differs.
+
+> This carrier was written to Telnyx's documentation and tested against a stand-in that speaks the documented
+> messages. It has not been run on a real Telnyx call yet. Try it on a test number before you rely on it.
+
+### Set it up
+
+1. Make up a secret of at least 16 letters and digits, for example with `openssl rand -hex 24`, and set it as
+   `TELNYX_WEBHOOK_SECRET`.
+2. Copy your account's public key from the Telnyx portal into `TELNYX_PUBLIC_KEY`. Telnyx calls are off until both
+   are set.
+3. In the portal, create a TeXML application and set its voice URL to
+   `https://<your-relay>/telephony/telnyx/voice?key=<your secret>`. Either method, GET or POST, works. Assign your
+   number to the application.
+4. Restart the relay and call the number.
+
+```bash
+TELNYX_WEBHOOK_SECRET=3f1c…your-own-secret
+TELNYX_PUBLIC_KEY=your-account-public-key
+TELEPHONY_PUBLIC_URL=https://voice.example.com
+```
+
+| Variable                  | Default | What it does                                                                                                       |
+| ------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `TELNYX_WEBHOOK_SECRET`   | none    | Required. The secret in the voice URL you give Telnyx. At least 16 characters: letters, digits, `-` and `_`.       |
+| `TELNYX_PUBLIC_KEY`       | none    | Required. Your account's public key (base64, hex or PEM). The relay checks Telnyx's signature on every stream.     |
+| `TELNYX_API_KEY`          | none    | Needed, with `TELNYX_ACCOUNT_SID`, to transfer calls and to place outbound calls.                                  |
+| `TELNYX_ACCOUNT_SID`      | none    | Your account id, as it appears in TeXML REST paths.                                                                |
+| `TELNYX_APPLICATION_SID`  | none    | The TeXML application outbound calls are placed through.                                                           |
+| `TELNYX_PHONE_NUMBER`     | none    | The Telnyx number outbound calls come from, in E.164 form. It is also the caller ID of a transfer.                 |
+| `TELNYX_UNSIGNED_STREAMS` | off     | `allow` runs Telnyx without `TELNYX_PUBLIC_KEY`. Read [the next section](#how-the-relay-knows-it-is-telnyx) first. |
+
+`TELEPHONY_PUBLIC_URL`, `TELEPHONY_TRANSFER_NUMBERS` and `TELEPHONY_MAX_CALLS` apply to Telnyx as they do to Twilio.
+Twilio and Telnyx can be set up at the same time. Each then has `TELEPHONY_MAX_CALLS` lines of its own.
+
+### How the relay knows it is Telnyx
+
+```text
+caller ── PSTN ── Telnyx ──GET or POST /telephony/telnyx/voice?key=…──▶ relay (TeXML: connect a stream)
+                     └─────WS  /telephony/telnyx/stream?ticket=…──────▶ relay (μ-law 8 kHz both ways)
+```
+
+Two things together, because neither is enough alone:
+
+- **The secret in the voice URL.** Telnyx's documentation does not say how the request for a call's instructions is
+  signed, so the relay does not depend on a signature there. A request without the right `key` gets 403 and no call
+  is set up. The answer to a request with the right key holds a one-time ticket for the call's stream.
+- **Telnyx's signature on the stream.** Telnyx signs each media stream's request with your account's key (Ed25519,
+  over the time and the stream's URL, ticket included). A stream that is unsigned, signed for another URL or more than
+  five minutes old gets 403, before it counts against anything. A key the relay cannot use, including one of the few
+  values that would accept any signature, turns Telnyx off, so a mistake cannot quietly switch the check off.
+
+Behind a reverse proxy or a tunnel, set `TELEPHONY_PUBLIC_URL`: the signature is checked against the stream URL the
+relay gave Telnyx, and the relay must know its own public address to rebuild it.
+
+**If the secret leaks.** Treat the voice URL like a password: keep it out of proxy access logs and screenshots.
+Someone who has it, but not your Telnyx account, can ask the relay for tickets. They cannot open a stream with one,
+because they cannot sign it, so they cannot talk to the assistant, use its tools or place calls. What they can do is
+get in the way: a flood of requests pushes real calls' tickets out (the relay holds a fixed number), so Telnyx calls
+fail to connect while it lasts. If that happens, or you think the secret is out, set a new one and update the URL in
+the portal.
+
+**Without the public key.** `TELNYX_UNSIGNED_STREAMS=allow` lets Telnyx run with the secret and the ticket only. The
+secret is then all that stands between a stranger and the assistant: whoever has it can open sessions without placing
+a call, with any caller number they like in the assistant's context, use every tool a caller can, run up model costs
+up to `TELEPHONY_MAX_CALLS` at a time, and keep stream connections open that Twilio calls on the same relay also need.
+Use it only to find out why signed streams are being refused, and not on a relay the public can reach.
+
+### What is different from Twilio
+
+- **Outbound calls need `TELEPHONY_PUBLIC_URL`.** The URL Telnyx fetches an outbound call's instructions from holds
+  the secret, so the relay builds it only from the address you configured, never from the address a request to
+  `POST /v1/calls` came in on. Without it the relay answers 503.
+- **No answering-machine detection.** Telnyx reports who answered to a separate callback, which the relay does not
+  take yet. `POST /v1/calls` with a `voicemailMessage` is refused with 400 on Telnyx, and an outbound call that
+  reaches a machine starts the assistant, which talks to the recording.
+- **`callSid` may be empty** in the answer to `POST /v1/calls`: Telnyx's documented response does not name the call.
+  The id appears in the conversation record once the call connects.
+- **Audio frames can arrive out of order.** Telnyx does not promise their order, so the relay puts them back in
+  order, waiting for at most three later frames (60 ms at 20 ms a frame) before it gives a missing one up.
+- **Only μ-law at 8 kHz.** The relay asks Telnyx for it, and refuses a stream that announces anything else.
+
 ## Testing on your own machine
 
 Twilio has to reach the relay, so run a tunnel to your local relay and give Twilio and the relay the tunnel's address.
@@ -226,8 +312,8 @@ A free tunnel's address usually changes every time you start it, so update both 
 
 ## Limits
 
-- **Twilio Media Streams only.** There is no direct SIP trunk and no other carrier yet. A SIP destination is supported
-  only as somewhere to transfer a call to.
+- **Twilio and Telnyx only.** There is no direct SIP trunk and no other carrier yet. A SIP destination is supported
+  only as somewhere to transfer a call to. Telnyx has not been run on a real call: see [Telnyx](#telnyx).
 - **The relay does not record calls.** Audio is never stored. The [conversation log](conversations.md#the-log-file)
   has the text only. If you need recordings, ask Twilio to record the call, and check what the law and your callers'
   consent require where you operate.

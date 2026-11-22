@@ -17,7 +17,8 @@ export const CLIENT_EVENT_TYPES = [
   "nav.prompt",
   "vision.frames",
   "tool.result",
-  "text.input"
+  "text.input",
+  "image.input"
 ] as const;
 
 export const SERVER_EVENT_TYPES = [

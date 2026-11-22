@@ -28,12 +28,15 @@ sooner. Pipeline backends let you mix vendors and run each step on your own hard
 
 The `capabilities` object in `session.started` tells the client what the backend can do.
 
-| Backend                                                                         | Tools | Typed input (`text.input`) | Synthesized audio | Notes                                                                            |
-| ------------------------------------------------------------------------------- | ----- | -------------------------- | ----------------- | -------------------------------------------------------------------------------- |
-| `mock` (app assistant)                                                          | yes   | yes                        | no                | Speech is left to the client (`useBrowserSpeech`). Type a tool's name to run it. |
-| `mock` (helmet default)                                                         | no    | no (see below)             | no                | The scripted riding demo.                                                        |
-| `doubao`                                                                        | no    | no                         | yes               | No function calling and no typed turns.                                          |
-| `openai`, `grok`, `gemini`, `pipeline`, `local`, `local-realtime`, `max-speech` | yes   | yes                        | yes               |                                                                                  |
+| Backend                           | Tools | Typed input (`text.input`) | Pictures (`image.input`)        | Synthesized audio | Notes                                                                            |
+| --------------------------------- | ----- | -------------------------- | ------------------------------- | ----------------- | -------------------------------------------------------------------------------- |
+| `mock` (app assistant)            | yes   | yes                        | no                              | no                | Speech is left to the client (`useBrowserSpeech`). Type a tool's name to run it. |
+| `mock` (helmet default)           | no    | no (see below)             | no                              | no                | The scripted riding demo.                                                        |
+| `doubao`                          | no    | no                         | no                              | yes               | No function calling and no typed turns.                                          |
+| `openai`                          | yes   | yes                        | yes (see [Pictures](#pictures)) | yes               |                                                                                  |
+| `gemini`                          | yes   | yes                        | yes                             | yes               |                                                                                  |
+| `pipeline`, `local`, `max-speech` | yes   | yes                        | only when you turn it on        | yes               | Needs a chat model that can see pictures.                                        |
+| `grok`, `local-realtime`          | yes   | yes                        | no                              | yes               |                                                                                  |
 
 The "app assistant" row applies when the assistant's device is `app` (a general software assistant, see
 `assistant.config.json`). Without an assistant config the relay is the original "Max" helmet assistant and uses the
@@ -41,6 +44,36 @@ helmet demo.
 
 The helmet demo is a scripted ride: it takes no typed turns or tools and reports `textInput: false` and
 `tools: false`. Use the app preset for anything that is not the helmet.
+
+## Pictures
+
+A user can show the assistant a picture during a conversation (`image.input`, see the [protocol](protocol.md#imageinput)
+and the web SDK's `sendImage`). The conversation's own model sees it; this is separate from the helmet's camera, which
+goes to a vision service. `session.started.capabilities.imageInput` says whether it will work. It is true only where the
+picture reaches a model that can see it:
+
+| Backend                                    | `imageInput`                                                                                                                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openai`                                   | True unless `OPENAI_REALTIME_MODEL` contains "preview". OpenAI documents image input for `gpt-realtime` and `gpt-realtime-2`, and not for the preview models. |
+| `gemini`                                   | True. Sent as a video frame, which Gemini Live takes at most once a second.                                                                                   |
+| `pipeline`                                 | True when `PIPELINE_LLM_IMAGES=on`.                                                                                                                           |
+| `local`                                    | True when `LOCAL_LLM_IMAGES=on`.                                                                                                                              |
+| `max-speech`                               | True when `LOCAL_LLM_IMAGES=on`: its chat model is the one `local` uses (`LOCAL_LLM_*`).                                                                      |
+| `grok`, `local-realtime`, `doubao`, `mock` | False. The relay sends no pictures to them.                                                                                                                   |
+
+The chat-model backends talk to an OpenAI-compatible chat endpoint, and the relay cannot tell whether the model behind
+it can see pictures, so you say so with the setting above. Leave it off for a text-only model. If you turn it on for a
+model that cannot see, its server refuses the request that carries the picture (Ollama answers HTTP 400 for
+`qwen3:8b`); the relay reports that error, drops the pictures from the conversation so the next turns work, and the
+user can go on.
+
+How these backends handle pictures: a picture sent with words is a user message with the text and the picture. A
+picture sent without words waits and goes with the user's next turn. Only the two most recent pictures are sent again
+with each request; older ones become the text "[a picture the user showed earlier]".
+
+Pictures go to the model's vendor (or to your own model server) and the relay does not write picture bytes to conversation records, logs, traces, resume state or memory. The OpenAI and Gemini
+paths were built to the vendors' documentation and have not been run against their servers. The `local` backend was run
+against Ollama with `gemma3:4b`.
 
 ## Backend reference
 
@@ -161,6 +194,9 @@ OPENAI_API_KEY=sk-...
 | Text-to-speech | `PIPELINE_TTS_BASE_URL`, `PIPELINE_TTS_API_KEY`, `PIPELINE_TTS_MODEL` | `gpt-4o-mini-tts` |
 | Voices         | `PIPELINE_TTS_VOICE`, `PIPELINE_TTS_VOICE_MALE`                       | `nova`, `onyx`    |
 
+`PIPELINE_LLM_IMAGES=on` lets users show the assistant pictures; set it only when the chat model can see them. Off by
+default. See [Pictures](#pictures).
+
 `PIPELINE_API_KEY` and `PIPELINE_BASE_URL` apply to every step unless a step overrides them. With neither set, the relay
 uses `OPENAI_API_KEY` and `https://api.openai.com/v1`. The text-to-speech step must return raw PCM16
 (`response_format=pcm`); set `PIPELINE_TTS_SAMPLE_RATE` if it is not 24000.
@@ -189,6 +225,9 @@ LOCAL_VOICE=on
 
 Tool calling needs a chat model that supports it. Small local models are less reliable at choosing tools and filling
 arguments than hosted ones.
+
+To let users show the assistant pictures, set `LOCAL_LLM_IMAGES=on` and use a multimodal chat model such as
+`gemma3:4b`. See [Pictures](#pictures).
 
 ### local-realtime
 
@@ -273,6 +312,7 @@ bookkeeping) lives once in `server/providers/live/session.ts` and is shared.
      addContext?(text: string): void;
      sendToolResult?(callId: string, output: string): void; // the result of a tool call
      sendText?(text: string): void; // a typed turn
+     sendImage?(image: { data: string; mimeType: string }, text?: string): void; // a picture, with or without words
      close(): void;
    };
    ```
@@ -284,6 +324,9 @@ bookkeeping) lives once in `server/providers/live/session.ts` and is shared.
      uses one, and implement `sendToolResult(callId, output)` to hand the result back and let the model continue. The
      relay runs the tool (relay-side or on the client) and always calls you back, even on failure or timeout.
    - Implement `sendText` if the upstream can take a typed turn.
+   - Implement `sendImage` only if the upstream and its model can see pictures. With `text` it is a typed turn with the
+     picture attached; without, the picture joins the conversation and the reply waits for the next turn. Also give the
+     catalog entry an `imageInput()` check, so `capabilities.imageInput` is true only where it works.
    - Use the helpers in `engine.ts`: `resamplePcm16`, `wavFromPcm16`, `pcm16Rms`, `env`, and the constants
      `CLIENT_INPUT_RATE` (16000) and `CLIENT_OUTPUT_RATE` (24000).
    - `connect` should reject with a message fit for the person setting the kit up, such as "set MYVENDOR_API_KEY".

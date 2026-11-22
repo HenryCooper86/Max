@@ -116,6 +116,10 @@ export type ProviderCapabilities = {
   tools?: boolean;
   /** The session accepts typed turns (`text.input`). */
   textInput?: boolean;
+  /** The session accepts pictures (`image.input`) and the model can see them.
+   *  Chat-model backends turn this on with a setting, because the relay cannot
+   *  tell whether a model is multimodal. */
+  imageInput?: boolean;
 };
 
 export type TesterStats = {
@@ -322,6 +326,25 @@ export type ToolResultEvent = {
 /** Client → server: a turn the user typed instead of spoke. */
 type TextInputEvent = { type: "text.input"; text: string };
 
+/** Client → server: a picture for the conversation's model, with optional words.
+ *  `image` is base64 without a `data:` prefix, JPEG or PNG, at most
+ *  `MAX_IMAGE_BASE64_CHARS` characters. Without `text` the picture waits for the
+ *  user's next turn instead of starting one. */
+type ImageInputEvent = {
+  type: "image.input";
+  image: string;
+  mimeType: "image/jpeg" | "image/png";
+  text?: string;
+};
+
+/** Longest `image.input` picture, in base64 characters. Keeps the whole JSON
+ *  message under the relay's 256 KiB limit, which the WebRTC data channel shares. */
+export const MAX_IMAGE_BASE64_CHARS = 240_000;
+/** At most this many pictures in one session. */
+export const MAX_IMAGES_PER_SESSION = 50;
+/** Shortest time between two pictures; Gemini Live takes at most one frame a second. */
+export const MIN_IMAGE_INTERVAL_MS = 1_000;
+
 /** Server → client: run one of the client's own tools and answer with `tool.result`. */
 export type ToolCallEvent = {
   type: "tool.call";
@@ -368,6 +391,7 @@ export type ClientEvent =
   | DeviceResultEvent
   | ToolResultEvent
   | TextInputEvent
+  | ImageInputEvent
   // A hazard the embedded board detected and already announced. Upward only:
   // the board plays the audio itself from a local clip, so the relay must never
   // echo this back as `hazard.alert` — Max would speak the warning a second
@@ -831,7 +855,8 @@ export const MOCK_CAPABILITIES: ProviderCapabilities = {
   emergencyMode: true,
   tools: false,
   // The scripted ride takes no typed turns; the app demo (server/providers/app-demo.ts) does.
-  textInput: false
+  textInput: false,
+  imageInput: false
 };
 
 /** What every live backend offers: real synthesized audio on top of the demo's
@@ -846,7 +871,10 @@ export const LIVE_CAPABILITIES: ProviderCapabilities = {
   sessionMemory: true,
   emergencyMode: true,
   tools: true,
-  textInput: true
+  textInput: true,
+  // Backends turn this on where pictures reach a model that can see them
+  // (server/providers/catalog.ts); none does by default.
+  imageInput: false
 };
 
 /** The keyless demo of a software assistant (server/providers/app-demo.ts):

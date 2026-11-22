@@ -1,7 +1,7 @@
 import WebSocket, { type RawData } from "ws";
 import type { Logger } from "../../logger";
 import { createChatLoop, type ChatStage } from "./chat-loop";
-import { env, type EngineConfig, type EngineEvents, type VoiceEngine } from "./engine";
+import { env, type EngineConfig, type EngineEvents, type EngineImage, type VoiceEngine } from "./engine";
 import { localPipelineSettings } from "./pipeline";
 
 /**
@@ -213,6 +213,15 @@ export function createMaxSpeechEngine(
     }
   });
 
+  /** A picture waits for the next user turn; with words it is that turn. */
+  function sendImage(image: EngineImage, text?: string): void {
+    if (closed) return;
+    chat.addImage(image);
+    if (!text) return;
+    pendingUser = undefined;
+    void chat.reply(text);
+  }
+
   function onSpeechStarted(): void {
     if (closed) return;
     // Barge-in: whatever is being generated or spoken stops now.
@@ -417,6 +426,8 @@ export function createMaxSpeechEngine(
     sendToolResult(callId, output) {
       chat.sendToolResult(callId, output);
     },
+    // Only when the owner said the chat model sees pictures (LOCAL_LLM_IMAGES).
+    ...(chatStage().images ? { sendImage } : {}),
     sendText(text) {
       if (closed) return;
       pendingUser = undefined;

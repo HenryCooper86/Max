@@ -218,6 +218,42 @@ transcript and the assistant answers aloud.
 relay answers with an `error` event. Doubao and the original helmet demo do not accept them; every other backend does.
 `session.started.capabilities.textInput` tells you in advance; it is absent on relays older than typed input.
 
+### image.input
+
+A picture for the conversation's model: a screenshot, a photo.
+
+```json
+{ "type": "image.input", "image": "<base64>", "mimeType": "image/jpeg", "text": "What does this error mean?" }
+```
+
+| Field      | Rules                                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `image`    | Required. Base64 without a `data:` prefix, at most 240,000 characters. The first bytes must be a real JPEG or PNG.       |
+| `mimeType` | Required. `image/jpeg` or `image/png`, and the bytes must match it.                                                      |
+| `text`     | Optional. The same rules as the text of `text.input`: trimmed, at most 2000 characters. Empty or blank counts as absent. |
+
+The 240,000-character limit keeps the whole JSON message under the relay's 256 KiB limit for client messages, which the
+WebRTC data channel shares. Scale a photo down first; the web SDK does that in `sendImage`.
+
+With `text`, it is a typed turn with the picture attached: the relay handles it exactly as it does `text.input` (it
+interrupts a reply in progress, shows the words as the user's final transcript, and the assistant answers aloud).
+
+Without `text`, the picture joins the conversation silently. Nothing is answered, nothing appears as a transcript, and
+a reply in progress is not interrupted. The model sees the picture together with the user's next spoken or typed turn.
+A picture counts as the user being present for the idle check-in.
+
+Limits per connection (a reconnect starts a new count, even when it resumes the same conversation): at least one second between pictures (Gemini Live documents at most one frame per second) and at
+most 50 pictures. A picture over either limit is refused with an `error` event and the session continues.
+
+The relay answers with an `error` event, and does nothing else, when the backend cannot take pictures, and for an
+invalid event (wrong media type, bad base64, bytes that do not match `mimeType`, too large). Which backends take
+pictures is in [Voice backends](backends.md#pictures); `session.started.capabilities.imageInput` tells you in advance,
+and it is absent on relays older than image input.
+
+Pictures go to the model's vendor. The relay does not write picture bytes to conversation records, logs, traces, resume
+state or memory; a conversation record or a resumed session only holds the text "[the user showed a picture]" where one
+was shown.
+
 ### tool.result
 
 The answer to a `tool.call`. Send exactly one per call, within 15 seconds.
@@ -262,13 +298,13 @@ The answer to a `tool.call`. Send exactly one per call, within 15 seconds.
 
 `session.started` fields:
 
-| Field          | Meaning                                                                                                                                                                                                                           |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider`     | The backend id actually used: `mock`, `openai`, and so on.                                                                                                                                                                        |
-| `mode`         | `mock` or `live`.                                                                                                                                                                                                                 |
-| `capabilities` | `serverVad`, `synthesizedAudio`, `transcriptEvents`, `bargeIn`, `voiceSelection`, `weatherContext`, `sessionMemory`, `emergencyMode`, `tools`, `textInput`. `tools` and `textInput` are absent on relays older than tool support. |
-| `audio`        | The audio plan: `wakeGate`, `silenceFill`, `bargeIn`. See the audio contract.                                                                                                                                                     |
-| `resume`       | An id to send back as `session.start.resume` when you reconnect, so the conversation carries on. Absent from relays older than resumption. See [Resuming](#resuming).                                                             |
+| Field          | Meaning                                                                                                                                                                                                                                                                                                  |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`     | The backend id actually used: `mock`, `openai`, and so on.                                                                                                                                                                                                                                               |
+| `mode`         | `mock` or `live`.                                                                                                                                                                                                                                                                                        |
+| `capabilities` | `serverVad`, `synthesizedAudio`, `transcriptEvents`, `bargeIn`, `voiceSelection`, `weatherContext`, `sessionMemory`, `emergencyMode`, `tools`, `textInput`, `imageInput`. `tools` and `textInput` are absent on relays older than tool support; `imageInput` is absent on relays older than image input. |
+| `audio`        | The audio plan: `wakeGate`, `silenceFill`, `bargeIn`. See the audio contract.                                                                                                                                                                                                                            |
+| `resume`       | An id to send back as `session.start.resume` when you reconnect, so the conversation carries on. Absent from relays older than resumption. See [Resuming](#resuming).                                                                                                                                    |
 
 `synthesizedAudio: false` means the backend sends text only (the mock). The page should speak the text itself. See
 [`useBrowserSpeech`](#usebrowserspeech).

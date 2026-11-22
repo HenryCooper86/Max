@@ -24,6 +24,10 @@ export const UNAUTHORIZED_CLOSE_CODE = 1008;
 const MAX_CONTEXT_CHARS = 2000;
 /** Longest typed message the relay accepts. */
 export const MAX_TEXT_CHARS = 2000;
+/** Longest `image.input` picture, in base64 characters. */
+export const MAX_IMAGE_BASE64_CHARS = 240_000;
+/** The relay refuses a picture less than this long after the last one. */
+export const MIN_IMAGE_INTERVAL_MS = 1_000;
 /** Most client tools a session may declare. */
 export const MAX_TOOLS = 32;
 /** Reconnect attempts before the client gives up. */
@@ -53,6 +57,8 @@ export type AgentCapabilities = {
   tools?: boolean;
   /** The relay accepts typed input via `text.input`. */
   textInput?: boolean;
+  /** The relay accepts pictures via `image.input` and the model can see them. */
+  imageInput?: boolean;
 };
 
 /** Who said a transcript line, as the relay names it. */
@@ -98,6 +104,7 @@ export type ClientMessage =
   | { type: "audio.start" }
   | { type: "audio.stop" }
   | { type: "text.input"; text: string }
+  | { type: "image.input"; image: string; mimeType: "image/jpeg"; text?: string }
   | { type: "tool.result"; callId: string; output?: unknown; error?: string };
 
 /** Relay to client: a transcript line or partial. */

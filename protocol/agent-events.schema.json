@@ -403,6 +403,28 @@
             }
           },
           "required": ["type", "text"]
+        },
+        {
+          "title": "ImageInput",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "image.input"
+            },
+            "image": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240000
+            },
+            "mimeType": {
+              "enum": ["image/jpeg", "image/png"]
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 2000
+            }
+          },
+          "required": ["type", "image", "mimeType"]
         }
       ]
     },

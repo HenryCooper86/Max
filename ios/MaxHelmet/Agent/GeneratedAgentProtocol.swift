@@ -19,7 +19,8 @@ enum ClientEventTypes {
     static let visionFrames = "vision.frames"
     static let toolResult = "tool.result"
     static let textInput = "text.input"
-    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame, crashAlert, crashCancel, navRequest, navPrompt, visionFrames, toolResult, textInput]
+    static let imageInput = "image.input"
+    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame, crashAlert, crashCancel, navRequest, navPrompt, visionFrames, toolResult, textInput, imageInput]
 }
 
 enum ServerEventTypes {

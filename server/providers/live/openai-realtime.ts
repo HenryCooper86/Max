@@ -8,6 +8,7 @@ import {
   env,
   resamplePcm16,
   type EngineConfig,
+  type EngineImage,
   type EngineEvents,
   type EngineResponseMode,
   type VoiceEngine
@@ -38,6 +39,8 @@ export type RealtimeDialect = {
   contextRole: "system" | "user";
   /** `session.type` the upstream requires on every session.update, if any. */
   sessionType?: string;
+  /** The upstream and its configured model take `input_image` content. */
+  images?: boolean;
 };
 
 const SAY_INSTRUCTION = "Say exactly the following line and nothing else, in the language it is written in: ";
@@ -55,6 +58,17 @@ export function realtimeTools(config: EngineConfig): Record<string, unknown> {
     })),
     tool_choice: "auto"
   };
+}
+
+/** OpenAI documents image input for gpt-realtime and later, and not for the
+ *  preview models. A name without "preview" is taken to be a model that can. */
+export function openAiModelTakesImages(model: string): boolean {
+  return !/preview/i.test(model);
+}
+
+/** Whether the OpenAI Realtime backend, as configured, can see pictures. */
+export function openAiImageInputEnabled(): boolean {
+  return openAiModelTakesImages(env("OPENAI_REALTIME_MODEL") ?? "gpt-realtime");
 }
 
 /** `apiKey` overrides OPENAI_API_KEY (a Max Cloud project brings its own). */
@@ -98,7 +112,8 @@ export function openAiDialect(apiKey?: string, voiceName?: string): RealtimeDial
       { type: "response.create", response: { conversation: "none", instructions: SAY_INSTRUCTION + text } }
     ],
     contextRole: "system",
-    sessionType: "realtime"
+    sessionType: "realtime",
+    images: openAiModelTakesImages(model)
   };
 }
 
@@ -463,6 +478,32 @@ export function createRealtimeEngine(
       });
       requestResponse();
     },
+    // Pictures only where the dialect says its model takes them.
+    ...(dialect.images
+      ? {
+          sendImage(image: EngineImage, text?: string) {
+            if (!ready) return;
+            // With words it is a typed turn and supersedes pending tool calls,
+            // as in sendText. A silent picture must not disturb them.
+            if (text) {
+              continueAfterTools = false;
+              awaitingCalls.clear();
+            }
+            sendEvent({
+              type: "conversation.item.create",
+              item: {
+                type: "message",
+                role: "user",
+                content: [
+                  { type: "input_image", image_url: `data:${image.mimeType};base64,${image.data}` },
+                  ...(text ? [{ type: "input_text", text }] : [])
+                ]
+              }
+            });
+            if (text) requestResponse();
+          }
+        }
+      : {}),
     say(text) {
       if (!ready) return;
       for (const event of dialect.say(text)) sendEvent(event);

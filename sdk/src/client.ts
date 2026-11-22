@@ -11,10 +11,13 @@
 import { createBrowserAudio } from "./audio.js";
 import type { AudioIO } from "./audio.js";
 import { PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
+import { DEFAULT_IMAGE_MAX_SIDE, encodeImage } from "./image.js";
+import type { ImageEncoder, ImageSource } from "./image.js";
 import { WEBRTC_UNAVAILABLE_CODE, createWebRtcSocket, webRtcSupported } from "./webrtc.js";
 import type { WebRtcSocket, WebRtcSocketOptions } from "./webrtc.js";
 import {
   MAX_TEXT_CHARS,
+  MIN_IMAGE_INTERVAL_MS,
   TOOL_NAME_PATTERN,
   buildSessionStart,
   mergeTranscript,
@@ -69,6 +72,8 @@ export type VoiceAgentErrorCode =
   | "connection"
   | "relay"
   | "audio"
+  /** {@link VoiceAgent.sendImage} could not turn the source into a small enough JPEG. */
+  | "image"
   /** The relay closed with 4003: this account's voice minutes are used up. Retrying will not help. */
   | "usage_limit"
   /** The relay closed with 1008: it refused the credentials, even after a fresh token where one could be fetched. */
@@ -232,6 +237,8 @@ interface VoiceAgentInternals {
   audio?: (onPlayingChange: (playing: boolean) => void, onBlockedChange: (blocked: boolean) => void) => AudioIO;
   toolTimeoutMs?: number;
   connectTimeoutMs?: number;
+  /** Reads and encodes a picture, instead of the browser's canvas. */
+  imageEncoder?: ImageEncoder;
 }
 
 /**
@@ -339,6 +346,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private readonly spoken = new Set<string>();
 
   private caps: AgentCapabilities | undefined;
+  /** A `sendImage` is encoding now. */
+  private imageEncoding = false;
+  /** When and on which socket the last picture went out, for the relay's one-second gap. */
+  private lastImage: { socket: WebSocketLike; at: number } | undefined;
   private provider: string | undefined;
 
   /**
@@ -503,6 +514,50 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     const clean = text.trim().slice(0, MAX_TEXT_CHARS);
     if (!clean) return false;
     return this.sendIfReady({ type: "text.input", text: clean });
+  }
+
+  /**
+   * Shows the agent a picture. With `text` it is a typed turn with the picture
+   * attached and is answered aloud; without, the agent sees the picture with
+   * your next turn. The picture is scaled so its longer side is at most
+   * `maxSide` (default 1024 pixels) and sent as JPEG; it goes to the model's
+   * vendor and the relay does not keep it.
+   *
+   * @returns false when the session is not ready or the relay does not take
+   * pictures (see `capabilities.imageInput`), when another `sendImage` is
+   * still encoding or went out less than a second ago, or when the session
+   * changed while the picture was being prepared. Nothing is sent then.
+   * @throws {VoiceAgentError} with code `image` when the source cannot be read
+   * or will not fit the relay's size limit.
+   */
+  async sendImage(source: ImageSource, options: { text?: string; maxSide?: number } = {}): Promise<boolean> {
+    const socket = this.socket;
+    const caps = this.caps;
+    if (!socket || !this.isReady() || caps?.imageInput !== true) return false;
+    // The relay refuses a second picture within a second; do not even encode one.
+    if (this.imageEncoding) return false;
+    if (this.lastImage?.socket === socket && Date.now() - this.lastImage.at < MIN_IMAGE_INTERVAL_MS) return false;
+    this.imageEncoding = true;
+    let data: string;
+    try {
+      data = await encodeImage(source, options.maxSide ?? DEFAULT_IMAGE_MAX_SIDE, this.options.internals?.imageEncoder);
+    } catch (error) {
+      throw new VoiceAgentError("image", `Could not prepare the picture: ${errorMessage(error)}`, { cause: error });
+    } finally {
+      this.imageEncoding = false;
+    }
+    // The session may have been replaced while encoding (a reconnect): the new
+    // one may not take pictures, and its limits start over.
+    if (this.socket !== socket || this.caps !== caps || caps.imageInput !== true) return false;
+    const text = options.text?.trim().slice(0, MAX_TEXT_CHARS);
+    const sent = this.sendIfReady({
+      type: "image.input",
+      image: data,
+      mimeType: "image/jpeg",
+      ...(text ? { text } : {})
+    });
+    if (sent) this.lastImage = { socket, at: Date.now() };
+    return sent;
   }
 
   /**
@@ -683,6 +738,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     if (!socket || !this.streaming || socket.readyState !== SOCKET_OPEN) return;
     if (socket.bufferedAmount + pcm.byteLength >= MAX_BUFFERED_BYTES) return;
     socket.send(pcm);
+  }
+
+  private isReady(): boolean {
+    return Boolean(this.socket && this.socketReady && this.socket.readyState === SOCKET_OPEN);
   }
 
   private sendIfReady(message: ClientMessage): boolean {

@@ -9,6 +9,7 @@ import {
   wavFromPcm16,
   type EngineConfig,
   type EngineEvents,
+  type EngineImage,
   type VoiceEngine
 } from "./engine";
 
@@ -63,7 +64,8 @@ function settingsFrom(
   const rate = Number(env(`${prefix}_TTS_SAMPLE_RATE`));
   return {
     stt: stage(prefix, "STT", defaults.stt, keys),
-    llm: stage(prefix, "LLM", defaults.llm, keys),
+    // The relay cannot tell whether a chat model sees pictures, so the owner says so.
+    llm: { ...stage(prefix, "LLM", defaults.llm, keys), images: env(`${prefix}_LLM_IMAGES`)?.toLowerCase() === "on" },
     tts: {
       ...stage(prefix, "TTS", defaults.tts, keys),
       voice: (gender) =>
@@ -77,7 +79,7 @@ function settingsFrom(
 }
 
 /** The hosted pipeline: OpenAI's endpoints unless a stage is pointed elsewhere. */
-function pipelineSettings(): PipelineSettings {
+export function pipelineSettings(): PipelineSettings {
   return settingsFrom(
     "PIPELINE",
     {
@@ -460,6 +462,15 @@ export function createPipelineEngine(
     }
   });
 
+  /** A picture waits for the next user turn; with words it is that turn. */
+  function sendImage(image: EngineImage, text?: string): void {
+    if (closed) return;
+    chat.addImage(image);
+    if (!text) return;
+    pendingUser = undefined;
+    void chat.reply(text);
+  }
+
   const vad = createVad(
     {
       onStart() {
@@ -527,6 +538,8 @@ export function createPipelineEngine(
     sendToolResult(callId, output) {
       chat.sendToolResult(callId, output);
     },
+    // Only when the owner said the chat model sees pictures (PIPELINE_LLM_IMAGES / LOCAL_LLM_IMAGES).
+    ...(settings.llm.images ? { sendImage } : {}),
     sendText(text) {
       if (closed) return;
       pendingUser = undefined;

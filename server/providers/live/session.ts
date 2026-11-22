@@ -1,5 +1,10 @@
 import type { WebSocket } from "ws";
-import { IDLE_CLOSE_CODE, type ProviderCapabilities } from "../../../shared/agent";
+import {
+  IDLE_CLOSE_CODE,
+  MAX_IMAGES_PER_SESSION,
+  MIN_IMAGE_INTERVAL_MS,
+  type ProviderCapabilities
+} from "../../../shared/agent";
 import { type AdasSeverity } from "../../../shared/adas";
 import {
   buildDeviceContextSummary,
@@ -71,7 +76,7 @@ import { toolErrorText } from "../../tools/schema";
 import type { ToolDefinition } from "../../tools";
 import { serverTools as installedServerTools } from "../../tools/registry";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent } from "../types";
-import { env, type EngineConfig, type EngineEvents, type VoiceEngine } from "./engine";
+import { env, type EngineConfig, type EngineEvents, type EngineImage, type VoiceEngine } from "./engine";
 
 /** What a live backend contributes besides its engine. */
 export type LiveBackend = {
@@ -452,6 +457,10 @@ export function createLiveProvider(
   let sessionContext: ProviderSessionContext | undefined;
   /** Final turns so far, for a model that has to pick the conversation up again. */
   let history: HistoryTurn[] = [];
+  /** Pictures accepted this session, and when the last one came. Only counts
+   *  and times are kept: the picture itself goes to the engine and nowhere else. */
+  let imagesAccepted = 0;
+  let lastImageAt: number | undefined;
   /** The conversation so far as the model was last told it: set when the
    *  upstream is (re)connected with turns already behind it, and left alone
    *  in between, because a connected upstream remembers the rest itself. */
@@ -597,8 +606,24 @@ export function createLiveProvider(
     const clean = text.trim();
     if (!general || !clean) return;
     history.push({ speaker, text: clean.slice(0, MAX_HISTORY_TURN_CHARS) });
+    flushPictureNotes(false);
     if (history.length > MAX_HISTORY_TURNS) history = history.slice(-MAX_HISTORY_TURNS);
     saveResume();
+  }
+
+  /** Notes for silent pictures that arrived while a user turn was open or a
+   *  reply was running. They are written after that turn's own entry. */
+  let pictureNotesWaiting = 0;
+
+  function flushPictureNotes(save: boolean): void {
+    if (pictureNotesWaiting === 0 || !riderFinal || responseActive) return;
+    for (; pictureNotesWaiting > 0; pictureNotesWaiting -= 1) {
+      history.push({ speaker: "user", text: pictureNote() });
+    }
+    if (save) {
+      if (history.length > MAX_HISTORY_TURNS) history = history.slice(-MAX_HISTORY_TURNS);
+      saveResume();
+    }
   }
 
   function formatHistory(): string {
@@ -1258,8 +1283,14 @@ export function createLiveProvider(
     engine?.respond();
   }
 
-  /** A turn the user typed: always addressed, shown as their words, answered aloud. */
-  function acceptTypedTurn(text: string): void {
+  /** What conversation records and a resumed session keep in place of a picture. */
+  function pictureNote(): string {
+    return t("[用户给你看了一张图片]", "[the user showed a picture]");
+  }
+
+  /** A turn the user typed: always addressed, shown as their words, answered
+   *  aloud. With `image` the picture goes to the model along with the words. */
+  function acceptTypedTurn(text: string, image?: EngineImage): void {
     if (!riderFinal) finalizeRiderTurn();
     abandonTools();
     if (responseActive && !replyInterrupted) {
@@ -1286,10 +1317,28 @@ export function createLiveProvider(
     memory = updateSessionMemory(memory, text, rideContext.mode);
     emitMemory();
     clearIdle();
-    userEngaged(text);
+    userEngaged(image ? `${pictureNote()} ${text}` : text);
     if (!general) dispatchDeviceCommand(text);
     status("thinking", t(`${me().name} 正在思考`, `${me().name} is thinking`));
-    engine?.sendText?.(text);
+    if (image) engine?.sendImage?.(image, text);
+    else engine?.sendText?.(text);
+  }
+
+  /** A picture shown without words: the model sees it with the next turn.
+   *  Nothing is answered, shown as a transcript, or interrupted. */
+  function acceptSilentImage(image: EngineImage): void {
+    engine?.sendImage?.(image);
+    // Not userEngaged(): a picture is not an answer. It must not cancel a
+    // goodbye already decided on, or reset the count of unanswered check-ins.
+    // History order must match what the model saw, so while a user turn is
+    // still open or a reply is running the note waits for that turn's own entry.
+    if (general) {
+      pictureNotesWaiting += 1;
+      flushPictureNotes(true);
+    }
+    // The silence clock starts over, unless a reply, a tool or a goodbye is
+    // under way: the end of that restarts it.
+    if (!responseActive && toolsRunning === 0 && !pendingEnd && !pendingFarewell) armIdle();
   }
 
   /** Says a line of the relay's own in the assistant's voice: the greeting, a
@@ -1410,6 +1459,7 @@ export function createLiveProvider(
         send(transcriptEvent(agentDelivery, "agent", text, { final: true, useBrowserSpeech: fallback }));
         remember("agent", text);
       }
+      flushPictureNotes(true);
       // A reply that ended by asking for tools is not the end of the turn.
       if (toolsRunning > 0) return;
       if (audioActive) status("listening", listeningDetail());
@@ -1700,6 +1750,38 @@ export function createLiveProvider(
         return;
       }
       acceptTypedTurn(text);
+    },
+    async imageInput(image: EngineImage, text?: string) {
+      if (closed) return;
+      if (!engineReady || !engine?.sendImage) {
+        send({
+          type: "error",
+          message: t(`${backend.label} 不支持图片输入`, `${backend.label} does not take pictures`)
+        });
+        return;
+      }
+      const at = now();
+      if (imagesAccepted >= MAX_IMAGES_PER_SESSION) {
+        send({
+          type: "error",
+          message: t(
+            `一次对话最多发送 ${MAX_IMAGES_PER_SESSION} 张图片`,
+            `At most ${MAX_IMAGES_PER_SESSION} pictures in one conversation`
+          )
+        });
+        return;
+      }
+      if (lastImageAt !== undefined && at - lastImageAt < MIN_IMAGE_INTERVAL_MS) {
+        send({
+          type: "error",
+          message: t("图片发送太快，每秒最多一张", "Pictures are limited to one per second")
+        });
+        return;
+      }
+      imagesAccepted += 1;
+      lastImageAt = at;
+      if (text) acceptTypedTurn(text, image);
+      else acceptSilentImage(image);
     },
     async toolResult(event) {
       tools?.clientResult(event);

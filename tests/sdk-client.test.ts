@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AudioIO } from "../sdk/src/audio";
+import type { ImageEncoder } from "../sdk/src/image";
 import {
   VoiceAgent,
   VoiceAgentError,
@@ -1072,5 +1073,163 @@ describe("webrtc transport", () => {
     const { socket, frame } = await startedRtc();
     expect(() => frame(new Int16Array(160).buffer)).not.toThrow();
     expect(socket.sent.filter((m) => m instanceof ArrayBuffer)).toHaveLength(1);
+  });
+
+  it("carries a picture as one JSON event, like text", async () => {
+    const imageEncoder: ImageEncoder = async () => ({ width: 10, height: 10, encode: async () => "SkZJRg==" });
+    const { agent, socket } = await startedRtc({ internals: { imageEncoder } });
+    // `STARTED` reports no imageInput, so the relay is first told it may.
+    socket.serverSends({ ...STARTED, capabilities: { imageInput: true } });
+    expect(await agent.sendImage("data:image/png;base64,AAAA", { text: "what is this?" })).toBe(true);
+    expect(socket.ofType("image.input")).toEqual([
+      { type: "image.input", image: "SkZJRg==", mimeType: "image/jpeg", text: "what is this?" }
+    ]);
+  });
+});
+
+describe("sendImage", () => {
+  const encoder =
+    (log: Array<[unknown, number]> = []): ImageEncoder =>
+    async (source) => ({
+      width: 2000,
+      height: 1000,
+      async encode(width) {
+        log.push([source, width]);
+        return "SkZJRg==";
+      }
+    });
+
+  async function startedWithImages(
+    capabilities: Record<string, unknown> = { imageInput: true },
+    log?: Array<[unknown, number]>
+  ) {
+    const made = await started({ internals: { imageEncoder: encoder(log) } });
+    made.socket.serverSends({ ...STARTED, capabilities });
+    return made;
+  }
+
+  it("sends one JPEG image.input with the trimmed words", async () => {
+    const log: Array<[unknown, number]> = [];
+    const { agent, socket } = await startedWithImages({ imageInput: true }, log);
+    const source = "data:image/png;base64,AAAA";
+    expect(await agent.sendImage(source, { text: "  what colour?  " })).toBe(true);
+    expect(socket.ofType("image.input")).toEqual([
+      { type: "image.input", image: "SkZJRg==", mimeType: "image/jpeg", text: "what colour?" }
+    ]);
+    // Scaled to the default 1024 on the longer side.
+    expect(log).toEqual([[source, 1024]]);
+  });
+
+  it("omits blank words, and passes maxSide on", async () => {
+    const log: Array<[unknown, number]> = [];
+    const { agent, socket } = await startedWithImages({ imageInput: true }, log);
+    expect(await agent.sendImage("data:x", { text: "   ", maxSide: 640 })).toBe(true);
+    expect(socket.ofType("image.input")[0]).not.toHaveProperty("text");
+    expect(log[0]![1]).toBe(640);
+  });
+
+  it("caps the words at the typed-turn limit", async () => {
+    const { agent, socket } = await startedWithImages();
+    await agent.sendImage("data:x", { text: "a".repeat(3000) });
+    expect((socket.ofType("image.input")[0]!.text as string).length).toBe(2000);
+  });
+
+  it("returns false, and does no work, when the relay does not take pictures", async () => {
+    const log: Array<[unknown, number]> = [];
+    const { agent, socket } = await startedWithImages({ textInput: true }, log);
+    expect(await agent.sendImage("data:x")).toBe(false);
+    expect(socket.ofType("image.input")).toEqual([]);
+    expect(log).toEqual([]);
+  });
+
+  it("returns false when there is no live session", async () => {
+    const agent = new VoiceAgent({ url: "https://relay.example.com", internals: { imageEncoder: encoder() } });
+    expect(await agent.sendImage("data:x")).toBe(false);
+    const { agent: stopped } = await startedWithImages();
+    stopped.stop();
+    expect(await stopped.sendImage("data:x")).toBe(false);
+  });
+
+  it("returns false when the connection drops while the picture is being prepared", async () => {
+    const { agent, socket } = await startedWithImages();
+    const pending = agent.sendImage("data:x");
+    socket.readyState = 3;
+    expect(await pending).toBe(false);
+    expect(socket.ofType("image.input")).toEqual([]);
+  });
+
+  /** An encoder that finishes when the test says so. */
+  function slowEncoder() {
+    const waiting: Array<() => void> = [];
+    const encoder: ImageEncoder = async () => ({
+      width: 10,
+      height: 10,
+      encode: () => new Promise<string>((resolve) => waiting.push(() => resolve("SkZJRg==")))
+    });
+    return { encoder, finish: () => waiting.splice(0).forEach((done) => done()) };
+  }
+
+  it("sends nothing when the session was replaced while the picture was prepared", async () => {
+    const slow = slowEncoder();
+    const { agent, socket } = await started({ internals: { imageEncoder: slow.encoder } });
+    socket.serverSends({ ...STARTED, capabilities: { imageInput: true } });
+    const pending = agent.sendImage("data:x");
+    await vi.advanceTimersByTimeAsync(0);
+    // A new session on the connection that does not take pictures.
+    socket.serverSends({ ...STARTED, capabilities: { textInput: true } });
+    slow.finish();
+    expect(await pending).toBe(false);
+    expect(socket.ofType("image.input")).toEqual([]);
+  });
+
+  it("sends nothing when a reconnect gave a new connection while the picture was prepared", async () => {
+    const slow = slowEncoder();
+    const { agent, socket } = await started({ internals: { imageEncoder: slow.encoder } });
+    socket.serverSends({ ...STARTED, capabilities: { imageInput: true } });
+    const pending = agent.sendImage("data:x");
+    await vi.advanceTimersByTimeAsync(0);
+    socket.serverCloses(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = FakeSocket.instances.at(-1)!;
+    expect(next).not.toBe(socket);
+    next.open();
+    next.serverSends({ ...STARTED, capabilities: { imageInput: true } });
+    slow.finish();
+    expect(await pending).toBe(false);
+    expect(next.ofType("image.input")).toEqual([]);
+  });
+
+  it("answers false to a call made while another is encoding or within a second of the last one", async () => {
+    const slow = slowEncoder();
+    const { agent, socket } = await started({ internals: { imageEncoder: slow.encoder } });
+    socket.serverSends({ ...STARTED, capabilities: { imageInput: true } });
+    const first = agent.sendImage("data:x", { text: "one" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await agent.sendImage("data:x", { text: "two" })).toBe(false);
+    slow.finish();
+    expect(await first).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(await agent.sendImage("data:x", { text: "three" })).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const fourth = agent.sendImage("data:x", { text: "four" });
+    await vi.advanceTimersByTimeAsync(0);
+    slow.finish();
+    expect(await fourth).toBe(true);
+    expect(socket.ofType("image.input").map((message) => message.text)).toEqual(["one", "four"]);
+  });
+
+  it("rejects with an image error when the picture cannot be prepared", async () => {
+    const failing: ImageEncoder = async () => {
+      throw new Error("the image does not fit");
+    };
+    const { agent, socket } = await started({ internals: { imageEncoder: failing } });
+    socket.serverSends({ ...STARTED, capabilities: { imageInput: true } });
+    await expect(agent.sendImage("data:x")).rejects.toMatchObject({
+      name: "VoiceAgentError",
+      code: "image",
+      message: expect.stringContaining("does not fit")
+    });
+    expect(socket.ofType("image.input")).toEqual([]);
   });
 });

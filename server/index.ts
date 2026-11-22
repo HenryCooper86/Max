@@ -42,7 +42,18 @@ import { cloudCounters } from "./cloud/counters";
 import { cloudSessionTokens, sessionTokens } from "./session-tokens";
 import { installServerTools } from "./tools/registry";
 import { createConversationLifecycle } from "./conversation-lifecycle";
-import { createTelephony, telephonySettingsFromEnv, type Telephony } from "./telephony/twilio-calls";
+import {
+  telnyxCarrier,
+  telnyxSettingsFromEnv,
+  telnyxSignedStreamUrl,
+  validTelnyxStreamSignature
+} from "./telephony/telnyx";
+import {
+  createTelephony,
+  telephonySettingsFromEnv,
+  type Telephony,
+  type TelephonyDeps
+} from "./telephony/twilio-calls";
 import type { IncomingMessage } from "node:http";
 import { createWebRtcGateway, webRtcSettingsFromEnv, type WebRtcGateway } from "./webrtc/gateway";
 import { turnSettingProblems } from "./providers/live/turn-settings";
@@ -162,11 +173,14 @@ server.requestTimeout = 30_000;
 server.keepAliveTimeout = 5_000;
 server.maxRequestsPerSocket = 1_000;
 const activeSessions = new Map<WebSocket, AgentSessionController>();
-// Phone calls (server/telephony): Twilio's media streams carry no credentials,
-// so they have their own socket server and prove themselves with a ticket.
+// Phone calls (server/telephony): a carrier's media streams carry no relay
+// credentials, so they have their own socket server and prove themselves with
+// a ticket. Twilio and Telnyx can both be set up; each has its own routes.
 const telephonySockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
 const telephonyConfig = telephonySettingsFromEnv();
+const telnyxConfig = telnyxSettingsFromEnv();
 let telephony: Telephony | undefined;
+let telnyx: Telephony | undefined;
 /** Media-stream sockets that have not presented a ticket yet, by client address. */
 const pendingStreams = new Map<string, number>();
 let pendingStreamTotal = 0;
@@ -411,6 +425,31 @@ app.post("/telephony/twilio/voice", express.urlencoded({ extended: false, limit:
   res.status(answer.status).type("text/xml").send(answer.body);
 });
 
+// The same for Telnyx, which asks with GET (its default) or POST. Authenticated
+// by the secret in the URL you gave Telnyx: see server/telephony/telnyx.ts.
+app.all("/telephony/telnyx/voice", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  if (req.method !== "GET" && req.method !== "POST") {
+    res.status(405).set("Allow", "GET, POST").end();
+    return;
+  }
+  if (!telnyx) {
+    res.status(404).type("text/plain").send("Telnyx is not configured. Set TELNYX_WEBHOOK_SECRET.");
+    return;
+  }
+  // The call's details are in the query of a GET and in the form of a POST.
+  const params: Record<string, string> = {};
+  for (const source of [req.query, req.method === "POST" ? req.body : undefined]) {
+    for (const [name, value] of Object.entries((source ?? {}) as Record<string, unknown>)) {
+      if (typeof value === "string") params[name] = value;
+    }
+  }
+  const origin = telnyxConfig.settings?.publicUrl ?? requestOrigin(req);
+  const answer = telnyx.voiceWebhook({ url: `${origin}${req.originalUrl}`, params, signature: undefined });
+  if (answer.status === 403) log.warn("rejected a Telnyx webhook: wrong key", { address: clientAddress(req) });
+  // Nothing on the way may keep an answer that holds a ticket.
+  res.status(answer.status).set("Cache-Control", "no-store").type("text/xml").send(answer.body);
+});
+
 // WebRTC signalling for /agent: the client's offer in, the relay's answer out.
 // The same checks as the WebSocket upgrade apply, and the session that follows
 // is the same session: only its transport differs (server/webrtc/gateway.ts).
@@ -488,11 +527,26 @@ app.post("/v1/calls", async (req, res) => {
     });
     return;
   }
-  if (!telephony) {
-    res.status(503).json({ ok: false, error: "Telephony is not configured. Set TWILIO_AUTH_TOKEN." });
+  const { carrier: wanted, ...input } = (req.body ?? {}) as Record<string, unknown>;
+  if (wanted !== undefined && wanted !== "twilio" && wanted !== "telnyx") {
+    res.status(400).json({ ok: false, error: "carrier must be twilio or telnyx." });
     return;
   }
-  const placed = await telephony.placeCall((req.body ?? {}) as Record<string, unknown>, requestOrigin(req));
+  // With both carriers set up, Twilio places the call unless the request names Telnyx.
+  const calls = wanted === "telnyx" ? telnyx : wanted === "twilio" ? telephony : (telephony ?? telnyx);
+  if (!calls) {
+    res.status(503).json({
+      ok: false,
+      error:
+        wanted === "telnyx"
+          ? "Telnyx is not configured. Set TELNYX_WEBHOOK_SECRET."
+          : wanted === "twilio"
+            ? "Twilio is not configured. Set TWILIO_AUTH_TOKEN."
+            : "Telephony is not configured. Set TWILIO_AUTH_TOKEN or TELNYX_WEBHOOK_SECRET."
+    });
+    return;
+  }
+  const placed = await calls.placeCall(input, requestOrigin(req));
   if (placed.ok) res.status(201).json({ ok: true, callSid: placed.callSid });
   else res.status(placed.status).json({ ok: false, error: placed.error });
 });
@@ -1265,8 +1319,9 @@ server.on("upgrade", (request, socket, head) => {
     companionSockets.handleUpgrade(request, socket, head);
     return;
   }
-  if (url.pathname === "/telephony/twilio/stream") {
-    const calls = telephony;
+  if (url.pathname === "/telephony/twilio/stream" || url.pathname === "/telephony/telnyx/stream") {
+    const viaTelnyx = url.pathname === "/telephony/telnyx/stream";
+    const calls = viaTelnyx ? telnyx : telephony;
     const address = clientAddress(request);
     const waiting = pendingStreams.get(address) ?? 0;
     // A media stream carries no credentials until its first message, so the
@@ -1287,6 +1342,35 @@ server.on("upgrade", (request, socket, head) => {
       socket.destroy();
       return;
     }
+    // Telnyx signs the request for a stream; with its public key set, an
+    // unsigned one goes no further. The signature covers the URL as Telnyx was
+    // given it, which is the relay's public origin and this path and ticket.
+    const telnyxKey = viaTelnyx ? telnyxConfig.settings?.publicKey : undefined;
+    if (telnyxKey) {
+      const header = (name: string): string | undefined => {
+        const value = request.headers[name];
+        return Array.isArray(value) ? value[0] : value;
+      };
+      const signed = validTelnyxStreamSignature({
+        publicKey: telnyxKey,
+        streamUrl: telnyxSignedStreamUrl({
+          ...(telnyxConfig.settings?.publicUrl ? { publicUrl: telnyxConfig.settings.publicUrl } : {}),
+          ...(request.headers.host ? { host: request.headers.host } : {}),
+          ...(header("x-forwarded-proto") ? { forwardedProto: header("x-forwarded-proto") } : {}),
+          encrypted: "encrypted" in request.socket,
+          requestUrl: request.url ?? ""
+        }),
+        timestamp: header("telnyx-timestamp"),
+        signature: header("telnyx-signature-ed25519")
+      });
+      if (!signed) {
+        log.warn("rejected a Telnyx media stream: bad signature", { address });
+        socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+    }
+    const urlTicket = viaTelnyx ? (url.searchParams.get("ticket") ?? "") : undefined;
     pendingStreams.set(address, waiting + 1);
     pendingStreamTotal += 1;
     let counted = true;
@@ -1300,7 +1384,7 @@ server.on("upgrade", (request, socket, head) => {
     };
     // A handshake that never completes gives its slot back too.
     socket.once("close", settled);
-    telephonySockets.handleUpgrade(request, socket, head, (stream) => calls.handleStream(stream, settled));
+    telephonySockets.handleUpgrade(request, socket, head, (stream) => calls.handleStream(stream, settled, urlTicket));
     return;
   }
   if (url.pathname !== "/agent") {
@@ -1362,82 +1446,97 @@ if (webRtcConfig.settings) {
     maxSessions: webRtcConfig.settings.maxSessions
   });
 }
+/** What a call needs from the relay, whichever carrier brought it. */
+const callDeps = (logName: string): TelephonyDeps => ({
+  log: createLogger(logName),
+  openSession(client, call, extras) {
+    const usageUserId = call.userId ?? "phone";
+    if (shuttingDown) return { refused: "shutting down" };
+    if (usageMeter.overLimit(usageUserId)) return { refused: "usage limit reached" };
+    const sessionId = randomUUID();
+    const sessionLog = createLogger(`call:${shortSessionId(sessionId)}`);
+    const metered = usageMeter.open(sessionId, usageUserId);
+    const observer = conversations.active()
+      ? conversations.open({
+          sessionId,
+          channel: "phone",
+          assistant: assistant().name,
+          phone: {
+            direction: call.direction,
+            callSid: call.callSid,
+            ...(call.from ? { from: call.from } : {}),
+            ...(call.to ? { to: call.to } : {})
+          },
+          ...(call.userId ? { userId: call.userId } : {}),
+          ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
+        })
+      : undefined;
+    metrics.sessionOpened();
+    const socket = client as unknown as WebSocket;
+    const session = new AgentSessionController(
+      socket,
+      (target, telemetry) => selectProvider(target, sessionLog, telemetry),
+      sessionLog,
+      "phone",
+      undefined,
+      undefined,
+      {
+        deviceRegistrationAuthorized: false,
+        // A caller is a member of the public: nothing they say is QA evidence.
+        privateSession: true,
+        resumeScope: "phone",
+        channel: "phone",
+        noiseSuppression: noiseSuppression.mode !== "off",
+        sessionTools: extras.sessionTools,
+        trustedContext: extras.trustedContext,
+        ...(call.userId ? { tokenGrant: { userId: call.userId } } : {}),
+        onServerEvent: (payload) => {
+          observer?.event(payload);
+          const event = payload as { type?: unknown; state?: unknown };
+          if (event?.type === "tool.activity" && event.state === "started") metered.toolCall();
+        }
+      }
+    );
+    activeSessions.set(socket, session);
+    let over = false;
+    return {
+      handleMessage: (data, isBinary) => session.handleMessage(data, isBinary),
+      close(reason) {
+        if (over) return;
+        over = true;
+        metered.close();
+        observer?.end(reason ?? "caller");
+        activeSessions.delete(socket);
+        metrics.sessionClosed();
+        void session.close().catch((error: unknown) => {
+          sessionLog.warn("session close failed", {
+            message: error instanceof Error ? error.message : String(error)
+          });
+        });
+      }
+    };
+  },
+  ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
+});
 for (const problem of telephonyConfig.problems) log.warn(problem);
 if (telephonyConfig.settings) {
-  telephony = createTelephony(telephonyConfig.settings, {
-    log: createLogger("telephony"),
-    openSession(client, call, extras) {
-      const usageUserId = call.userId ?? "phone";
-      if (shuttingDown) return { refused: "shutting down" };
-      if (usageMeter.overLimit(usageUserId)) return { refused: "usage limit reached" };
-      const sessionId = randomUUID();
-      const sessionLog = createLogger(`call:${shortSessionId(sessionId)}`);
-      const metered = usageMeter.open(sessionId, usageUserId);
-      const observer = conversations.active()
-        ? conversations.open({
-            sessionId,
-            channel: "phone",
-            assistant: assistant().name,
-            phone: {
-              direction: call.direction,
-              callSid: call.callSid,
-              ...(call.from ? { from: call.from } : {}),
-              ...(call.to ? { to: call.to } : {})
-            },
-            ...(call.userId ? { userId: call.userId } : {}),
-            ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
-          })
-        : undefined;
-      metrics.sessionOpened();
-      const socket = client as unknown as WebSocket;
-      const session = new AgentSessionController(
-        socket,
-        (target, telemetry) => selectProvider(target, sessionLog, telemetry),
-        sessionLog,
-        "phone",
-        undefined,
-        undefined,
-        {
-          deviceRegistrationAuthorized: false,
-          // A caller is a member of the public: nothing they say is QA evidence.
-          privateSession: true,
-          resumeScope: "phone",
-          channel: "phone",
-          noiseSuppression: noiseSuppression.mode !== "off",
-          sessionTools: extras.sessionTools,
-          trustedContext: extras.trustedContext,
-          ...(call.userId ? { tokenGrant: { userId: call.userId } } : {}),
-          onServerEvent: (payload) => {
-            observer?.event(payload);
-            const event = payload as { type?: unknown; state?: unknown };
-            if (event?.type === "tool.activity" && event.state === "started") metered.toolCall();
-          }
-        }
-      );
-      activeSessions.set(socket, session);
-      let over = false;
-      return {
-        handleMessage: (data, isBinary) => session.handleMessage(data, isBinary),
-        close(reason) {
-          if (over) return;
-          over = true;
-          metered.close();
-          observer?.end(reason ?? "caller");
-          activeSessions.delete(socket);
-          metrics.sessionClosed();
-          void session.close().catch((error: unknown) => {
-            sessionLog.warn("session close failed", {
-              message: error instanceof Error ? error.message : String(error)
-            });
-          });
-        }
-      };
-    },
-    ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
-  });
+  telephony = createTelephony(telephonyConfig.settings, callDeps("telephony"));
   log.info("telephony ready", {
     transfers: [...telephonyConfig.settings.transferTargets.keys()],
     outbound: Boolean(telephonyConfig.settings.accountSid && telephonyConfig.settings.phoneNumber)
+  });
+}
+// What both carriers share is read for each: say it once.
+for (const problem of telnyxConfig.problems) {
+  if (!telephonyConfig.problems.includes(problem)) log.warn(problem);
+}
+if (telnyxConfig.settings) {
+  const settings = telnyxConfig.settings;
+  telnyx = createTelephony(settings, callDeps("telnyx"), telnyxCarrier(settings));
+  log.info("telephony ready (Telnyx)", {
+    transfers: settings.apiKey ? [...settings.transferTargets.keys()] : [],
+    outbound: Boolean(settings.applicationSid && settings.phoneNumber && settings.publicUrl),
+    streamSignature: Boolean(settings.publicKey)
   });
 }
 

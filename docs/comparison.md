@@ -18,21 +18,21 @@ it is not built; see [not built yet](#not-built-yet).
 
 ### The conversation
 
-| Capability                                            | Max    | Notes                                                                                                                       |
-| ----------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| Speech-to-speech models                               | Yes    | OpenAI Realtime, Gemini Live, Grok Voice, Doubao. See [voice backends](backends.md).                                        |
-| Cascaded speech-to-text → chat model → text-to-speech | Yes    | Any OpenAI-compatible endpoints, hosted or local.                                                                           |
-| Barge-in                                              | Yes    | On every live backend, including phone calls.                                                                               |
-| Turn detection                                        | Yes    | Tunable per backend. Learned end-of-turn detection with OpenAI (`semantic_vad`) and Max Speech; the vendor's own elsewhere. |
-| Noise suppression                                     | Yes    | In the relay for any backend and for phone calls (RNNoise), the browser's own on the web, and OpenAI's setting.             |
-| Typed input and live captions                         | Yes    |                                                                                                                             |
-| Greeting, check-ins on silence, time limit            | Yes    | [Running a conversation](conversations.md).                                                                                 |
-| The agent ends the conversation itself                | Yes    | The `end_session` tool; always on for phone calls.                                                                          |
-| Several agents with handoff                           | Yes    | Per-agent instructions and tools. No visual flow builder.                                                                   |
-| Conversation survives a dropped connection            | Yes    | For 10 minutes, in the relay's memory.                                                                                      |
-| Memory across conversations                           | Yes    | Recent turns and facts the user asked to keep, per user, with a route to forget a user. No summarising of long histories.   |
-| Images or video in the conversation                   | Partly | Camera frames for the helmet assistant. Not yet a general image input for app assistants.                                   |
-| Wake word                                             | Yes    | Uncommon on agent platforms; it comes from Max's device origins.                                                            |
+| Capability                                            | Max    | Notes                                                                                                                        |
+| ----------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Speech-to-speech models                               | Yes    | OpenAI Realtime, Gemini Live, Grok Voice, Doubao. See [voice backends](backends.md).                                         |
+| Cascaded speech-to-text → chat model → text-to-speech | Yes    | Any OpenAI-compatible endpoints, hosted or local.                                                                            |
+| Barge-in                                              | Yes    | On every live backend, including phone calls.                                                                                |
+| Turn detection                                        | Yes    | Tunable per backend. Learned end-of-turn detection with OpenAI (`semantic_vad`) and Max Speech; the vendor's own elsewhere.  |
+| Noise suppression                                     | Yes    | In the relay for any backend and for phone calls (RNNoise), the browser's own on the web, and OpenAI's setting.              |
+| Typed input and live captions                         | Yes    |                                                                                                                              |
+| Greeting, check-ins on silence, time limit            | Yes    | [Running a conversation](conversations.md).                                                                                  |
+| The agent ends the conversation itself                | Yes    | The `end_session` tool; always on for phone calls.                                                                           |
+| Several agents with handoff                           | Yes    | Per-agent instructions and tools. No visual flow builder.                                                                    |
+| Conversation survives a dropped connection            | Yes    | For 10 minutes, in the relay's memory.                                                                                       |
+| Memory across conversations                           | Yes    | Recent turns and facts the user asked to keep, per user, with a route to forget a user. No summarising of long histories.    |
+| Images or video in the conversation                   | Partly | A picture, with or without words, to the conversation's model (web SDK `sendImage`). Camera frames for the helmet. No video. |
+| Wake word                                             | Yes    | Uncommon on agent platforms; it comes from Max's device origins.                                                             |
 
 ### Tools and knowledge
 
@@ -48,11 +48,12 @@ it is not built; see [not built yet](#not-built-yet).
 
 | Capability                                  | Max | Notes                                                            |
 | ------------------------------------------- | --- | ---------------------------------------------------------------- |
-| Inbound and outbound calls                  | Yes | Through Twilio. See [phone calls](telephony.md).                 |
+| Inbound and outbound calls                  | Yes | Through Twilio or Telnyx. See [phone calls](telephony.md).       |
 | Transfer to a person, keypad input, hang up | Yes | Cold transfer to numbers you list. No warm (announced) transfer. |
-| Answering-machine detection                 | Yes | Twilio's; a voicemail message can be left.                       |
-| Direct SIP trunks, other carriers           | No  |                                                                  |
-| Buying numbers, batch campaigns, recordings | No  | Numbers and recording stay in your Twilio account.               |
+| Answering-machine detection                 | Yes | Twilio's; a voicemail message can be left. Not on Telnyx yet.    |
+| A second carrier                            | Yes | Telnyx, written to its documentation; not run on a real call.    |
+| Direct SIP trunks, further carriers         | No  |                                                                  |
+| Buying numbers, batch campaigns, recordings | No  | Numbers and recording stay in your carrier account.              |
 
 ### Operating it
 
@@ -100,17 +101,22 @@ In rough order of how much they would matter to most users:
 1. **A learned turn detector of the relay's own in front of every hosted backend.** OpenAI and Max Speech have one;
    Gemini and Grok use the vendor's voice activity detection, which the relay can tune but not replace. Noise
    suppression is steady-noise removal: it does not separate the user from other people talking nearby.
-2. **Direct SIP and carriers other than Twilio.**
+2. **Direct SIP, and carriers other than Twilio and Telnyx.** Telnyx still needs a run on a real call.
 3. **A vector database for very large knowledge bases.** The built-in knowledge base holds its index in memory and
    compares a question with every passage: measured at 100,000 passages, not beyond. For a larger collection, call
    your own search from a tool or an MCP server.
-4. **A general image input for app assistants.** Background tools exist for webhook and code tools, not yet for
-   client tools or MCP servers.
-5. **Guardrails beyond redaction**, such as moderation of what the agent says.
-6. **A visual flow builder, agent versions and A/B tests.**
-7. **Warm transfers, batch outbound campaigns and call recording.**
-8. **WebRTC in the native iOS and Android clients.** The web SDK has it; the native clients use the WebSocket.
-9. **Avatars.**
+4. **Continuous video, and image input beyond the web SDK.** A user can show the assistant one picture at a time
+   (at most one a second and 50 per connection), JPEG or PNG, to OpenAI Realtime, Gemini Live, or a multimodal chat
+   model on the pipeline, local and Max Speech backends. There is no continuous video, and no screen sharing. Only the
+   web SDK has a method for it; the iOS and Android clients and the widget do not, so a native client sends the
+   `image.input` event itself. The OpenAI and Gemini paths were built to the vendors' documentation and not run against
+   their servers.
+5. **Background tools for client tools and MCP servers.** They exist for webhook and code tools.
+6. **Guardrails beyond redaction**, such as moderation of what the agent says.
+7. **A visual flow builder, agent versions and A/B tests.**
+8. **Warm transfers, batch outbound campaigns and call recording.**
+9. **WebRTC in the native iOS and Android clients.** The web SDK has it; the native clients use the WebSocket.
+10. **Avatars.**
 
 Conversation analysis, the conversation webhook, traces and phone calls currently apply to the relay's own assistant.
 Max Cloud projects have their own conversation history in the console and do not have these yet.

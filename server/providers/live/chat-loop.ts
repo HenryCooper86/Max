@@ -1,7 +1,7 @@
 import type { Logger } from "../../logger";
 import { forFastLocalModel } from "../../prompts";
 import type { ToolSpec } from "../../tools";
-import type { EngineEvents } from "./engine";
+import type { EngineEvents, EngineImage } from "./engine";
 
 /**
  * The chat-model half of a cascaded voice engine: streaming chat completions
@@ -17,6 +17,8 @@ export type ChatStage = {
   model: string;
   /** Sent as `reasoning_effort`. Local voice replies use "none": a hidden thinking step delays every answer. */
   reasoningEffort?: string;
+  /** The owner says this chat model can see pictures. The relay cannot tell. */
+  images?: boolean;
 };
 
 /** Where one reply's text goes. Created per reply, so it can hold that reply's state.
@@ -72,13 +74,18 @@ export type ChatLoop = {
   /** Reports the reply done, once. */
   endReply(cancelled: boolean): void;
   addContext(text: string): void;
+  /** Holds a picture for the next user turn; it starts nothing and stops nothing. */
+  addImage(image: EngineImage): void;
   sendToolResult(callId: string, output: string): void;
 };
 
 type ChatToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 
+type ChatPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
 type ChatMessage =
-  | { role: "system" | "user"; content: string }
+  | { role: "system"; content: string }
+  | { role: "user"; content: string | ChatPart[] }
   | { role: "assistant"; content: string | null; tool_calls?: ChatToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
 
@@ -123,6 +130,38 @@ type StreamedChunk = {
 };
 
 const MAX_HISTORY_MESSAGES = 16;
+/** Pictures resent with every request; older ones are replaced by a note. */
+const MAX_PICTURES_IN_HISTORY = 2;
+const OLD_PICTURE_NOTE = "[a picture the user showed earlier]";
+
+function hasPicture(message: ChatMessage): boolean {
+  return (
+    message.role === "user" &&
+    Array.isArray(message.content) &&
+    message.content.some((part) => part.type === "image_url")
+  );
+}
+
+/** The messages with only the newest `keep` pictures left in; the others become a note.
+ *  Returns new objects where it changes anything and never touches the input. */
+function withPictures(messages: ChatMessage[], keep: number): ChatMessage[] {
+  let seen = 0;
+  const result = [...messages];
+  for (let index = result.length - 1; index >= 0; index -= 1) {
+    const message = result[index];
+    if (!message || message.role !== "user" || !Array.isArray(message.content)) continue;
+    const parts: ChatPart[] = [];
+    // Within one message the later picture is the newer one.
+    for (let at = message.content.length - 1; at >= 0; at -= 1) {
+      const part = message.content[at]!;
+      if (part.type !== "image_url") parts.unshift(part);
+      else if ((seen += 1) <= keep) parts.unshift(part);
+      else parts.unshift({ type: "text", text: OLD_PICTURE_NOTE });
+    }
+    result[index] = { role: "user", content: parts };
+  }
+  return result;
+}
 // Sentence boundaries for both Latin and CJK punctuation.
 const SENTENCE_END = /[。！？!?；;\n]|[.](?=\s|$)/u;
 
@@ -130,8 +169,15 @@ export function authHeaders(item: ChatStage): Record<string, string> {
   return item.apiKey ? { Authorization: `Bearer ${item.apiKey}` } : {};
 }
 
+/** A vendor may echo part of a request in an error. Picture data must not reach a log line or the client. */
+function withoutPictureData(text: string): string {
+  return text.replace(/data:[^;,\s"]*;base64,[A-Za-z0-9+/=_-]*/g, "[data]").replace(/[A-Za-z0-9+/=_-]{40,}/g, "[data]");
+}
+
 export async function failure(stageName: string, response: Response): Promise<Error> {
-  const body = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
+  const body = withoutPictureData(await response.text().catch(() => ""))
+    .replace(/\s+/g, " ")
+    .slice(0, 160);
   const hint = response.status === 401 || response.status === 403 ? " — check the API key" : "";
   return new Error(`${stageName} HTTP ${response.status}${hint}${body ? `: ${body}` : ""}`);
 }
@@ -139,6 +185,8 @@ export async function failure(stageName: string, response: Response): Promise<Er
 export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   const { log, request } = options;
   let history: ChatMessage[] = [];
+  /** Pictures shown without words, waiting for the next user turn. */
+  let pendingImages: EngineImage[] = [];
   /** Tool calls waiting for `sendToolResult`, by call id. */
   const toolWaiters = new Map<string, (output: string) => void>();
   /** Bumped whenever the current work must stop: barge-in, cancel, close. */
@@ -300,29 +348,52 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
     options.events()?.onResponseStarted();
     const current = () => !options.closed() && mine === generation;
     const speaker = options.newSpeaker({ signal: controller.signal, current });
+    /** Whether any request of this reply carried a picture. */
+    let carriedPicture = false;
+    /** Pictures taken for this turn, until the turn is in history or has failed. */
+    let shown: EngineImage[] = [];
+    let settled = false;
 
     try {
       if (exactLine) {
         (speaker.say ?? speaker.sentence ?? speaker.delta)?.call(speaker, exactLine);
       } else {
-        const turn: ChatMessage[] = userText ? [{ role: "user", content: userText }] : [];
+        // Pictures shown earlier go with the next turn that has words.
+        shown = userText ? pendingImages.slice(-MAX_PICTURES_IN_HISTORY) : [];
+        if (userText) pendingImages = [];
+        const userMessage: ChatMessage | undefined = userText
+          ? {
+              role: "user",
+              content: shown.length
+                ? [
+                    { type: "text", text: userText },
+                    ...shown.map((image) => ({
+                      type: "image_url" as const,
+                      image_url: { url: `data:${image.mimeType};base64,${image.data}` }
+                    }))
+                  ]
+                : userText
+            }
+          : undefined;
+        const turn: ChatMessage[] = userMessage ? [userMessage] : [];
         let full = "";
         let nudged = false;
         for (let round = 0; ; round += 1) {
           // The last round offers no tools, so the model has to answer in words.
           const offerTools = round < MAX_TOOL_ROUNDS;
+          const messages: ChatMessage[] = [
+            {
+              role: "system",
+              content:
+                options.stage().reasoningEffort === "none"
+                  ? forFastLocalModel(options.instructions())
+                  : options.instructions()
+            },
+            ...withPictures([...history, ...turn], MAX_PICTURES_IN_HISTORY)
+          ];
+          carriedPicture ||= messages.some(hasPicture);
           const result = await streamChat(
-            [
-              {
-                role: "system",
-                content:
-                  options.stage().reasoningEffort === "none"
-                    ? forFastLocalModel(options.instructions())
-                    : options.instructions()
-              },
-              ...history,
-              ...turn
-            ],
+            messages,
             controller.signal,
             (delta) => {
               if (!current()) return;
@@ -355,16 +426,22 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
           }
         }
         // History keeps what was said; tool chatter stays inside its turn.
-        if (userText) history.push({ role: "user", content: userText });
+        if (userMessage) history.push(userMessage);
+        settled = true;
         if (full.trim()) history.push({ role: "assistant", content: full.trim() });
+        history = withPictures(history, MAX_PICTURES_IN_HISTORY);
         if (history.length > MAX_HISTORY_MESSAGES) history = history.slice(-MAX_HISTORY_MESSAGES);
       }
       await speaker.finish();
       if (mine === generation) endReply(false);
     } catch (error) {
       if (mine !== generation || options.closed()) return;
+      settled = true;
       const message = error instanceof Error ? error.message : String(error);
       log.warn(`${options.label} reply failed`, { message });
+      // A model that cannot take pictures would refuse every later request
+      // while one is in the history. The failed turn never reached it.
+      if (carriedPicture) history = withPictures(history, 0);
       options.events()?.onError(message);
       // The speaker winds down what it already has (its audio may still arrive
       // while it does), then the reply is made stale so nothing later plays.
@@ -381,6 +458,10 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
       if (mine !== generation || options.closed()) return;
       stop();
       endReply(false);
+    } finally {
+      // A turn that was superseded (barge-in) before it reached history: its
+      // pictures were never seen, so they wait for the next turn.
+      if (!settled && shown.length) pendingImages = [...shown, ...pendingImages].slice(-MAX_PICTURES_IN_HISTORY);
     }
   }
 
@@ -396,6 +477,9 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
     endReply,
     addContext(text) {
       history.push({ role: "system", content: text });
+    },
+    addImage(image) {
+      pendingImages = [...pendingImages, image].slice(-MAX_PICTURES_IN_HISTORY);
     },
     sendToolResult(callId, output) {
       const waiter = toolWaiters.get(callId);

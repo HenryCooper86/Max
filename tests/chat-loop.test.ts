@@ -281,3 +281,152 @@ describe("chat loop", () => {
     expect(seen.at(-1)).toBe("done:false");
   });
 });
+
+describe("chat loop pictures", () => {
+  const pic = (name: string) => ({ data: name, mimeType: "image/jpeg" });
+  const imagePart = (name: string) => ({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${name}` } });
+  const OLD = { type: "text", text: "[a picture the user showed earlier]" };
+  const refused = () =>
+    new Response('{"error":{"message":"model does not support multimodal requests"}}', { status: 400 });
+
+  it("attaches a waiting picture to the next turn that has words, and nothing before", async () => {
+    const { loop, chats } = setup([() => sseOf([text("Hi.")]), () => sseOf([text("Red.")])]);
+    loop.addImage(pic("A"));
+    // A line the relay says itself is not a user turn: no request, picture still waiting.
+    await loop.reply(undefined, "Welcome.");
+    expect(chats).toHaveLength(0);
+    await loop.reply("what colour?");
+    expect(chats[0].messages.at(-1)).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "what colour?" }, imagePart("A")]
+    });
+    // Used once: the next turn carries none of its own.
+    await loop.reply("and now?");
+    expect(chats[1].messages.at(-1)).toEqual({ role: "user", content: "and now?" });
+  });
+
+  it("holds only the two latest waiting pictures", async () => {
+    const { loop, chats } = setup([() => sseOf([text("Ok.")])]);
+    for (const name of ["A", "B", "C"]) loop.addImage(pic(name));
+    await loop.reply("look");
+    expect(chats[0].messages.at(-1).content).toEqual([{ type: "text", text: "look" }, imagePart("B"), imagePart("C")]);
+  });
+
+  it("resends at most the two most recent pictures and notes the older ones", async () => {
+    const { loop, chats } = setup([1, 2, 3, 4].map(() => () => sseOf([text("Ok.")])));
+    for (const [name, words] of [
+      ["A", "one"],
+      ["B", "two"],
+      ["C", "three"],
+      ["D", "four"]
+    ] as const) {
+      loop.addImage(pic(name));
+      await loop.reply(words);
+    }
+    const userContents = (index: number) =>
+      chats[index].messages.filter((message: any) => message.role === "user").map((message: any) => message.content);
+    expect(userContents(2)).toEqual([
+      [{ type: "text", text: "one" }, OLD],
+      [{ type: "text", text: "two" }, imagePart("B")],
+      [{ type: "text", text: "three" }, imagePart("C")]
+    ]);
+    expect(userContents(3)).toEqual([
+      [{ type: "text", text: "one" }, OLD],
+      [{ type: "text", text: "two" }, OLD],
+      [{ type: "text", text: "three" }, imagePart("C")],
+      [{ type: "text", text: "four" }, imagePart("D")]
+    ]);
+  });
+
+  it("drops the pictures when a request that carried one fails, so later turns still work", async () => {
+    const { loop, chats, seen } = setup([() => sseOf([text("Fine.")]), refused, () => sseOf([text("Four.")])]);
+    loop.addImage(pic("A"));
+    await loop.reply("first");
+    loop.addImage(pic("B"));
+    await loop.reply("what colour?");
+    expect(seen.some((entry) => entry.startsWith("error:"))).toBe(true);
+
+    await loop.reply("what is 2+2?");
+    expect(JSON.stringify(chats[2].messages)).not.toContain("image_url");
+    expect(chats[2].messages.map((message: any) => message.content)).toEqual([
+      "Be brief.",
+      [{ type: "text", text: "first" }, OLD],
+      "Fine.",
+      "what is 2+2?"
+    ]);
+  });
+
+  it("keeps text history when a request without pictures fails", async () => {
+    const { loop, chats } = setup([
+      () => sseOf([text("Fine.")]),
+      () => new Response("nope", { status: 500 }),
+      () => sseOf([text("Ok.")])
+    ]);
+    await loop.reply("first");
+    await loop.reply("second");
+    await loop.reply("third");
+    expect(chats[2].messages.map((message: any) => message.content)).toEqual(["Be brief.", "first", "Fine.", "third"]);
+  });
+
+  it("also drops an older picture when a later request that still carried it fails", async () => {
+    const { loop, chats } = setup([
+      () => sseOf([text("Fine.")]),
+      () => new Response("nope", { status: 500 }),
+      () => sseOf([text("Ok.")])
+    ]);
+    loop.addImage(pic("A"));
+    await loop.reply("first");
+    // The picture is still in the history this request resends, and it may be why it failed.
+    await loop.reply("second");
+    await loop.reply("third");
+    expect(chats[2].messages[1].content).toEqual([{ type: "text", text: "first" }, OLD]);
+  });
+
+  it("keeps a picture for the next turn when the turn that carried it was cut off", async () => {
+    const { loop, chats, request } = setup([() => sseOf([text("Red.")])]);
+    request.mockImplementationOnce(async (_url: unknown, init?: RequestInit) => {
+      // A reply that never finishes by itself: only the barge-in ends it.
+      const body = new ReadableStream({
+        start(controller) {
+          init!.signal!.addEventListener("abort", () => controller.error(new Error("aborted")));
+        }
+      });
+      return new Response(body, { status: 200 });
+    });
+    loop.addImage(pic("A"));
+    const first = loop.reply("what colour?");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    loop.stop();
+    await first;
+
+    await loop.reply("I mean the picture I just showed");
+    expect(chats[0].messages.at(-1)).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "I mean the picture I just showed" }, imagePart("A")]
+    });
+  });
+
+  it("does not bring a picture back after its request failed", async () => {
+    const { loop, chats } = setup([refused, () => sseOf([text("Ok.")])]);
+    loop.addImage(pic("A"));
+    await loop.reply("what colour?");
+    await loop.reply("hello");
+    expect(JSON.stringify(chats[1].messages)).not.toContain("image_url");
+  });
+
+  it("removes picture data a vendor echoes in an error before it is reported", async () => {
+    const b64 = "/9j/4AAQSkZJRgABAQAAAQABAAD".repeat(4);
+    const echoed = () =>
+      new Response(`{"error":{"message":"bad image data:image/jpeg;base64,${b64} and raw ${b64} end"}}`, {
+        status: 400
+      });
+    const { loop, seen } = setup([echoed]);
+    loop.addImage(pic("A"));
+    await loop.reply("what colour?");
+    const reported = seen.find((entry) => entry.startsWith("error:"))!;
+    expect(reported).toContain("Chat model HTTP 400");
+    expect(reported).toContain("[data]");
+    expect(reported).not.toContain("/9j/4AAQ");
+    expect(reported).not.toMatch(/[A-Za-z0-9+/=_-]{40,}/);
+  });
+});

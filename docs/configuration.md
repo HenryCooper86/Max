@@ -155,6 +155,8 @@ The most used ones. `.env.example` documents all of them, including each backend
 | `VOICE_PROVIDER`                                                       | `mock`  | The default backend: `mock`, `openai`, `gemini`, `grok`, `doubao`, `pipeline`, `local`, `local-realtime`, `max-speech`. |
 | `VOICE_PROVIDER_SWITCHING`                                             | `on`    | `off` pins every session to the default. Otherwise a client may choose any backend that is set up.                      |
 | `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `DOUBAO_API_KEY`, … |         | Each backend's credentials. See [voice backends](backends.md).                                                          |
+| `PIPELINE_LLM_IMAGES`                                                  | `off`   | `on` lets users show the assistant pictures on the `pipeline` backend. Set it only for a chat model that can see them.  |
+| `LOCAL_LLM_IMAGES`                                                     | `off`   | The same for the `local` and `max-speech` backends, which share `LOCAL_LLM_*`. See [pictures](backends.md#pictures).    |
 
 ### Security and access
 
@@ -228,16 +230,25 @@ Conversations are exported as OpenTelemetry traces (OTLP over HTTP with JSON) wh
 
 ### Phone calls
 
-Set `TWILIO_AUTH_TOKEN` to turn phone calls on. See [phone calls](telephony.md).
+Set `TWILIO_AUTH_TOKEN` to turn phone calls on through Twilio, or `TELNYX_WEBHOOK_SECRET` and `TELNYX_PUBLIC_KEY` for
+Telnyx. Both carriers can be set.
+See [phone calls](telephony.md).
 
-| Variable                     | Default | What it does                                                                                 |
-| ---------------------------- | ------- | -------------------------------------------------------------------------------------------- |
-| `TWILIO_AUTH_TOKEN`          | none    | Your Twilio auth token. Turns telephony on and checks Twilio's webhook signatures.           |
-| `TWILIO_ACCOUNT_SID`         | none    | Needed to transfer calls and place outbound calls.                                           |
-| `TWILIO_PHONE_NUMBER`        | none    | The number outbound calls come from, in E.164 form.                                          |
-| `TELEPHONY_PUBLIC_URL`       | derived | The relay's public address as Twilio reaches it. Set it behind a proxy or a tunnel.          |
-| `TELEPHONY_TRANSFER_NUMBERS` | none    | Where the assistant may transfer a call: `support=+14155550100,sales=sip:sales@example.com`. |
-| `TELEPHONY_MAX_CALLS`        | `20`    | Simultaneous calls, 1 to 1000.                                                               |
+| Variable                     | Default | What it does                                                                                                        |
+| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `TWILIO_AUTH_TOKEN`          | none    | Your Twilio auth token. Turns telephony on and checks Twilio's webhook signatures.                                  |
+| `TWILIO_ACCOUNT_SID`         | none    | Needed to transfer calls and place outbound calls.                                                                  |
+| `TWILIO_PHONE_NUMBER`        | none    | The number outbound calls come from, in E.164 form.                                                                 |
+| `TELEPHONY_PUBLIC_URL`       | derived | The relay's public address as Twilio reaches it. Set it behind a proxy or a tunnel.                                 |
+| `TELEPHONY_TRANSFER_NUMBERS` | none    | Where the assistant may transfer a call: `support=+14155550100,sales=sip:sales@example.com`.                        |
+| `TELEPHONY_MAX_CALLS`        | `20`    | Simultaneous calls, 1 to 1000, on each carrier.                                                                     |
+| `TELNYX_WEBHOOK_SECRET`      | none    | The secret in the voice URL you give Telnyx. With the public key, turns Telnyx calls on.                            |
+| `TELNYX_PUBLIC_KEY`          | none    | Your Telnyx account's public key. Required: it checks Telnyx's signature on every media stream.                     |
+| `TELNYX_API_KEY`             | none    | With `TELNYX_ACCOUNT_SID`: needed to transfer calls and place outbound calls.                                       |
+| `TELNYX_ACCOUNT_SID`         | none    | Your Telnyx account id.                                                                                             |
+| `TELNYX_APPLICATION_SID`     | none    | The TeXML application outbound calls are placed through.                                                            |
+| `TELNYX_PHONE_NUMBER`        | none    | The Telnyx number outbound calls come from, in E.164 form.                                                          |
+| `TELNYX_UNSIGNED_STREAMS`    | off     | `allow` runs Telnyx without the public key. See [phone calls](telephony.md#how-the-relay-knows-it-is-telnyx) first. |
 
 ### Noise suppression
 

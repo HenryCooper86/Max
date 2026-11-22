@@ -22,7 +22,7 @@ few lines of JavaScript, and the agent can call your own code and APIs while it 
 - **Tools.** The agent looks things up and takes actions mid-sentence: functions in your relay, webhooks to any backend
   in any language (HMAC-signed), remote MCP servers, a built-in knowledge base over your own files, or functions in
   the page itself (scroll, fill a form, add to cart).
-- **Phone calls.** The same assistant answers and places calls through Twilio, transfers to a person and hangs up when
+- **Phone calls.** The same assistant answers and places calls through Twilio or Telnyx, transfers to a person and hangs up when
   it is done.
 - **Whole conversations, not only turns.** Several agents with handoff, check-ins when the user goes quiet, and after
   each conversation a summary, an outcome and the fields you asked for, sent to your webhook.
@@ -265,7 +265,7 @@ minutes per user, can cap them, and can send each session to your billing system
 | [Web SDK](sdk/README.md)                        | Widget, `VoiceAgent`, React hook, events, client tools               |
 | [Tools](docs/tools.md)                          | Code, webhook, MCP and client tools; the knowledge base; signatures  |
 | [Running a conversation](docs/conversations.md) | Agents and handoff, ending, resuming, analysis, webhooks, traces     |
-| [Phone calls](docs/telephony.md)                | Inbound and outbound calls through Twilio, transfers, keypad input   |
+| [Phone calls](docs/telephony.md)                | Inbound and outbound calls (Twilio, Telnyx), transfers, keypad input |
 | [Testing your agent](docs/testing-agents.md)    | Scripted and simulated conversations, an LLM judge, CI reports       |
 | [How Max compares](docs/comparison.md)          | What agent platforms do, where Max stands, and what is not built     |
 | [Configuration](docs/configuration.md)          | Every `assistant.config.json` key and the main environment variables |

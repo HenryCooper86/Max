@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { PacketOrder } from "../packet-order";
 import { Downsampler24to8, mulawDecode, mulawEncode, Upsampler8to16 } from "./g711";
 
 /**
@@ -113,15 +114,34 @@ const MULAW_SILENCE = 0xff;
 export class TwilioAudioBridge {
   private readonly up = new Upsampler8to16();
   private readonly down = new Downsampler24to8();
+  private readonly order = new PacketOrder();
   private inboundCarry: Buffer = Buffer.alloc(0);
   private outboundCarry: Buffer = Buffer.alloc(0);
 
-  constructor(private readonly streamSid: string) {}
+  /**
+   * `wire` is whose message format to write. Telnyx's media stream is Twilio's
+   * with two differences: its messages do not name the stream, and it does not
+   * promise to deliver audio frames in order.
+   */
+  constructor(
+    private readonly streamSid: string,
+    private readonly wire: "twilio" | "telnyx" = "twilio"
+  ) {}
 
-  /** Caller audio: one media payload → whole 640-byte PCM16 16 kHz frames. Only the caller's own track counts. */
-  inbound(payloadBase64: string, track?: string): Buffer[] {
+  /**
+   * Caller audio: one media payload → whole 640-byte PCM16 16 kHz frames. Only
+   * the caller's own track counts. With a `sequence`, frames that arrive out
+   * of order are put back in order first.
+   */
+  inbound(payloadBase64: string, track?: string, sequence?: number): Buffer[] {
     if (track !== undefined && track !== "inbound") return [];
-    const pcm = this.up.process(mulawDecode(Buffer.from(payloadBase64, "base64")));
+    const mulaw = Buffer.from(payloadBase64, "base64");
+    if (sequence === undefined) return this.frames(mulaw);
+    return this.order.push(sequence & 0xffff, mulaw).flatMap((ready) => this.frames(ready));
+  }
+
+  private frames(mulaw: Buffer): Buffer[] {
+    const pcm = this.up.process(mulawDecode(mulaw));
     let pending = this.inboundCarry.length ? Buffer.concat([this.inboundCarry, pcm]) : pcm;
     const frames: Buffer[] = [];
     while (pending.length >= INBOUND_FRAME_BYTES) {
@@ -158,16 +178,23 @@ export class TwilioAudioBridge {
   clear(): string {
     this.outboundCarry = Buffer.alloc(0);
     this.down.reset();
-    return JSON.stringify({ event: "clear", streamSid: this.streamSid });
+    return JSON.stringify(this.wire === "twilio" ? { event: "clear", streamSid: this.streamSid } : { event: "clear" });
   }
 
   /** Twilio echoes the name back when playback reaches this point. */
   mark(name: string): string {
-    return JSON.stringify({ event: "mark", streamSid: this.streamSid, mark: { name } });
+    return JSON.stringify(
+      this.wire === "twilio"
+        ? { event: "mark", streamSid: this.streamSid, mark: { name } }
+        : { event: "mark", mark: { name } }
+    );
   }
 
   private mediaMessage(mulaw: Buffer): string {
-    return JSON.stringify({ event: "media", streamSid: this.streamSid, media: { payload: mulaw.toString("base64") } });
+    const media = { payload: mulaw.toString("base64") };
+    return JSON.stringify(
+      this.wire === "twilio" ? { event: "media", streamSid: this.streamSid, media } : { event: "media", media }
+    );
   }
 }
 
@@ -254,7 +281,7 @@ export function validTwilioSignature(
   return expected.length === given.length && timingSafeEqual(expected, given);
 }
 
-function xml(value: string): string {
+export function xml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => {
     switch (char) {
       case "&":

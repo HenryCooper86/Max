@@ -5,7 +5,13 @@ import { localizeOutgoing } from "./relay-speech";
 import { normalizeEqualizer } from "./audio-eq";
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
-import { IDLE_CLOSE_CODE, PROTOCOL_VERSION, type AudioPlan, type NavPromptEvent } from "../shared/agent";
+import {
+  IDLE_CLOSE_CODE,
+  MAX_IMAGE_BASE64_CHARS,
+  PROTOCOL_VERSION,
+  type AudioPlan,
+  type NavPromptEvent
+} from "../shared/agent";
 import { SilenceFiller, normalizeDeviceAudio, planAudio } from "./audio-contract";
 import { CLIENT_EVENT_TYPES } from "../shared/generated/agent-protocol";
 import { TESTING_PLATFORMS as CANONICAL_TESTING_PLATFORMS } from "../shared/testing";
@@ -63,6 +69,30 @@ export type AgentSessionHooks = {
 };
 
 const MAX_TEXT_INPUT_CHARS = 2_000;
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const IMAGE_MAGIC = {
+  "image/jpeg": Buffer.from([0xff, 0xd8, 0xff]),
+  "image/png": Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+} as const;
+
+/** Throws unless `image` is base64 of a real JPEG or PNG matching `mimeType`. */
+function assertImage(image: unknown, mimeType: unknown): asserts mimeType is keyof typeof IMAGE_MAGIC {
+  if (mimeType !== "image/jpeg" && mimeType !== "image/png") {
+    throw new Error("Invalid image.input mimeType: use image/jpeg or image/png");
+  }
+  if (typeof image !== "string" || !image) throw new Error("Invalid image.input image");
+  if (image.length > MAX_IMAGE_BASE64_CHARS) {
+    throw new Error(`image.input image is too large (at most ${MAX_IMAGE_BASE64_CHARS} base64 characters)`);
+  }
+  if (image.length % 4 !== 0 || !BASE64.test(image)) throw new Error("Invalid image.input image: not base64");
+  const magic = IMAGE_MAGIC[mimeType];
+  // The first 12 base64 characters are the first 9 bytes, enough for both signatures.
+  const head = Buffer.from(image.slice(0, 12), "base64");
+  if (!head.subarray(0, magic.length).equals(magic)) {
+    throw new Error(`Invalid image.input image: the bytes are not a ${mimeType === "image/png" ? "PNG" : "JPEG"}`);
+  }
+}
+
 /** Client events a private (Max Cloud) session may not send. */
 const PRIVATE_SESSION_REFUSED: ReadonlySet<string> = new Set([
   "nav.request",
@@ -550,6 +580,20 @@ export function parseClientEvent(data: RawData): ClientEvent {
     return { type: "text.input", text: value.text.trim() };
   }
 
+  if (value.type === "image.input") {
+    assertImage(value.image, value.mimeType);
+    if (value.text !== undefined && typeof value.text !== "string") throw new Error("Invalid image.input text");
+    if (value.text !== undefined && value.text.length > MAX_TEXT_INPUT_CHARS)
+      throw new Error("Invalid image.input text");
+    const text = value.text?.trim();
+    return {
+      type: "image.input",
+      image: value.image as string,
+      mimeType: value.mimeType as "image/jpeg" | "image/png",
+      ...(text ? { text } : {})
+    };
+  }
+
   if (value.type === "tool.result") {
     if (typeof value.callId !== "string" || !value.callId || value.callId.length > MAX_TOOL_CALL_ID) {
       throw new Error("Invalid tool.result callId");
@@ -1004,6 +1048,14 @@ export class AgentSessionController {
         const accepted = this.provider.textInput ? await this.provider.textInput(event.text) : false;
         if (accepted === false) {
           this.send({ type: "error", message: "This voice backend does not accept typed messages." });
+        }
+      }
+      if (event.type === "image.input") {
+        const accepted = this.provider.imageInput
+          ? await this.provider.imageInput({ data: event.image, mimeType: event.mimeType }, event.text)
+          : false;
+        if (accepted === false) {
+          this.send({ type: "error", message: "This voice backend does not take pictures." });
         }
       }
       // The FIRST consumer of hazard.report (see parseClientEvent's "never

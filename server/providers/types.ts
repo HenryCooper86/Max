@@ -117,6 +117,9 @@ export type AgentProvider = {
   /** A turn the user typed. Resolves `false` when the backend cannot take
    *  typed turns. Providers without typed input omit this. */
   textInput?(text: string): Promise<boolean | void>;
+  /** A picture the user showed, with or without words. Resolves `false` when
+   *  the backend cannot take pictures. Providers without image input omit this. */
+  imageInput?(image: { data: string; mimeType: string }, text?: string): Promise<boolean | void>;
   /** A client's answer to a `tool.call`. Providers without tools omit this. */
   toolResult?(event: ToolResultEvent): Promise<void>;
 };

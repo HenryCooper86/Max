@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { VoiceAgent, VoiceAgentError } from "./client.js";
 import type { ClientTool, StartOptions, VoiceAgentOptions, VoiceAgentStatus } from "./client.js";
+import type { ImageSource } from "./image.js";
 import type { TranscriptItem } from "./protocol.js";
 
 /** What {@link useVoiceAgent} returns. */
@@ -27,6 +28,8 @@ export interface UseVoiceAgentResult {
   unmute(): void;
   /** Sends a typed turn. Returns false when there is no live session. */
   sendText(text: string): boolean;
+  /** Shows the agent a picture. See `VoiceAgent.sendImage`. Resolves false when there is no live session or the relay takes no pictures. */
+  sendImage(source: ImageSource, options?: { text?: string; maxSide?: number }): Promise<boolean>;
   /** Whether the mic is muted. */
   isMuted: boolean;
   /** Mic and agent-output loudness, 0..1. Updates up to ~30 times a second. */
@@ -152,6 +155,11 @@ export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
     setMuted(false);
   }, [agent]);
   const sendText = useCallback((text: string) => agent?.sendText(text) ?? false, [agent]);
+  const sendImage = useCallback(
+    (source: ImageSource, options?: { text?: string; maxSide?: number }) =>
+      agent?.sendImage(source, options) ?? Promise.resolve(false),
+    [agent]
+  );
 
-  return { status, transcript, start, stop, mute, unmute, sendText, isMuted, level, error, agent };
+  return { status, transcript, start, stop, mute, unmute, sendText, sendImage, isMuted, level, error, agent };
 }

@@ -334,6 +334,15 @@ export function createGeminiLiveEngine(
       riderText = "";
       sendMessage({ realtimeInput: { text } });
     },
+    sendImage(image, text) {
+      if (!ready) return;
+      // Gemini Live takes pictures as video frames, at most one a second.
+      sendMessage({ realtimeInput: { video: { data: image.data, mimeType: image.mimeType } } });
+      if (!text) return;
+      riderOpen = false;
+      riderText = "";
+      sendMessage({ realtimeInput: { text } });
+    },
     close() {
       closedByRelay = true;
       ready = false;

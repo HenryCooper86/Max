@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { MediaStreamTrack, RTCPeerConnection, RTCRtpCodecParameters, RtpHeader, RtpPacket } from "werift";
 import type { Logger } from "../server/logger";
+import { PacketOrder } from "../server/packet-order";
 import {
-  PacketOrder,
   createWebRtcGateway,
   webRtcSettingsFromEnv,
   type RtcSocket,

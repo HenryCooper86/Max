@@ -48,6 +48,9 @@ vi.mock("../sdk/src/client", async (importOriginal) => {
     sendText() {
       return true;
     }
+    sendImage() {
+      return Promise.resolve(true);
+    }
     setContext(text: string) {
       this.context = text;
     }
@@ -108,6 +111,11 @@ describe("useVoiceAgent", () => {
     await act(async () => renderer!.unmount());
     renderer = undefined;
     expect(live()).toHaveLength(0);
+  });
+
+  it("passes pictures to the client", async () => {
+    await render(base);
+    await expect(result.sendImage("data:image/png;base64,AAAA", { text: "hi" })).resolves.toBe(true);
   });
 
   it("does not recreate the client for inline objects, functions and new handlers", async () => {

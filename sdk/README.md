@@ -105,6 +105,8 @@ stopButton.onclick = () => agent.stop();
 - `stop()`: end the conversation and release the mic. The agent can be started again.
 - `mute()` / `unmute()`, `muted`
 - `sendText(text)`: send a typed turn; returns `false` if there is no live session.
+- `sendImage(source, { text?, maxSide? })`: show the agent a picture; resolves to `false` if there is no live session or
+  the relay does not take pictures. See [Pictures](#pictures).
 - `setContext(text)`: replaces the context for the **next** session (next `start()` or reconnect). It does not change a running session.
 - `interrupt()`: silence the agent immediately.
 - `resumeAudio()`: resume audio the browser blocked; call it from a click. Resolves to whether audio is running. `audioBlocked` tells you if it is needed.
@@ -153,6 +155,48 @@ The relay must have it turned on (`WEBRTC=on`, see [WebRTC transport](../docs/we
 `webrtc_unavailable` warning, so it is safe to ask for it everywhere. `agent.transport` tells you which one a session
 got. Everything else in this README applies to both.
 
+## Pictures
+
+`agent.sendImage(source, options?)` shows the agent a picture: a screenshot, a photo. The conversation's own model sees
+it.
+
+- `source`: a `Blob` or `File`, an `HTMLCanvasElement`, `HTMLImageElement` or `HTMLVideoElement` (its current frame), an
+  `ImageBitmap`, or a `data:` URL string.
+- `options.text`: words to send with it. Then it is a typed turn with the picture attached, and the agent answers
+  aloud. Without `text` the picture joins the conversation silently: the agent does not answer it, and sees it with
+  your user's next spoken or typed turn.
+- `options.maxSide`: the longer side in pixels, 1024 by default. The picture is drawn to a canvas at that size, encoded
+  as JPEG, and re-encoded at lower quality and then smaller until it fits the relay's limit of 240,000 base64
+  characters. If it cannot be made to fit, or the source cannot be read, the promise rejects with a `VoiceAgentError`
+  whose `code` is `image`.
+- It resolves to `true` when the picture was sent, and to `false` when the session is not ready or the relay does not
+  take pictures (`agent.capabilities?.imageInput` is not `true`). Check that first to decide whether to show a button.
+
+The relay allows one picture a second and 50 per connection (a reconnect starts a new count), and answers a faster one
+with an `error` event (the `relay` error code). A `sendImage` call made while another is still encoding, or less than a
+second after the last one, resolves to `false` and sends nothing. The same call works over the WebSocket and over [WebRTC](#webrtc): the picture is one JSON
+event.
+
+```ts
+// A file input
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files?.[0];
+  if (file) await agent.sendImage(file, { text: "What does this error mean?" });
+});
+```
+
+```ts
+// The camera: show the agent what the user is holding
+const video = document.querySelector("video")!;
+video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+await video.play();
+await agent.sendImage(video, { text: "What is this?" }); // this frame only; it is not a video stream
+```
+
+The picture goes to the model's vendor and the relay does not write it to conversation records, logs, traces, resume state or memory. Which backends take pictures, and the settings
+that turn it on for chat-model backends, are in [voice backends](../docs/backends.md#pictures).
+There is no button for it in the widget. Native iOS and Android clients can send the `image.input` event themselves.
+
 ## Errors and reconnecting
 
 `start()` rejects with, and the `error` event delivers, a `VoiceAgentError`. Branch on `error.code`:
@@ -166,6 +210,7 @@ got. Everything else in this README applies to both.
 | `usage_limit`  | The relay closed with 4003: this account's voice minutes are used up.                     | `4003`      |
 | `relay`        | The relay sent an `error` event. The session may continue.                                |             |
 | `audio`        | Decoding or playing the agent's audio failed.                                             |             |
+| `image`        | `sendImage` could not read the picture or make it small enough. Rejects that call only.   |             |
 
 `unauthorized` and `usage_limit` are new in 0.2.0. Before, both surfaced as `connection`, and a microphone refusal also
 surfaced as `connection`. The old codes keep their meaning for everything else. If your code treats `connection` as "the
@@ -246,7 +291,7 @@ name, description and parameters.
 import { useVoiceAgent } from "max-voice-agent/react";
 
 function Assistant() {
-  const { status, transcript, start, stop, mute, unmute, isMuted, sendText, level, error } = useVoiceAgent({
+  const { status, transcript, start, stop, mute, unmute, isMuted, sendText, sendImage, level, error } = useVoiceAgent({
     url: "https://relay.example.com",
     token: fetchToken,
     tools: [{ name: "get_cart", description: "Read the cart.", handler: () => cart }]

@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-11-22 — WebRTC transport, noise suppression, background tools and a larger knowledge base
+## 2026-11-22 — WebRTC transport, noise suppression, pictures, Telnyx, background tools and a larger knowledge base
 
 - Web clients can send audio over WebRTC instead of the WebSocket: `WEBRTC=on` on the relay, `transport: "webrtc"`
   in the SDK (`transport="webrtc"` on the widget). Audio travels over UDP as Opus, so a lost packet is concealed
@@ -25,6 +25,38 @@
   `GEMINI_START_SENSITIVITY`, `GEMINI_END_SENSITIVITY`, `GEMINI_VAD_SILENCE_MS` and `GEMINI_VAD_PREFIX_MS`. A value
   the relay cannot use is reported at startup. These were checked against the vendors' documentation, not their
   servers. See [voice backends](docs/backends.md).
+
+### Images
+
+- A user can show the assistant a picture during a conversation, with or without words: a screenshot, a photo. The
+  conversation's own model sees it; this is separate from the helmet's camera, which goes to a vision service. Without
+  words the picture joins the conversation silently and the model sees it with the user's next turn.
+- Protocol: a new client event `image.input` (`image` base64, `mimeType` `image/jpeg` or `image/png`, optional `text`)
+  and a new capability `imageInput`. The relay checks that the bytes are a real JPEG or PNG, allows 240,000 base64
+  characters, one picture a second and 50 a connection (a reconnect starts a new count), and answers an invalid or refused picture with an `error` event.
+  See [the protocol](docs/protocol.md#imageinput).
+- Web SDK: `agent.sendImage(source, { text, maxSide })` takes a file, a canvas, an image, a `<video>` frame, an
+  `ImageBitmap` or a data URL, scales it to 1024 pixels on the longer side and encodes JPEG small enough for the limit.
+  It works over the WebSocket and WebRTC. `useVoiceAgent` returns it too. There is no widget button.
+- Backends: OpenAI Realtime (unless the model is a preview model) and Gemini Live. The pipeline, local and Max Speech
+  backends need a chat model that can see pictures and a new setting, `PIPELINE_LLM_IMAGES=on` or `LOCAL_LLM_IMAGES=on`
+  (off by default, because the relay cannot tell). Grok and local realtime servers take none. See
+  [voice backends](docs/backends.md#pictures).
+- Pictures go to the model's vendor. The relay does not write picture bytes to conversation records, logs, traces,
+  resume state or memory; they only note that a picture was shown.
+- Run for real against Ollama on the local backend with `gemma3:4b`. The OpenAI and Gemini paths were built to the
+  vendors' documentation and not run against their servers. Not tested in a browser: the SDK's canvas encoding.
+
+### Phone calls
+
+- Telnyx is a second carrier beside Twilio: set `TELNYX_WEBHOOK_SECRET` and `TELNYX_PUBLIC_KEY`, and point a TeXML
+  application at `/telephony/telnyx/voice?key=<secret>`. Inbound calls, transfers, keypad input and outbound calls work as on
+  Twilio. Answering-machine detection does not yet. Both carriers can be set up at once, and `POST /v1/calls` takes
+  a `carrier` field. See [phone calls](docs/telephony.md#telnyx).
+- Telnyx's media streams are checked against your account's public key, and audio frames that arrive out of order
+  are put back in order.
+- Written to Telnyx's documentation and tested against a stand-in that speaks the documented messages. Not yet run on
+  a real Telnyx call.
 
 ### Tools and knowledge
 

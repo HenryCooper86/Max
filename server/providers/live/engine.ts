@@ -69,6 +69,9 @@ export type EngineEvents = {
   onToolCall?(call: EngineToolCall): void;
 };
 
+/** A picture for the model: base64 without a `data:` prefix, and its media type. */
+export type EngineImage = { data: string; mimeType: string };
+
 export type VoiceEngine = {
   readonly responseMode: EngineResponseMode;
   /** True when the upstream ends the reply that asked for a tool and answers
@@ -96,6 +99,11 @@ export type VoiceEngine = {
   sendToolResult?(callId: string, output: string): void;
   /** A turn the user typed: answer it as if it had been spoken. */
   sendText?(text: string): void;
+  /** A picture from the user. With `text` it is a typed turn with the picture
+   *  attached and the model answers it; without, the picture joins the
+   *  conversation and the model sees it with the next turn. Engines whose
+   *  upstream or model cannot see pictures omit this. */
+  sendImage?(image: EngineImage, text?: string): void;
   /** Replace the tools the model may call (the conversation moved to another
    *  agent). Engines whose upstream fixes the tools at connect omit this; the
    *  session then offers every tool up front and refuses the ones out of turn. */

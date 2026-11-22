@@ -4,8 +4,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ToolContext, ToolDefinition } from "../server/tools";
 import { loadMcpTools, mcpServerFrom, type McpServerConfig } from "../server/tools/mcp";
-import { childEnvironment, closeStdioConnections } from "../server/tools/mcp-stdio";
-import { installServerTools, serverToolProblems, serverTools, setServerToolsForTests } from "../server/tools/registry";
+import { childEnvironment, closeStdioConnections, stdioConnection } from "../server/tools/mcp-stdio";
+import {
+  buildServerTools,
+  installServerTools,
+  serverToolProblems,
+  serverTools,
+  setServerToolsForTests
+} from "../server/tools/registry";
 
 const FIXTURE = path.resolve("tests/fixtures/mcp-stdio-server.mjs");
 const context: ToolContext = { sessionId: "s1", callId: "c1", signal: new AbortController().signal };
@@ -20,6 +26,15 @@ function entry(extra: Record<string, unknown> = {}, flags: string[] = []): McpSe
   if (!server) throw new Error(problem);
   return server;
 }
+
+const running = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const opened: Array<() => void> = [];
 async function load(server: McpServerConfig, options: Parameters<typeof loadMcpTools>[1] = {}) {
@@ -162,9 +177,10 @@ describe("an MCP server named by a command", () => {
   });
 
   it("gives up on a call that takes too long, and tells the server so", async () => {
-    const { tool } = await load(entry({ timeoutMs: 300 }));
-    await expect(tool("slow").handler({ ms: 5000 }, context)).rejects.toThrow(
-      "the local MCP server did not answer within 0.3 s"
+    // The same time is what the program gets to start and introduce itself, so it is not a short one.
+    const { tool } = await load(entry({ timeoutMs: 2000 }));
+    await expect(tool("slow").handler({ ms: 30_000 }, context)).rejects.toThrow(
+      "the local MCP server did not answer within 2 s"
     );
     // The server heard that the request was given up, and is still there for the next one.
     const cancelled = JSON.parse((await tool("cancelled").handler({}, context)) as string) as number[];
@@ -191,6 +207,35 @@ describe("an MCP server named by a command", () => {
     // Later: started again, and introduced to again before the call.
     expect(await tool("echo").handler({ text: "b" }, context)).toBe("echo: b");
     expect(fs.readFileSync(starts, "utf8").trim().split("\n")).toHaveLength(2);
+  });
+
+  it("reads an answer the program wrote just before it went", async () => {
+    const { tool } = await load(entry());
+    expect(await tool("last_words").handler({}, context)).toBe("w".repeat(8000));
+  });
+
+  it("keeps no program running for a server none of whose tools can be used", async () => {
+    const starts = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mcp-stdio-")), "starts");
+    const { tools } = await load(entry({ allowedTools: ["no_such_tool"], env: { MCP_FIXTURE_STARTS: starts } }));
+    expect(tools).toEqual([]);
+    const pid = Number(fs.readFileSync(starts, "utf8").trim());
+    await expect.poll(() => running(pid), { timeout: 5000 }).toBe(false);
+  });
+
+  it("leaves nothing running when it is stopped while the program is starting", async () => {
+    const starts = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mcp-stdio-")), "starts");
+    const connection = stdioConnection("local MCP server", () => ({
+      command: process.execPath,
+      args: [FIXTURE],
+      env: { MCP_FIXTURE_STARTS: starts }
+    }));
+    const started = connection.start();
+    connection.close();
+    await expect(started).rejects.toThrow("the local MCP server was stopped");
+    // It may have got as far as writing its pid down, or not: either way it is not there afterwards.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const pid = fs.existsSync(starts) ? Number(fs.readFileSync(starts, "utf8").trim()) : undefined;
+    if (pid !== undefined) await expect.poll(() => running(pid), { timeout: 5000 }).toBe(false);
   });
 
   it("stops a program that sends a line too long to be a message", async () => {
@@ -251,7 +296,7 @@ describe("the relay's tools, with an MCP server it runs itself", () => {
     expect(serverTools().map((tool) => tool.name)).toEqual(["echo"]);
     const [first] = pids(starts);
     expect(alive(first!)).toBe(true);
-    // The Studio saved a config: the tools are loaded again, and the first program must not be left behind.
+    // The tools are installed again: the first program must not be left behind.
     await installServerTools(source);
     const [, second] = pids(starts);
     expect(second).toBeDefined();
@@ -262,6 +307,25 @@ describe("the relay's tools, with an MCP server it runs itself", () => {
     await installServerTools({});
     await expect.poll(() => alive(second!)).toBe(false);
     expect(serverTools()).toEqual([]);
+  });
+
+  it("does not start a program over and over whose tools cannot be used", async () => {
+    const built = await buildServerTools({
+      mcpServers: [
+        {
+          name: "local",
+          command: process.execPath,
+          args: [FIXTURE],
+          allowedTools: ["no_such_tool"],
+          backgroundTools: ["no_such_tool"]
+        }
+      ]
+    });
+    opened.push(built.close);
+    expect(built.tools).toEqual([]);
+    expect(built.problems.join("; ")).toContain("backgroundTools names no_such_tool, which the server does not have");
+    // It answered: trying again would start the program again, to the same end.
+    expect(built.unreachable).toEqual([]);
   });
 
   it("leaves no program running for a server that could not be used", async () => {

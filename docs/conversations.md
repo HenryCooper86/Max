@@ -1051,6 +1051,10 @@ confirmation.
 | `POST /auth/admin/studio/history/:id/restore` | The Studio's state after the restore, and `restartFor`                                         |
 | `DELETE /auth/admin/studio/history/:id`       | Removes that version, and answers with the list that is left                                   |
 
+**What a restore does not change.** `toolsModule` and `mcpServers` stay as the config file has them now. They can
+name programs that run on the relay's machine, and only whoever writes the config file decides those: an admin
+going back to an old config must not bring back a program that was taken out since.
+
 **What a restore does.** It writes the kept config over the config file (the one `ASSISTANT_CONFIG` names, else the
 Studio's), makes it the live assistant, and adds it to the history as a new entry with `restoredFrom`: going back is
 itself a step you can undo. New conversations use it at once; one in progress keeps the config it started with. The

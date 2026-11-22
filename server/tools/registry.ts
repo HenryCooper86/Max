@@ -265,7 +265,7 @@ export async function buildServerTools(
         closers.push(result.close);
         result.tools.forEach(add);
         found.push(...result.problems);
-        if (result.tools.length === 0 && result.problems.length > 0) unreachable.push(servers[index]!);
+        if (result.unavailable) unreachable.push(servers[index]!);
       });
     }
   }
@@ -297,7 +297,7 @@ function retryUnreachable(servers: McpServerConfig[], mine: number, attempt: num
         const added: ToolDefinition[] = [];
         loaded.forEach((result, index) => {
           const server = servers[index]!;
-          if (result.tools.length === 0 && result.problems.length > 0) {
+          if (result.unavailable) {
             still.push(server);
             return;
           }

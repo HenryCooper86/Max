@@ -341,6 +341,18 @@ export function restoreStudioConfig(
     /* there was no file */
   }
   const config = { ...version.config };
+  // What names a program to run on the relay's machine stays as it is now: only whoever
+  // writes the config file changes that, and a restore must not bring back one they took out.
+  // "Now" is the config file when there is one; before the Studio has a file of its own, what the relay runs.
+  const stored = previous === undefined ? undefined : readStored();
+  const running = assistant();
+  const programs: Record<string, unknown> = stored
+    ? { toolsModule: stored.toolsModule, mcpServers: stored.mcpServers }
+    : { toolsModule: running.tools.modulePath, mcpServers: running.deployerConfig.mcpServers };
+  for (const [key, value] of Object.entries(programs)) {
+    if (value === undefined || value === null) delete config[key];
+    else config[key] = value;
+  }
   if (config.logo !== undefined && !logoReadable(config.logo)) {
     const current = readStored().logo;
     if (logoReadable(current)) config.logo = current;

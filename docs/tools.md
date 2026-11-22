@@ -388,25 +388,32 @@ belong to a `url`. The limits on tools, what the assistant is given back and the
 available are the same.
 
 - **Only the config file names a command.** Nothing that arrives over the network can add or change one: Admin →
-  Studio and Admin → Flow carry `mcpServers` over as they are, and a client cannot send any. Whoever can write the
-  config file can run a program as the relay's user, which was already so through `toolsModule`.
-- **The program does not get the relay's environment.** The relay's environment holds its model keys. The program
+  Studio and Admin → Flow carry `mcpServers` over as they are, a client cannot send any, and going back to an
+  earlier config in the [config history](conversations.md#versions-and-ab-tests) leaves `mcpServers` and
+  `toolsModule` as the config file has them now. Whoever can write the config file can run a program as the
+  relay's user, which was already so through `toolsModule`.
+- **The program does not get the relay's environment variables.** They hold the relay's model keys. The program
   gets `PATH`, `HOME`, the user's name, the locale, the time zone and the temporary directory (on Windows, the
   equivalents), and what you list under `env`. A `${NAME}` the relay does not have keeps the program from being
-  started at all, so it never runs with a blank credential.
-- **It is a program with the relay's rights.** It can read and write what the relay's user can. Give it only the
-  directories and keys it needs, list `allowedTools`, and consider [rules for what tools
-  return](conversations.md#guardrails) when it reads what others wrote.
+  started at all, so it never runs with a blank credential. Write a secret as `${NAME}`, never as itself: admins
+  can read the config, `env` and `args` included, in the Studio.
+- **It is a program with the relay's rights.** That its environment is small does not confine it: it starts in the
+  relay's directory (or `cwd`) and can read and write what the relay's user can, the relay's `.env` file among it.
+  Run only programs you trust, give them only the directories and keys they need, list `allowedTools`, and
+  consider [rules for what tools return](conversations.md#guardrails) when a server reads what others wrote.
+- **A relative `command` or `cwd`** is read from the directory the relay runs in, not from the config file's.
+- **On Windows** a program that is a `.cmd` or `.bat` file, which `npx` is, cannot be started this way: name
+  `node` and the path of the server's script. This transport was run on macOS and Linux only.
 - **If the program stops**, the call that was under way fails (what it had done by then is not known, so it is not
   sent again) and the next call starts the program again, at most once every three seconds. A program that cannot be
-  started at all is retried like a server that is down.
+  started at all is retried like a server that is down. One that starts and has no tool the assistant can use is
+  stopped and not started again. The relay stops the program and whatever it started (its process group).
 - **What the program writes to its standard error** is its log and appears in the relay's log as `mcp files: …`.
-  So does a line on its standard output that is not a message.
+  So does a line on its standard output that is not a message. At most 40 lines in ten seconds are taken.
 - A message is one line of at most 1 MiB; a program that sends a longer one is stopped. Requests the program makes
   of the relay are refused, except `ping`. A call that times out or is cancelled is reported to the program
   (`notifications/cancelled`).
-- When the Studio saves a config the tools are loaded again: the relay starts the program anew and then stops the
-  old one, so for a moment two are running.
+- The programs are started when the relay starts. A change to `mcpServers` takes a restart.
 - Tested with a server of our own that speaks the protocol, through a conversation with a local model: listing
   tools, calls, a program that was killed and started again, and the relay stopping with its program. Not run
   against the published servers; `npx` in the example downloads and runs a package, so read what you install.

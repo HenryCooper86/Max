@@ -293,6 +293,33 @@ describe("the Studio's history", () => {
     expect(restoreStudioConfig("1800000000000-00000000", "omar")).toBeUndefined();
   });
 
+  it("does not bring back a program the config file no longer names", () => {
+    // Whoever deploys the relay wrote an MCP server run as a program, and a tools module, into the file.
+    fs.writeFileSync(
+      studioConfigPath(),
+      JSON.stringify({
+        name: "Iris",
+        toolsModule: "/srv/old-tools.ts",
+        mcpServers: [{ name: "files", command: "old-server" }]
+      })
+    );
+    saveStudioConfig({ name: "Iris", greeting: "Hello." }, "nora");
+    const withPrograms = studioHistory().versions[0]!;
+    expect(studioVersion(withPrograms.id)!.config.mcpServers).toEqual([{ name: "files", command: "old-server" }]);
+    // Then took both out again, and named another server.
+    fs.writeFileSync(
+      studioConfigPath(),
+      JSON.stringify({ name: "Nova", mcpServers: [{ name: "crm", url: "https://mcp.example.com/mcp" }] })
+    );
+    // An admin goes back to the earlier config: its words come back, its programs do not.
+    restoreStudioConfig(withPrograms.id, "omar");
+    const file = JSON.parse(fs.readFileSync(studioConfigPath(), "utf8")) as Record<string, unknown>;
+    expect(file.name).toBe("Iris");
+    expect(file.greeting).toBe("Hello.");
+    expect(file.toolsModule).toBeUndefined();
+    expect(file.mcpServers).toEqual([{ name: "crm", url: "https://mcp.example.com/mcp" }]);
+  });
+
   it("has a way back to the relay's built-in assistant", () => {
     saveStudioConfig({ name: "Iris", device: "sunglasses" }, "nora");
     const start = studioHistory().versions.at(-1)!;
@@ -456,6 +483,8 @@ describe("the Studio's history", () => {
         logo: path.join(elsewhere, "brand/logo.svg")
       });
       // Going back to it writes the Studio's file, from which those paths still lead to the same files.
+      // The relay that started from that file is running it, tools module and all.
+      setAssistantProfileForTests(assistantProfileFrom(raw, elsewhere));
       restoreStudioConfig(version!.id, "nora");
       expect(assistant().tools.modulePath).toBe(path.join(elsewhere, "tools.mjs"));
       expect(studioHistory().versions.map((kept) => kept.current)).toEqual([true]);

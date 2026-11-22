@@ -83,6 +83,10 @@
   same user gets the same variant every time, the record names it as `session.variant`, and `GET /v1/variants` counts
   conversations, length, end reasons, analysis success and sentiment for each. Its `comparison` says whether each
   variant's success rate differs from the first variant's by more than chance (Fisher's exact test). See [versions and A/B tests](docs/conversations.md#versions-and-ab-tests).
+- MCP servers that are programs, after review: a server none of whose tools can be used is stopped and not started
+  again every few minutes; a program is not left running when it is stopped while starting; an answer written just
+  before a program exits is read; the program is stopped with whatever it started; its log lines are limited.
+  Going back to an earlier config no longer changes `toolsModule` or `mcpServers`.
 - Rules for what tools return, after review: the judge is no longer shown a tool's description beside its result,
   nor told to let a result pass when in doubt; a verdict must be a whole number; a misspelled key such as
   `resultRule` stops every tool like any other mistake in the rules for tools; invisible Unicode "tag" characters

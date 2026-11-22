@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 /**
  * An MCP server run as a process of the relay's own: the "stdio" transport.
@@ -43,6 +44,13 @@ const MAX_LINE_BYTES = 1024 * 1024;
 const MIN_RESTART_INTERVAL_MS = 3_000;
 /** How long a process gets to leave after its stdin is closed, before it is killed. */
 const EXIT_GRACE_MS = 2_000;
+/** How long what a process wrote last may take to be read once it has exited. */
+const LAST_WORDS_MS = 1_000;
+/** A process that talks without end does not fill the relay's log: this many lines in ten seconds, then one that says so. */
+const LOG_LINES_PER_WINDOW = 40;
+const LOG_WINDOW_MS = 10_000;
+/** A process gets a group of its own where there are such, so that what it started ends with it. */
+const OWN_GROUP = process.platform !== "win32";
 
 export type StdioCommand = {
   command: string;
@@ -110,6 +118,19 @@ export function stdioConnection(
   } = {}
 ): StdioConnection {
   const now = options.now ?? Date.now;
+  let logWindow = -Infinity;
+  let logged = 0;
+  const onLog = (line: string): void => {
+    if (!options.onLog) return;
+    if (Date.now() - logWindow > LOG_WINDOW_MS) {
+      logWindow = Date.now();
+      logged = 0;
+    }
+    logged += 1;
+    if (logged <= LOG_LINES_PER_WINDOW) options.onLog(line);
+    else if (logged === LOG_LINES_PER_WINDOW + 1)
+      options.onLog("more lines than the relay's log takes: the rest are left out for now");
+  };
   let child: ChildProcessWithoutNullStreams | undefined;
   let starting: Promise<void> | undefined;
   let generation = 0;
@@ -136,7 +157,7 @@ export function stdioConnection(
       message = parsed as RpcMessage;
     } catch {
       // Not a message: a server that prints to stdout by mistake. Its log, like stderr.
-      options.onLog?.(line.slice(0, 500));
+      onLog(line.slice(0, 500));
       return;
     }
     if (typeof message.method === "string") {
@@ -160,9 +181,18 @@ export function stdioConnection(
   function stop(process: ChildProcessWithoutNullStreams): void {
     // Closing stdin is how a stdio server is asked to leave; one that does not is killed.
     process.stdin.end();
-    const timer = setTimeout(() => process.kill("SIGKILL"), EXIT_GRACE_MS);
+    const signal = (name: NodeJS.Signals): void => {
+      try {
+        // The whole group: a launcher such as npx is not the server, which is a process it started.
+        if (OWN_GROUP && process.pid !== undefined) globalThis.process.kill(-process.pid, name);
+        else process.kill(name);
+      } catch {
+        /* it has gone already */
+      }
+    };
+    const timer = setTimeout(() => signal("SIGKILL"), EXIT_GRACE_MS);
     process.once("exit", () => clearTimeout(timer));
-    process.kill();
+    signal("SIGTERM");
   }
 
   function start(): Promise<void> {
@@ -188,6 +218,7 @@ export function stdioConnection(
           env: childEnvironment(options.env ?? globalThis.process.env, spec.env),
           stdio: ["pipe", "pipe", "pipe"],
           shell: false,
+          detached: OWN_GROUP,
           windowsHide: true
         });
       } catch {
@@ -198,27 +229,45 @@ export function stdioConnection(
       let buffer: Buffer = Buffer.alloc(0);
       process.once("spawn", () => {
         settled = true;
+        // Stopped while it was starting: nothing is left running that nobody holds.
+        if (closed) {
+          stop(process);
+          reject(new StdioError(`the ${label} was stopped`, true));
+          return;
+        }
         child = process;
         generation += 1;
         resolve();
       });
-      process.once("error", () => {
+      // More than once: a signal that cannot be sent is reported here too, and an event nobody hears ends the relay.
+      process.on("error", () => {
         // Before `spawn`: the command is not there or may not be run. After: the process is failing.
         if (!settled) {
           settled = true;
           reject(new StdioError(`the ${label} could not be started`, true));
         }
       });
+      // What was waiting fails once all the process wrote has been read: an answer written
+      // just before it exited still counts. Not for ever: something it started may hold the pipe open.
+      let ended = false;
+      const end = (): void => {
+        if (ended) return;
+        ended = true;
+        // Only its own requests: a process started since has its own.
+        if (child === undefined || child === process)
+          failAll(new StdioError(`the ${label} stopped before it answered`, true));
+      };
+      process.once("close", end);
       process.once("exit", (code, signal) => {
         if (child === process) child = undefined;
-        options.onLog?.(`the process ended (${signal ?? `code ${code ?? "unknown"}`})`);
+        onLog(`the process ended (${signal ?? `code ${code ?? "unknown"}`})`);
         if (!settled) {
           settled = true;
           reject(new StdioError(`the ${label} could not be started`, true));
         }
-        failAll(new StdioError(`the ${label} stopped before it answered`, true));
+        setTimeout(end, LAST_WORDS_MS).unref();
       });
-      process.stdin.on("error", () => undefined);
+      for (const stream of [process.stdin, process.stdout, process.stderr]) stream.on("error", () => undefined);
       process.stdout.on("data", (chunk: Buffer) => {
         buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
         for (;;) {
@@ -230,20 +279,21 @@ export function stdioConnection(
         }
         if (buffer.length > MAX_LINE_BYTES) {
           buffer = Buffer.alloc(0);
-          options.onLog?.("a message longer than 1 MB: the process is stopped");
+          onLog("a message longer than 1 MB: the process is stopped");
           failAll(new StdioError(`the ${label} sent a message that is too long`, true));
           stop(process);
         }
       });
       let errors = "";
+      const decoder = new StringDecoder("utf8");
       process.stderr.on("data", (chunk: Buffer) => {
-        errors += chunk.toString("utf8");
+        errors += decoder.write(chunk);
         for (;;) {
           const end = errors.indexOf("\n");
           if (end < 0) break;
           const line = errors.slice(0, end).trim();
           errors = errors.slice(end + 1);
-          if (line) options.onLog?.(line.slice(0, 500));
+          if (line) onLog(line.slice(0, 500));
         }
         if (errors.length > 4000) errors = errors.slice(-500);
       });
@@ -259,6 +309,8 @@ export function stdioConnection(
     async request(message, timeoutMs, signal) {
       if (signal?.aborted) throw new StdioError(`call to the ${label} was cancelled`);
       await start();
+      // Cancelled while the process was starting: nobody is listening for that any more.
+      if (signal?.aborted) throw new StdioError(`call to the ${label} was cancelled`);
       return new Promise<RpcMessage>((resolve, reject) => {
         const done = () => {
           clearTimeout(timer);

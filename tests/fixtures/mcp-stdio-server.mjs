@@ -31,6 +31,7 @@ const TOOLS = [
   { name: "big", description: "Answers with far too much.", inputSchema: { type: "object", properties: {} } },
   { name: "ask", description: "Asks the client something first.", inputSchema: { type: "object", properties: {} } },
   { name: "cancelled", description: "Which requests were cancelled.", inputSchema: { type: "object", properties: {} } },
+  { name: "last_words", description: "Answers and is gone.", inputSchema: { type: "object", properties: {} } },
   { name: "where", description: "The directory it runs in.", inputSchema: { type: "object", properties: {} } }
 ];
 
@@ -84,6 +85,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   if (name === "where") return text(message.id, process.cwd());
   if (name === "slow") return void setTimeout(() => text(message.id, "late"), Number(args.ms ?? 1000));
   if (name === "crash") return process.exit(7);
+  if (name === "last_words") {
+    // An answer, and the process gone before anyone can have read it. Short enough to be
+    // written in one go: a longer one this process would lose itself by leaving.
+    text(message.id, "w".repeat(8000));
+    return process.exit(0);
+  }
   if (name === "big") return void process.stdout.write("x".repeat(1024 * 1024 + 4096));
   if (name === "cancelled") return text(message.id, JSON.stringify(cancelled));
   if (name === "ask") {

@@ -559,7 +559,7 @@ export async function loadMcpTools(
     /** The clock that spaces out the starts of a process. */
     now?: () => number;
   } = {}
-): Promise<{ tools: ToolDefinition[]; problems: string[]; close(): void }> {
+): Promise<{ tools: ToolDefinition[]; problems: string[]; close(): void; unavailable?: true }> {
   const label = `${server.name} MCP server`;
   const problems: string[] = [];
   const client = "command" in server ? stdioClient(server, label, options) : httpClient(server, label, options);
@@ -641,8 +641,15 @@ export async function loadMcpTools(
     return {
       tools: [],
       problems: [`${label} is not available: ${error instanceof Error ? error.message : String(error)}`],
-      close: () => undefined
+      close: () => undefined,
+      // Worth another try later. A server that answered with tools none of which can be used is not.
+      unavailable: true
     };
+  }
+  // A server with no tool the assistant can use serves nothing: its process is not kept.
+  if (tools.length === 0) {
+    client.close();
+    return { tools, problems, close: () => undefined };
   }
   return { tools, problems, close: client.close };
 }

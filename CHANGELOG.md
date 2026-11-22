@@ -67,6 +67,15 @@
 - Written to Telnyx's documentation and tested against a stand-in that speaks the documented messages. Not yet run on
   a real Telnyx call.
 
+### Versions and A/B tests
+
+- `version` in the assistant config is a label that every conversation record carries as `session.version`.
+- `variants` runs two to eight versions of the assistant side by side: each replaces a few config keys (instructions,
+  greeting, persona, conversation settings, guardrails, agents) and takes a share of conversations by `weight`. The
+  same user gets the same variant every time, the record names it as `session.variant`, and `GET /v1/variants` counts
+  conversations, length, end reasons, analysis success and sentiment for each. The relay does not test whether a
+  difference is significant. See [versions and A/B tests](docs/conversations.md#versions-and-ab-tests).
+
 ### Guardrails
 
 - `guardrails` in the assistant config: `blockedTerms` the assistant never says, `rules` for the assistant and

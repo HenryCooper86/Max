@@ -24,6 +24,9 @@ export type ConversationEndedPayload = {
     endedAt: number;
     seconds: number;
     endReason?: string;
+    /** The config's `version`, and the variant this conversation was given, when the config has them. */
+    version?: string;
+    variant?: string;
     phone?: { direction: "inbound" | "outbound"; from?: string; to?: string; callSid?: string };
   };
   transcript: ConversationTurn[];

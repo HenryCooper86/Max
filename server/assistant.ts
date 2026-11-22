@@ -8,6 +8,7 @@ import { configureWakePhrase, DEFAULT_WAKE_NAMES, type WakeNames } from "../shar
 import type { ServerToolSource } from "./tools/registry";
 import { analysisConfigFrom, type AnalysisConfig } from "./conversation-analysis";
 import { guardrailsConfigFrom, type GuardrailsConfig } from "./guardrails";
+import { variantSpecsFrom } from "./variants";
 import { redactionKindsFrom, type RedactionKind } from "./redact";
 import { knowledgeConfigFrom } from "./knowledge";
 
@@ -21,6 +22,8 @@ export const DEPLOYER_KEYS = [
   "analysis",
   "privacy",
   "guardrails",
+  "variants",
+  "version",
   "knowledge",
   "mcpServers"
 ] as const;
@@ -104,6 +107,12 @@ export type AssistantProfile = {
   redact: RedactionKind[];
   /** What the assistant must not say and users must not do (server/guardrails.ts). */
   guardrails?: GuardrailsConfig;
+  /** A label of the owner's for this state of the config, named in every conversation's record. */
+  version?: string;
+  /** The assistant as each variant of an A/B test has it (server/variants.ts). Empty: no test. */
+  variants: AssistantVariant[];
+  /** On a variant's own profile: which one it is. */
+  variant?: string;
   /** What was wrong with the conversation keys of the config file, for /health and startup. */
   configProblems: string[];
   /** The config keys only whoever deploys the relay sets (see {@link DEPLOYER_KEYS}), as written, so
@@ -220,6 +229,7 @@ export const DEFAULT_ASSISTANT_PROFILE: AssistantProfile = {
   conversation: DEFAULT_CONVERSATION_SETTINGS,
   agents: [],
   redact: [],
+  variants: [],
   configProblems: [],
   deployerConfig: {},
   isDefault: true
@@ -306,9 +316,34 @@ function voiceIdFrom(value: unknown): string | undefined {
   return typeof value === "string" && value.length <= 64 && /^[A-Za-z0-9_-]+$/.test(value) ? value : undefined;
 }
 
+type AssistantVariant = { id: string; weight: number; profile: AssistantProfile };
+
 /** Builds a profile from parsed config JSON. Exported for tests. */
 export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): AssistantProfile {
   if (!isRecord(raw)) throw new Error("assistant config must be a JSON object");
+  const base = baseProfileFrom(raw, baseDir);
+  const specs = variantSpecsFrom(raw.variants);
+  if (specs.problem) base.configProblems.push(specs.problem);
+  for (const spec of specs.variants) {
+    // The whole config with the variant's keys in place of its own.
+    const profile = baseProfileFrom({ ...raw, ...spec.overrides }, baseDir);
+    profile.variant = spec.id;
+    // Whether users are remembered is decided before a conversation has its variant.
+    if (profile.conversation.rememberUsers !== base.conversation.rememberUsers) {
+      profile.conversation = { ...profile.conversation, rememberUsers: base.conversation.rememberUsers };
+      base.configProblems.push(
+        `variants: ${spec.id}: conversation.rememberUsers is the same for every variant; the config's own value is used`
+      );
+    }
+    for (const problem of profile.configProblems) {
+      if (!base.configProblems.includes(problem)) base.configProblems.push(`variants: ${spec.id}: ${problem}`);
+    }
+    base.variants.push({ id: spec.id, weight: spec.weight, profile });
+  }
+  return base;
+}
+
+function baseProfileFrom(raw: Record<string, unknown>, baseDir: string): AssistantProfile {
   const brand = brandLogoFrom(raw.logo, baseDir);
   logoProblem = brand.problem;
   const logoBackground = text(raw.logoBackground, 7);
@@ -390,6 +425,8 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     ...(analysis.config ? { analysis: analysis.config } : {}),
     redact: redact.kinds,
     ...(guardrails.config ? { guardrails: guardrails.config } : {}),
+    ...(text(raw.version, 64) ? { version: text(raw.version, 64) } : {}),
+    variants: [],
     deployerConfig,
     configProblems: [
       ...conversation.problems,

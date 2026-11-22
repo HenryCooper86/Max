@@ -72,12 +72,14 @@ to Max Cloud projects. Each is explained in [running a conversation](conversatio
 | `analysis`       | `true` or object         | Summary, sentiment, success criteria and extracted `fields` for each finished conversation. Runs only when `CONVERSATION_WEBHOOK_URL` or `CONVERSATION_LOG_FILE` is set. See [analysis](conversations.md#analysis).                                                                                                                                             |
 | `privacy.redact` | `true`, `"all"` or array | Removes personal data from records that leave the relay. Kinds: `email`, `card`, `ssn`, `ip`, `phone`. See [redacting](conversations.md#redacting-personal-data).                                                                                                                                                                                               |
 | `guardrails`     | object                   | What the assistant must not say and users must not do, checked by the relay: `blockedTerms`, `rules`, `userRules`, `say`, `endConversation`. See [guardrails](conversations.md#guardrails).                                                                                                                                                                     |
+| `version`        | string                   | A label of your own for this state of the config, up to 64 characters. Every conversation record carries it. See [versions and A/B tests](conversations.md#versions-and-ab-tests).                                                                                                                                                                              |
+| `variants`       | list                     | Two to eight versions of the assistant to compare: each an `id`, a `weight` and the keys it replaces. See [versions and A/B tests](conversations.md#versions-and-ab-tests).                                                                                                                                                                                     |
 
 A bad entry in any of these is skipped or ignored with a line in the relay's startup log, and the rest of the file still
 applies.
 
 Admin → Studio edits only the identity, look and sound keys. When it saves, it copies `tools`, `toolsModule`,
-`conversation`, `agents`, `analysis`, `privacy`, `guardrails`, `knowledge` and `mcpServers` into its own file from the config the
+`conversation`, `agents`, `analysis`, `privacy`, `guardrails`, `variants`, `version`, `knowledge` and `mcpServers` into its own file from the config the
 relay is running (relative `knowledge` paths become absolute), so a save never drops them. The Studio's file then wins
 over `./assistant.config.json`: change these keys there afterwards, or keep your config in a file named by
 `ASSISTANT_CONFIG`, which wins over the Studio's.

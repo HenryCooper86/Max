@@ -44,6 +44,7 @@ import { installServerTools } from "./tools/registry";
 import { createConversationLifecycle } from "./conversation-lifecycle";
 import { createRecordings, recordingSettingsFromEnv } from "./recording";
 import { guardrailModelFromEnv, guardrailProblems } from "./guardrails";
+import { createVariantResults, pickVariant } from "./variants";
 import {
   telnyxCarrier,
   telnyxSettingsFromEnv,
@@ -129,7 +130,7 @@ import {
   type TestingReviewStatus,
   type TestingValidityStatus
 } from "../shared/testing";
-import { assistant, assistantLogo, projectAssistantProfile } from "./assistant";
+import { assistant, assistantLogo, projectAssistantProfile, type AssistantProfile } from "./assistant";
 import { sendBrandLogo } from "./brand-logo-route";
 import { localizeErrors } from "./error-language";
 import { clearStudioVoice, removeStudioLogo, saveStudioConfig, saveStudioLogo, studioState } from "./studio";
@@ -670,6 +671,23 @@ app.delete("/v1/users/:userId/memory", (req, res) => {
   const removed = clearUserConversationMemory(externalUserMemoryKey(req.params.userId));
   log.info("a token user's conversation memory was cleared", { removed });
   res.json({ ok: true, removed });
+});
+
+// The variants of an A/B test and how their conversations went. Owner-only.
+app.get("/v1/variants", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const { variants, version } = assistant();
+  const total = variants.reduce((sum, variant) => sum + variant.weight, 0);
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json({
+    ok: true,
+    ...(version ? { version } : {}),
+    variants: variants.map(({ id, weight }) => ({ id, weight, share: Math.round((weight / total) * 1000) / 1000 })),
+    results: variantResults.tallies(),
+    // False when nothing is counted because no conversation records are kept.
+    counting: conversations.keepsRecords(),
+    ...(variantResults.reading() ? { readingLog: true } : {})
+  });
 });
 
 // The finished recordings, newest first. Owner-only, like the two routes after it.
@@ -1546,30 +1564,62 @@ server.on("upgrade", (request, socket, head) => {
   });
 });
 
-function selectProvider(client: WebSocket, sessionLog: Logger, telemetry: ProviderTelemetry): AgentProvider {
+function selectProvider(
+  client: WebSocket,
+  sessionLog: Logger,
+  telemetry: ProviderTelemetry,
+  /** The assistant as this conversation's variant has it, in an A/B test. */
+  profile?: AssistantProfile
+): AgentProvider {
   return createSelectableProvider((requested) => {
     const id = chooseVoiceProvider(requested, {
       fallback: config.voiceProvider,
       switching: config.voiceProviderSwitching
     });
     if (id !== config.voiceProvider) sessionLog.info("session picked its own voice backend", { provider: id });
-    return createVoiceProvider(id, client, sessionLog, telemetry);
+    return createVoiceProvider(id, client, sessionLog, telemetry, profile ? { profile } : {});
   });
 }
+
+// How the conversations of each variant went (server/variants.ts), counted
+// from the conversation records: the ones in the log file, and each new one.
+const variantResults = createVariantResults();
 
 // Traces, post-conversation analysis and the conversation webhook, for the
 // relay's own assistant. (Max Cloud projects keep their history in the console.)
 const conversations = createConversationLifecycle({
   ...(assistant().analysis ? { analysis: assistant().analysis } : {}),
-  redact: assistant().redact
+  redact: assistant().redact,
+  onRecord: (record) => variantResults.add(record),
+  // An A/B test is counted from the records, so it has them made even with nowhere to send them.
+  keepRecords: assistant().variants.length > 0
 });
+if (process.env.CONVERSATION_LOG_FILE?.trim()) void variantResults.readLog(process.env.CONVERSATION_LOG_FILE.trim());
 for (const problem of [
   ...assistant().configProblems,
   ...conversations.problems(),
   ...turnSettingProblems(),
-  ...guardrailProblems(assistant().guardrails)
+  ...new Set(
+    [assistant(), ...assistant().variants.map((variant) => variant.profile)].flatMap((profile) =>
+      guardrailProblems(profile.guardrails)
+    )
+  )
 ]) {
   log.warn(problem);
+}
+if (assistant().variants.length > 0) {
+  log.info("variants on", {
+    variants: assistant().variants.map((variant) => `${variant.id}:${variant.weight}`),
+    ...(assistant().version ? { version: assistant().version } : {})
+  });
+  if (!process.env.CONVERSATION_LOG_FILE?.trim())
+    log.warn(
+      "variants are counted in memory only and start from zero at a restart: set CONVERSATION_LOG_FILE to keep the counts"
+    );
+  if (config.voiceProvider === "doubao" || config.voiceProvider === "mock")
+    log.warn(
+      `variants do not apply to the ${config.voiceProvider === "mock" ? "demo" : "Doubao"} backend: every conversation there runs the config as it is`
+    );
 }
 if (assistant().guardrails) {
   const { blockedTerms, rules, userRules, endConversation } = assistant().guardrails!;
@@ -1614,11 +1664,16 @@ const callDeps = (logName: string): TelephonyDeps => ({
     const sessionId = randomUUID();
     const sessionLog = createLogger(`call:${shortSessionId(sessionId)}`);
     const metered = usageMeter.open(sessionId, usageUserId);
+    // The same person gets the same variant on every call: by who they are, or else by their number.
+    const other = call.direction === "inbound" ? call.from : call.to;
+    const variant = pickVariant(assistant().variants, call.userId ?? other);
     const observer = conversations.active()
       ? conversations.open({
           sessionId,
           channel: "phone",
           assistant: assistant().name,
+          ...(assistant().version ? { version: assistant().version } : {}),
+          ...(variant ? { variant: variant.id } : {}),
           phone: {
             direction: call.direction,
             callSid: call.callSid,
@@ -1634,7 +1689,7 @@ const callDeps = (logName: string): TelephonyDeps => ({
     const socket = client as unknown as WebSocket;
     const session = new AgentSessionController(
       socket,
-      (target, telemetry) => selectProvider(target, sessionLog, telemetry),
+      (target, telemetry) => selectProvider(target, sessionLog, telemetry, variant?.profile),
       sessionLog,
       "phone",
       undefined,
@@ -1808,12 +1863,18 @@ wss.on("connection", (client, request) => {
   embedLimit?.unref();
   metrics.sessionOpened();
   trackClient(client);
+  // The same user gets the same variant every time; a visitor without an id, by their address.
+  const variant = cloudProject
+    ? undefined
+    : pickVariant(assistant().variants, authenticatedUser?.id ?? tokenGrant?.userId ?? address);
   const observer =
     !cloudProject && conversations.active()
       ? conversations.open({
           sessionId: usageSessionId,
           channel: "web",
           assistant: assistant().name,
+          ...(assistant().version ? { version: assistant().version } : {}),
+          ...(variant ? { variant: variant.id } : {}),
           ...((authenticatedUser?.id ?? tokenGrant?.userId)
             ? { userId: authenticatedUser?.id ?? tokenGrant?.userId }
             : {}),
@@ -1840,7 +1901,7 @@ wss.on("connection", (client, request) => {
             serverTools: () => projectServerTools(runtime.studio, runtime.webhookSecret),
             ...(runtime.studio.voice ? { voice: runtime.studio.voice } : {})
           })
-        : selectProvider(socket, sessionLog, telemetry)),
+        : selectProvider(socket, sessionLog, telemetry, variant?.profile)),
     sessionLog,
     address,
     region,

@@ -74,28 +74,32 @@ export function createVoiceProvider(
         client,
         liveBackend(id, (engineLog) => createPipelineEngine(engineLog)),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "local":
       return createLiveProvider(
         client,
         liveBackend(id, (engineLog) => createPipelineEngine(engineLog, localPipelineSettings())),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "local-realtime":
       return createLiveProvider(
         client,
         liveBackend(id, (engineLog) => createRealtimeEngine(localRealtimeDialect(), engineLog)),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "max-speech":
       return createLiveProvider(
         client,
         liveBackend(id, (engineLog) => createMaxSpeechEngine(engineLog)),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "mock":
       // A software assistant gets a demo of its own: the scripted ride makes

@@ -355,7 +355,9 @@ The URL must be HTTPS, or plain HTTP to a local or private host (the same rule a
     "startedAt": 1763452800000,
     "endedAt": 1763452890000,
     "seconds": 90,
-    "endReason": "agent"
+    "endReason": "agent",
+    "version": "2026-11-23",
+    "variant": "warm"
   },
   "transcript": [
     { "at": 1763452803000, "speaker": "agent", "text": "Hi, I'm Ava. How can I help?" },
@@ -375,6 +377,8 @@ The URL must be HTTPS, or plain HTTP to a local or private host (the same rule a
 
 - `session.userId` is absent for a session without a user. `session.channel` is `web` or `phone`; for a phone call
   there is also a `session.phone` block (see [telephony](telephony.md#usage-records-and-traces)).
+- `session.version` is the config's `version` label and `session.variant` the variant this conversation was given.
+  Each is left out when the config has none. See [versions and A/B tests](#versions-and-ab-tests).
 - `session.endReason` is `agent`, `idle` or `max_duration` when the relay ended the conversation (see above). Otherwise
   it says how the connection ended: `client` for a normal close and `disconnected` for any other, for a web session;
   and `caller` or `transfer` for a phone call.
@@ -672,3 +676,108 @@ as soon as 128 are waiting, at most 512 to a request. The queue holds 4096 spans
 request that fails with a network error, `429` or `5xx` is retried once after one second; after that the batch is
 dropped and a warning is logged. Each request times out after 10 seconds. A session records at most 2000 spans (the rest
 are counted in `voice.spans_dropped`). On shutdown the relay flushes what is queued, within a few seconds.
+
+## Versions and A/B tests
+
+Two keys of the assistant config let you compare how the assistant does when you change it.
+
+`version` is a label of your own for the state of the config, up to 64 characters: a date, a git tag, a ticket number.
+Every [conversation record](#the-conversation-webhook) carries it as `session.version`, so you can tell the
+conversations before a change from those after it. The relay does not keep old configs. The config is a file: keep its
+history in git, and put the commit or tag in `version`.
+
+`variants` runs two to eight versions of the assistant side by side. Each has an `id`, an optional `weight`, and the
+config keys it replaces:
+
+```json
+{
+  "name": "Ava",
+  "version": "2026-11-23",
+  "instructions": "You are Ava, the assistant of Acme Outdoor. Answer in one or two sentences.",
+  "greeting": "Hello, this is Ava from Acme Outdoor. How can I help?",
+  "variants": [
+    { "id": "control", "weight": 3 },
+    {
+      "id": "warm",
+      "weight": 1,
+      "greeting": "Hi! Ava here, from Acme Outdoor. What can I do for you today?",
+      "instructions": "You are Ava, the assistant of Acme Outdoor. Be warm, use the caller's name once you know it, and answer in one or two sentences."
+    }
+  ]
+}
+```
+
+- A variant may replace `instructions`, `persona`, `greeting`, `identityNotes`, `conversation`, `guardrails` and
+  `agents`. A key it sets replaces the config's whole value for that key; what it does not set, it has from the config.
+  A variant with only an `id` is the config as it is, which is what you want for a control group.
+- A variant cannot change the name, voice, look, tools, knowledge, analysis or redaction: those are the same for every
+  conversation. `conversation.rememberUsers` is also the config's own for all variants.
+- `weight` is a variant's share relative to the others (default 1, at most 1000). Above, three conversations in four
+  get `control`.
+- `id` is lower-case letters, digits, `-` and `_`, up to 32 characters.
+
+If any part of `variants` is wrong, no variant is used and the startup log says what is wrong. A mistake inside a
+variant's own keys is reported under its name and handled as it would be in the config.
+
+**Who gets which.** The same person gets the same variant every time, so nobody hears the assistant change between two
+calls. The relay decides by the user's id when it has one (a signed-in user, or the `userId` of a
+[session token](embedding.md) or an outbound call), otherwise by the other party's phone number on a call, and
+otherwise by the visitor's network address. People behind one address therefore get the same variant, and a visitor
+whose address changes may get another. Changing the list or its weights moves some people to another variant.
+
+**How each variant did.** The relay counts the finished conversations of each version and variant. `GET /v1/variants`
+is owner-only (the relay token) and answers:
+
+```json
+{
+  "ok": true,
+  "version": "2026-11-23",
+  "variants": [
+    { "id": "control", "weight": 3, "share": 0.75 },
+    { "id": "warm", "weight": 1, "share": 0.25 }
+  ],
+  "results": [
+    {
+      "version": "2026-11-23",
+      "variant": "warm",
+      "conversations": 212,
+      "averageSeconds": 96,
+      "endReasons": { "agent": 140, "client": 61, "idle": 11 },
+      "analysed": 212,
+      "succeeded": 171,
+      "failed": 38,
+      "sentiment": { "positive": 120, "neutral": 70, "negative": 22 },
+      "withGuardrailFindings": 3,
+      "firstAt": 1763452890000,
+      "lastAt": 1764057690000
+    }
+  ],
+  "counting": true
+}
+```
+
+`results` has one entry for each version and variant that has conversations, the most recent first. `succeeded`,
+`failed` and `sentiment` come from the [analysis](#analysis), so set `analysis.successCriteria` to have a success rate
+to compare; `analysed` is how many conversations have an analysis at all. A conversation in which the user said nothing
+is not a conversation and is not counted.
+
+- With `CONVERSATION_LOG_FILE` set, the counts are read from that file again at every start, so they survive a restart
+  and include the conversations from before you added `variants` (those have no `variant`). `readingLog: true` in the
+  answer means the file is still being read.
+- Without it the counts are kept in memory and start from zero at a restart. The
+  [webhook](#the-conversation-webhook) still delivers every record with its `variant`, so your own system can count.
+- The relay reports the numbers and leaves the judging to you. It does not work out whether a difference is larger
+  than chance: with a few dozen conversations per variant it usually is not. The success figure is a model's reading
+  of your criteria, so read some of the conversations behind it.
+
+**Ending a test.** Move the winning variant's keys into the config, remove `variants`, and change `version`.
+
+**Where variants do not apply.** The Doubao backend and the demo backend (`VOICE_PROVIDER=mock`) run the config as it
+is: conversations there are still given a variant and recorded with it, so do not run a test on them. Max Cloud
+projects have no variants.
+
+**What was tested.** Two variants were run on a real relay with the local backend (a local chat model, 15
+conversations): each user got the same variant on every conversation, the variant's instructions changed the answers,
+the records and `GET /v1/variants` agreed, and the counts were read back from the log file after a restart. On the
+hosted backends a variant reaches the model the same way a Max Cloud project's persona does; that was not run against
+their servers for this feature.

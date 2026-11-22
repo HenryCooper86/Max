@@ -196,6 +196,44 @@ describe("conversation delivery", () => {
     expect("guardrails" in second!).toBe(false);
   });
 
+  it("names the config's version and the conversation's variant, and reports each record as it is made", async () => {
+    const h = harness();
+    const heard: unknown[] = [];
+    const lifecycle = createConversationLifecycle(
+      base({ env: { CONVERSATION_WEBHOOK_URL: HOOK }, request: h.request, onRecord: (record) => heard.push(record) })
+    );
+    const observer = lifecycle.open({ ...info, version: "2026-11-23", variant: "warm" });
+    converse(observer);
+    observer.end("client");
+    const plain = lifecycle.open(info);
+    converse(plain);
+    plain.end("client");
+    await lifecycle.drain(1000);
+    const [first, second] = h.hooks();
+    expect(first!.session).toMatchObject({ version: "2026-11-23", variant: "warm" });
+    expect("variant" in (second!.session as Body)).toBe(false);
+    expect("version" in (second!.session as Body)).toBe(false);
+    expect(heard).toHaveLength(2);
+    expect(heard[0]).toMatchObject({ type: "conversation.ended", session: { variant: "warm" } });
+  });
+
+  it("makes records for a listener alone when asked to, and none otherwise", async () => {
+    const heard: unknown[] = [];
+    const quiet = createConversationLifecycle(base({ env: {}, onRecord: (record) => heard.push(record) }));
+    expect(quiet.keepsRecords()).toBe(false);
+    expect(quiet.active()).toBe(false);
+    const counted = createConversationLifecycle(
+      base({ env: {}, onRecord: (record) => heard.push(record), keepRecords: true })
+    );
+    expect(counted.keepsRecords()).toBe(true);
+    const observer = counted.open({ ...info, variant: "warm" });
+    converse(observer);
+    observer.end("client");
+    await counted.drain(1000);
+    expect(heard).toHaveLength(1);
+    expect(heard[0]).toMatchObject({ session: { variant: "warm", endReason: "client" } });
+  });
+
   it("omits optional session fields when not given", async () => {
     const h = harness();
     const lifecycle = createConversationLifecycle(

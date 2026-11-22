@@ -62,6 +62,9 @@ type ConversationSessionInfo = {
   /** Language the assistant answers in, for the analysis text. */
   language?: string;
   assistant?: string;
+  /** The config's `version`, and the variant the conversation was given. */
+  version?: string;
+  variant?: string;
 };
 
 type ConversationObserver = {
@@ -80,6 +83,10 @@ export type ConversationLifecycleOptions = {
   /** Test seam: replaces the trace exporter the environment asks for. */
   exporter?: SpanExporter;
   version?: string;
+  /** Hears every finished conversation's record, whether or not it could be delivered. */
+  onRecord?: (record: ConversationEndedPayload) => void;
+  /** Make records for `onRecord` even when there is no webhook and no log file to send them to. */
+  keepRecords?: boolean;
 };
 
 export type ConversationLifecycle = {
@@ -87,6 +94,8 @@ export type ConversationLifecycle = {
   problems(): string[];
   /** Whether anything at all observes sessions. */
   active(): boolean;
+  /** True when a record is made of each conversation (for the webhook, the log file or a listener). */
+  keepsRecords(): boolean;
   open(info: ConversationSessionInfo): ConversationObserver;
   /** Waits for analyses and deliveries in flight (shutdown), up to `timeoutMs`. */
   drain(timeoutMs: number): Promise<void>;
@@ -149,7 +158,7 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
       problems.push(
         "analysis is configured but there is no model to run it: set ANALYSIS_LLM_BASE_URL and ANALYSIS_LLM_MODEL, or OPENAI_API_KEY"
       );
-    } else if (!webhook && !logFile) {
+    } else if (!webhook && !logFile && !options.keepRecords) {
       problems.push(
         "analysis is configured but its results go nowhere: set CONVERSATION_WEBHOOK_URL or CONVERSATION_LOG_FILE"
       );
@@ -171,7 +180,7 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
   }
   const captureContent = tracing?.captureContent ?? false;
 
-  const records = Boolean(webhook || logFile);
+  const records = Boolean(webhook || logFile || (options.keepRecords && options.onRecord));
   const pending = new Set<Promise<void>>();
 
   async function finish(
@@ -226,6 +235,8 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
         endedAt,
         seconds: Math.max(0, Math.round((endedAt - recorder.startedAt) / 1000)),
         ...(endReason ? { endReason } : {}),
+        ...(info.version ? { version: info.version } : {}),
+        ...(info.variant ? { variant: info.variant } : {}),
         ...(info.phone ? { phone: kinds.includes("phone") ? withoutNumbers(info.phone) : info.phone } : {})
       },
       transcript,
@@ -235,6 +246,11 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
       ...(result ? { analysis: result } : {}),
       ...(analysisError ? { analysisError } : {})
     };
+    try {
+      options.onRecord?.(payload);
+    } catch {
+      /* a listener's trouble is not the conversation's */
+    }
     if (logFile) {
       try {
         await fs.promises.mkdir(path.dirname(logFile), { recursive: true });
@@ -266,6 +282,7 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
   return {
     problems: () => [...problems],
     active: () => records || Boolean(exporter),
+    keepsRecords: () => records,
     open(info) {
       const recorder = records ? conversationRecorder(now) : undefined;
       let backend = "";

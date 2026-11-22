@@ -177,13 +177,79 @@ describe("max speech engine", () => {
     expect(fake.received[0]).toEqual({
       type: "session.update",
       languages: ["zh", "en"],
-      keyterms: ["Max"],
       gender: "female"
     });
     expect(fake.headers.authorization).toBe("Bearer secret");
     engine.sendAudio(Buffer.from([1, 2, 3, 4]));
     await until(() => fake.received.some(Buffer.isBuffer), "audio");
     expect(fake.received.find(Buffer.isBuffer)).toEqual(Buffer.from([1, 2, 3, 4]));
+    engine.close();
+  });
+
+  it("sends keyterms once the server is ready, unless it says it cannot use them", async () => {
+    const accepting = await fakeServer();
+    const first = setup(accepting);
+    await first.engine.connect(config, first.events);
+    await until(() => accepting.received.length >= 2, "keyterms update");
+    expect(accepting.received[1]).toEqual({ type: "session.update", keyterms: ["Max"] });
+    first.engine.close();
+
+    const refusing = await fakeServer((message, server) => {
+      if (message.type === "session.update" && !message.keyterms)
+        server.send({ type: "ready", protocol: "max-speech.session.v1", engines: {}, keyterms: false });
+    }, "none");
+    const second = setup(refusing);
+    await second.engine.connect(config, second.events);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(refusing.received.filter((message) => message?.type === "session.update")).toHaveLength(1);
+    expect(refusing.received.some((message) => message?.keyterms)).toBe(false);
+    second.engine.close();
+  });
+
+  it("shows a server warning once and keeps going", async () => {
+    const fake = await fakeServer();
+    const { engine, events, seen } = setup(fake);
+    await engine.connect(config, events);
+    const warning = { type: "warning", code: "language_unsupported", message: "ja will not be recognised" };
+    fake.send(warning);
+    fake.send(warning);
+    fake.send({ type: "warning", code: "keyterms_unsupported", message: "keyterms are ignored" });
+    await until(() => seen.includes("error:keyterms are ignored"), "second warning");
+    expect(seen.filter((item) => item === "error:ja will not be recognised")).toHaveLength(1);
+    engine.close();
+  });
+
+  it("shows a warning that arrived before ready once the connection is up", async () => {
+    const fake = await fakeServer((message, server) => {
+      if (message.type !== "session.update" || message.keyterms) return;
+      server.send({ type: "warning", code: "language_unknown", message: "xx ignored" });
+      server.send({ type: "ready", protocol: "max-speech.session.v1", engines: {} });
+    }, "none");
+    const { engine, events, seen } = setup(fake);
+    await engine.connect(config, events);
+    await until(() => seen.includes("error:xx ignored"), "early warning");
+    engine.close();
+  });
+
+  it("says the session limit was reached when the server refuses with busy", async () => {
+    const fake = await fakeServer((_message, server) => {
+      server.send({ type: "error", code: "busy", message: "this server already has 2 live session(s)" });
+      server.socket().close(1013, "busy");
+    }, "none");
+    const { engine, events } = setup(fake);
+    await expect(engine.connect(config, events)).rejects.toThrow(
+      "Max Speech is at its limit of live sessions; try again when another has ended"
+    );
+  });
+
+  it("explains an idle close", async () => {
+    const fake = await fakeServer();
+    const { engine, events, seen } = setup(fake);
+    await engine.connect(config, events);
+    fake.send({ type: "error", code: "idle_timeout", message: "nothing received for 600 s" });
+    fake.socket().close(1000, "idle_timeout");
+    await until(() => seen.some((item) => item.startsWith("closed:")), "close");
+    expect(seen).toContain("closed:Max Speech closed the session after it sat idle");
     engine.close();
   });
 

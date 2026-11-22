@@ -4,7 +4,7 @@
 
 import { randomBytes } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
-import { checkAuthRateLimit, clientAddress } from "../auth";
+import { checkAuthRateLimit, clientAddress, withLoginBackoff } from "../auth";
 import { createLogger } from "../logger";
 import { PACKS } from "./billing";
 import { cloudEnabled, cloudPaymentProvider, cloudPaymentProviders, now } from "./context";
@@ -87,7 +87,7 @@ function bearerToken(req: Request): string {
 }
 
 function rateLimited(req: Request, res: Response, next: NextFunction): void {
-  if (!checkAuthRateLimit(clientAddress(req))) {
+  if (!checkAuthRateLimit(clientAddress(req), Date.now(), "cloud-auth")) {
     res.status(429).json({ ok: false, error: "Too many attempts. Try again in a minute." });
     return;
   }
@@ -135,7 +135,17 @@ export function registerCloudRoutes(app: express.Express): void {
   api.post(
     "/login",
     rateLimited,
-    handle(async (req, res) => send(res, await login(body(req).email, body(req).password)))
+    handle(async (req, res) => {
+      const outcome = await withLoginBackoff("cloud", body(req).email, clientAddress(req), () =>
+        login(body(req).email, body(req).password)
+      );
+      if (outcome.locked) {
+        res.setHeader("Retry-After", String(outcome.retryAfterSeconds));
+        res.status(429).json({ ok: false, error: "Too many attempts. Try again in a minute." });
+        return;
+      }
+      send(res, outcome.result);
+    })
   );
 
   api.use(requireCustomer);
@@ -192,7 +202,7 @@ export function registerCloudRoutes(app: express.Express): void {
         res.status(404).json({ ok: false, error: "Project not found." });
         return;
       }
-      if (!checkAuthRateLimit(`tool-test:${row.id}`)) {
+      if (!checkAuthRateLimit(`project:${row.id}`, Date.now(), "tool-test")) {
         res.status(429).json({ ok: false, error: "Too many test requests. Try again in a minute." });
         return;
       }

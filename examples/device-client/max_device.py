@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Deque, Dict, List, Optional
 
 MIC_RATE = 16_000  # what the relay accepts
+PROTOCOL = 1  # the wire protocol this client speaks (docs/protocol.md, "Versions")
 VOICE_RATE = 24_000  # what the relay sends
 FRAME_SAMPLES = 320  # 20 ms at 16 kHz
 FRAME_BYTES = FRAME_SAMPLES * 2
@@ -117,6 +118,7 @@ def session_start(label: str, audio: DeviceAudio) -> Dict[str, object]:
         "sampleRate": MIC_RATE,
         "channels": 1,
         "platform": "embedded",
+        "protocol": PROTOCOL,
         "deviceLabel": label,
     }
     declared = audio.declaration()

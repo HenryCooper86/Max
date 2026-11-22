@@ -46,6 +46,15 @@ describe("install snippets", () => {
     expect(escapeAttribute(`a&b"c'd<e>`)).toBe("a&amp;b&quot;c&#39;d&lt;e&gt;");
   });
 
+  it("keeps the Next.js client snippet on the entry that is safe to render on the server", () => {
+    const { client, server } = frameworkSnippets("next", ORIGIN);
+    // A "use client" component still renders on the server, so it must not import the browser-only widget.
+    expect(client).toMatch(/^"use client";/);
+    expect(client).toContain(`from "max-voice-agent/react"`);
+    expect(client).not.toContain("max-voice-agent/widget");
+    expect(server).toContain("401");
+  });
+
   it("points every framework at the relay and keeps the key in the environment", () => {
     for (const name of FRAMEWORKS) {
       const snippets = frameworkSnippets(name, ORIGIN);

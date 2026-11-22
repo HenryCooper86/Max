@@ -22,20 +22,12 @@ services:
       # - ./assistant.config.json:/app/assistant.config.json:ro
     restart: unless-stopped
 
-  # Optional: a fully local voice stack (Whisper, Ollama, Kokoro) for
-  # VOICE_PROVIDER=local. Start it with the file it comes from, then set
-  # LOCAL_VOICE=on and the LOCAL_*_BASE_URL variables in .env to the service
-  # names below (for example http://ollama:11434/v1). See docs/local-models.md.
+  # Optional: a fully local voice stack (Max Speech and Ollama) for
+  # VOICE_PROVIDER=max-speech or VOICE_PROVIDER=local. Add its services by
+  # listing both files; the relay then reaches them by service name (for
+  # example http://ollama:11434/v1). See docs/speech-server-deployment.md.
   #
-  #   docker compose -f docker-compose.yml -f docker-compose.local-voice.yml up -d
-  #
-  # Or merge it by hand: include the services from
-  # docker-compose.local-voice.yml in this file and keep one network.
-  #
-  # local-voice:
-  #   extends:
-  #     file: docker-compose.local-voice.yml
-  #     service: ollama
+  #   docker compose -f docker-compose.yml -f docker-compose.local-voice.yml up -d --build
 
 volumes:
   relay-data:

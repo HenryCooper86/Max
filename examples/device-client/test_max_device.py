@@ -63,6 +63,7 @@ class PureParts(unittest.TestCase):
         bare = session_start("Board", DeviceAudio())
         self.assertNotIn("audio", bare)
         self.assertEqual((bare["sampleRate"], bare["channels"]), (16000, 1))
+        self.assertEqual(bare["protocol"], 1)
         declared = session_start("Board", DeviceAudio(echo_cancellation=False, speaker="open", microphones=2))
         self.assertEqual(declared["audio"], {"echoCancellation": False, "speaker": "open", "microphones": 2})
 

@@ -11,6 +11,7 @@ import { ToolsTab } from "./ToolsTab";
 import {
   draftChanged,
   draftFromProject,
+  minutesCapFromDraft,
   stepDone,
   type StudioDraft,
   type StudioTab,
@@ -28,8 +29,10 @@ const TABS: { id: StudioTab; zh: string; en: string }[] = [
   { id: "settings", zh: "设置", en: "Settings" }
 ];
 
-/** What a save sends: everything the Studio edits, the model key only when typed. */
+/** What a save sends: everything the Studio edits, the model key only when typed, and the minutes
+ *  limit only when it is a whole number or empty (Settings says when it is not). */
 export function patchFromDraft(draft: StudioDraft): ProjectPatch {
+  const cap = minutesCapFromDraft(draft.monthlyMinutesCap);
   return {
     name: draft.name,
     backend: draft.backend,
@@ -37,6 +40,7 @@ export function patchFromDraft(draft: StudioDraft): ProjectPatch {
     instructions: draft.instructions,
     greeting: draft.greeting,
     studio: draft.studio,
+    ...(cap !== undefined ? { monthlyMinutesCap: cap } : {}),
     ...(draft.modelKey.trim() ? { modelKey: draft.modelKey.trim() } : {})
   };
 }

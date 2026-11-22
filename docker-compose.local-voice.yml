@@ -61,6 +61,16 @@
 # proxy in front of it does the authenticating. With the relay in this network,
 # you can drop the ollama `ports` entry altogether.
 #
+# Together with the relay (one command, both files):
+#   docker compose -f docker-compose.yml -f docker-compose.local-voice.yml up -d --build
+# Compose starts the relay as soon as it can: it does not wait for Ollama, so the first chat request can fail
+# while Ollama is still starting. To make it wait, save this as a third file and add `-f` for it:
+#   services:
+#     relay:
+#       depends_on:
+#         ollama: { condition: service_healthy }
+# (It cannot live in this file: a `relay` service here would not validate when this file is used alone.)
+#
 # Port 8790 is also what a native Max Speech (start-speech.command) uses. To run
 # both on one machine, change the published port below, e.g. "127.0.0.1:18790:8790".
 #
@@ -109,11 +119,20 @@ services:
 
   # Chat model: any open-weight model Ollama can run.
   ollama:
-    image: ollama/ollama:latest
+    # Pinned so the runtime does not change under you on `docker compose pull`. This is the release the
+    # local stack was last tested with; Dependabot proposes newer ones.
+    image: ollama/ollama:0.40.17
     ports:
       - "127.0.0.1:11434:11434"
     volumes:
       - ollama-models:/root/.ollama
+    healthcheck:
+      # `ollama list` asks the server, so it fails until the API answers (the image has no curl).
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
     restart: unless-stopped
 
 volumes:

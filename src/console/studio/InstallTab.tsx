@@ -85,8 +85,8 @@ export function InstallTab(props: StudioTabProps) {
         </label>
         <p className="cxMuted">
           {say(
-            "任何访问这些网站的人都能和你的智能体通话，并消耗你的分钟数。同时最多 5 场对话。",
-            "Anyone visiting these websites can talk to your agent, and it uses your minutes. At most 5 conversations at once."
+            "任何访问这些网站的人都能和你的智能体通话，并消耗你的分钟数。同时最多 3 场对话，每个访客最多 2 场。想控制花费，请在“设置”里设定每月分钟上限。",
+            "Anyone visiting these websites can talk to your agent, and it uses your minutes. At most 3 conversations at once, 2 per visitor. To cap what it can spend, set a monthly minutes limit in Settings."
           )}
         </p>
         <div role="group" aria-labelledby={`${ids}-sites`}>

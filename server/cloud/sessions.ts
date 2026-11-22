@@ -5,12 +5,16 @@
 //           that website can start a session, as with any public chat widget,
 //           so it is limited per visitor address and per project, and every
 //           session still counts against the owner's 5 concurrent sessions
-//           and their balance. Browsers send Origin and cannot fake it; other
-//           clients can, which is why the limits matter.
+//           (3 of them for the embed), their balance and the project's
+//           monthly minutes limit. Browsers send Origin and cannot fake it;
+//           other clients can, which is why the limits matter. An embed token
+//           opens one session: the SDK fetches a new one for every connect.
 
 import { cloudSessionTokens } from "../session-tokens";
 import { now } from "./context";
 import { projectStudio, type Result } from "./customers";
+import { projectLimitRefusal } from "./live";
+import { hashToken } from "./secrets";
 import { liveProject, liveProjectByPublicId } from "./store";
 
 const TEST_TTL_SECONDS = 300;
@@ -20,6 +24,8 @@ const WINDOW_MS = 60_000;
 const LIMITS = { testPerProject: 20, embedPerAddress: 10, embedPerProject: 120 } as const;
 
 const hits = new Map<string, number[]>();
+// Hashes of embed tokens that already opened a session, until they would have expired anyway.
+const spentEmbedTokens = new Map<string, number>();
 
 /** Sliding one-minute window; true when this hit is within `limit`. */
 function allowed(key: string, limit: number): boolean {
@@ -40,6 +46,7 @@ function allowed(key: string, limit: number): boolean {
 /** Test hook. */
 export function resetCloudSessionLimits(): void {
   hits.clear();
+  spentEmbedTokens.clear();
 }
 
 type Minted = { token: string; expiresAt: number };
@@ -49,6 +56,13 @@ export function mintTestSession(customerId: string, projectId: string): Result<M
   if (!row) return { ok: false, status: 404, error: "Project not found." };
   if (!row.model_key_enc) {
     return { ok: false, status: 409, error: "Add your model key and save before testing." };
+  }
+  if (projectLimitRefusal(row.id)) {
+    return {
+      ok: false,
+      status: 403,
+      error: "This project has used its monthly minutes limit. Raise it in Settings to keep testing."
+    };
   }
   if (!allowed(`test:${row.id}`, LIMITS.testPerProject)) {
     return { ok: false, status: 429, error: "Too many test sessions in a minute. Wait a moment." };
@@ -81,10 +95,43 @@ export function mintEmbedSession(input: { publicId: unknown; origin: unknown; ad
   if (!allowed(`embed:${row.id}`, LIMITS.embedPerProject)) {
     return { ok: false, status: 429, error: "This agent is busy. Try again in a minute." };
   }
+  if (projectLimitRefusal(row.id)) {
+    return { ok: false, status: 403, error: "This agent has used its minutes for this month." };
+  }
   const minted = cloudSessionTokens.mint(
     { ttlSeconds: EMBED_TTL_SECONDS },
     { projectId: row.id, customerId: row.customer_id, keyHash: row.key_hash, source: "embed", origin }
   );
   if (!minted.ok) return { ok: false, status: 400, error: minted.error };
   return { ok: true, value: { token: minted.token, expiresAt: minted.expiresAt } };
+}
+
+/**
+ * Spends the public-embed tokens a connection presents: the first connection
+ * with one gets its session and the token is revoked, so a script holding a
+ * token cannot open session after session with it past the per-visitor mint
+ * limit. Returns false when a presented token was already spent; that
+ * connection must be refused. Other tokens (project key, console test) are
+ * left alone, so their clients can reconnect with them.
+ */
+export function spendEmbedTokens(presented: readonly string[]): boolean {
+  // The token store's clock, which the expiry times come from.
+  const at = Date.now();
+  let fresh = true;
+  for (const token of presented) {
+    const key = hashToken(token);
+    const spentUntil = spentEmbedTokens.get(key);
+    if (spentUntil !== undefined && spentUntil > at) {
+      fresh = false;
+      continue;
+    }
+    const grant = cloudSessionTokens.grant(token);
+    if (grant?.project?.source !== "embed") continue;
+    spentEmbedTokens.set(key, grant.expiresAt);
+    cloudSessionTokens.revoke(token);
+  }
+  if (spentEmbedTokens.size > 10_000) {
+    for (const [key, until] of spentEmbedTokens) if (until <= at) spentEmbedTokens.delete(key);
+  }
+  return fresh;
 }

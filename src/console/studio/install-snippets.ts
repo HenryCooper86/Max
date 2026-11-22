@@ -102,7 +102,7 @@ export function Talk() {
         install: "npm install max-voice-agent",
         serverFile: "app/api/voice-token/route.ts",
         server: `export async function POST() {
-  const userId = "user-123"; // read it from your session
+  const userId = "user-123"; // read it from your session, and return 401 when nobody is signed in
   const reply = await fetch("${base}/v1/session-tokens", {
     method: "POST",
     headers: {

@@ -59,8 +59,15 @@ export type AgentProvider = {
   close(): Promise<void>;
   /** Toggles the guided demo ride. Providers without a demo tour omit this. */
   setGuidedDemo?(enabled: boolean): Promise<void>;
-  /** Mid-ride rider position update. Providers without location context omit this. */
-  updateLocation?(lat: number, lon: number): Promise<void>;
+  /**
+   * False while the voice backend is disconnected or reconnecting, so nothing
+   * said can be heard or answered. Max Cloud bills only while this is not
+   * false. Providers that cannot tell omit this.
+   */
+  upstreamUsable?(): boolean | undefined;
+  /** Mid-ride rider position update; `speedKmh` is the phone's GPS speed, or undefined when it has none.
+   *  Providers without location context omit this. */
+  updateLocation?(lat: number, lon: number, speedKmh?: number): Promise<void>;
   /** Result of a dispatched device command. Providers without a device-action
    *  path omit this. */
   deviceResult?(event: DeviceResultEvent): Promise<void>;

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { chargeSession, cloudEnabled, projectForApiKey, projectRuntime, remainingSeconds } from "../server/cloud";
 import { bookedSeconds, secondsForFen, usageCharge } from "../server/cloud/billing";
 import { setCloudClock, setCloudPaymentProviders } from "../server/cloud/context";
+import { cloudCounters } from "../server/cloud/counters";
 import { createProject, patchProject, rotateProjectKey, deleteProject, signup } from "../server/cloud/customers";
 import type { PaidOrder, PaymentProvider, QrOrder } from "../server/cloud/payments";
 import { decryptModelKey, encryptModelKey } from "../server/cloud/secrets";
@@ -105,11 +106,11 @@ describe("CLOUD_SECRET_KEY", () => {
 });
 
 describe("model key encryption", () => {
-  it("round-trips under AES-256-GCM in the v1 format with a fresh IV each time", () => {
+  it("round-trips under AES-256-GCM in the v2 format (naming its key) with a fresh IV each time", () => {
     const first = encryptModelKey("sk-live-secret", KEY, "prj_a");
     const second = encryptModelKey("sk-live-secret", KEY, "prj_a");
-    expect(first).toMatch(/^v1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/);
-    expect(Buffer.from(first.split(":")[1]!, "base64")).toHaveLength(12);
+    expect(first).toMatch(/^v2:[0-9a-f]{8}:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/);
+    expect(Buffer.from(first.split(":")[2]!, "base64")).toHaveLength(12);
     expect(first).not.toBe(second);
     expect(first).not.toContain("sk-live-secret");
     expect(decryptModelKey(first, KEY, "prj_a")).toBe("sk-live-secret");
@@ -118,10 +119,12 @@ describe("model key encryption", () => {
 
   it("refuses tampered ciphertext, another key, or another project's row", () => {
     const stored = encryptModelKey("sk-live-secret", KEY, "prj_a");
-    const [version, iv, tag, ciphertext] = stored.split(":");
+    const [version, keyId, iv, tag, ciphertext] = stored.split(":");
     const flipped = Buffer.from(ciphertext!, "base64");
     flipped[0] = flipped[0]! ^ 1;
-    expect(decryptModelKey([version, iv, tag, flipped.toString("base64")].join(":"), KEY, "prj_a")).toBeUndefined();
+    expect(
+      decryptModelKey([version, keyId, iv, tag, flipped.toString("base64")].join(":"), KEY, "prj_a")
+    ).toBeUndefined();
     expect(decryptModelKey(stored, randomBytes(32), "prj_a")).toBeUndefined();
     expect(decryptModelKey(stored, KEY, "prj_b")).toBeUndefined();
     expect(decryptModelKey("garbage", KEY, "prj_a")).toBeUndefined();
@@ -301,15 +304,18 @@ describe("top-ups", () => {
   it("credits a verified payment exactly once", async () => {
     const { customerId, order } = await pendingOrder();
     const paid = { orderId: order.orderId, providerTxnId: "4200001", amountFen: 20_000 };
+    const credited = cloudCounters().max_cloud_topups_credited_total!;
     expect(creditPaidOrder(paid, "wechat")).toBe("credited");
     expect(creditPaidOrder(paid, "wechat")).toBe("duplicate");
     expect(creditPaidOrder({ ...paid, providerTxnId: "4200002" }, "wechat")).toBe("duplicate");
     expect(remainingSeconds(customerId)).toBe(60_000 + 80_000);
+    expect(cloudCounters().max_cloud_topups_credited_total).toBe(credited + 1);
     expect(await topupStatus(customerId, order.orderId)).toEqual({ ok: true, value: { status: "paid" } });
   });
 
   it("refuses a wrong amount, another provider, an unknown order or a malformed one", async () => {
     const { customerId, order } = await pendingOrder();
+    const refused = cloudCounters().max_cloud_topups_refused_total!;
     expect(creditPaidOrder({ orderId: order.orderId, providerTxnId: "t", amountFen: 19_999 }, "wechat")).toBe(
       "amount-mismatch"
     );
@@ -323,6 +329,7 @@ describe("top-ups", () => {
     expect(creditPaidOrder({ orderId: order.orderId, providerTxnId: "t", amountFen: 200.5 }, "wechat")).toBe("invalid");
     expect(creditPaidOrder({ orderId: "bad id!", providerTxnId: "t", amountFen: 20_000 }, "wechat")).toBe("invalid");
     expect(remainingSeconds(customerId)).toBe(60_000);
+    expect(cloudCounters().max_cloud_topups_refused_total).toBe(refused + 6);
     expect(await topupStatus(customerId, order.orderId)).toEqual({ ok: true, value: { status: "pending" } });
   });
 

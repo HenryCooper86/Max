@@ -25,14 +25,18 @@ import {
   checkAuthRateLimit,
   clientAddress,
   clientRegionHint,
+  noteProxyHeaders,
   presentedTokens,
   relayTokenPresented,
   requestSession,
   requestUser,
   testingAccess,
-  testingClearAuthorized
+  testingClearAuthorized,
+  withLoginBackoff
 } from "./auth";
-import { buildHealth, config, describeConfig, readinessIssues, validateConfig } from "./config";
+import { buildHealth, config, describeConfig, readinessIssues, readinessWarnings, validateConfig } from "./config";
+import { metricsResponse, registerMetricsSource } from "./prometheus";
+import { cloudCounters } from "./cloud/counters";
 import { cloudSessionTokens, sessionTokens } from "./session-tokens";
 import { installServerTools } from "./tools/registry";
 import { createUsageMeter, monthOf, usageSettingsFromEnv } from "./usage";
@@ -41,11 +45,16 @@ import {
   createCloudInvite,
   listCloudInvites,
   revokeCloudInvite,
-  cloudSessionAlive,
+  admitCloudSession,
+  CLOUD_CHECK_INTERVAL_MS,
+  cloudReadinessIssues,
+  cloudReadinessWarnings,
+  cloudUnreadableSecrets,
   cloudSessionEnded,
-  cloudSessionStarted,
   conversationRecorder,
+  openCloudSession,
   projectForApiKey,
+  projectLimitRefusal,
   pruneOldConversations,
   projectServerTools,
   saveConversation,
@@ -55,7 +64,7 @@ import {
   registerCloudPaymentRoutes,
   registerCloudRoutes,
   registerEmbedRoutes,
-  remainingSeconds
+  spendEmbedTokens
 } from "./cloud";
 import { USAGE_LIMIT_CLOSE_CODE } from "../shared/agent";
 import { createLogger, shortSessionId } from "./logger";
@@ -146,16 +155,8 @@ server.keepAliveTimeout = 5_000;
 server.maxRequestsPerSocket = 1_000;
 const activeSessions = new Map<WebSocket, AgentSessionController>();
 const usageMeter = createUsageMeter(usageSettingsFromEnv());
-const CLOUD_BALANCE_MESSAGE = "Your Max Cloud balance is used up. Top up in the console.";
-/** Simultaneous voice sessions per Max Cloud customer. */
-const CLOUD_SESSIONS_PER_CUSTOMER = 5;
-/** Of those, at most this many from the public embed, which anyone visiting a listed website (or
- *  anyone faking its Origin) can start: the customer's own backend and tests always keep room. */
-const CLOUD_EMBED_SESSIONS_PER_CUSTOMER = 3;
 /** A public-embed session ends after this long, so nobody can hold one open for hours. */
 const CLOUD_EMBED_SESSION_MS = 15 * 60_000;
-/** Customer id → ids of their live public-embed sessions. */
-const liveEmbedSessions = new Map<string, Set<string>>();
 const PROJECT_MINTS_PER_MINUTE = 120;
 const projectMints = new Map<string, number[]>();
 /** A project's token mints in the trailing minute, within the limit. */
@@ -172,15 +173,6 @@ function projectMintAllowed(projectId: string, at = Date.now()): boolean {
   }
   return true;
 }
-/** Max Cloud sessions in progress: customer → session → when it connected.
- *  A customer's balance pays for all of them at once, so every check counts
- *  them all, not just the session asking. */
-const liveCloudSessions = new Map<string, Map<string, number>>();
-function liveCloudSeconds(customerId: string, at = Date.now()): number {
-  let seconds = 0;
-  for (const connectedAt of liveCloudSessions.get(customerId)?.values() ?? []) seconds += (at - connectedAt) / 1000;
-  return seconds;
-}
 const log = createLogger("relay");
 const companionStore = createCompanionBindingStore();
 const companionRegistry = createCompanionRegistry({ store: companionStore, log });
@@ -191,6 +183,12 @@ const companionSockets = createCompanionSocketServer({
 let shuttingDown = false;
 
 app.disable("x-powered-by");
+// Every request, including those that never ask for the client address, so a
+// misconfigured proxy is reported on the first page load.
+app.use((req, _res, next) => {
+  noteProxyHeaders(req);
+  next();
+});
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -267,6 +265,13 @@ app.post("/v1/session-tokens", (req, res) => {
       res.status(429).json({ ok: false, error: `At most ${PROJECT_MINTS_PER_MINUTE} tokens a minute per project.` });
       return;
     }
+    if (projectLimitRefusal(project.projectId)) {
+      res.status(403).json({
+        ok: false,
+        error: "This project has used its monthly minutes limit. Raise it in the console's Settings."
+      });
+      return;
+    }
     const body = (req.body ?? {}) as Record<string, unknown>;
     const minted = cloudSessionTokens.mint(
       { ttlSeconds: body.ttlSeconds, userId: body.userId, context: body.context },
@@ -297,7 +302,7 @@ app.post("/v1/session-tokens", (req, res) => {
       });
       return;
     }
-    if (!checkAuthRateLimit(clientAddress(req))) {
+    if (!checkAuthRateLimit(clientAddress(req), Date.now(), "token-mint")) {
       res.status(429).json({ ok: false, error: "Too many token requests." });
       return;
     }
@@ -361,17 +366,40 @@ app.get("/ready", (_req, res) => {
   const companionIssue = companionStore.readinessIssue();
   const issues = [
     ...readinessIssues(),
+    ...cloudReadinessIssues(),
     ...(companionIssue ? [companionIssue] : []),
     ...(shuttingDown ? ["shutting-down"] : [])
   ];
-  res.status(issues.length ? 503 : 200).json({ ok: issues.length === 0, issues, build: { ...buildInfo } });
+  res.status(issues.length ? 503 : 200).json({
+    ok: issues.length === 0,
+    issues,
+    warnings: [...readinessWarnings(), ...cloudReadinessWarnings()],
+    build: { ...buildInfo }
+  });
+});
+
+// Prometheus scrape endpoint (server/prometheus.ts). Off unless METRICS_TOKEN
+// is set, and then only for that token.
+registerMetricsSource(() => ({
+  relay_agent_sockets_open: wss.clients.size,
+  relay_companion_sockets_open: [...companionSockets.clients()].length
+}));
+// Billing counters (bookings, failed bookings, top-ups); all zero while Max Cloud is off.
+registerMetricsSource(cloudCounters);
+registerMetricsSource(() => ({ max_cloud_secrets_unreadable: cloudUnreadableSecrets() }));
+app.get("/metrics", (req, res) => {
+  const response = metricsResponse(req.headers.authorization);
+  // setHeader and end, not set/send: Express would rewrite the exposition content type.
+  for (const [name, value] of Object.entries(response.headers)) res.setHeader(name, value);
+  res.setHeader("Cache-Control", "no-store");
+  res.status(response.status).end(response.body);
 });
 
 // User accounts. Registration turns authentication on (first user = admin);
 // login sessions then unlock the testing stats, admin actions, and — on
 // token-protected relays — the /agent WebSocket.
 app.post("/auth/register", (req, res) => {
-  if (!checkAuthRateLimit(clientAddress(req))) {
+  if (!checkAuthRateLimit(clientAddress(req), Date.now(), "relay-auth")) {
     log.warn("auth rate limit hit", { address: clientAddress(req), route: "register" });
     res.status(429).json({ ok: false, error: "尝试过于频繁，请稍后再试。" });
     return;
@@ -399,14 +427,25 @@ app.post("/auth/register", (req, res) => {
 });
 
 app.post("/auth/login", (req, res) => {
-  if (!checkAuthRateLimit(clientAddress(req))) {
+  if (!checkAuthRateLimit(clientAddress(req), Date.now(), "relay-auth")) {
     log.warn("auth rate limit hit", { address: clientAddress(req), route: "login" });
     res.status(429).json({ ok: false, error: "尝试过于频繁，请稍后再试。" });
     return;
   }
   const body = (req.body ?? {}) as Record<string, unknown>;
-  loginUser(body.username, body.password)
-    .then((result) => {
+  withLoginBackoff("relay", body.username, clientAddress(req), () => loginUser(body.username, body.password))
+    .then((outcome) => {
+      // Same answer as the per-IP limit, for real and unknown names alike.
+      if (outcome.locked) {
+        log.warn("login locked out", {
+          address: clientAddress(req),
+          username: typeof body.username === "string" ? body.username.slice(0, 32) : "?"
+        });
+        res.setHeader("Retry-After", String(outcome.retryAfterSeconds));
+        res.status(429).json({ ok: false, error: "尝试过于频繁，请稍后再试。" });
+        return;
+      }
+      const result = outcome.result;
       if (result.ok) {
         log.info("user logged in", { username: result.user.username });
         res.json(result);
@@ -425,7 +464,7 @@ app.post("/auth/login", (req, res) => {
 
 // Self-service password change; revokes the user's other sessions.
 app.post("/auth/password", (req, res) => {
-  if (!checkAuthRateLimit(clientAddress(req))) {
+  if (!checkAuthRateLimit(clientAddress(req), Date.now(), "relay-password")) {
     res.status(429).json({ ok: false, error: "尝试过于频繁，请稍后再试。" });
     return;
   }
@@ -1121,6 +1160,12 @@ wss.on("connection", (client, request) => {
       client.close(code, reason);
     }
   };
+  // A public-embed token opens one session (server/cloud/sessions.ts); the SDK fetches a new one to reconnect.
+  if (!spendEmbedTokens(presentedTokens(request))) {
+    unregisterAuthenticatedConnection(client);
+    refuse(1008, "This conversation token was already used. Start the conversation again.", "embed token reused");
+    return;
+  }
   if (cloudProject && (!runtime || !projectKeyValid(cloudProject.projectId, cloudProject.keyHash))) {
     unregisterAuthenticatedConnection(client);
     refuse(
@@ -1132,82 +1177,41 @@ wss.on("connection", (client, request) => {
     );
     return;
   }
-  const cloudCustomer = cloudProject?.customerId;
-  if (cloudCustomer && (liveCloudSessions.get(cloudCustomer)?.size ?? 0) >= CLOUD_SESSIONS_PER_CUSTOMER) {
-    unregisterAuthenticatedConnection(client);
-    refuse(
-      1013,
-      `This Max Cloud account already has ${CLOUD_SESSIONS_PER_CUSTOMER} voice sessions open.`,
-      "too many sessions"
-    );
-    return;
-  }
   const embedSession = cloudProject?.source === "embed";
-  if (
-    cloudCustomer &&
-    embedSession &&
-    (liveEmbedSessions.get(cloudCustomer)?.size ?? 0) >= CLOUD_EMBED_SESSIONS_PER_CUSTOMER
-  ) {
-    unregisterAuthenticatedConnection(client);
-    refuse(1013, "This assistant is busy right now. Try again in a minute.", "too many embed sessions");
-    return;
-  }
-  // Left to talk: the customer's free seconds and balance, minus every one of
-  // their sessions still running (they are only booked when they end).
-  const cloudSecondsLeft = () =>
-    cloudCustomer ? remainingSeconds(cloudCustomer) - liveCloudSeconds(cloudCustomer) : Infinity;
 
-  // Usage: whose minutes these are, and whether they have any left.
+  // Usage: whose minutes these are, and whether they have any left. A Cloud
+  // project pays from its customer's balance, within its own limits
+  // (server/cloud/live.ts); the relay-wide allowance is for the relay's own users.
   const usageUserId = cloudProject
     ? `project:${cloudProject.projectId}`
     : (authenticatedUser?.id ?? tokenGrant?.userId);
   const limitReached = () =>
-    cloudProject
-      ? refuse(USAGE_LIMIT_CLOSE_CODE, CLOUD_BALANCE_MESSAGE, "balance used up")
-      : refuse(
-          USAGE_LIMIT_CLOSE_CODE,
-          "This account has used all of its voice minutes for this month.",
-          "usage limit reached"
-        );
-  // A Cloud project pays from its balance and must afford at least one check
-  // interval; the relay-wide allowance is for the relay's own users.
-  if (cloudProject ? cloudSecondsLeft() < 15 : usageMeter.overLimit(usageUserId)) {
+    refuse(
+      USAGE_LIMIT_CLOSE_CODE,
+      "This account has used all of its voice minutes for this month.",
+      "usage limit reached"
+    );
+  const cloudRefusal = cloudProject ? admitCloudSession(cloudProject, address) : undefined;
+  if (cloudRefusal || (!cloudProject && usageMeter.overLimit(usageUserId))) {
     // Refused before any session exists: nothing else to clean up.
     unregisterAuthenticatedConnection(client);
-    limitReached();
+    if (cloudRefusal) refuse(cloudRefusal.code, cloudRefusal.message, cloudRefusal.reason);
+    else limitReached();
     return;
   }
   const usageSessionId = randomUUID();
   const meteredSession = usageMeter.open(usageSessionId, usageUserId);
   // The project's conversation history, when the customer keeps one.
   const recorder = runtime?.studio.keepConversations ? conversationRecorder() : undefined;
-  if (cloudProject) {
-    const sessions = liveCloudSessions.get(cloudProject.customerId) ?? new Map<string, number>();
-    sessions.set(usageSessionId, Date.now());
-    liveCloudSessions.set(cloudProject.customerId, sessions);
-    if (embedSession) {
-      const embeds = liveEmbedSessions.get(cloudProject.customerId) ?? new Set<string>();
-      embeds.add(usageSessionId);
-      liveEmbedSessions.set(cloudProject.customerId, embeds);
-    }
-    cloudSessionStarted({
-      sessionId: usageSessionId,
-      customerId: cloudProject.customerId,
-      projectId: cloudProject.projectId
-    });
-  }
-  const usageCheck =
-    cloudProject || usageMeter.limitMinutes()
+  // Billed only while the voice model can talk, checkpointed and checked every few seconds.
+  const cloudSession = cloudProject ? openCloudSession(usageSessionId, cloudProject, address) : undefined;
+  const usageCheck = cloudSession
+    ? setInterval(() => {
+        const refusal = cloudSession.check();
+        if (refusal) refuse(refusal.code, refusal.message, refusal.reason);
+      }, CLOUD_CHECK_INTERVAL_MS)
+    : usageMeter.limitMinutes()
       ? setInterval(() => {
-          if (cloudProject) {
-            cloudSessionAlive(usageSessionId);
-            if (!projectKeyValid(cloudProject.projectId, cloudProject.keyHash)) {
-              refuse(1008, "This Max Cloud project key was rotated or the project was deleted.", "project revoked");
-              return;
-            }
-            if (cloudSecondsLeft() <= 0) limitReached();
-            return;
-          }
           if (usageMeter.overLimit(usageUserId)) limitReached();
         }, 15_000)
       : undefined;
@@ -1221,10 +1225,11 @@ wss.on("connection", (client, request) => {
   embedLimit?.unref();
   metrics.sessionOpened();
   trackClient(client);
+  let sessionProvider: AgentProvider | undefined;
   const session = new AgentSessionController(
     client,
     (socket, telemetry) =>
-      runtime
+      (sessionProvider = runtime
         ? createVoiceProvider(runtime.backend, socket, sessionLog, telemetry, {
             apiKey: runtime.modelKey,
             profile: projectAssistantProfile({
@@ -1238,7 +1243,7 @@ wss.on("connection", (client, request) => {
             serverTools: () => projectServerTools(runtime.studio, runtime.webhookSecret),
             ...(runtime.studio.voice ? { voice: runtime.studio.voice } : {})
           })
-        : selectProvider(socket, sessionLog, telemetry),
+        : selectProvider(socket, sessionLog, telemetry)),
     sessionLog,
     address,
     region,
@@ -1249,6 +1254,7 @@ wss.on("connection", (client, request) => {
       privateSession: Boolean(cloudProject),
       ...(tokenGrant ? { tokenGrant: { userId: tokenGrant.userId, context: tokenGrant.context } } : {}),
       onServerEvent: (payload) => {
+        cloudSession?.observe(payload, sessionProvider?.upstreamUsable?.());
         recorder?.event(payload);
         const event = payload as { type?: unknown; state?: unknown };
         if (event?.type === "tool.activity" && event.state === "started") meteredSession.toolCall();
@@ -1273,17 +1279,9 @@ wss.on("connection", (client, request) => {
   client.on("close", async (code) => {
     if (usageCheck) clearInterval(usageCheck);
     if (embedLimit) clearTimeout(embedLimit);
-    if (cloudProject && embedSession) {
-      const embeds = liveEmbedSessions.get(cloudProject.customerId);
-      embeds?.delete(usageSessionId);
-      if (embeds && embeds.size === 0) liveEmbedSessions.delete(cloudProject.customerId);
-    }
     const usage = meteredSession.close();
-    if (cloudProject) {
-      const sessions = liveCloudSessions.get(cloudProject.customerId);
-      sessions?.delete(usageSessionId);
-      if (sessions && sessions.size === 0) liveCloudSessions.delete(cloudProject.customerId);
-    }
+    const endedAt = usage?.endedAt ?? Date.now();
+    const billedSeconds = cloudSession?.close(endedAt);
     if (cloudProject && recorder) {
       try {
         saveConversation({
@@ -1299,19 +1297,20 @@ wss.on("connection", (client, request) => {
         });
       }
     }
-    if (cloudProject && usage) {
+    if (cloudProject && billedSeconds !== undefined) {
       try {
+        // A failed booking is kept and retried by the booking timer below.
         cloudSessionEnded({
           customerId: cloudProject.customerId,
           projectId: cloudProject.projectId,
-          sessionId: usage.sessionId,
-          seconds: usage.seconds,
-          endedAt: usage.endedAt
+          sessionId: usageSessionId,
+          seconds: billedSeconds,
+          endedAt
         });
       } catch (error) {
         sessionLog.error("cloud session could not be charged", {
           projectId: cloudProject.projectId,
-          seconds: usage.seconds,
+          seconds: billedSeconds,
           message: error instanceof Error ? error.message : String(error)
         });
       }
@@ -1375,8 +1374,15 @@ authSessionSweepTimer.unref();
 // The relay's own tools (assistant.config.json → tools / toolsModule) load
 // before the first session can start.
 await installServerTools(assistant().tools);
-// Max Cloud sessions a crash or restart left unbooked are charged up to their last checkpoint.
+// Max Cloud sessions a crash or restart left unbooked are charged up to their last checkpoint, and
+// bookings that failed are retried: now, and from then on every 15 seconds.
 recoverCloudSessions();
+// A CLOUD_SECRET_KEY that reads none of the stored customer secrets is logged now, not first on a /ready probe.
+cloudReadinessIssues();
+const cloudBookingTimer = setInterval(() => {
+  if (cloudEnabled()) recoverCloudSessions();
+}, 15_000);
+cloudBookingTimer.unref();
 // Conversation transcripts expire after 30 days even for projects nobody talks to any more.
 const conversationPruneTimer = setInterval(() => {
   if (!cloudEnabled()) return;

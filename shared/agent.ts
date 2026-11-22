@@ -15,6 +15,15 @@ import type {
   TestingValiditySummary
 } from "./testing";
 
+/**
+ * Version of the wire protocol. It goes up only for a change that is not
+ * backwards compatible; new optional fields and new message types leave it
+ * alone, because both sides ignore what they do not know. A client sends its
+ * version in `session.start`, the relay answers with its own in
+ * `session.started`, and each side warns when the other is ahead.
+ */
+export const PROTOCOL_VERSION = 1;
+
 export type VoiceGender = "female" | "male";
 export type VoicePersonality = "concise" | "friendly" | "technical" | "rally";
 export type ConnectionState = "offline" | "connecting" | "relay" | "provider" | "ready" | "degraded";
@@ -247,6 +256,9 @@ export type SessionStartEvent = {
   /** Release-run assignment supplied by the QA control plane. */
   testingRunId?: string;
   testingAssignmentId?: string;
+  /** The wire protocol the client speaks ({@link PROTOCOL_VERSION}); absent
+   *  from clients older than the version handshake. */
+  protocol?: number;
   /** Build metadata for release comparison. */
   appVersion?: string;
   gitCommit?: string;
@@ -369,7 +381,10 @@ export type ClientEvent =
   // Mid-ride rider position update. The session-start coordinates go stale
   // fast on a moving motorcycle; this keeps the live weather (and any future
   // location-aware context) tracking the rider. Clients throttle sends.
-  | { type: "location.update"; lat: number; lon: number }
+  //
+  // `speedKmh` is the phone's own GPS speed when it has a fresh one. The relay
+  // has no other source of real speed; without it the speed is unknown.
+  | { type: "location.update"; lat: number; lon: number; speedKmh?: number }
   // Client-side audio-pipeline quality. This is aggregate telemetry only; raw
   // microphone audio remains opt-in and is never retained by this event.
   | {
@@ -533,6 +548,9 @@ export type AgentEvent =
       provider: string;
       mode: ProviderMode;
       capabilities: ProviderCapabilities;
+      /** The wire protocol the relay speaks ({@link PROTOCOL_VERSION}); absent
+       *  from relays older than the version handshake. */
+      protocol?: number;
       /** How the relay treats this session's audio; absent from relays older
        *  than the audio contract. */
       audio?: AudioPlan;

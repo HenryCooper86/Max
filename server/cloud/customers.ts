@@ -5,7 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { DEFAULT_STUDIO, parseStudio, type ProjectStudio } from "../../shared/cloud-studio";
 import { createLogger } from "../logger";
-import { cloudSecretKey, now } from "./context";
+import { cloudSecretKey, cloudSecretKeys, now } from "./context";
 import {
   customerByEmail,
   deleteOpenInvite,
@@ -59,6 +59,8 @@ export type PublicProject = {
   publicId: string;
   /** True once a webhook signing secret exists (it is made with the first tool). */
   hasWebhookSecret: boolean;
+  /** The owner's limit on this project's minutes per calendar month (UTC); null for none. */
+  monthlyMinutesCap: number | null;
   createdAt: number;
 };
 
@@ -68,6 +70,8 @@ const MAX_PASSWORD_LENGTH = 200;
 const MAX_EMAIL_LENGTH = 254;
 const MAX_PROJECTS = 20;
 const LIMITS = { name: 60, assistantName: 24, instructions: 8000, greeting: 300, modelKey: 400 } as const;
+/** A month has at most 44,640 minutes; five sessions at once use five times that. */
+const MAX_MONTHLY_MINUTES_CAP = 250_000;
 const BACKENDS: readonly Backend[] = ["openai", "gemini", "grok"];
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
 const WRONG_LOGIN = "Wrong email or password";
@@ -234,18 +238,19 @@ function publicProject(row: ProjectRow): PublicProject {
     studio: projectStudio(row),
     publicId: row.public_id ?? "",
     hasWebhookSecret: Boolean(row.webhook_secret_enc),
+    monthlyMinutesCap: row.monthly_minutes_cap ?? null,
     createdAt: row.created_at
   };
 }
 
 const newPublicId = () => `pub_${randomBytes(12).toString("hex")}`;
-const webhookSecretScope = (projectId: string) => `${projectId}#webhook-secret`;
+/** What a project's webhook secret is bound to, so it cannot be swapped with its model key. */
+export const webhookSecretScope = (projectId: string) => `${projectId}#webhook-secret`;
 
 /** The project's webhook signing secret, decrypted; undefined when it has none. */
 export function projectWebhookSecret(row: Pick<ProjectRow, "id" | "webhook_secret_enc">): string | undefined {
-  const secret = cloudSecretKey();
-  if (!secret || !row.webhook_secret_enc) return undefined;
-  return decryptModelKey(row.webhook_secret_enc, secret, webhookSecretScope(row.id));
+  if (!cloudSecretKey() || !row.webhook_secret_enc) return undefined;
+  return decryptModelKey(row.webhook_secret_enc, cloudSecretKeys(), webhookSecretScope(row.id));
 }
 
 function newWebhookSecret(projectId: string): string | undefined {
@@ -309,6 +314,7 @@ export function createProject(
     studio: JSON.stringify(studio.value),
     public_id: newPublicId(),
     webhook_secret_enc: studio.value.tools.length ? (newWebhookSecret(id) ?? null) : null,
+    monthly_minutes_cap: null,
     created_at: now(),
     deleted_at: null
   };
@@ -362,6 +368,19 @@ export function patchProject(
       changes.webhook_secret_enc = secret;
     }
     if (!current.public_id) changes.public_id = newPublicId();
+  }
+  if (body.monthlyMinutesCap !== undefined) {
+    const cap = body.monthlyMinutesCap;
+    if (cap === null || cap === "") {
+      changes.monthly_minutes_cap = null;
+    } else if (typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= MAX_MONTHLY_MINUTES_CAP) {
+      changes.monthly_minutes_cap = cap;
+    } else {
+      return fail(
+        400,
+        `Monthly minutes limit must be a whole number from 1 to ${MAX_MONTHLY_MINUTES_CAP.toLocaleString("en")}, or empty for none.`
+      );
+    }
   }
   if (body.modelKey !== undefined) {
     if (typeof body.modelKey !== "string") return fail(400, "Model key must be text.");

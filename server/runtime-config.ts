@@ -85,6 +85,10 @@ export const config = {
   authSessionDays: resolveBoundedInt(process.env.AUTH_SESSION_DAYS, 30, 1, 365),
   // Login/registration attempts allowed per client IP per minute.
   authAttemptsPerMinute: resolveBoundedInt(process.env.AUTH_ATTEMPTS_PER_MINUTE, 10, 3, 1000),
+  // Bearer token for GET /metrics. Its own secret, not the relay token, so a
+  // monitoring system can scrape without being able to open voice sessions.
+  // Empty disables the endpoint (404).
+  metricsToken: process.env.METRICS_TOKEN?.trim() ?? "",
   // Crash escalation delivery channel. Only "log" exists today: incidents are
   // audited but nobody is texted, and the ack says so honestly.
   crashNotifier: process.env.CRASH_NOTIFIER?.trim().toLowerCase() || "log",

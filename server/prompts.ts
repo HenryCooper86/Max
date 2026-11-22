@@ -2,6 +2,8 @@
 // because the original helmet was tuned in Chinese; every supported model
 // follows them regardless of the language it answers in.
 
+import type { PromptAudience } from "../shared/session";
+
 // Small local models with thinking off repeat a scripted refusal whenever they are unsure, so ordinary
 // questions came back as "I only support Chinese and English". They get the same limit without the script.
 const SCRIPTED_REFUSALS: ReadonlyArray<readonly [string, string]> = [
@@ -36,7 +38,8 @@ export function buildLanguageInteractionPrompt(): string {
  * other external action explicitly out of reach. The success-only rule is now
  * load-bearing: the relay dispatches real commands and corrects Max out loud
  * when one fails. */
-export function buildToolGroundingPrompt(): string {
+export function buildToolGroundingPrompt(audience: PromptAudience = "rider"): string {
+  if (audience === "wearer") return WEARER_TOOL_GROUNDING;
   return (
     "[真实能力边界] 你可以请求系统执行这些设备动作：开关手电筒、调整你自己的说话音量、" +
     "请求音乐播放控制（默认 QQ 音乐，也可手动选择 Apple Music 或本机音乐）、准备短信、拨打电话、语音导航（实时路线指引，仅汽车路线）、拍照和录像（录像无声音）、关机（10秒倒计时后干净地关闭头盔系统，期间说取消关机可以撤销）。" +
@@ -49,6 +52,32 @@ export function buildToolGroundingPrompt(): string {
     "导航路线、路名、转弯方向和距离只能来自系统导航提示，不要自己编造。骑手当前位置可来自系统的手机实时定位，无需启动导航；没有最新定位时如实说明，不得把默认或演示天气地点当作骑手位置。" +
     "骑手在录像或导航后说‘取消’、‘停一下’或 cancel it 时，系统会根据当前动作处理；你必须等待系统结果，不能自行声称已经停止。"
   );
+}
+
+// The same boundary for a wearable that is not a helmet: the device actions and
+// honesty rules are identical, but nothing assumes the wearer is riding, and
+// the assistant's own tools are not ruled out.
+const WEARER_TOOL_GROUNDING =
+  "[真实能力边界] 你可以请求系统执行这些设备动作：开关手电筒、调整你自己的说话音量、" +
+  "请求音乐播放控制（默认 QQ 音乐，也可手动选择 Apple Music 或本机音乐）、准备短信、拨打电话、语音导航（实时路线指引，仅汽车路线）、拍照和录像（录像无声音）、关机（10秒倒计时后干净地关闭设备，期间说取消关机可以撤销）。" +
+  "这些都是语音免手操作。用户要求其中任何一项时直接执行，不要以分心或不安全为由拒绝，也不要让用户稍后再做。" +
+  "天气信息由系统注入，可以当作实时事实。" +
+  "QQ 音乐在 Android 上可通过用户授权的媒体会话控制已有队列；iOS 和网页目前仅提供官网入口，不能控制 QQ 音乐播放。打开官网不代表播放成功。不支持搜索或点播指定 QQ 歌曲。必须等待设备结果再回答。" +
+  "除了这些设备动作和系统提供给你的工具之外，你没有其他能力：没有实时交通、附近地点搜索、其他第三方音乐应用。" +
+  "拨号和短信必须由用户在手机上确认，你只说正在准备，不要说已经拨通或已经发送。" +
+  "任何动作只有在系统明确返回成功之后才可以说已完成；系统没有回应之前，不要描述结果。" +
+  "导航路线、路名、转弯方向和距离只能来自系统导航提示，不要自己编造。用户当前位置可来自系统的手机实时定位，无需启动导航；没有最新定位时如实说明，不得把默认或演示天气地点当作用户位置。" +
+  "用户在录像或导航后说‘取消’、‘停一下’或 cancel it 时，系统会根据当前动作处理；你必须等待系统结果，不能自行声称已经停止。";
+
+/** The wording a device's rules use: a helmet's wearer is riding, nobody else is. */
+export function promptAudience(profile: { preset: { family: string } }): PromptAudience {
+  return profile.preset.family === "helmet" ? "rider" : "wearer";
+}
+
+/** Live weather for a wearer who is not riding: the facts, without the riding advice. */
+export function buildWearerWeatherPrompt(location: "rider" | "configured" | "demo", summary: string): string {
+  const label = location === "rider" ? "用户当前位置" : location === "configured" ? "默认位置" : "演示位置";
+  return `\n\n[实时天气] ${label}${summary}当对方询问天气或风力时，只基于这条真实数据简短回答。`;
 }
 
 const SESSION_LANGUAGE_NAMES: Record<string, { zh: string; en: string }> = {

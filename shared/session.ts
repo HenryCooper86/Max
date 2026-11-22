@@ -135,9 +135,25 @@ export function restoreSessionMemory(
   };
 }
 
-export function buildSessionMemoryPrompt(memory: SessionMemory): string {
+/**
+ * Who the operating rules are written for. "rider" is the helmet's own
+ * wording, which the stock assistant was tuned against and must not drift.
+ * "wearer" is for every other wearable (glasses, headsets), where talk of
+ * riding, pulling over and helmets would be wrong.
+ */
+export type PromptAudience = "rider" | "wearer";
+
+/**
+ * `languagePreference: false` leaves the remembered language out. That memory
+ * only knows Chinese and English, so for an assistant with its own languages
+ * it would contradict the persona.
+ */
+export function buildSessionMemoryPrompt(
+  memory: SessionMemory,
+  options: { languagePreference?: boolean } = {}
+): string {
   const parts = [
-    `语言偏好：${memory.language === "zh" ? "中文" : "English"}`,
+    ...(options.languagePreference === false ? [] : [`语言偏好：${memory.language === "zh" ? "中文" : "English"}`]),
     `回答模式：${memory.responseMode}`,
     `最近意图：${memory.lastIntent ?? "未知"}`
   ];
@@ -145,15 +161,35 @@ export function buildSessionMemoryPrompt(memory: SessionMemory): string {
   return parts.join("；");
 }
 
-export function buildSafetyPrompt(context: RideContext, memory: SessionMemory): string {
+const SAFETY_LIMITS: Record<
+  PromptAudience,
+  { emergency: string; concise: string; relaxed: string; telemetry: string }
+> = {
+  rider: {
+    emergency: "紧急模式：用命令式短句。先让骑手减速、靠边、打开警示并寻求帮助。不要展开复杂排障。",
+    concise:
+      "骑行模式：每次最多两句。导航和安全问题只给下一步动作、距离、风险或确认；闲聊、笑话、短故事和常识问题用一两句话直接回答。把需要看屏幕或多步操作的长任务推迟到停车后。",
+    relaxed: "停车模式：可以稍微完整，但仍保持清晰简短。",
+    telemetry: "当前骑行情报"
+  },
+  wearer: {
+    emergency: "紧急模式：用命令式短句。先确认用户是否安全，帮助其脱离危险并寻求帮助。不要展开复杂排障。",
+    concise:
+      "简洁模式：每次最多两句。导航和安全问题只给下一步动作、距离、风险或确认；闲聊、笑话、短故事和常识问题用一两句话直接回答。",
+    relaxed: "完整模式：可以稍微完整，但仍保持清晰简短。",
+    telemetry: "当前设备情报"
+  }
+};
+
+export function buildSafetyPrompt(
+  context: RideContext,
+  memory: SessionMemory,
+  audience: PromptAudience = "rider"
+): string {
   const mode = memory.responseMode;
   const isFast = typeof context.speedKmh === "number" && context.speedKmh >= 60;
-  const limits =
-    mode === "emergency"
-      ? "紧急模式：用命令式短句。先让骑手减速、靠边、打开警示并寻求帮助。不要展开复杂排障。"
-      : mode === "concise"
-        ? "骑行模式：每次最多两句。导航和安全问题只给下一步动作、距离、风险或确认；闲聊、笑话、短故事和常识问题用一两句话直接回答。把需要看屏幕或多步操作的长任务推迟到停车后。"
-        : "停车模式：可以稍微完整，但仍保持清晰简短。";
+  const wording = SAFETY_LIMITS[audience];
+  const limits = mode === "emergency" ? wording.emergency : mode === "concise" ? wording.concise : wording.relaxed;
   const speedPolicy = isFast ? "高速/较快移动：每次只问一个必要问题，不提供复杂菜单或长列表。" : "";
 
   const telemetry = [
@@ -165,10 +201,45 @@ export function buildSafetyPrompt(context: RideContext, memory: SessionMemory): 
     .filter(Boolean)
     .join("；");
 
-  return `[安全策略] ${limits}${speedPolicy ? ` ${speedPolicy}` : ""}${telemetry ? ` 当前骑行情报：${telemetry}。` : ""}`;
+  return `[安全策略] ${limits}${speedPolicy ? ` ${speedPolicy}` : ""}${telemetry ? ` ${wording.telemetry}：${telemetry}。` : ""}`;
 }
 
-export function buildIntentGuidancePrompt(intent: RiderIntent | undefined): string {
+/**
+ * The phone's current GPS speed as an addition to instructions that were
+ * built before it was known ("" when it is not known). Above the same speed as
+ * buildSafetyPrompt it carries the same one-question rule.
+ */
+export function buildPhoneSpeedPrompt(speedKmh: number | undefined): string {
+  if (typeof speedKmh !== "number") return "";
+  const policy = speedKmh >= 60 ? "高速/较快移动：每次只问一个必要问题，不提供复杂菜单或长列表。" : "";
+  return `\n\n[手机实时速度] 速度约 ${speedKmh} km/h（来自手机 GPS）。${policy}`;
+}
+
+/**
+ * One line of guidance for what the wearer last asked about, or "" when there
+ * is nothing to add. `stockLanguageRule: false` drops the fallback line, which
+ * restates Max's own Chinese-and-English rule and would contradict an
+ * assistant that speaks other languages.
+ */
+export function buildIntentGuidancePrompt(
+  intent: RiderIntent | undefined,
+  options: { audience?: PromptAudience; stockLanguageRule?: boolean } = {}
+): string {
+  if (options.audience === "wearer") {
+    switch (intent) {
+      case "navigation":
+        return "意图指导：导航/帮助。只给下一步动作、距离或风险。";
+      case "weather":
+        return "意图指导：天气。优先回答温度、风、雨和出行风险。";
+      case "emergency":
+        return "意图指导：紧急。先确认用户是否安全，再给脱离危险、求助的下一步。";
+      case "casual":
+        return "意图指导：闲聊。用一两句话直接给出对方要的内容（笑话、短故事、常识、建议都可以），不要拒绝，不要转移话题。";
+      default:
+        // Motorcycle diagnostics and group rides do not apply off the bike.
+        return "";
+    }
+  }
   switch (intent) {
     case "navigation":
       return "意图指导：导航/帮助。只给下一步动作、距离、车道或风险。";
@@ -183,7 +254,9 @@ export function buildIntentGuidancePrompt(intent: RiderIntent | undefined): stri
     case "casual":
       return "意图指导：闲聊。用一两句话直接给出对方要的内容（笑话、短故事、常识、建议都可以），不要拒绝，不要转移话题，也不要让对方停车后再问。";
     default:
-      return "意图指导：语言规则。只支持中文和 English；其他语言用中文简短拒绝。";
+      return options.stockLanguageRule === false
+        ? ""
+        : "意图指导：语言规则。只支持中文和 English；其他语言用中文简短拒绝。";
   }
 }
 

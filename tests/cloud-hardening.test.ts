@@ -10,7 +10,7 @@ import {
   recoverCloudSessions,
   remainingSeconds
 } from "../server/cloud";
-import { setCloudClock, setCloudPaymentProviders } from "../server/cloud/context";
+import { setCloudClock, setCloudInstanceId, setCloudPaymentProviders } from "../server/cloud/context";
 import { createProject, deleteProject, rotateProjectKey, signup } from "../server/cloud/customers";
 import { createTestProvider } from "../server/cloud/payments/test-provider";
 import type { PaymentProvider } from "../server/cloud/payments";
@@ -108,8 +108,10 @@ describe("crash-proof billing", () => {
     const before = remainingSeconds(customerId);
     cloudSessionStarted({ sessionId: "s-crash", customerId, projectId });
     clock += 90_000;
-    cloudSessionAlive("s-crash");
+    cloudSessionAlive({ sessionId: "s-crash", customerId, projectId }, 90);
     clock += 10_000; // the process dies before the next checkpoint
+    setCloudInstanceId(); // and starts again: a new process
+    clock += 60_000; // once the old row has gone quiet long enough to be abandoned
     expect(recoverCloudSessions()).toBe(1);
     expect(before - remainingSeconds(customerId)).toBe(90);
     expect(recoverCloudSessions()).toBe(0);

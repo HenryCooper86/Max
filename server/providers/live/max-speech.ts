@@ -61,6 +61,8 @@ type ServerMessage = {
   message?: string;
   ms?: unknown;
   protocol?: string;
+  /** `ready`: whether the live recognizer can bias towards keyterms (absent on older servers). */
+  keyterms?: boolean;
 };
 
 type Reply = {
@@ -98,6 +100,23 @@ export function createMaxSpeechEngine(
   const reportedErrors = new Set<string>();
   /** The last error the server sent, for a connect that fails right after it. */
   let lastError: { code?: string; message?: string } | undefined;
+  /** Warning codes already shown to the user this connection: a notice is said once. */
+  const shownWarnings = new Set<string>();
+  /** Warnings that arrived before `ready`, shown once the connection is up. */
+  const earlyWarnings: ServerMessage[] = [];
+
+  function onWarning(message: ServerMessage): void {
+    log.warn("max-speech warning", { code: message.code, message: message.message });
+    if (closed) return;
+    if (!ready) {
+      earlyWarnings.push(message);
+      return;
+    }
+    const key = message.code ?? message.message ?? "";
+    if (shownWarnings.has(key)) return;
+    shownWarnings.add(key);
+    events?.onError(message.message ?? "Max Speech sent a warning");
+  }
 
   function sendJson(message: Record<string, unknown>): void {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
@@ -230,6 +249,9 @@ export function createMaxSpeechEngine(
         if (audioId === message.id) audioId = undefined;
         break;
       }
+      case "warning":
+        onWarning(message);
+        break;
       case "error":
         log.warn("max-speech error", { code: message.code, message: message.message });
         lastError = { code: message.code, message: message.message };
@@ -286,10 +308,10 @@ export function createMaxSpeechEngine(
         socket = upstream;
         let loading = false;
         upstream.on("open", () => {
+          // Keyterms are sent after `ready`, and only to a server that can use them.
           sendJson({
             type: "session.update",
             languages: engineConfig.languages,
-            keyterms: engineConfig.keyterms,
             gender: engineConfig.voiceGender,
             ...(engineConfig.voiceId || settings.voice ? { voice: engineConfig.voiceId ?? settings.voice } : {})
           });
@@ -312,7 +334,10 @@ export function createMaxSpeechEngine(
               settled = true;
               ready = true;
               clearTimeout(timer);
+              if (engineConfig.keyterms.length > 0 && message.keyterms !== false)
+                sendJson({ type: "session.update", keyterms: engineConfig.keyterms });
               resolve();
+              for (const warning of earlyWarnings.splice(0)) onWarning(warning);
             }
             return;
           }
@@ -333,13 +358,17 @@ export function createMaxSpeechEngine(
             const why = lastError ? `: ${[lastError.code, lastError.message].filter(Boolean).join(": ")}` : "";
             fail(
               new Error(
-                loading || code === 1013
-                  ? "Max Speech is still loading its models"
-                  : code === 1011
-                    ? `Max Speech could not start its models${why}`
-                    : code === 1008
-                      ? `Max Speech refused the connection at ${settings.url} (check MAX_SPEECH_API_KEY / origin)${why}`
-                      : `Max Speech ${detail} before it was ready${why}`
+                lastError?.code === "busy"
+                  ? "Max Speech is at its limit of live sessions; try again when another has ended"
+                  : lastError?.code === "handshake_timeout"
+                    ? `Max Speech gave up waiting for the session to start${why}`
+                    : loading || code === 1013
+                      ? "Max Speech is still loading its models"
+                      : code === 1011
+                        ? `Max Speech could not start its models${why}`
+                        : code === 1008
+                          ? `Max Speech refused the connection at ${settings.url} (check MAX_SPEECH_API_KEY / origin)${why}`
+                          : `Max Speech ${detail} before it was ready${why}`
               )
             );
             return;
@@ -347,7 +376,10 @@ export function createMaxSpeechEngine(
           const wasReady = ready;
           ready = false;
           settleAll();
-          if (!closed && wasReady) events?.onClosed(detail);
+          if (!closed && wasReady)
+            events?.onClosed(
+              lastError?.code === "idle_timeout" ? "Max Speech closed the session after it sat idle" : detail
+            );
         });
       });
     },

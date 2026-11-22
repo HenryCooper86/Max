@@ -520,6 +520,10 @@ const FAILURE_SPEECH: Record<string, string> = {
   "torch.unavailable": "这台设备没有可用的手电筒。",
   "permission.camera": "我没有相机权限，去设置里开启后我再帮你拍。",
   "storage.full": "存储快满了，导出或删除一些内容后我再帮你拍。",
+  // The phone sheds camera and other heavy work when it overheats or enters a
+  // power-saving mode; the voice session and crash detection keep running.
+  "device.hot": "手机过热，这个操作先暂停，语音和摔车检测照常。",
+  "device.powerSave": "手机在省电模式，暂时不录像。",
   "camera.recording": "已经在录了。",
   "camera.notRecording": "现在没有在录像。",
   "shutdown.notPending": "现在没有要关机。",

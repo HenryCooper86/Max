@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { createLogger } from "../logger";
 import { ORDER_LIFETIME_MS, packById } from "./billing";
 import { cloudPaymentProvider, cloudPublicUrl, now } from "./context";
+import { countCloud } from "./counters";
 import type { PaidOrder, PaymentProvider } from "./payments";
 import {
   closePendingOrder,
@@ -61,13 +62,19 @@ export function creditPaidOrder(paid: PaidOrder, provider: string): CreditResult
     Number.isSafeInteger(paid.amountFen) &&
     paid.amountFen > 0;
   if (!shapeOk) {
+    countCloud("max_cloud_topups_refused_total");
     log.warn("paid order refused", { provider, reason: "invalid" });
     return "invalid";
   }
   const outcome = creditOrder(paid, provider, now());
   const fields = { provider, orderId: paid.orderId, amountFen: paid.amountFen };
-  if (outcome === "credited") log.info("top-up credited", fields);
-  else if (outcome !== "duplicate") log.warn("paid order refused", { ...fields, reason: outcome });
+  if (outcome === "credited") {
+    countCloud("max_cloud_topups_credited_total");
+    log.info("top-up credited", fields);
+  } else if (outcome !== "duplicate") {
+    countCloud("max_cloud_topups_refused_total");
+    log.warn("paid order refused", { ...fields, reason: outcome });
+  }
   return outcome;
 }
 

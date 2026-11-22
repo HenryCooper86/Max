@@ -866,6 +866,41 @@ describe("createDoubaoProvider — mid-ride location updates", () => {
     expect(clientEvents(send).filter((event) => event.type === "weather")).toEqual([]);
   });
 
+  it("tells the model the phone's speed, and the one-question rule when it is fast", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    const role = () => {
+      const update = upstream.sent.filter((frame) => clientFrameEvent(frame) === 201).at(-1);
+      return JSON.stringify(clientFramePayload(update));
+    };
+    await provider.updateLocation?.(1.01, 2.01);
+    expect(role()).not.toContain("手机实时速度");
+
+    await provider.updateLocation?.(1.011, 2.011, 71.6);
+    expect(role()).toContain("[手机实时速度] 速度约 72 km/h");
+    expect(role()).toContain("高速/较快移动");
+    expect(
+      clientEvents(send)
+        .filter((event) => event.type === "ride.context")
+        .at(-1)
+    ).toMatchObject({ speedKmh: 72 });
+
+    await provider.updateLocation?.(1.012, 2.012, 12);
+    expect(role()).toContain("速度约 12 km/h");
+    expect(role()).not.toContain("高速/较快移动");
+
+    // A position without a speed: unknown again, not the last value.
+    await provider.updateLocation?.(1.013, 2.013);
+    expect(role()).not.toContain("手机实时速度");
+    expect(
+      clientEvents(send)
+        .filter((event) => event.type === "ride.context")
+        .at(-1)
+    ).not.toHaveProperty("speedKmh");
+    await provider.close();
+  });
+
   it("refetches weather immediately after a far move, but not for GPS jitter", async () => {
     const fetchMock = stubWeatherFetch();
     const { client } = makeClient();

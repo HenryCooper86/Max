@@ -9,6 +9,9 @@ import android.view.Surface
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import android.util.Size
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -75,6 +78,12 @@ class LiveVideoCamera(private val context: Context) {
             val worker = Executors.newSingleThreadExecutor()
             var lastAt = 0L
             val useCase = ImageAnalysis.Builder()
+                // Without this CameraX analyses at 640 × 480, where writing on a page cannot be read.
+                .setResolutionSelector(
+                    ResolutionSelector.Builder().setResolutionStrategy(
+                        ResolutionStrategy(Size(1280, 720), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
+                    ).build()
+                )
                 .setTargetRotation(rotation)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)

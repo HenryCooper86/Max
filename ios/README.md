@@ -295,7 +295,9 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
   connection drops or the app goes to the background, each with a `video.stop`. Frames use none of the
   50-picture budget. The front camera is used first, with a button for the back one and a small preview
   of what is being shown; frames and preview stay upright when the phone is turned. Like the field, the
-  camera is not turned on while the bike is moving (turning it off always works). Without camera permission, or on the simulator (which has no camera), a short
+  camera is not turned on while the bike is moving (turning it off always works). One camera is used at a time:
+  live video is not turned on during a recording, and a photo or a recording asked for by voice ends it, as does
+  the system taking the camera away (a phone call, another app beside this one). Without camera permission, or on the simulator (which has no camera), a short
   note says so. A frame starts no reply: the assistant sees the newest with the next thing said. `tool.activity` shows “Looking that
   up…” while a relay-side tool runs. The app declares no client tools; an unexpected `tool.call` gets
   one `tool.result` error at once so the model does not wait out the timeout.

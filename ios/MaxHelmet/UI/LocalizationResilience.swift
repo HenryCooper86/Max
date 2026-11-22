@@ -41,6 +41,7 @@ extension LocalizationTable {
         ("video.denied", "没有相机权限。请在系统设置里允许使用相机。", "Camera access is off. Allow it in Settings."),
         ("video.unavailable", "这台设备没有可用的相机。", "This device has no camera to use."),
         ("video.notReady", "现在打不开摄像头，请稍后再试。", "The camera can't be turned on right now. Try again in a moment."),
+        ("video.busy", "正在录像，摄像头被占用。请先停止录像。", "The camera is recording. Stop the recording first."),
         // unconfigured relay
         ("relay.unset.title", "未配置语音中继", "Relay not configured"),
         ("relay.unset.body", "这个版本没有中继地址。请在「设置 › 连接」里填写你的中继地址，或在 ios/Config/Secrets.xcconfig 中设置 MAX_RELAY_HOST 后重新构建。", "This build has no relay address. Enter your relay's address under Settings › Connection, or set MAX_RELAY_HOST in ios/Config/Secrets.xcconfig and rebuild."),

@@ -995,9 +995,13 @@ private struct CameraPreview: UIViewRepresentable {
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
         private var rotation: AVCaptureDevice.RotationCoordinator?
         private var watching: NSKeyValueObservation?
+        private var followed: String?
 
         /// Keeps the picture upright as the phone is turned (the app runs in landscape too), like the frames sent.
         func follow(_ device: AVCaptureDevice?) {
+            // Asked with every redraw: only another camera is news.
+            guard device?.uniqueID != followed else { return }
+            followed = device?.uniqueID
             watching = nil
             guard let device else { return }
             let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)

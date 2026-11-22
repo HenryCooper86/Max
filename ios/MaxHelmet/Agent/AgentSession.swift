@@ -1995,6 +1995,10 @@ extension AgentSession {
     func startLiveVideo() async -> VideoStartResult {
         guard !liveVideoState.active else { return .started }
         guard liveVideoReady() else { return .notReady }
+        // One camera at a time: a recording keeps it, and a photo or a recording asked for later takes it.
+        guard !state.recording else { return .busy }
+        cameraController.willUseCamera = { [weak self] in self?.stopLiveVideo() }
+        videoCamera.onLost = { [weak self] in self?.stopLiveVideo() }
         let result = await videoCamera.start(position: .front)
         guard result == .started else { return result }
         // The session may have ended while the user was asked for the camera.
@@ -2006,9 +2010,12 @@ extension AgentSession {
             $0.liveVideo = true
             $0.liveVideoBackCamera = false
         }
-        videoTimer = Timer.scheduledTimer(withTimeInterval: videoInputInterval, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: videoInputInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.sendLiveVideoFrame() }
         }
+        // In the common modes, so frames keep going while the conversation is being scrolled.
+        RunLoop.main.add(timer, forMode: .common)
+        videoTimer = timer
         // The first frame as soon as the camera has one, not a whole second later.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
             MainActor.assumeIsolated { self?.sendLiveVideoFrame() }

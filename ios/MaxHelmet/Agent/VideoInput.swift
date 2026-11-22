@@ -31,6 +31,8 @@ enum VideoStartResult: Equatable {
     /// No camera: the simulator, or a device without one.
     case unavailable
     case notReady
+    /// A recording is using the camera.
+    case busy
 }
 
 /// Has `encode` make a JPEG of a frame of `width` × `height` as base64: the
@@ -111,5 +113,6 @@ func videoNoteText(_ result: VideoStartResult) -> String? {
     case .denied: return L("video.denied")
     case .unavailable: return L("video.unavailable")
     case .notReady: return L("video.notReady")
+    case .busy: return L("video.busy")
     }
 }

@@ -339,6 +339,7 @@ enum class Str(val zh: String, val en: String) {
     VIDEO_PERMISSION_DENIED("没有摄像头权限，无法打开。可在系统设置中允许。", "The camera is off because it isn't allowed. You can allow it in Settings."),
     VIDEO_NOT_READY("现在无法打开摄像头，请稍后再试。", "The camera can't be turned on right now. Try again in a moment."),
     VIDEO_CAMERA_FAILED("摄像头打不开。", "The camera could not be opened."),
+    VIDEO_CAMERA_BUSY("正在录像，摄像头被占用。请先停止录像。", "The camera is recording. Stop the recording first."),
     SMS_SPEED_UNKNOWN("现在无法确认你是否在骑行，暂时不发短信。等 GPS 定位后再试。", "I can't tell whether you're riding right now, so I won't write a text yet. Try again once GPS has a fix."),
     TYPE_STOP_FIRST("停车后才能输入", "Stop to type"),
     LOAD_HOT("手机过热，已停止录像，降温后可再次录像。", "The phone is hot, so video recording is off until it cools down."),

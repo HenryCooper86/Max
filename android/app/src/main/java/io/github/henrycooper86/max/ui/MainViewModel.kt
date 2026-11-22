@@ -598,21 +598,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _videoNote.value = null
         val granted = ContextCompat.checkSelfPermission(getApplication(), Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (!granted) { _videoNote.value = Str.VIDEO_PERMISSION_DENIED; return }
+        // One camera at a time: a recording keeps it, and a photo or a recording asked for later takes it.
+        if (camera.isRecording.value) { _videoNote.value = Str.VIDEO_CAMERA_BUSY; return }
+        camera.beforeCapture = { stopVideo() }
         if (!session.startVideo()) { _videoNote.value = Str.VIDEO_NOT_READY; return }
         openVideoCamera()
     }
 
-    private fun openVideoCamera() {
+    /** [fallBack]: the camera switched to could not be opened, and the one before it is opened again. */
+    private fun openVideoCamera(fallBack: Boolean = false) {
         videoCamera.start(
             front = videoFront,
-            onFrame = { frame -> session.offerVideoFrame(frame); _videoPreview.value = frame },
-            onFailed = { stopVideo(); _videoNote.value = Str.VIDEO_CAMERA_FAILED }
+            // A frame that was on its way when the video went off is not kept as a preview nobody sees.
+            onFrame = { frame -> if (session.state.value.videoActive) { session.offerVideoFrame(frame); _videoPreview.value = frame } },
+            onFailed = {
+                if (fallBack) { videoFront = !videoFront; openVideoCamera() }
+                else { stopVideo(); _videoNote.value = Str.VIDEO_CAMERA_FAILED }
+            }
         )
     }
 
     fun switchVideoCamera() {
         videoFront = !videoFront
-        if (session.state.value.videoActive) openVideoCamera()
+        // A phone with one camera stays on it.
+        if (session.state.value.videoActive) openVideoCamera(fallBack = true)
     }
 
     fun videoPermissionDenied() { _videoNote.value = Str.VIDEO_PERMISSION_DENIED }

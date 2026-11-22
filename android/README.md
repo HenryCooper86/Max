@@ -194,7 +194,8 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
   sent when the user turns it off, the conversation ends or the app goes to the background. A lost
   connection turns the camera off too (it is not left on with nobody to show), as does a
   `session.started` without `videoInput`. Like the field, the camera is not turned on while the bike
-  is moving; turning it off always works.
+  is moving; turning it off always works. One camera is used at a time: live video is not turned on
+  during a recording, and a photo or a recording asked for by voice ends it.
 - Tool activity: `tool.activity` events show as a short status line ("Using get weather…"). The
   app declares no client tools, so an unexpected `tool.call` is answered at once with an
   `unknown tool` error, as the protocol requires.

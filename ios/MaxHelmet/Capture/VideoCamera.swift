@@ -24,6 +24,20 @@ final class VideoCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     private var newestTaken = true
     /// Which camera is on. Read from the main thread only.
     private(set) var position: AVCaptureDevice.Position = .front
+    /// The system took the camera away (a call, another app in split view, another capture session) or
+    /// the session failed: the video cannot go on, and its owner is told so. Main thread.
+    @MainActor var onLost: () -> Void = {}
+
+    override init() {
+        super.init()
+        // The microphone and the audio session stay with the voice engine.
+        session.automaticallyConfiguresApplicationAudioSession = false
+        for name in [AVCaptureSession.wasInterruptedNotification, AVCaptureSession.runtimeErrorNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: session, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onLost() }
+            }
+        }
+    }
 
     private func device(_ position: AVCaptureDevice.Position) -> AVCaptureDevice? {
         AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
@@ -46,10 +60,17 @@ final class VideoCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         if connection.videoRotationAngle != angle, connection.isVideoRotationAngleSupported(angle) {
             connection.videoRotationAngle = angle
         }
+        // Never mirrored: writing on a page must read right. (It can only be set by hand once the
+        // system is told not to choose it.)
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            if connection.isVideoMirrored { connection.isVideoMirrored = false }
+        }
     }
 
     /// Opens the camera, asking permission the first time. The simulator has no
     /// camera: that is `.unavailable`, with no permission asked.
+    @MainActor
     func start(position wanted: AVCaptureDevice.Position = .front) async -> VideoStartResult {
         guard device(wanted) != nil else { return .unavailable }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -67,6 +88,7 @@ final class VideoCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     }
 
     /// Switches between the front and the back camera. False when there is no other camera.
+    @MainActor
     func switchCamera() async -> Bool {
         let wanted: AVCaptureDevice.Position = position == .front ? .back : .front
         guard device(wanted) != nil else { return false }
@@ -100,8 +122,11 @@ final class VideoCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     private func configure(_ wanted: AVCaptureDevice.Position) -> Bool {
         guard let camera = device(wanted), let input = try? AVCaptureDeviceInput(device: camera) else { return false }
         session.beginConfiguration()
-        for existing in session.inputs { session.removeInput(existing) }
+        let before = session.inputs
+        for existing in before { session.removeInput(existing) }
         guard session.canAddInput(input) else {
+            // The camera that was on stays on: a session left with no input would show nothing and say it was live.
+            for existing in before where session.canAddInput(existing) { session.addInput(existing) }
             session.commitConfiguration()
             return false
         }
@@ -114,13 +139,8 @@ final class VideoCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
             if session.canAddOutput(output) { session.addOutput(output) }
             configured = true
         }
-        // Frames are sent upright, as the phone is held, and never mirrored (writing on a page must read right).
+        // Frames are sent upright, as the phone is held.
         rotation = AVCaptureDevice.RotationCoordinator(device: camera, previewLayer: nil)
-        if let connection = output.connection(with: .video), connection.isVideoMirroringSupported {
-            // Mirroring can only be set by hand once the system is told not to choose it.
-            connection.automaticallyAdjustsVideoMirroring = false
-            connection.isVideoMirrored = false
-        }
         level()
         session.commitConfiguration()
         lock.lock()

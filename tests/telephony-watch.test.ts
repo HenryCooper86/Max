@@ -282,6 +282,69 @@ describe("watching a placed call", () => {
   });
 });
 
+describe("the relay's lines and watched calls", () => {
+  it("counts a call that is still ringing as a line taken", async () => {
+    const harness = twilio({ maxCalls: 1 });
+    const first = await placeWatched(harness);
+    expect(first.result.ok).toBe(true);
+    // The first has not been answered yet, and will need the only line when it is.
+    const second = await harness.telephony.placeCall({ to: "+14155550124" }, ORIGIN, () => undefined);
+    expect(second).toMatchObject({ ok: false, status: 429 });
+    twilioStatus(harness, first.statusUrl, { CallStatus: "no-answer" });
+    expect((await placeWatched(harness)).result.ok).toBe(true);
+  });
+
+  it("frees the line a call was to have when nothing is heard of it", async () => {
+    const harness = twilio({ maxCalls: 1 });
+    const first = await placeWatched(harness);
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(first.events).toEqual([{ type: "unknown" }]);
+    expect((await placeWatched(harness)).result.ok).toBe(true);
+    // Given up on: a late answer is not a conversation nobody is counting.
+    expect(twilioVoice(harness, first.voiceUrl).body).not.toContain("<Stream");
+  });
+
+  it("tells the watcher when someone picked up and every line was taken", async () => {
+    const harness = twilio({ maxCalls: 1 });
+    const placed = await placeWatched(harness);
+    // An inbound call takes the line while the outbound one rings.
+    const inboundUrl = `${ORIGIN}/telephony/twilio/voice`;
+    const inbound = twilioVoice(harness, inboundUrl, { CallSid: "CAin1", From: "+14155550150", To: "+14155550199" });
+    await connectStream(harness, inbound.body, "CAin1");
+    const answer = twilioVoice(harness, placed.voiceUrl);
+    expect(answer.body).toContain("<Reject");
+    expect(placed.events).toEqual([{ type: "refused", callSid: "CAout1" }]);
+    // The carrier's word on the hung-up call adds nothing.
+    twilioStatus(harness, placed.statusUrl, { CallStatus: "busy" });
+    expect(placed.events).toHaveLength(1);
+  });
+
+  it("takes the call as placed when it is answered before the carrier's error arrives", async () => {
+    const harness = twilio();
+    const events: CallProgress[] = [];
+    let voiceUrl = "";
+    harness.request.mockImplementationOnce((async (_url: string, init: RequestInit) => {
+      voiceUrl = new URLSearchParams(String(init.body)).get("Url") ?? "";
+      // The call exists and is answered, and then the answer to the request is lost.
+      twilioVoice(harness, voiceUrl);
+      return json({ message: "gateway timeout" }, 504);
+    }) as never);
+    const result = await harness.telephony.placeCall({ to: "+14155550123" }, ORIGIN, (p) => events.push(p));
+    expect(result).toEqual({ ok: true, callSid: "CAout1" });
+    expect(events).toEqual([{ type: "answered", callSid: "CAout1" }]);
+  });
+
+  it("says what the carrier answered when it refuses a call", async () => {
+    const harness = twilio();
+    harness.request.mockImplementationOnce((async () => json({ message: "no" }, 401)) as never);
+    expect(await harness.telephony.placeCall({ to: "+14155550123" }, ORIGIN, () => undefined)).toMatchObject({
+      ok: false,
+      status: 502,
+      carrierStatus: 401
+    });
+  });
+});
+
 describe("watching a Telnyx call", () => {
   const CALL_ID = "v3:MdI91X4lWFEs7IgbBEOT9M4AigoY08M0WWZFISt1Yw2axZ_IiE4pqg";
 

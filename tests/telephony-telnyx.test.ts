@@ -709,6 +709,7 @@ describe("a Telnyx call", () => {
     expect(await refused.telephony.placeCall({ to: "+14155550123" }, "https://r.example")).toEqual({
       ok: false,
       status: 502,
+      carrierStatus: 422,
       error: "Telnyx refused the call (HTTP 422)."
     });
   });

@@ -54,6 +54,10 @@
   Campaigns live in memory unless `CAMPAIGNS_FILE` is set. The relay now also gives the carrier a status callback
   (`/telephony/twilio/status`, `/telephony/telnyx/status`) for calls placed this way. Tested against stand-ins for
   Twilio and Telnyx, not on real calls. See [calling a list of numbers](docs/telephony.md#calling-a-list-of-numbers).
+- A campaign writes each call to a journal on disk before it places it, so a number is not dialled again after a
+  crash, and places nothing while it cannot write. It stops placing when the relay shuts down, counts calls that are
+  still ringing against `TELEPHONY_MAX_CALLS`, does not call one number for two campaigns at once, and stops itself
+  with a `stoppedReason` when five calls in a row cannot be placed. `startAt` needs its offset.
 - Telnyx is a second carrier beside Twilio: set `TELNYX_WEBHOOK_SECRET` and `TELNYX_PUBLIC_KEY`, and point a TeXML
   application at `/telephony/telnyx/voice?key=<secret>`. Inbound calls, transfers, keypad input and outbound calls work as on
   Twilio. Answering-machine detection does not yet. Both carriers can be set up at once, and `POST /v1/calls` takes

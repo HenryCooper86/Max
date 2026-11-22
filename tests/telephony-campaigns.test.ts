@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as realSleep } from "node:timers/promises";
@@ -66,6 +66,18 @@ const statuses = (harness: ReturnType<typeof setup>, id: string) =>
 async function settleFile() {
   await advance(0);
   await realSleep(30);
+}
+
+/**
+ * Lets time pass for campaigns kept in a file. Each call is written to disk
+ * before it is placed, and that write is real: the clock waits for it.
+ */
+async function pass(harness: ReturnType<typeof setup>, ms: number) {
+  for (let left = ms; left > 0; left -= 500) {
+    await advance(Math.min(500, left));
+    await harness.campaigns.settled();
+    await advance(0);
+  }
 }
 
 describe("validating a campaign", () => {
@@ -495,7 +507,7 @@ describe("keeping campaigns in a file", () => {
     const file = path.join(directory, "campaigns.json");
     const first = setup({ file, place: () => ({ ok: true, callSid: "CA1" }) });
     const id = make(first, { name: "Saved", calls: numbers(3), carrier: "twilio" });
-    await advance(3_000);
+    await pass(first, 3_000);
     await first.campaigns.close();
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ campaigns: [{ id, name: "Saved" }] });
@@ -509,17 +521,17 @@ describe("keeping campaigns in a file", () => {
     const file = path.join(directory, "campaigns.json");
     const first = setup({ file });
     const id = make(first, { calls: numbers(3), concurrency: 2 });
-    await advance(3_000);
+    await pass(first, 3_000);
     first.placed[0]!.watch({ type: "answered", callSid: "CA1" });
     first.placed[1]!.watch({ type: "ended", callSid: "CA2", reason: "caller", durationMs: 3_000 });
-    await advance(1_000);
+    await pass(first, 1_000);
     expect(statuses(first, id)).toEqual(["answered", "completed", "calling"]);
     await first.campaigns.close();
 
     const second = setup({ file });
     expect(statuses(second, id)).toEqual(["unknown", "completed", "unknown"]);
     expect(second.campaigns.get(id)!.calls[0]).toMatchObject({ endedReason: "the relay restarted during the call" });
-    await advance(60_000);
+    await pass(second, 60_000);
     expect(second.placed).toHaveLength(0);
   });
 
@@ -527,17 +539,17 @@ describe("keeping campaigns in a file", () => {
     const file = path.join(directory, "campaigns.json");
     const first = setup({ file });
     const id = make(first, { calls: numbers(2), attempts: 2, retryAfterMinutes: 5 });
-    await advance(2_000);
+    await pass(first, 2_000);
     first.placed[0]!.watch({ type: "unanswered", callSid: "CA1", status: "busy" });
     await first.campaigns.close();
 
     const second = setup({ file });
-    await advance(2_000);
+    await pass(second, 2_000);
     // The second number has not been called yet and goes first.
     expect(second.placed.map((entry) => entry.input.to)).toEqual(["+14155550101"]);
     expect(statuses(second, id)[0]).toBe("waiting");
     second.placed[0]!.watch({ type: "ended", callSid: "CA1", reason: "caller", durationMs: 1 });
-    await advance(5 * 60_000);
+    await pass(second, 5 * 60_000);
     expect(second.placed.map((entry) => entry.input.to)).toContain("+14155550100");
   });
 
@@ -601,5 +613,246 @@ describe("keeping campaigns in a file", () => {
     make(again);
     await settleFile();
     expect(JSON.parse(readFileSync(file, "utf8")).campaigns).toHaveLength(1);
+  });
+});
+
+describe("not dialling anybody twice", () => {
+  it("does not dial again a call it placed just before a crash", async () => {
+    const file = path.join(directory, "campaigns.json");
+    // The carrier takes its time: the relay dies while it waits for the answer.
+    const first = setup({ file, place: () => new Promise<PlaceResult>(() => undefined) });
+    const id = make(first, { calls: numbers(2), attempts: 3 });
+    await pass(first, 1_000);
+    expect(first.placed.map((entry) => entry.input.to)).toEqual(["+14155550100"]);
+    // No close(): what is on disk is all a new process has.
+    const second = setup({ file });
+    expect(second.campaigns.get(id)!.calls[0]).toMatchObject({
+      status: "unknown",
+      attempts: 1,
+      endedReason: "the relay restarted during the call"
+    });
+    await pass(second, 5_000);
+    expect(second.placed.map((entry) => entry.input.to)).toEqual(["+14155550101"]);
+    await first.campaigns.close();
+    await second.campaigns.close();
+  });
+
+  it("knows from the journal alone that a call was placed, when the file is older", async () => {
+    const file = path.join(directory, "campaigns.json");
+    const first = setup({ file });
+    const id = make(first, { calls: numbers(2), concurrency: 2 });
+    await pass(first, 3_000);
+    await first.campaigns.close();
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    // The file as it was before either call: both waiting, and no line of the journal known.
+    for (const call of saved.campaigns[0].calls) Object.assign(call, { status: "waiting", attempts: 0 });
+    writeFileSync(file, JSON.stringify({ ...saved, journalSeq: 0 }));
+    writeFileSync(
+      `${file}.journal`,
+      `${JSON.stringify({ seq: 1, campaign: id, to: "+14155550100", attempts: 1, at: "2026-06-01T10:00:00.000Z" })}\n{"seq":2,"campa`
+    );
+    const second = setup({ file });
+    expect(statuses(second, id)).toEqual(["unknown", "waiting"]);
+    await pass(second, 3_000);
+    // The line cut short was never followed by a call: that number is still to be called.
+    expect(second.placed.map((entry) => entry.input.to)).toEqual(["+14155550101"]);
+    await second.campaigns.close();
+    // Once the file knows everything, the journal is gone.
+    expect(existsSync(`${file}.journal`)).toBe(false);
+  });
+
+  it("places no call that it cannot write down first", async () => {
+    const folder = path.join(directory, "later");
+    const file = path.join(folder, "campaigns.json");
+    const harness = setup({ file });
+    const id = make(harness, { calls: numbers(2) });
+    await pass(harness, 10_000);
+    expect(harness.placed).toHaveLength(0);
+    expect(harness.campaigns.get(id)!.calls[0]).toMatchObject({ status: "waiting", attempts: 0 });
+    // The disk is back: placing goes on within half a minute.
+    mkdirSync(folder);
+    await pass(harness, 35_000);
+    expect(harness.placed.length).toBeGreaterThan(0);
+    await harness.campaigns.close();
+  });
+
+  it("stops placing when the relay begins to shut down, and still records how calls end", async () => {
+    const file = path.join(directory, "campaigns.json");
+    const harness = setup({ file });
+    const id = make(harness, { calls: numbers(3) });
+    await pass(harness, 500);
+    expect(harness.placed).toHaveLength(1);
+    harness.campaigns.stop();
+    harness.placed[0]!.watch({ type: "ended", callSid: "CA1", reason: "shutdown", durationMs: 2_000 });
+    await pass(harness, 10_000);
+    expect(harness.placed).toHaveLength(1);
+    await harness.campaigns.close();
+    expect(
+      JSON.parse(readFileSync(file, "utf8")).campaigns[0].calls.map((call: { status: string }) => call.status)
+    ).toEqual(["completed", "waiting", "waiting"]);
+    expect(statuses(harness, id)).toEqual(["completed", "waiting", "waiting"]);
+  });
+
+  it("does not call a number for two campaigns at the same time", async () => {
+    const harness = setup();
+    make(harness, { calls: numbers(1) });
+    const second = make(harness, { calls: numbers(1) });
+    await advance(10_000);
+    expect(harness.placed).toHaveLength(1);
+    expect(statuses(harness, second)).toEqual(["waiting"]);
+    harness.placed[0]!.watch({ type: "ended", callSid: "CA1", reason: "caller", durationMs: 1 });
+    await advance(2_000);
+    expect(harness.placed).toHaveLength(2);
+  });
+
+  it("keeps a call that was answered before the carrier's error arrived", async () => {
+    const harness = setup({
+      place: (entry) => {
+        entry.watch({ type: "answered", callSid: "CA9" });
+        return { ok: false, status: 502, error: "Twilio could not be reached.", carrierStatus: 0 };
+      }
+    });
+    const id = make(harness, { calls: numbers(1) });
+    await advance(1_000);
+    expect(harness.campaigns.get(id)!.calls[0]).toMatchObject({ status: "answered", callSid: "CA9" });
+    harness.placed[0]!.watch({ type: "ended", callSid: "CA9", reason: "caller", durationMs: 5_000 });
+    expect(statuses(harness, id)).toEqual(["completed"]);
+  });
+
+  it("tries again later when the relay had no line for someone who picked up", async () => {
+    const harness = setup();
+    const id = make(harness, { calls: numbers(1), attempts: 2, retryAfterMinutes: 10 });
+    await advance(1_000);
+    harness.placed[0]!.watch({ type: "refused", callSid: "CA1" });
+    expect(harness.campaigns.get(id)!.calls[0]).toMatchObject({ status: "waiting", attempts: 1 });
+    await advance(9 * 60_000);
+    expect(harness.placed).toHaveLength(1);
+    await advance(2 * 60_000);
+    expect(harness.placed).toHaveLength(2);
+    harness.placed[1]!.watch({ type: "refused", callSid: "CA2" });
+    expect(harness.campaigns.get(id)!.calls[0]).toMatchObject({
+      status: "failed",
+      attempts: 2,
+      endedReason: "every line of the relay was busy when the call was answered"
+    });
+  });
+
+  it("marks a call cancelled when the campaign is cancelled while the lines are full", async () => {
+    let cancel = (): void => undefined;
+    const harness = setup({
+      place: () => {
+        cancel();
+        return { ok: false, status: 429, error: "Every line is busy." };
+      }
+    });
+    const id = make(harness, { calls: numbers(2) });
+    cancel = () => harness.campaigns.cancel(id);
+    await advance(1_000);
+    expect(statuses(harness, id)).toEqual(["cancelled", "cancelled"]);
+    expect(harness.campaigns.get(id)).toMatchObject({ status: "cancelled", counts: { waiting: 0, calling: 0 } });
+  });
+});
+
+describe("a carrier that cannot be used", () => {
+  it("stops the campaign after five calls in a row could not be placed, and says why", async () => {
+    const harness = setup({
+      place: () => ({ ok: false, status: 502, error: "Twilio refused the call (HTTP 401).", carrierStatus: 401 })
+    });
+    const id = make(harness, { calls: numbers(8) });
+    await advance(60_000);
+    expect(harness.placed).toHaveLength(5);
+    const campaign = harness.campaigns.get(id)!;
+    expect(campaign.status).toBe("cancelled");
+    expect(campaign.stoppedReason).toContain("5 calls in a row could not be placed");
+    expect(campaign.stoppedReason).toContain("HTTP 401");
+    expect(campaign.counts).toMatchObject({ failed: 5, cancelled: 3 });
+  });
+
+  it("carries on when the carrier refuses single numbers", async () => {
+    let count = 0;
+    const harness = setup({
+      place: () => {
+        count += 1;
+        return count <= 6
+          ? { ok: false, status: 502, error: "Twilio refused the call (HTTP 400).", carrierStatus: 400 }
+          : { ok: true, callSid: `CA${count}` };
+      }
+    });
+    const id = make(harness, { calls: numbers(8), concurrency: 8 });
+    await advance(60_000);
+    expect(harness.placed).toHaveLength(8);
+    expect(harness.campaigns.get(id)!.counts).toMatchObject({ failed: 6, calling: 2 });
+  });
+
+  it("starts counting again after a call that could be placed", async () => {
+    let count = 0;
+    const harness = setup({
+      place: () => {
+        count += 1;
+        return count % 5 === 0
+          ? { ok: true, callSid: `CA${count}` }
+          : { ok: false, status: 502, error: "Twilio could not be reached.", carrierStatus: 0 };
+      }
+    });
+    const id = make(harness, { calls: numbers(12), concurrency: 12 });
+    await advance(60_000);
+    expect(harness.placed).toHaveLength(12);
+    expect(harness.campaigns.get(id)!.stoppedReason).toBeUndefined();
+  });
+});
+
+describe("times and saved files that are odd", () => {
+  it("waits for a start weeks ahead without spinning", async () => {
+    const harness = setup();
+    make(harness, { calls: numbers(1), startAt: "2026-06-30T10:00:00Z" });
+    const warned = vi.spyOn(process, "emitWarning");
+    await advance(3 * 60 * 60_000);
+    // One look an hour, not one a millisecond.
+    expect(vi.getTimerCount()).toBeLessThanOrEqual(2);
+    expect(warned).not.toHaveBeenCalled();
+    expect(harness.placed).toHaveLength(0);
+    await advance(29 * 24 * 60 * 60_000);
+    expect(harness.placed).toHaveLength(1);
+    warned.mockRestore();
+  });
+
+  it.each([
+    ["no offset", "2026-06-02T09:00:00"],
+    ["a day that does not exist", "2026-02-31T09:00:00Z"],
+    ["a date only", "2026-06-02"],
+    ["words", "tomorrow at nine"]
+  ])("refuses a start time with %s", (_name, startAt) => {
+    const result = setup().campaigns.create({ calls: numbers(1), startAt });
+    expect(result).toMatchObject({ ok: false, status: 400 });
+    expect((result as { problem: string }).problem).toContain("startAt must be a time with its offset");
+  });
+
+  it("takes a start time with an offset", () => {
+    const result = setup().campaigns.create({ calls: numbers(1), startAt: "2026-06-02T09:00:00+02:00" });
+    expect(result).toMatchObject({ ok: true, campaign: { startAt: "2026-06-02T07:00:00.000Z", status: "scheduled" } });
+  });
+
+  it.each([
+    ["a time zone that does not exist", { window: { from: "09:00", to: "18:00", timeZone: "Bad/Zone" } }],
+    ["a start that is not a time", { startAt: "soon" }],
+    ["no room for a call", { concurrency: 0 }]
+  ])("does not load a saved campaign with %s, and keeps running", async (_name, odd) => {
+    const file = path.join(directory, "campaigns.json");
+    const campaign = {
+      id: "a",
+      createdAt: "2026-06-01T09:00:00.000Z",
+      concurrency: 1,
+      attempts: 1,
+      retryAfterMinutes: 30,
+      cancelled: false,
+      calls: [{ to: "+14155550100", attempts: 0, status: "waiting" }],
+      ...odd
+    };
+    writeFileSync(file, JSON.stringify({ version: 1, campaigns: [campaign] }));
+    const harness = setup({ file });
+    expect(harness.campaigns.loadProblem).toContain("CAMPAIGNS_FILE");
+    await pass(harness, 5_000);
+    expect(harness.placed).toHaveLength(0);
+    await harness.campaigns.close();
   });
 });

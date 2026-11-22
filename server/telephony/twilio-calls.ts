@@ -296,7 +296,7 @@ type OutboundPlan = { context?: string; userId?: string; voicemailMessage?: stri
 
 /**
  * What a caller who asked to watch a placed call is told. Exactly one of
- * `ended`, `machine`, `unanswered` and `unknown` is the last word on a call.
+ * `ended`, `machine`, `unanswered`, `refused` and `unknown` is the last word on a call.
  */
 export type CallProgress =
   /** A person is on the line and the assistant's session is starting. */
@@ -307,6 +307,8 @@ export type CallProgress =
   | { type: "machine"; callSid: string; answeredBy: string; voicemailLeft: boolean }
   /** Nobody picked up, as the carrier's status callback says. */
   | { type: "unanswered"; callSid?: string; status: "busy" | "no-answer" | "failed" | "canceled" }
+  /** The person picked up, but every line of the relay was taken by then: the call was hung up. */
+  | { type: "refused"; callSid: string }
   /** Nothing was heard about the call in time. */
   | { type: "unknown" };
 
@@ -316,6 +318,8 @@ type Watched = {
   watch: (progress: CallProgress) => void;
   callSid?: string;
   answeredAt?: number;
+  /** Its media stream is connected: the call holds one of the relay's lines. */
+  onLine?: boolean;
   expiresAt: number;
   timer?: NodeJS.Timeout;
 };
@@ -350,7 +354,16 @@ export type Telephony = {
     input: PlaceCallInput,
     origin: string,
     watch?: (progress: CallProgress) => void
-  ): Promise<{ ok: true; callSid: string } | { ok: false; status: number; error: string }>;
+  ): Promise<
+    | { ok: true; callSid: string }
+    | {
+        ok: false;
+        status: number;
+        error: string;
+        /** With 502: what the carrier answered. 0 when it could not be reached. */
+        carrierStatus?: number;
+      }
+  >;
   activeCalls(): number;
 };
 
@@ -397,6 +410,8 @@ export function createTelephony(
   function conclude(entry: Watched, progress: CallProgress): void {
     if (watched.get(entry.plan) !== entry) return;
     watched.delete(entry.plan);
+    // A call that is given up on is not answered later with nobody watching it.
+    outbound.delete(entry.plan);
     if (entry.callSid && watchedByCall.get(entry.callSid) === entry) watchedByCall.delete(entry.callSid);
     clearTimeout(entry.timer);
     report(entry, progress);
@@ -408,6 +423,16 @@ export function createTelephony(
     } catch (error) {
       log.warn("a call watcher failed", { message: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  /**
+   * Watched calls that are placed and not yet on a line. Each will need a line
+   * when it is answered, so they count against the limit when a call is placed.
+   */
+  function linesSpokenFor(): number {
+    let count = 0;
+    for (const entry of watched.values()) if (!entry.onLine) count += 1;
+    return count;
   }
 
   /** If nothing more is heard of the call in time, it is reported as unknown. */
@@ -486,6 +511,10 @@ export function createTelephony(
     }
     if (active >= settings.maxCalls) {
       log.warn("call refused: every line is busy", { callSid, active });
+      if (watcher && plan) {
+        watcher.callSid = callSid;
+        conclude(watcher, { type: "refused", callSid });
+      }
       return { status: 200, body: carrier.busyXml() };
     }
     const call: CallInfo = plan
@@ -776,7 +805,11 @@ export function createTelephony(
         counted = true;
         connected.set(call.callSid, now() + CALL_MEMORY_MS);
         // The call is connected: its end is reported by finish, not by the timer.
-        clearTimeout(watchedByCall.get(call.callSid)?.timer);
+        const watcher = watchedByCall.get(call.callSid);
+        if (watcher) {
+          clearTimeout(watcher.timer);
+          watcher.onLine = true;
+        }
         settle();
         bridge = carrier.bridge(message.streamId);
         const callerId = dialable(call.from);
@@ -840,7 +873,7 @@ export function createTelephony(
     input: PlaceCallInput,
     origin: string,
     watch?: (progress: CallProgress) => void
-  ): Promise<{ ok: true; callSid: string } | { ok: false; status: number; error: string }> {
+  ): Promise<{ ok: true; callSid: string } | { ok: false; status: number; error: string; carrierStatus?: number }> {
     const notReady = placeProblem();
     if (notReady || !carrier.placeCall || !settings.phoneNumber) {
       return { ok: false, status: 503, error: notReady ?? carrier.placeCallHelp };
@@ -867,8 +900,11 @@ export function createTelephony(
         error: `voicemailMessage needs answering-machine detection, which the relay does not do on ${carrier.label} yet.`
       };
     }
-    if (active >= settings.maxCalls) return { ok: false, status: 429, error: "Every line is busy." };
     prune();
+    // Calls that are ringing will each need a line when they are answered.
+    if (active + linesSpokenFor() >= settings.maxCalls) {
+      return { ok: false, status: 429, error: "Every line is busy." };
+    }
     const plan = randomBytes(24).toString("base64url");
     outbound.set(plan, {
       ...(typeof context === "string" ? { context } : {}),
@@ -890,6 +926,12 @@ export function createTelephony(
       ...(entry ? { statusUrl: carrier.statusUrl(base, plan) } : {})
     });
     if (!result.ok) {
+      // The carrier's answer was lost, but the call it placed has already been
+      // heard of: it is a call, and what becomes of it is reported as for any other.
+      if (entry && (entry.answeredAt || watched.get(plan) !== entry)) {
+        log.warn("outbound call placed, though the carrier's answer was lost", { status: result.status });
+        return { ok: true, callSid: entry.callSid ?? "" };
+      }
       outbound.delete(plan);
       if (entry) {
         // The caller is told by the error; the watcher hears nothing.
@@ -900,6 +942,7 @@ export function createTelephony(
       return {
         ok: false,
         status: 502,
+        carrierStatus: result.status || 0,
         error: result.status
           ? `${carrier.label} refused the call (HTTP ${result.status}).`
           : `${carrier.label} could not be reached.`

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { rename, writeFile } from "node:fs/promises";
+import { open, rename, rm } from "node:fs/promises";
 import type { Logger } from "../logger";
 import { E164, MAX_CONTEXT_CHARS, MAX_VOICEMAIL_CHARS, type CallProgress } from "./twilio-calls";
 
@@ -66,6 +66,8 @@ type Campaign = {
   voicemailMessage?: string;
   createdAt: string;
   cancelled: boolean;
+  /** Why the relay stopped the campaign itself, when it did. */
+  stoppedReason?: string;
   calls: CampaignCall[];
 };
 
@@ -84,6 +86,8 @@ type CampaignSummary = {
   window?: Window;
   /** Running, but outside its window: nothing is placed until it opens. */
   waitingForWindow: boolean;
+  /** Why the relay stopped the campaign itself: call after call could not be placed. */
+  stoppedReason?: string;
   total: number;
   counts: Record<CallStatus, number>;
 };
@@ -97,7 +101,7 @@ type CampaignDetail = CampaignSummary & {
   >;
 };
 
-type PlaceResult = { ok: true; callSid: string } | { ok: false; status: number; error: string };
+type PlaceResult = { ok: true; callSid: string } | { ok: false; status: number; error: string; carrierStatus?: number };
 
 export type CampaignOptions = {
   /** Places one call (the relay's POST /v1/calls) and reports what becomes of it to `watch`. */
@@ -125,6 +129,10 @@ export type Campaigns = {
   remove(id: string): { ok: true } | { ok: false; status: number; problem: string };
   /** Why the saved file could not be read, if it could not. */
   loadProblem: string | undefined;
+  /** Places no more calls. Calls on the line still end and are still saved. For the start of a shutdown. */
+  stop(): void;
+  /** Resolves when no write to the files is under way any more. */
+  settled(): Promise<void>;
   /** Writes what has changed and stops the timers. */
   close(): Promise<void>;
 };
@@ -140,6 +148,14 @@ const LINE_BUSY_RETRY_MS = 5_000;
 /** How often a campaign outside its window looks at the clock. */
 const WINDOW_CHECK_MS = 30_000;
 const SAVE_GAP_MS = 1_000;
+/** A large file takes time to write: the next write waits this many times as long. */
+const SAVE_COST_FACTOR = 10;
+/** When a placement cannot be written down first, placing waits this long. */
+const STORAGE_RETRY_MS = 30_000;
+/** Timers take at most 2^31-1 ms. Nothing waits longer than this without looking again. */
+const MAX_WAKE_MS = 60 * 60_000;
+/** This many calls in a row that cannot be placed stop a campaign: it is the setup, not the numbers. */
+const MAX_PLACE_FAILURES = 5;
 const RESTART_REASON = "the relay restarted during the call";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -191,6 +207,19 @@ function parseWindow(value: unknown): Window | undefined | Error {
   return { from, to, timeZone, days: DAYS.filter((day) => days.includes(day)) };
 }
 
+/** An ISO time that says which offset it is in, and names a day that exists. */
+function instantFrom(value: unknown): number | undefined {
+  if (typeof value !== "string" || value.length > 40) return undefined;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return undefined;
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return undefined;
+  // Date.parse turns 31 February into 3 March.
+  const day = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  if (day.getUTCMonth() !== Number(match[2]) - 1 || day.getUTCDate() !== Number(match[3])) return undefined;
+  return parsed;
+}
+
 /** Turns the request body into a campaign, or says what is wrong with it. */
 function parseCampaign(body: unknown, at: number): { campaign: Campaign } | { problem: string } {
   if (!isRecord(body)) return { problem: "Send a JSON object with a calls list." };
@@ -221,9 +250,12 @@ function parseCampaign(body: unknown, at: number): { campaign: Campaign } | { pr
 
   let startAt: string | undefined;
   if (body.startAt !== undefined && body.startAt !== null) {
-    const parsed =
-      typeof body.startAt === "string" && /^\d{4}-\d{2}-\d{2}T/.test(body.startAt) ? Date.parse(body.startAt) : NaN;
-    if (Number.isNaN(parsed)) return { problem: "startAt must be a time like 2026-12-01T09:00:00Z." };
+    const parsed = instantFrom(body.startAt);
+    if (parsed === undefined) {
+      return {
+        problem: "startAt must be a time with its offset, like 2026-12-01T09:00:00Z or 2026-12-01T09:00:00+01:00."
+      };
+    }
     if (parsed > at + MAX_START_AHEAD_MS) return { problem: "startAt can be at most 30 days ahead." };
     startAt = new Date(parsed).toISOString();
   }
@@ -273,6 +305,10 @@ function parseCampaign(body: unknown, at: number): { campaign: Campaign } | { pr
   };
 }
 
+/** Why a file operation failed, without the path. */
+const reasonOf = (error: unknown): string =>
+  (error as NodeJS.ErrnoException | undefined)?.code ?? (error instanceof Error ? error.name : "error");
+
 const inProgress = (call: CampaignCall): boolean => call.status === "calling" || call.status === "answered";
 
 const countIn = (campaign: Campaign, ...statuses: CallStatus[]): number =>
@@ -287,6 +323,15 @@ function reviveCampaigns(raw: unknown): Campaign[] | undefined {
     if (!Array.isArray(item.calls) || typeof item.concurrency !== "number" || typeof item.attempts !== "number") {
       return undefined;
     }
+    if (!Number.isInteger(item.concurrency) || (item.concurrency as number) < 1) return undefined;
+    if (typeof item.retryAfterMinutes !== "number" || !(item.retryAfterMinutes >= 0)) return undefined;
+    // What the scheduler reads on every tick must be what a request could have set.
+    if (
+      item.window !== undefined &&
+      (parseWindow(item.window) === undefined || parseWindow(item.window) instanceof Error)
+    )
+      return undefined;
+    if (item.startAt !== undefined && instantFrom(item.startAt) === undefined) return undefined;
     for (const call of item.calls as unknown[]) {
       if (!isRecord(call) || typeof call.to !== "string" || typeof call.attempts !== "number") return undefined;
       if (!CALL_STATUSES.includes(call.status as CallStatus)) return undefined;
@@ -308,15 +353,26 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
   let placing = false;
   let lastPlacedAt = Number.NEGATIVE_INFINITY;
   let linesBusyUntil = 0;
+  let storageBusyUntil = 0;
   let wakeTimer: NodeJS.Timeout | undefined;
   let wakeAt = 0;
+  let stopped = false;
   let closed = false;
+  /** Calls in a row that could not be placed, by campaign. */
+  const placeFailures = new WeakMap<Campaign, number>();
 
-  // Persistence.
+  // Persistence: the whole state in the file, now and then, and one line in a
+  // journal beside it before each call is placed. The journal is what makes
+  // sure that a number is not dialled again after a crash; the file is everything else.
   let dirty = false;
   let saveTimer: NodeJS.Timeout | undefined;
   let lastSavedAt = Number.NEGATIVE_INFINITY;
+  let saveGap = SAVE_GAP_MS;
+  /** Everything that touches the two files, one after the other. */
   let writing: Promise<void> = Promise.resolve();
+  /** The number of the last line written to the journal. The file says up to which line it knows. */
+  let journalSeq = 0;
+  const journalFile = options.file ? `${options.file}.journal` : undefined;
 
   const formatters = new Map<string, Intl.DateTimeFormat>();
 
@@ -366,6 +422,7 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
       retryAfterMinutes: campaign.retryAfterMinutes,
       ...(campaign.window ? { window: campaign.window } : {}),
       waitingForWindow: status === "running" && counts.waiting > 0 && !windowOpen(campaign, at),
+      ...(campaign.stoppedReason ? { stoppedReason: campaign.stoppedReason } : {}),
       total: campaign.calls.length,
       counts
     };
@@ -377,16 +434,63 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     const file = options.file;
     if (!file || saveBlocked || !dirty) return;
     dirty = false;
-    lastSavedAt = now();
-    const state = JSON.stringify({ version: 1, campaigns });
+    const started = now();
+    lastSavedAt = started;
+    // What may still change is taken as it is at this moment. A finished
+    // campaign does not change any more, so it is turned into text only when
+    // its turn comes: a long history is never one long pause.
+    const seq = journalSeq;
+    const snapshot = campaigns.map((campaign) => (isFinished(campaign, started) ? campaign : JSON.stringify(campaign)));
     const temporary = `${file}.tmp`;
     try {
-      await writeFile(temporary, state, { mode: 0o600 });
+      const handle = await open(temporary, "w", 0o600);
+      try {
+        await handle.write(`{"version":1,"journalSeq":${seq},"campaigns":[`);
+        for (const [index, item] of snapshot.entries()) {
+          await handle.write(`${index ? "," : ""}${typeof item === "string" ? item : JSON.stringify(item)}`);
+        }
+        await handle.write("]}");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
       await rename(temporary, file);
+      // Nothing was placed meanwhile: the file knows all the journal does.
+      if (journalFile && seq === journalSeq) await rm(journalFile, { force: true });
     } catch (error) {
       dirty = true;
-      log.warn("campaigns could not be saved", { message: error instanceof Error ? error.message : String(error) });
+      log.warn("campaigns could not be saved", { reason: reasonOf(error) });
     }
+    saveGap = Math.max(SAVE_GAP_MS, (now() - started) * SAVE_COST_FACTOR);
+  }
+
+  /**
+   * Writes down that a call is about to be placed, and waits until it is on
+   * disk. False when it could not be written: the call is then not placed,
+   * because nothing would keep it from being placed again after a crash.
+   */
+  function recordAttempt(campaign: Campaign, call: CampaignCall, seq: number): Promise<boolean> {
+    if (!journalFile) return Promise.resolve(true);
+    const line = `${JSON.stringify({ seq, campaign: campaign.id, to: call.to, attempts: call.attempts, at: call.lastAttemptAt })}\n`;
+    const written = writing.then(async () => {
+      try {
+        const handle = await open(journalFile, "a", 0o600);
+        try {
+          await handle.appendFile(line);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        return true;
+      } catch (error) {
+        log.warn("a call was not placed: it could not be written to the campaigns journal first", {
+          reason: reasonOf(error)
+        });
+        return false;
+      }
+    });
+    writing = written.then(() => undefined);
+    return written;
   }
 
   /** Saves what changed, not more often than every second. */
@@ -395,9 +499,11 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     if (!options.file) return;
     dirty = true;
     if (saveTimer || closed) return;
-    const wait = Math.max(0, lastSavedAt + SAVE_GAP_MS - now());
+    const wait = Math.max(0, lastSavedAt + saveGap - now());
     saveTimer = setTimeout(() => {
       saveTimer = undefined;
+      // Counted from now, not from when the write gets its turn behind the journal.
+      lastSavedAt = now();
       writing = writing.then(writeFileNow);
     }, wait);
     saveTimer.unref?.();
@@ -410,14 +516,20 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     try {
       text = readFileSync(file, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        // Lines left by campaigns that are gone: new lines are numbered after them.
+        replayJournal(0);
+        return;
+      }
       loadProblem = `CAMPAIGNS_FILE could not be read (${(error as NodeJS.ErrnoException).code ?? "error"}). It is left as it is until a campaign is created.`;
       saveBlocked = true;
       return;
     }
     let revived: Campaign[] | undefined;
+    let parsedFile: unknown;
     try {
-      revived = reviveCampaigns(JSON.parse(text));
+      parsedFile = JSON.parse(text);
+      revived = reviveCampaigns(parsedFile);
     } catch {
       revived = undefined;
     }
@@ -436,19 +548,78 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
       }
     }
     campaigns = revived;
+    const known =
+      isRecord(parsedFile) && Number.isInteger(parsedFile.journalSeq) ? (parsedFile.journalSeq as number) : 0;
+    journalSeq = known;
+    replayJournal(known);
+  }
+
+  /** Calls the journal says were placed after the file was last written: they are not placed again either. */
+  function replayJournal(known: number): void {
+    if (!journalFile) return;
+    let text: string;
+    try {
+      text = readFileSync(journalFile, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      // Without the journal nobody knows which calls were placed last. Place none.
+      loadProblem = `The campaigns journal could not be read (${reasonOf(error)}), so the campaigns in CAMPAIGNS_FILE were cancelled: some of their calls may already have been placed.`;
+      for (const campaign of campaigns) {
+        if (campaign.cancelled || !campaign.calls.some((call) => call.status === "waiting")) continue;
+        campaign.cancelled = true;
+        campaign.stoppedReason = "The campaigns journal could not be read after a restart.";
+        for (const call of campaign.calls) if (call.status === "waiting") call.status = "cancelled";
+      }
+      dirty = true;
+      return;
+    }
+    let applied = 0;
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      let entry: unknown;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        // A line cut short by the crash: its call was not placed, the line comes first.
+        continue;
+      }
+      if (!isRecord(entry) || typeof entry.seq !== "number" || typeof entry.attempts !== "number") continue;
+      journalSeq = Math.max(journalSeq, entry.seq);
+      if (entry.seq <= known) continue;
+      const call = campaigns
+        .find((campaign) => campaign.id === entry.campaign)
+        ?.calls.find((other) => other.to === entry.to);
+      if (!call) continue;
+      call.attempts = Math.max(call.attempts, entry.attempts);
+      if (typeof entry.at === "string") call.lastAttemptAt = entry.at;
+      delete call.notBefore;
+      call.status = "unknown";
+      call.endedReason = RESTART_REASON;
+      applied += 1;
+    }
+    if (applied > 0) {
+      dirty = true;
+      log.warn("calls placed just before the relay stopped are not placed again", { calls: applied });
+    }
   }
 
   // --- placing -------------------------------------------------------------
 
-  function wake(delay: number): void {
-    if (closed) return;
+  function wake(wanted: number): void {
+    if (closed || stopped) return;
+    const delay = Math.min(Math.max(wanted, 0), MAX_WAKE_MS);
     const due = now() + delay;
     if (wakeTimer && wakeAt <= due) return;
     clearTimeout(wakeTimer);
     wakeAt = due;
     wakeTimer = setTimeout(() => {
       wakeTimer = undefined;
-      void tick();
+      tick().catch((error: unknown) => {
+        // One campaign that cannot be read must not take the relay down with it.
+        log.error("the campaign scheduler failed", { reason: reasonOf(error) });
+        placing = false;
+        wake(WINDOW_CHECK_MS);
+      });
     }, delay);
     wakeTimer.unref?.();
   }
@@ -459,6 +630,11 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     const soonest = (ms: number): void => {
       retryIn = retryIn === undefined ? ms : Math.min(retryIn, ms);
     };
+    // A number that is being called for one campaign is not called for another at the same time.
+    const onTheLine = new Set<string>();
+    for (const campaign of campaigns) {
+      for (const call of campaign.calls) if (inProgress(call)) onTheLine.add(call.to);
+    }
     for (const campaign of campaigns) {
       if (statusOf(campaign, at) === "scheduled") {
         soonest(Date.parse(campaign.startAt as string) - at);
@@ -473,6 +649,8 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
       if (campaign.calls.filter(inProgress).length >= campaign.concurrency) continue;
       for (const call of campaign.calls) {
         if (call.status !== "waiting") continue;
+        // The call that ends wakes the scheduler.
+        if (onTheLine.has(call.to)) continue;
         if ((call.notBefore ?? 0) <= at) return { due: { campaign, call } };
         soonest((call.notBefore as number) - at);
       }
@@ -481,14 +659,14 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
   }
 
   async function tick(): Promise<void> {
-    if (placing || closed) return;
+    if (placing || closed || stopped) return;
     const at = now();
     const { due, retryIn } = nextDue(at);
     if (!due) {
       if (retryIn !== undefined) wake(Math.max(retryIn, 0));
       return;
     }
-    const wait = Math.max(lastPlacedAt + PLACE_GAP_MS - at, linesBusyUntil - at);
+    const wait = Math.max(lastPlacedAt + PLACE_GAP_MS - at, linesBusyUntil - at, storageBusyUntil - at);
     if (wait > 0) {
       wake(wait);
       return;
@@ -508,7 +686,28 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     call.status = "calling";
     call.attempts += 1;
     call.lastAttemptAt = new Date(lastPlacedAt).toISOString();
+    const earlierNotBefore = call.notBefore;
     delete call.notBefore;
+    journalSeq += 1;
+    const backOut = (): void => {
+      call.status = campaign.cancelled ? "cancelled" : "waiting";
+      call.attempts -= 1;
+      if (earlierAttempt) call.lastAttemptAt = earlierAttempt;
+      else delete call.lastAttemptAt;
+      if (earlierNotBefore !== undefined && !campaign.cancelled) call.notBefore = earlierNotBefore;
+    };
+    // On disk before the carrier hears of it: a crash right after must not lead to a second call.
+    if (!(await recordAttempt(campaign, call, journalSeq))) {
+      backOut();
+      storageBusyUntil = now() + STORAGE_RETRY_MS;
+      return;
+    }
+    // The relay began to shut down while that was written: nobody would be there to answer.
+    if (stopped || closed) {
+      backOut();
+      changed();
+      return;
+    }
     changed();
     const context = call.context ?? campaign.context;
     const voicemailMessage = call.voicemailMessage ?? campaign.voicemailMessage;
@@ -531,16 +730,33 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     if (result.ok) {
       // The first event may have come before this answer: keep what it set.
       if (call.callSid === undefined && result.callSid) call.callSid = result.callSid;
+      placeFailures.delete(campaign);
+    } else if (call.status !== "calling") {
+      // The call was heard of before the error was: it is a call, and its events say what became of it.
     } else if (result.status === 429) {
       // The relay's own lines are full. That is not an attempt at this person.
-      call.status = "waiting";
-      call.attempts -= 1;
-      if (earlierAttempt) call.lastAttemptAt = earlierAttempt;
-      else delete call.lastAttemptAt;
+      backOut();
       linesBusyUntil = now() + LINE_BUSY_RETRY_MS;
     } else {
       call.status = "failed";
       call.endedReason = result.error;
+      // A number the carrier will not call says nothing about the next one. A
+      // carrier that cannot be reached, or will not have us, says the same for all.
+      const carrier = result.carrierStatus;
+      const everyCall =
+        result.status !== 502 ||
+        carrier === undefined ||
+        carrier === 0 ||
+        carrier >= 500 ||
+        [401, 403, 429].includes(carrier);
+      const failures = everyCall ? (placeFailures.get(campaign) ?? 0) + 1 : 0;
+      placeFailures.set(campaign, failures);
+      if (failures >= MAX_PLACE_FAILURES && !campaign.cancelled) {
+        campaign.cancelled = true;
+        campaign.stoppedReason = `Stopped: ${MAX_PLACE_FAILURES} calls in a row could not be placed. The last answer was: ${result.error}`;
+        for (const other of campaign.calls) if (other.status === "waiting") other.status = "cancelled";
+        log.warn("campaign stopped: calls cannot be placed", { campaignId: campaign.id });
+      }
     }
     changed();
   }
@@ -573,6 +789,17 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
         call.status = "failed";
         call.endedReason =
           progress.status === "canceled" ? "the carrier canceled the call" : "the carrier could not complete the call";
+      }
+    } else if (progress.type === "refused") {
+      // The person picked up and was hung up on, because other calls had taken
+      // every line. That was a try; another follows if the campaign has one left.
+      call.callSid = progress.callSid;
+      call.status = "failed";
+      call.endedReason = "every line of the relay was busy when the call was answered";
+      if (!campaign.cancelled && call.attempts < campaign.attempts) {
+        call.notBefore = now() + campaign.retryAfterMinutes * 60_000;
+        call.status = "waiting";
+        delete call.endedReason;
       }
     } else {
       call.status = "unknown";
@@ -676,6 +903,12 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     return { ok: true };
   }
 
+  function stop(): void {
+    stopped = true;
+    clearTimeout(wakeTimer);
+    wakeTimer = undefined;
+  }
+
   async function close(): Promise<void> {
     closed = true;
     clearTimeout(wakeTimer);
@@ -687,6 +920,8 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
 
   load();
   if (loadProblem) log.warn(loadProblem);
+  // What the journal added is written into the file at once.
+  if (dirty) writing = writing.then(writeFileNow);
   wake(0);
 
   return {
@@ -697,6 +932,14 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     remove,
     get loadProblem() {
       return loadProblem;
+    },
+    stop,
+    async settled() {
+      let seen: Promise<void>;
+      do {
+        seen = writing;
+        await seen;
+      } while (seen !== writing);
     },
     close
   };

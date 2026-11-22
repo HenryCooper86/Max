@@ -2039,6 +2039,8 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     }, 5_000);
     forceTimer.unref();
 
+    // No new calls from here on: nobody would be there when they are answered.
+    campaigns.stop();
     for (const client of wss.clients) client.close(1001, "server shutdown");
     for (const client of telephonySockets.clients) client.close(1001, "server shutdown");
     webRtc?.close();

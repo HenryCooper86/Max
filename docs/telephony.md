@@ -212,7 +212,7 @@ The answer is `201` with `{ "ok": true, "campaign": { "id": "...", "status": "ru
 | `attempts`                    | no       | Tries for a number that is busy or does not answer, 1 to 5. Default 1.                                                                                                      |
 | `retryAfterMinutes`           | no       | How long to wait before trying again, 1 to 1440. Default 30.                                                                                                                |
 | `window`                      | no       | When calls may be placed: `from` and `to` as `HH:MM` (`from` before `to`), a `timeZone` name, and optionally `days` (`mon` to `sun`). One time zone for the whole campaign. |
-| `startAt`                     | no       | An ISO time such as `2026-12-01T09:00:00Z`, at most 30 days ahead. Without it the campaign starts at once.                                                                  |
+| `startAt`                     | no       | An ISO time with its offset, such as `2026-12-01T09:00:00Z` or `2026-12-01T09:00:00+01:00`, at most 30 days ahead. Without it the campaign starts at once.                  |
 
 The request body may be up to 4 MB. This route has its own limit because 5,000 calls with their own contexts do not fit
 in the 32 KB the other routes allow.
@@ -229,7 +229,8 @@ An unknown id is `404`. A bad request is `400`, with the first problem found. A 
 carrier cannot place calls at all (not set up), creating the campaign is `503` with what to set.
 
 **Statuses.** A campaign is `scheduled` (before `startAt`), `running`, `done` or `cancelled`. While it is running
-outside its window it also says `waitingForWindow: true`. A call is:
+outside its window it also says `waitingForWindow: true`. A campaign the relay stopped itself is `cancelled` and has a
+`stoppedReason`. A call is:
 
 | Status              | Meaning                                                                                                   |
 | ------------------- | --------------------------------------------------------------------------------------------------------- |
@@ -237,7 +238,7 @@ outside its window it also says `waitingForWindow: true`. A call is:
 | `calling`           | Placed; nobody has answered yet.                                                                          |
 | `answered`          | A person is on the line.                                                                                  |
 | `completed`         | The conversation happened and is over. `durationMs` and `endedReason` say how long and why.               |
-| `voicemail`         | A machine or a fax answered. Not tried again.                                                             |
+| `voicemail`         | A machine or a fax answered. Not tried again. Twilio only: on Telnyx a machine counts as a person.        |
 | `no-answer`, `busy` | Nobody answered, and no tries are left.                                                                   |
 | `failed`            | The carrier could not place or complete the call, or refused it. `endedReason` says why. Not tried again. |
 | `cancelled`         | The campaign was cancelled before the call was placed.                                                    |
@@ -246,9 +247,22 @@ outside its window it also says `waitingForWindow: true`. A call is:
 **How calls are placed.** At most `concurrency` calls of a campaign are on the line at once, and at least one second
 passes between two placements on the relay, because carriers limit how fast calls may start. `busy` and `no-answer`
 are tried again after `retryAfterMinutes` while tries are left. `failed`, `voicemail`, `completed` and `unknown` never
-are. A refusal because every line is busy (`TELEPHONY_MAX_CALLS`, shared with inbound calls) is not a try: the relay
-waits a few seconds and tries again. A call the relay cannot place at all (for example a `voicemailMessage` on Telnyx)
-is marked `failed` with the reason, and the campaign goes on.
+are. A number that is on a call for one campaign is not called for another until that call is over. (A call you place
+yourself with `POST /v1/calls` is not checked against campaigns.)
+
+**The relay's lines.** Campaign calls share `TELEPHONY_MAX_CALLS` with every other call, and a campaign call that is
+still ringing counts as a line taken, because it will need one when it is answered. So `concurrency` above
+`TELEPHONY_MAX_CALLS` changes nothing: the relay places a call only when a line is free for it, and waits a few seconds
+when none is. That wait is not a try. Inbound calls are not held back for campaigns. If they take the last line while a
+campaign call rings and the person then picks up, the relay hangs up on them: that was a try, the call is tried again
+after `retryAfterMinutes` if tries are left, and is `failed` with the reason if not. Leave room for inbound calls when
+you choose `concurrency`.
+
+**When calls cannot be placed.** A number the carrier will not call (HTTP 400 and the like) is marked `failed` with the
+reason, and the campaign goes on. Five calls in a row that fail for a reason that holds for every call (the carrier
+cannot be reached, answers with a server error, or refuses the relay's credentials) stop the campaign: its waiting
+calls become `cancelled`, and `stoppedReason` says what the last answer was. Fix the cause and create a new campaign
+with the numbers that were not called.
 
 **The window.** Calls are placed only from `from` up to, not including, `to`, on the listed `days`, in the time zone you
 name. The day is the day in that time zone, not the server's. Outside the window the campaign waits, and calls already
@@ -266,14 +280,22 @@ anyone answering (busy, no answer, failed, canceled). The callback is checked li
 on Twilio, the secret in the URL on Telnyx. The carrier must be able to reach it, so the same rule applies as for
 outbound calls: set `TELEPHONY_PUBLIC_URL`, or the relay uses the address your `POST /v1/campaigns` request came in on
 (Telnyx cannot use that, because its URL holds a secret). A call that is answered ends through its media stream
-instead. If nothing is heard about a call for about 3 minutes, it becomes `unknown`.
+instead. If nothing is heard about a call for about 3 minutes, it becomes `unknown`, and if it is answered after that
+the relay hangs up.
 
 **Keeping campaigns.** Without `CAMPAIGNS_FILE` campaigns live in memory and are lost when the relay restarts. With it,
-the whole state is written to that file (mode 0600, at most about once a second) and read again at startup. A call that
-was in progress at the restart becomes `unknown` with the reason "the relay restarted during the call", and is not
-dialled again, because the person may already have been spoken to. Waiting calls carry on. The file holds the numbers
-you sent. If it cannot be read, the relay logs a problem, starts with no campaigns and leaves the file alone until you
-create a campaign.
+the whole state is written to that file (mode 0600, at most about once a second, less often when the file is large) and
+read again at startup. Before each call is placed, the relay also writes one line to a journal beside it
+(`<CAMPAIGNS_FILE>.journal`, mode 0600) and waits until that line is on disk. So a call that was placed or in progress
+when the relay stopped, even one placed a moment before a crash, becomes `unknown` with the reason "the relay restarted
+during the call" and is not dialled again, because the person may already have been spoken to. Waiting calls carry on.
+If the journal line cannot be written (a full disk, a missing directory), the call is not placed and the relay tries
+again every 30 seconds. Both files hold the numbers you sent. If the file cannot be read, the relay logs a problem,
+starts with no campaigns and leaves the file alone until you create a campaign. This protects against the relay
+stopping; it does not make two relays that share one file safe. Run campaigns on one relay.
+
+**Shutting down.** When the relay is told to stop it places no more calls, lets the calls on the line end with the rest
+of its sessions, and writes the file. Waiting calls carry on after the restart.
 
 **Before you call a list.** In many places automated calls need the called person's consent given beforehand, are
 limited to certain hours, and must respect do-not-call lists. The relay enforces none of that beyond the window you set.

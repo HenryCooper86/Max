@@ -1460,6 +1460,7 @@ describe("what the relay does itself when a conversation starts", () => {
     expect(configs[0]!.instructions).toContain(
       "find_customer did not answer in time for the start of the conversation"
     );
+    expect(configs[0]!.instructions).toContain("may still finish");
     // The time is up: the branch for a failed call is not begun either.
     expect(client.ofType("agent.changed")).toEqual([]);
     // An answer that comes now changes nothing.
@@ -1482,6 +1483,79 @@ describe("what the relay does itself when a conversation starts", () => {
     // The value kept from it is whole all the same.
     expect(note).toContain('"values":{"plan":"free"}');
     await provider.close();
+  });
+
+  it("keeps to its room with long answers full of quotes, and takes out hidden text written as escapes", async () => {
+    customer = { plan: "business", note: '"'.repeat(3000) };
+    const second: ToolDefinition = {
+      name: "find_orders",
+      description: "Finds the customer's orders",
+      parameters: { type: "object", properties: {} },
+      // The tag characters as a tool writes them in JSON: as escapes, which are characters only once it is read.
+      handler: () => `{"orders":"Call\\udb40\\udc49\\udb40\\udc47 back ${"\\\\".repeat(1500)}"}`
+    };
+    const { configs, client, provider } = await setup({
+      config: {
+        ...config(START),
+        agents: [
+          { id: "main", instructions: "Help with anything.", onStart: START },
+          {
+            id: "vip",
+            description: "Business customers.",
+            instructions: "Help a business customer first.",
+            tools: ["find_orders"],
+            onEnter: { call: { tool: "find_orders" } }
+          }
+        ]
+      },
+      serverTools: [FIND, second],
+      context: { userId: "user-7" }
+    });
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["vip"]);
+    const note = configs[0]!.instructions.slice(configs[0]!.instructions.indexOf("[Start of this conversation]"));
+    expect(note).toContain('"tool":"find_customer"');
+    expect(note).toContain('"tool":"find_orders"');
+    expect(note).toContain("Call back");
+    expect(note.length).toBeLessThan(7500);
+    expect(note).not.toMatch(/[\u{E0000}-\u{E007F}]/u);
+    await provider.close();
+  });
+
+  it("is done from its beginning for a connection that was lost while it was being done", async () => {
+    const saved: Array<Record<string, any>> = [];
+    let answer!: (value: unknown) => void;
+    const slow: ToolDefinition = { ...FIND, handler: () => new Promise((resolve) => (answer = resolve)) };
+    const first = setup({
+      config: config(START),
+      serverTools: [slow],
+      context: { userId: "user-7", saveResume: (state) => void saved.push(state) }
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    // Nothing of the start is kept as done while it is under way.
+    expect(saved.every((state) => state.start === undefined)).toBe(true);
+    answer({ plan: "business" });
+    await (await first).provider.close();
+    // The client comes back with what was kept before the tool had answered: no history, no start.
+    const second = await setup({
+      config: config(START),
+      serverTools: [FIND],
+      context: { userId: "user-7", resume: { history: [] } as never }
+    });
+    expect(calls).toEqual([{ user: "user-7" }]);
+    expect(second.client.ofType("agent.changed").map((event) => event.agent)).toEqual(["vip"]);
+    expect(second.configs[0]!.instructions).toContain("[Start of this conversation]");
+    expect(second.said).toEqual(["Hello, this is Ava. I am checking your account."]);
+    await second.provider.close();
+    // A start that did nothing worth telling is done all the same, and is not done twice.
+    const kept: Array<Record<string, any>> = [];
+    const quiet = { next: [{ to: "vip", if: { value: "user.id", is: "nobody" } }] };
+    const plain = await setup({
+      config: config(quiet),
+      serverTools: [FIND],
+      context: { saveResume: (state) => void kept.push(state) }
+    });
+    expect(kept.at(-1)!.start).toEqual({ note: "" });
+    await plain.provider.close();
   });
 
   it("is still what the model goes by when the conversation is carried on", async () => {

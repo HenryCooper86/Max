@@ -83,10 +83,16 @@ const WHOLE_PLACEHOLDER = /^\{\{\s*[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?\s*\}\}$
 function cleanValue(text: string): string {
   return [
     ...text
-      // Marks that turn the direction of writing or hide text are taken out. What joins letters is kept: the
-      // joiners of an emoji and of Persian, Arabic and Indic words, and the soft hyphen.
-      .replace(/[\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu, "")
+      // Marks that turn the direction of writing or hide text are taken out, the soft hyphen with them. What
+      // joins letters is kept: the joiners of an emoji and of Persian, Arabic and Indic words.
+      .replace(
+        /[\u00AD\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB\u{E0000}-\u{E007F}]/gu,
+        ""
+      )
       .replace(/\p{Cc}/gu, " ")
+      // A joiner belongs to the letter before it. After a plain Latin letter, or at the start, it joins nothing
+      // and only makes two values that read alike differ.
+      .replace(/(?<=^|[\x20-\x7E])[\u200C\u200D]+/gu, "")
       .replace(/\s+/g, " ")
       .trim()
   ]

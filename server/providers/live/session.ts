@@ -186,11 +186,12 @@ const MAX_ENTRY_RESULT_CHARS = 4000;
 
 /** A tool's answer as the model is shown it inside another result: its JSON when it is that, else its text. */
 function readable(output: string): unknown {
-  if (output.length > MAX_ENTRY_RESULT_CHARS) return `${output.slice(0, MAX_ENTRY_RESULT_CHARS)}…`;
+  if (output.length > MAX_ENTRY_RESULT_CHARS) return withoutHiddenText(`${output.slice(0, MAX_ENTRY_RESULT_CHARS)}…`);
   try {
-    return JSON.parse(output) as unknown;
+    // What nobody sees is taken out once the answer is read: written as \u escapes it is not there before.
+    return JSON.parse(withoutHiddenText(JSON.stringify(JSON.parse(output)))) as unknown;
   } catch {
-    return output;
+    return withoutHiddenText(output);
   }
 }
 const CANNOT_SEE = "我看不清。";
@@ -554,6 +555,9 @@ export function createLiveProvider(
   let startLines: string[] = [];
   /** What was done at the start of the conversation, for the model: part of its instructions from the first turn on. */
   let startNote = "";
+  /** The start has been done, by this connection or by one this conversation is carried on from. */
+  let startDone = false;
+  let resumed = false;
   /** What the flow has collected from the user and saved from tools' answers, by name. */
   const values = new Map<string, Plain>();
   /** A value of the conversation by its name: the flow's own, or one the relay knows of every session. */
@@ -707,7 +711,7 @@ export function createLiveProvider(
       history: [...history],
       ...(roster.length ? { agent: activeAgent } : {}),
       ...(values.size > 0 ? { values: Object.fromEntries(values) } : {}),
-      ...(startNote || startLines.length > 0
+      ...(startDone
         ? { start: { note: startNote, ...(startLines.length > 0 ? { unsaid: [...startLines] } : {}) } }
         : {})
     });
@@ -1122,7 +1126,8 @@ export function createLiveProvider(
     // Nobody waits past this for a first word: an answer that comes later is not used.
     let timer: NodeJS.Timeout | undefined;
     const late = new Promise<"late">((resolve) => {
-      timer = setTimeout(() => resolve("late"), Math.max(0, until - now()));
+      // A few milliseconds past it: when this fires the time is up by the clock of whoever asks next, too.
+      timer = setTimeout(() => resolve("late"), Math.max(0, until - now()) + 5);
       timer.unref?.();
     });
     const running = attempt();
@@ -1133,7 +1138,9 @@ export function createLiveProvider(
     log.warn(`${what} did not wait longer for a tool`, { tool: spec.tool });
     return {
       ok: false,
-      output: toolErrorText(`${spec.tool} did not answer in time for the start of the conversation`),
+      output: toolErrorText(
+        `${spec.tool} did not answer in time for the start of the conversation. It was called and may still finish, but its answer is not used. Call it yourself only if you need what it finds`
+      ),
       ran: true
     };
   }
@@ -1203,8 +1210,7 @@ export function createLiveProvider(
             done.push({
               agent: here,
               tool: entry.call.tool,
-              // What nobody sees in an answer is not shown to the model either.
-              [result.ok ? "result" : "failed"]: readable(withoutHiddenText(result.output))
+              [result.ok ? "result" : "failed"]: readable(result.output)
             });
           }
           if (stopped) break;
@@ -1315,16 +1321,29 @@ export function createLiveProvider(
     const cancelled = (): boolean => closed || now() >= until;
     const { lines, done: all, agent } = await byRule(first, first.onStart, cancelled, undefined, "onStart", until);
     if (closed) return;
+    // From here on a conversation that is carried on has had its start.
+    startDone = true;
     startLines = lines;
     const final = stage() ?? agent;
-    if (all.length === 0 && lines.length === 0 && final.id === first.id) return;
-    // The instructions carry this for the whole conversation: long answers are cut to a share of what there is room for.
-    const share = Math.floor(MAX_START_RESULT_CHARS / Math.max(1, all.length));
-    const done = all.map((one) => {
-      const key = "result" in one ? "result" : "failed";
-      const text = JSON.stringify(one[key]) ?? "";
-      return text.length <= share ? one : { ...one, [key]: `${text.slice(0, share)}…` };
-    });
+    if (all.length === 0 && lines.length === 0 && final.id === first.id) {
+      saveResume();
+      return;
+    }
+    // The instructions carry this for the whole conversation: long answers are cut to a share of what there is
+    // room for, and the share is halved until what is written of them fits. (A cut answer is text inside JSON,
+    // and its quotes are written twice as long.)
+    const cut = (share: number) =>
+      all.map((one) => {
+        const key = "result" in one ? "result" : "failed";
+        const text = JSON.stringify(one[key]) ?? "";
+        return text.length <= share ? one : { ...one, [key]: `${text.slice(0, share)}…` };
+      });
+    let share = Math.floor(MAX_START_RESULT_CHARS / Math.max(1, all.length));
+    let done = cut(share);
+    while (JSON.stringify(done).length > MAX_START_RESULT_CHARS + 200 * all.length && share > 50) {
+      share = Math.floor(share / 2);
+      done = cut(share);
+    }
     startNote = `\n\n[Start of this conversation] Before the user said anything, the relay did what the flow says is done at the start. ${JSON.stringify(
       {
         ...(done.length > 0 ? { doneOnStarting: done } : {}),
@@ -2492,12 +2511,21 @@ export function createLiveProvider(
       sessionContext = context;
       sessionTools = context?.sessionTools ?? [];
       builtinTools = createBuiltinTools();
-      if (general && context?.resume) {
+      // A connection lost while the flow was still doing what it does at the start left nothing to carry on:
+      // nobody had said a word, and the start is done from its beginning.
+      const startOwed =
+        Boolean(context?.resume) &&
+        !context?.resume?.start &&
+        (context?.resume?.history.length ?? 0) === 0 &&
+        Boolean(roster.find((agent) => agent.id === MAIN_AGENT)?.onStart);
+      resumed = Boolean(context?.resume) && !startOwed;
+      if (general && context?.resume && !startOwed) {
         history = context.resume.history.slice(-MAX_HISTORY_TURNS);
         const resumedAgent = context.resume.agent;
         if (resumedAgent && roster.some((agent) => agent.id === resumedAgent)) activeAgent = resumedAgent;
         for (const [name, value] of Object.entries(context.resume.values ?? {})) keepValue(name, value);
         // What the flow did at the start is still what the model goes by, and is not done a second time.
+        startDone = Boolean(context.resume.start);
         startNote = context.resume.start?.note ?? "";
         startLines = [...(context.resume.start?.unsaid ?? [])];
         // The conversation is under way: no second greeting.
@@ -2540,7 +2568,6 @@ export function createLiveProvider(
       // A failed connect rejects: the relay reports the upstream's own message
       // to the client, which is what someone setting up a key needs to see.
       // A conversation that starts, not one that is carried on, begins with what the flow does at the start.
-      const resumed = Boolean(context?.resume);
       if (!resumed) await startByRule();
       if (closed) return;
       await connectEngine();

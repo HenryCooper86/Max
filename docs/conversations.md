@@ -334,8 +334,9 @@ name.
   be called `channel`, `agent` or `values`. A `number` is an amount or a count: `00123` and a 20-digit id are not
   numbers, so ask for those as `text`.
 - **A value is kept as one clean line**: line breaks become spaces, and marks that turn the direction of writing or
-  hide text are taken out, in what the model passed and in what a tool answered. What joins letters stays: the
-  joiners inside an emoji and inside Persian, Arabic and Indic words. `{{…}}` around anything that is no
+  hide text are taken out, soft hyphens with them, in what the model passed and in what a tool answered. What joins
+  letters stays: the joiners inside an emoji and inside Persian, Arabic and Indic words. A joiner after a plain
+  Latin letter joins nothing and is taken out, so that two values that read alike are alike. `{{…}}` around anything that is no
   name is refused when the config is loaded, since it would be said aloud as written.
 - **A branch does not lead past the question.** A `next` branch to an agent that has to be told something the
   conversation does not have yet is not taken, with a line in the log: the conversation stays where it is.
@@ -362,7 +363,8 @@ starts, before the model is connected: look the user up, and start the conversat
 - **The model is connected when it is done.** Its first instructions are those of the agent the conversation came
   to, with what the tools answered and the values, so the user's first words meet that agent. The price is time:
   the first word waits for the tool. The start has ten seconds in all: a tool that has not answered by then counts
-  as failed, its late answer is not used, and no further step is begun. What the tools answered is in the model's
+  as failed and no further step is begun. The call is not taken back: the tool may still finish, and its late
+  answer is not used. What the tools answered is in the model's
   instructions for the whole conversation, cut to about 6,000 characters in all: keep what matters as a value.
 - **The sentence is said after the [greeting](configuration.md#identity-and-behaviour)**, in the same breath, in
   your words on every backend: the relay says it as it says the greeting.
@@ -370,7 +372,8 @@ starts, before the model is connected: look the user up, and start the conversat
   names, and the model is told what went wrong.
 - **A user who types first** is shown the sentence as the assistant's line, before the answer to what they typed.
 - **Not done again for a resumed conversation**, which carries on where it was: with the agent it came to, the
-  values, and what the tools answered at the start. Only `main` has an `onStart`.
+  values, and what the tools answered at the start. A connection lost while the start was still being done has
+  nothing to carry on, and the start is done from its beginning, its tool calls included. Only `main` has an `onStart`.
 - `{{user.id}}` is there when the session token has a `userId`. Without one, a call that needs it is not made.
 
 **The flow builder.** Admin → Flow draws the same thing. Each agent is a step on a canvas; Start is `main`. Add a

@@ -499,10 +499,15 @@ describe("values, after review", () => {
     expect(filled("Order {{a}}.", (name) => ({ a: "{{b}}", b: "secret" })[name]).text).toBe("Order {{b}}.");
   });
 
-  it("keeps what joins letters: of an emoji, of Persian and Hindi words, a soft hyphen", () => {
-    for (const text of ["👨‍👩‍👧 family", "می‌خواهم", "क्‍ष", "co\u00ADoperate"]) {
+  it("keeps what joins letters: of an emoji, of Persian and Hindi words", () => {
+    for (const text of ["👨‍👩‍👧 family", "می‌خواهم", "क्‍ष"]) {
       expect(collected(text, "text")).toBe(text);
     }
+    // Between plain Latin letters a joiner joins nothing: two values that read alike are alike.
+    expect(collected("ad\u200Dmin", "text")).toBe("admin");
+    expect(collected("co\u00ADoperate", "text")).toBe("cooperate");
+    expect(collected("\u200D\u200C", "text")).toBeUndefined();
+    expect(collected("A\u180EB\u206AC\uFFF9D", "text")).toBe("ABCD");
     // What hides or turns text goes, with no space left where it was.
     expect(collected("AB\u200BC\u2060D\uFEFF \u{E0041}\u{E0042}E\u061C", "text")).toBe("ABCD E");
   });

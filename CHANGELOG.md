@@ -94,6 +94,13 @@
   Max Speech server hears where the user's speech begins and judges, from how the last words sounded, whether they
   have finished or are only pausing; the backend is told where each turn begins and ends and detects nothing itself.
   A conversation falls back to the backend's own detection when the detector is not there.
+- The turn detector, after review: a conversation gives its place on the Max Speech server back when the backend
+  drops its connection (it used to keep it, and a Mac's four places ran out after four such drops); a reply asked for
+  a moment before the user spoke again is cancelled as it begins; something typed is a turn of its own on Gemini,
+  which otherwise never answered it; a detector that hangs is found out by a ping and given up after 15 seconds; a
+  turn nobody ends is ended after 36 seconds; speech the detector's transcriber made nothing of is still answered.
+  Max Speech says why each turn ended (`reason` on `transcript.final`). `MAX_SPEECH_API_KEY` is no longer sent to a
+  detector at an address of its own.
 - Live video. A user can show the assistant their camera or their screen while they talk: the web SDK's `startVideo`
   sends a frame a second (`video.frame`, a new protocol event), the relay keeps the newest only, and the model sees it
   with the user's next turn (on Gemini Live, as it arrives). The widget has camera and screen buttons with a preview

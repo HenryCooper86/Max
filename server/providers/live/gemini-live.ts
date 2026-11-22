@@ -134,6 +134,8 @@ export function createGeminiLiveEngine(
   /** The relay cut a reply off for the user, and Gemini has not yet said that it stopped:
    *  what still arrives of that reply is not the start of a new one. */
   let staleReply = false;
+  /** The detector went away before Gemini was ready, which had already been told to detect nothing. */
+  let lostEarly: string | undefined;
   /** Tool calls awaiting a result: id → function name (the response needs both). */
   const pendingCalls = new Map<string, string>();
 
@@ -163,6 +165,34 @@ export function createGeminiLiveEngine(
     sendMessage({
       realtimeInput: { audio: { data: pcm.toString("base64"), mimeType: `audio/pcm;rate=${CLIENT_INPUT_RATE}` } }
     });
+  }
+
+  /** The detector is gone. Gemini was told at setup to detect nothing itself, and that cannot be
+   *  changed on a connection: a new one is made, with whichever detector is there then. */
+  function loseDetector(reason: string): void {
+    if (closedByRelay || !ready) return;
+    ready = false;
+    closedByRelay = true;
+    try {
+      socket?.close();
+    } catch {
+      /* already gone */
+    }
+    socket = undefined;
+    events?.onClosed(`the turn detector went away (${reason})`);
+  }
+
+  /**
+   * Something typed, or a line to say. With Gemini detecting nothing itself, text counts as the
+   * user's activity only between the marks the relay sends: inside a spoken turn that is open it
+   * goes along with it, and on its own it is a turn of one message.
+   */
+  function sendTyped(text: string, before?: Record<string, unknown>): void {
+    const alone = turns.on && !turns.open;
+    if (alone) sendMessage({ realtimeInput: { activityStart: {} } });
+    if (before) sendMessage(before);
+    sendMessage({ realtimeInput: { text } });
+    if (alone) sendMessage({ realtimeInput: { activityEnd: {} } });
   }
 
   const turns = turnTaking(log, {
@@ -195,18 +225,10 @@ export function createGeminiLiveEngine(
       closeRiderTurn();
     },
     onLost(reason) {
-      // Gemini was told at setup to detect nothing itself, and that cannot be changed on a
-      // connection: a new one is made, with whichever detector is there then.
-      if (closedByRelay || !ready) return;
-      ready = false;
-      closedByRelay = true;
-      try {
-        socket?.close();
-      } catch {
-        /* already gone */
-      }
-      socket = undefined;
-      events?.onClosed(`the turn detector went away (${reason})`);
+      // Not ready yet: Gemini is connecting, told to detect nothing. It is let go the moment
+      // it is ready, rather than left to hear a user it will never answer.
+      if (!closedByRelay && !ready) lostEarly = reason;
+      loseDetector(reason);
     }
   });
 
@@ -215,6 +237,12 @@ export function createGeminiLiveEngine(
     if (message.error?.message) events?.onError(redact(message.error.message));
     for (const call of message.toolCall?.functionCalls ?? []) {
       if (!call.id || !call.name) continue;
+      // A call of the reply the user has just spoken over: Gemini takes it back itself, and
+      // running it would open a reply in the middle of the user's turn.
+      if (staleReply) {
+        log.debug("tool call of an interrupted reply ignored", { name: call.name });
+        continue;
+      }
       // The model asking for a tool is it answering: the wearer's turn is
       // over, and the reply starts here. Gemini can send a tool call before
       // any content, and the session only runs tools inside a reply it has
@@ -347,6 +375,12 @@ export function createGeminiLiveEngine(
           ready = true;
           settled = true;
           resolve();
+          if (lostEarly !== undefined) {
+            const reason = lostEarly;
+            lostEarly = undefined;
+            // After the session has taken this connection for ready: it then asks for another.
+            setImmediate(() => loseDetector(reason));
+          }
           return;
         }
         handle(message);
@@ -366,7 +400,13 @@ export function createGeminiLiveEngine(
         const text = reason.length ? ` ${redact(reason.toString("utf8")).slice(0, 160)}` : "";
         const detail = `closed (${code}${text})`;
         fail(new Error(`Gemini Live: ${detail}`));
-        if (!closedByRelay && ready) events?.onClosed(detail);
+        if (closedByRelay) return;
+        const wasReady = ready;
+        ready = false;
+        // The detector listened for this connection alone: its place on the speech server is given back now,
+        // not when the session gets round to closing an engine that is already gone.
+        turns.close();
+        if (wasReady) events?.onClosed(detail);
       });
     });
   }
@@ -400,11 +440,7 @@ export function createGeminiLiveEngine(
     },
     say(text) {
       if (!ready) return;
-      sendMessage({
-        realtimeInput: {
-          text: `Say exactly the following line and nothing else, in the language it is written in: ${text}`
-        }
-      });
+      sendTyped(`Say exactly the following line and nothing else, in the language it is written in: ${text}`);
     },
     sendToolResult(callId, output) {
       if (ready) sendToolResponse(callId, output);
@@ -415,7 +451,7 @@ export function createGeminiLiveEngine(
       // turn; reporting it again would make it a second, new turn.
       riderOpen = false;
       riderText = "";
-      sendMessage({ realtimeInput: { text } });
+      sendTyped(text);
     },
     sendVideoFrame(image) {
       // Gemini Live takes video itself, a frame a second: it sees each one as it comes. A client's
@@ -428,11 +464,15 @@ export function createGeminiLiveEngine(
     sendImage(image, text) {
       if (!ready) return;
       // Gemini Live takes pictures as video frames, at most one a second.
-      sendMessage({ realtimeInput: { video: { data: image.data, mimeType: image.mimeType } } });
-      if (!text) return;
+      const picture = { realtimeInput: { video: { data: image.data, mimeType: image.mimeType } } };
+      if (!text) {
+        sendMessage(picture);
+        return;
+      }
       riderOpen = false;
       riderText = "";
-      sendMessage({ realtimeInput: { text } });
+      // The picture inside the turn its words make.
+      sendTyped(text, picture);
     },
     close() {
       closedByRelay = true;

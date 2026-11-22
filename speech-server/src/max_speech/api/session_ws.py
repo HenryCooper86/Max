@@ -473,7 +473,9 @@ class _Session:
     def _drop_turn(self) -> None:
         """Forget the turn in progress; a client that saw `speech.started` still gets its `transcript.final`."""
         if self.taker.active:
-            self.emit({"type": "transcript.final", "text": "", "ms": {"turn": 0, "stt": 0}})
+            self.emit(
+                {"type": "transcript.final", "text": "", "ms": {"turn": 0, "stt": 0}, "reason": "dropped"}
+            )
         self._pending_stt.clear()
         self.taker.reset()
 
@@ -577,7 +579,8 @@ class _Session:
             log.exception("finishing the turn failed")
             self.emit(_error("engine_error", "transcription failed for this turn"))
             ended = TurnEnded("", {"turn": cmd.turn_ms, "stt": 0})
-        self.emit({"type": "transcript.final", "text": ended.text, "ms": ended.ms})
+        # Why the turn ended: a client that only wants the turns can tell a blip from speech nobody made out.
+        self.emit({"type": "transcript.final", "text": ended.text, "ms": ended.ms, "reason": cmd.reason})
         await run_serialized(slots.stt_stream_lock, stream.reset)
 
 

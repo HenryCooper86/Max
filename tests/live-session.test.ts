@@ -337,12 +337,17 @@ describe("live voice session", () => {
     await vi.advanceTimersByTimeAsync(400);
     expect(engines).toHaveLength(2);
     expect(client.statuses().at(-1)).toBe("listening");
+    // The connection that dropped is closed, so it lets go of what it held besides its upstream
+    // (a place on the turn detector's server); the one that took over is not.
+    expect(engines.map((made) => made.closedCount)).toEqual([1, 0]);
 
     // From here on the upstream stays down: three attempts, then the client is told.
     outage.down = true;
     engine().events.onClosed("closed (1006)");
     await vi.advanceTimersByTimeAsync(400 + 800 + 1600);
     expect(engines).toHaveLength(5);
+    // Each closed once: the one that dropped when it was replaced, the ones that never connected at once.
+    expect(engines.map((made) => made.closedCount)).toEqual([1, 1, 1, 1, 1]);
     expect(client.of("error")).toHaveLength(1);
     expect(client.closed?.code).toBe(1011);
   });

@@ -27,6 +27,9 @@ class FakeSocket {
   bufferedAmount = 0;
   sent: any[] = [];
   terminated = false;
+  pings = 0;
+  /** A server that has stopped answering without closing. */
+  deaf = false;
   private handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
   on(event: string, handler: (...args: unknown[]) => void) {
     (this.handlers[event] ??= []).push(handler);
@@ -41,6 +44,10 @@ class FakeSocket {
   terminate() {
     this.terminated = true;
     this.readyState = 3;
+  }
+  ping() {
+    this.pings += 1;
+    if (!this.deaf) this.emit("pong");
   }
   emit(event: string, ...args: unknown[]) {
     for (const handler of this.handlers[event] ?? []) handler(...args);
@@ -98,6 +105,17 @@ describe("turn detector settings", () => {
         })
       ).watcher
     ).toMatchObject({ url: "ws://10.0.0.5:8790/v1/speech/session", apiKey: "k2" });
+    // The key of the relay's Max Speech server is for that server: another address is not sent it.
+    expect(
+      turnDetectorSettings(
+        reader({
+          TURN_DETECTOR: "max-speech",
+          MAX_SPEECH_URL: "https://speech.example.com",
+          MAX_SPEECH_API_KEY: "k1",
+          TURN_DETECTOR_URL: "http://10.0.0.5:8790"
+        })
+      ).watcher
+    ).toMatchObject({ url: "ws://10.0.0.5:8790/v1/speech/session", apiKey: "" });
   });
 
   it("says what it could not use, at startup", () => {
@@ -200,6 +218,54 @@ describe("the Max Speech turn watcher", () => {
     watcher.sendAudio(audio(20));
     watcher.endInput();
     expect(socket.sent).toHaveLength(before);
+  });
+
+  it("believes a server that says why a turn ended: only a blip was no speech", async () => {
+    const { socket, seen } = await ready();
+    const turn = (final: Record<string, unknown>) => {
+      socket.receive({ type: "speech.started" });
+      socket.receive({ type: "transcript.final", ...final });
+      return seen.splice(0).at(-1);
+    };
+    expect(turn({ text: "", reason: "blip" })).toBe("end without words");
+    // Somebody spoke, and the detector's own transcriber made nothing of it: another language, a short "yes".
+    expect(turn({ text: "", reason: "turn" })).toBe("end");
+    expect(turn({ text: "", reason: "max_wait" })).toBe("end");
+    expect(turn({ text: "", reason: "dropped" })).toBe("end");
+    expect(turn({ text: "ok", reason: "blip" })).toBe("end");
+    // An older server gives no reason: its words are all there is to go by.
+    expect(turn({ text: "" })).toBe("end without words");
+    expect(turn({ text: "", reason: 7 })).toBe("end without words");
+  });
+
+  it("asks a quiet server whether it is still there, and lets go of one that is not", async () => {
+    const { socket, seen } = await ready();
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Answered every time: nothing is lost in a minute of silence.
+    expect(socket.pings).toBe(12);
+    expect(socket.terminated).toBe(false);
+    // The machine it runs on went to sleep: the connection is still open, and nothing comes back.
+    socket.deaf = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(socket.terminated).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(socket.terminated).toBe(true);
+    // The close that follows is what the engine hears of it.
+    socket.emit("close", 1006, Buffer.alloc(0));
+    expect(seen).toEqual(["lost closed (1006)"]);
+    const pings = socket.pings;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(socket.pings).toBe(pings);
+  });
+
+  it("takes anything the server sends as a sign of life", async () => {
+    const { socket } = await ready();
+    socket.deaf = true;
+    for (let second = 0; second < 40; second += 1) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      socket.receive({ type: "transcript.partial", text: "…" });
+    }
+    expect(socket.terminated).toBe(false);
   });
 
   it("does not send audio to a server that is behind", async () => {
@@ -423,6 +489,53 @@ describe("turn taking", () => {
     expect(hand.heard).toEqual([]);
   });
 
+  it("says whether a turn is open", async () => {
+    const hand = handWatcher();
+    const { turns } = taking(hand);
+    expect(turns.open).toBe(false);
+    await turns.connect(["en"]);
+    expect(turns.open).toBe(false);
+    hand.start();
+    expect(turns.open).toBe(true);
+    hand.end();
+    expect(turns.open).toBe(false);
+    hand.start();
+    turns.close();
+    expect(turns.open).toBe(false);
+  });
+
+  it("ends a turn itself when the detector never says it is over", async () => {
+    vi.useFakeTimers();
+    try {
+      const hand = handWatcher();
+      const { turns, seen } = taking(hand);
+      await turns.connect(["en"]);
+      hand.start();
+      vi.advanceTimersByTime(35_000);
+      expect(seen).toEqual(["start"]);
+      vi.advanceTimersByTime(1_000);
+      expect(seen).toEqual(["start", "end"]);
+      expect(turns.open).toBe(false);
+      // What the detector says of that turn afterwards is about nothing.
+      hand.end();
+      hand.end(false);
+      vi.advanceTimersByTime(5_000);
+      expect(seen).toEqual(["start", "end"]);
+      // A turn that ended in time leaves no clock running into the next.
+      hand.start();
+      vi.advanceTimersByTime(20_000);
+      hand.end();
+      hand.start();
+      vi.advanceTimersByTime(20_000);
+      expect(seen.slice(2)).toEqual(["start", "end", "start"]);
+      turns.close();
+      vi.advanceTimersByTime(60_000);
+      expect(seen.slice(2)).toEqual(["start", "end", "start"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ends the open turn and says so when the detector goes away", async () => {
     const hand = handWatcher();
     const { turns, seen } = taking(hand);
@@ -631,6 +744,115 @@ describe("Gemini Live with the relay's turn detector", () => {
     engine.close();
   });
 
+  it("gives the detector back when Gemini drops the connection, and says so once", async () => {
+    const hand = handWatcher();
+    const { socket, engine, seen } = await gemini(hand);
+    // Gemini ends a session every ten minutes or so.
+    socket.emit("close", 1011, Buffer.from("deadline exceeded"));
+    expect(seen).toEqual([["closed", "closed (1011 deadline exceeded)"]]);
+    // Its place on the speech server is free at once, for the connection that takes over.
+    expect(hand.state.closed).toBe(1);
+    // An engine that is gone hears nothing and reports nothing more.
+    const before = socket.sent.length;
+    engine.sendAudio(audio(20));
+    engine.sendText("hello?");
+    expect(socket.sent).toHaveLength(before);
+    engine.close();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("makes a turn of something typed, or of a line to say, which Gemini would otherwise never answer", async () => {
+    const hand = handWatcher();
+    const { socket, engine } = await gemini(hand);
+    const since = (from: number) => socket.sent.slice(from);
+    let from = socket.sent.length;
+    engine.sendText("Where is my order?");
+    expect(since(from)).toEqual([
+      { realtimeInput: { activityStart: {} } },
+      { realtimeInput: { text: "Where is my order?" } },
+      { realtimeInput: { activityEnd: {} } }
+    ]);
+    from = socket.sent.length;
+    engine.say!("Goodbye!");
+    expect(since(from).map((message) => Object.keys(message.realtimeInput)[0])).toEqual([
+      "activityStart",
+      "text",
+      "activityEnd"
+    ]);
+    // A picture with words: the picture is inside the turn its words make.
+    from = socket.sent.length;
+    engine.sendImage!({ data: "AAAA", mimeType: "image/jpeg" }, "What is this?");
+    expect(since(from).map((message) => Object.keys(message.realtimeInput)[0])).toEqual([
+      "activityStart",
+      "video",
+      "text",
+      "activityEnd"
+    ]);
+    // A picture alone is no turn.
+    from = socket.sent.length;
+    engine.sendImage!({ data: "AAAA", mimeType: "image/jpeg" });
+    expect(since(from)).toEqual([{ realtimeInput: { video: { data: "AAAA", mimeType: "image/jpeg" } } }]);
+    // Typed while the user is speaking: it goes with the turn that is open, which ends when they stop.
+    hand.start();
+    from = socket.sent.length;
+    engine.sendText("and gift wrap it");
+    expect(since(from)).toEqual([{ realtimeInput: { text: "and gift wrap it" } }]);
+    hand.end();
+    expect(socket.sent.at(-1)).toEqual({ realtimeInput: { activityEnd: {} } });
+  });
+
+  it("sends typed text bare when Gemini detects turns itself", async () => {
+    const hand = handWatcher({ fail: "connect ECONNREFUSED" });
+    const { socket, engine } = await gemini(hand);
+    const from = socket.sent.length;
+    engine.sendText("Where is my order?");
+    engine.say!("Goodbye!");
+    expect(socket.sent.slice(from).every((message) => "text" in message.realtimeInput)).toBe(true);
+    expect(socket.sent.slice(from)).toHaveLength(2);
+  });
+
+  it("does not run a tool the interrupted reply asked for", async () => {
+    const hand = handWatcher();
+    const { socket, seen } = await gemini(hand);
+    hand.start();
+    hand.end();
+    socket.receive({ serverContent: { modelTurn: { parts: [{ inlineData: { data: "AAAA" } }] } } });
+    hand.start();
+    const before = seen.length;
+    // Sent before Gemini heard of the new turn.
+    socket.receive({ toolCall: { functionCalls: [{ id: "c1", name: "check_order", args: {} }] } });
+    expect(seen).toHaveLength(before);
+    expect(socket.sent.filter((message) => message.toolResponse)).toEqual([]);
+    // The reply to the new turn may call tools as ever.
+    hand.end();
+    socket.receive({ toolCall: { functionCalls: [{ id: "c2", name: "check_order", args: {} }] } });
+    expect(seen.at(-1)).toEqual(["response"]);
+    expect(socket.sent.filter((message) => message.toolResponse)).toHaveLength(1);
+  });
+
+  it("asks for a new connection when the detector went away while Gemini was still connecting", async () => {
+    process.env.GEMINI_API_KEY = "k";
+    const hand = handWatcher();
+    const socket = new FakeSocket();
+    const { seen, handlers } = engineEvents();
+    const engine = createGeminiLiveEngine(log, () => socket as never, undefined, undefined, withDetector(hand).factory);
+    const connected = engine.connect(CONFIG, handlers);
+    await vi.waitFor(() => expect(hand.state.connects).toHaveLength(1));
+    await Promise.resolve();
+    await Promise.resolve();
+    socket.emit("open");
+    // Gemini has been told to detect nothing, and now there is nobody to do it.
+    expect(socket.sent[0].setup.realtimeInputConfig.automaticActivityDetection).toEqual({ disabled: true });
+    hand.lose("closed (1012)");
+    expect(seen).toEqual([]);
+    socket.receive({ setupComplete: {} });
+    await connected;
+    // Once the session has this connection, it is told to make another.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(seen).toEqual([["closed", "the turn detector went away (closed (1012))"]]);
+    expect(socket.readyState).toBe(3);
+  });
+
   it("is Gemini as before when the detector is not there", async () => {
     process.env.GEMINI_VAD_SILENCE_MS = "900";
     const hand = handWatcher({ fail: "connect ECONNREFUSED" });
@@ -785,6 +1007,99 @@ describe("OpenAI Realtime and Grok with the relay's turn detector", () => {
     hand.lose();
     expect(socket.ofType("input_audio_buffer.commit")).toHaveLength(1);
     expect(seen.at(-1)).toEqual(["closed", "the turn detector went away (closed (1006))"]);
+    expect(socket.readyState).toBe(3);
+  });
+
+  it("stops a reply that was asked for a moment before the user spoke again", async () => {
+    process.env.OPENAI_API_KEY = "k";
+    const hand = handWatcher();
+    const { socket } = await realtime(openAiDialect(), hand);
+    hand.start();
+    hand.end();
+    expect(socket.ofType("response.create")).toHaveLength(1);
+    // "…and also": before OpenAI has said the reply began, so there is nothing to cancel yet.
+    hand.start();
+    expect(socket.ofType("response.cancel")).toEqual([]);
+    socket.receive({ type: "response.created" });
+    expect(socket.ofType("response.cancel")).toHaveLength(1);
+    // The session stopping it too is not a second cancel.
+    socket.receive({ type: "response.done", response: { status: "cancelled" } });
+    expect(socket.ofType("response.create")).toHaveLength(1);
+    hand.end();
+    expect(socket.ofType("response.create")).toHaveLength(2);
+    // The next reply is not cancelled for what happened to the last.
+    socket.receive({ type: "response.created" });
+    expect(socket.ofType("response.cancel")).toHaveLength(1);
+  });
+
+  it("forgets that cancel when the reply it was for was refused", async () => {
+    process.env.OPENAI_API_KEY = "k";
+    const hand = handWatcher();
+    const { socket } = await realtime(openAiDialect(), hand);
+    hand.start();
+    hand.end();
+    hand.start();
+    socket.receive({ type: "error", error: { message: "conversation already has an active response" } });
+    hand.end();
+    socket.receive({ type: "response.created" });
+    expect(socket.ofType("response.cancel")).toEqual([]);
+  });
+
+  it("still answers a turn that ended behind a reply the session cancelled", async () => {
+    process.env.OPENAI_API_KEY = "k";
+    const hand = handWatcher();
+    const { socket, engine } = await realtime(openAiDialect(), hand);
+    hand.start();
+    hand.end();
+    socket.receive({ type: "response.created" });
+    // The user speaks and stops again while the first reply is still being cancelled.
+    hand.start();
+    hand.end();
+    expect(socket.ofType("response.create")).toHaveLength(1);
+    // The session, settling the first reply, cancels: that is about the reply, not the turn that waits.
+    engine.cancel();
+    socket.receive({ type: "response.done", response: { status: "cancelled" } });
+    expect(socket.ofType("response.create")).toHaveLength(2);
+    // With no turn waiting, a cancel still takes a queued reply with it.
+    socket.receive({ type: "response.created" });
+    engine.respond!();
+    engine.cancel();
+    socket.receive({ type: "response.done", response: { status: "cancelled" } });
+    expect(socket.ofType("response.create")).toHaveLength(2);
+  });
+
+  it("gives the detector back when the upstream drops the connection", async () => {
+    process.env.OPENAI_API_KEY = "k";
+    const hand = handWatcher();
+    const { socket, engine, seen } = await realtime(openAiDialect(), hand);
+    socket.emit("close", 1001, Buffer.from("session expired"));
+    expect(seen).toEqual([["closed", "closed (1001 session expired)"]]);
+    expect(hand.state.closed).toBe(1);
+    const before = socket.sent.length;
+    engine.sendAudio(audio(20));
+    expect(socket.sent).toHaveLength(before);
+    engine.close();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("asks for a new connection when the detector went away while the upstream was still connecting", async () => {
+    process.env.OPENAI_API_KEY = "k";
+    const hand = handWatcher();
+    const socket = new FakeSocket();
+    const { seen, handlers } = engineEvents();
+    const engine = createRealtimeEngine(openAiDialect(), log, () => socket as never, withDetector(hand).factory);
+    const connected = engine.connect(CONFIG, handlers);
+    await vi.waitFor(() => expect(hand.state.connects).toHaveLength(1));
+    await Promise.resolve();
+    await Promise.resolve();
+    socket.emit("open");
+    expect(socket.ofType("session.update")[0].session.audio.input.turn_detection).toBeNull();
+    hand.lose("closed (1012)");
+    expect(seen).toEqual([]);
+    socket.receive({ type: "session.updated" });
+    await connected;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(seen).toEqual([["closed", "the turn detector went away (closed (1012))"]]);
     expect(socket.readyState).toBe(3);
   });
 

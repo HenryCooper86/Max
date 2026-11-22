@@ -2503,6 +2503,9 @@ export function createLiveProvider(
   }
 
   async function connectEngine(): Promise<void> {
+    // The connection this one replaces is over, and so is whatever it held besides its upstream
+    // (a place on the turn detector's server): closed, it lets go of it and reports nothing more.
+    engine?.close();
     const next = backend.createEngine(log);
     engine = next;
     engineReady = false;

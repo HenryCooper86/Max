@@ -264,6 +264,13 @@ export function createRealtimeEngine(
   let cancelSent = false;
   /** With the relay taking the turns: whether a turn's end is answered at once, or waits for `respond()`. */
   let answerTurns = true;
+  /** The user began to speak while a reply had been asked for and had not begun: it is cancelled as it begins. */
+  let cancelWhenCreated = false;
+  /** A turn the relay ended is waiting behind the reply under way for its own. Cancelling that reply
+   *  does not take the turn's answer with it: the upstream would have answered it by itself. */
+  let turnWaiting = false;
+  /** The detector went away before the upstream was ready, which had already been told to detect nothing. */
+  let lostEarly: string | undefined;
   /** The newest frame of live video, until a turn of the user's begins. */
   let frame: EngineImage | undefined;
   /** The frames the conversation holds, oldest first, by the item ids given to them. */
@@ -292,6 +299,7 @@ export function createRealtimeEngine(
    *  realtime APIs reject a second concurrent response. */
   function createResponse(): void {
     createPending = true;
+    turnWaiting = false;
     sendEvent({ type: "response.create" });
   }
 
@@ -345,20 +353,39 @@ export function createRealtimeEngine(
     events?.onSpeechStarted();
   }
 
+  /** The detector is gone: a new connection, with whichever detector is there then. Simpler and
+   *  surer than changing how a running session takes its turns. */
+  function loseDetector(reason: string): void {
+    if (closedByRelay || !ready) return;
+    ready = false;
+    closedByRelay = true;
+    try {
+      socket?.close();
+    } catch {
+      /* already gone */
+    }
+    socket = undefined;
+    events?.onClosed(`the turn detector went away (${reason})`);
+  }
+
   const turns = turnTaking(log, {
     forward: sendMicrophone,
     onStart() {
       if (!ready) return;
       // Nothing from before this turn is part of it.
       sendEvent({ type: "input_audio_buffer.clear" });
-      // What the upstream's own detection does when it hears the user: the reply under way stops.
-      cancelResponse();
+      // What the upstream's own detection does when it hears the user: the reply under way stops,
+      // and so does one that was asked for a moment ago and is still on its way.
+      if (createPending && !responseActive) cancelWhenCreated = true;
+      else cancelResponse();
       speechStarted();
     },
     onEnd() {
       if (!ready) return;
       sendEvent({ type: "input_audio_buffer.commit" });
-      if (answerTurns) requestResponse();
+      if (!answerTurns) return;
+      turnWaiting = responseActive || createPending;
+      requestResponse();
     },
     onAbandon() {
       if (!ready) return;
@@ -369,18 +396,10 @@ export function createRealtimeEngine(
       events?.onRiderTranscript("", true);
     },
     onLost(reason) {
-      // A new connection, with whichever detector is there then: simpler and surer than
-      // changing how a running session takes its turns.
-      if (closedByRelay || !ready) return;
-      ready = false;
-      closedByRelay = true;
-      try {
-        socket?.close();
-      } catch {
-        /* already gone */
-      }
-      socket = undefined;
-      events?.onClosed(`the turn detector went away (${reason})`);
+      // Not ready yet: the upstream is connecting, told to detect nothing. It is let go the
+      // moment it is ready, rather than left to hear a user it will never answer.
+      if (!closedByRelay && !ready) lostEarly = reason;
+      loseDetector(reason);
     }
   });
 
@@ -437,6 +456,12 @@ export function createRealtimeEngine(
     if (type === "session.updated" || (type === "session.created" && ready)) {
       ready = true;
       settle.resolve();
+      if (lostEarly !== undefined) {
+        const reason = lostEarly;
+        lostEarly = undefined;
+        // After the session has taken this connection for ready: it then asks for another.
+        setImmediate(() => loseDetector(reason));
+      }
       return;
     }
     if (type === "error") {
@@ -448,6 +473,7 @@ export function createRealtimeEngine(
       // A refused response.create will never be answered with response.created.
       if (createPending) {
         createPending = false;
+        cancelWhenCreated = false;
         afterReply();
       }
       return;
@@ -466,6 +492,10 @@ export function createRealtimeEngine(
       responseActive = true;
       cancelSent = false;
       createPending = false;
+      if (cancelWhenCreated) {
+        cancelWhenCreated = false;
+        cancelResponse();
+      }
       // Upstreams that never send a "completed" transcript (cumulative
       // "updated" only) mark the end of the wearer's turn by answering it.
       if (riderPending && dialect.responseMode === "auto" && riderText.trim()) {
@@ -549,7 +579,13 @@ export function createRealtimeEngine(
       upstream.on("close", (code, reason) => {
         const detail = `closed (${code}${reason.length ? ` ${reason.toString("utf8").slice(0, 120)}` : ""})`;
         settle.reject(new Error(`${dialect.name}: ${detail}`));
-        if (!closedByRelay && ready) events?.onClosed(detail);
+        if (closedByRelay) return;
+        const wasReady = ready;
+        ready = false;
+        // The detector listened for this connection alone: its place on the speech server is given back now,
+        // not when the session gets round to closing an engine that is already gone.
+        turns.close();
+        if (wasReady) events?.onClosed(detail);
       });
     });
   }
@@ -582,7 +618,8 @@ export function createRealtimeEngine(
       // results must not make the model resume it.
       continueAfterTools = false;
       awaitingCalls.clear();
-      respondWhenIdle = false;
+      // A turn of the user's that ended behind this reply is still owed its own.
+      respondWhenIdle = turnWaiting;
       cancelResponse();
     },
     sendToolResult(callId, output) {

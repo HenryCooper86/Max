@@ -18,6 +18,7 @@ import { maxSpeechUrl } from "./max-speech";
  *   TURN_DETECTOR             max-speech, or off (the default: the backend's own detection)
  *   TURN_DETECTOR_URL         the Max Speech server; MAX_SPEECH_URL when not set,
  *                             and http://localhost:8790 when neither is
+ *   TURN_DETECTOR_API_KEY     its key; MAX_SPEECH_API_KEY when TURN_DETECTOR_URL is not set
  *   TURN_DETECTOR_EAGERNESS   low, normal or high: how soon a pause may end the turn
  *
  * The detector is a helper, never a requirement: when it cannot be reached as a
@@ -37,6 +38,13 @@ const BYTES_PER_MS = 32; // 16 kHz mono PCM16
 const EMPTY_TURN_GRACE_MS = 1_200;
 /** Audio waiting to go to the detector beyond this is not sent: it would only arrive late. */
 const MAX_BUFFERED_BYTES = 1_000_000;
+/** How often the detector is asked whether it is still there, and how long its silence is believed.
+ *  Between turns the backend hears nothing, so a detector that hangs would leave the assistant deaf. */
+const PING_EVERY_MS = 5_000;
+const SILENT_FOR_MS = 15_000;
+/** Max Speech ends a turn after 30 seconds of audio. One still open on the relay's side a while
+ *  after that was lost on the way: the backend is given what there is. */
+const MAX_TURN_MS = 36_000;
 const EAGERNESS = ["low", "normal", "high"] as const;
 
 type Eagerness = (typeof EAGERNESS)[number];
@@ -55,8 +63,9 @@ export function turnDetectorSettings(read: (...names: string[]) => string | unde
     return { problems };
   }
   let url: string;
+  const own = read("TURN_DETECTOR_URL");
   try {
-    url = maxSpeechUrl(read("TURN_DETECTOR_URL") ?? read("MAX_SPEECH_URL"));
+    url = maxSpeechUrl(own ?? read("MAX_SPEECH_URL"));
   } catch (error) {
     problems.push(`TURN_DETECTOR: ${error instanceof Error ? error.message : String(error)}`);
     return { problems };
@@ -65,7 +74,9 @@ export function turnDetectorSettings(read: (...names: string[]) => string | unde
   const eagerness = EAGERNESS.find((value) => value === raw);
   if (raw && !eagerness) problems.push(`TURN_DETECTOR_EAGERNESS=${raw} is not one of ${EAGERNESS.join(", ")}`);
   return {
-    watcher: { url, apiKey: read("TURN_DETECTOR_API_KEY") ?? read("MAX_SPEECH_API_KEY") ?? "", eagerness },
+    // The key of the relay's Max Speech server goes to that server only: a detector with an
+    // address of its own has a key of its own, or none.
+    watcher: { url, apiKey: read("TURN_DETECTOR_API_KEY") ?? (own ? "" : read("MAX_SPEECH_API_KEY")) ?? "", eagerness },
     problems
   };
 }
@@ -100,9 +111,23 @@ type ServerMessage = {
   code?: string;
   message?: string;
   text?: string;
+  /** Why the turn ended, from a server that says so: "blip" is a sound too short to be speech. */
+  reason?: string;
   protocol?: string;
   idle_timeout_s?: number;
 };
+
+/**
+ * Whether a finished turn had speech in it. Words are proof. Without words, a server that
+ * says why the turn ended is believed: only a blip was no speech, and anything else was
+ * somebody talking whom the detector's own transcriber could not make out (another
+ * language, a short "yes") and the backend may. A server that gives no reason is taken at
+ * its words alone.
+ */
+function heardSpeech(message: ServerMessage): boolean {
+  if (message.text?.trim()) return true;
+  return typeof message.reason === "string" && message.reason !== "blip";
+}
 
 /** A Max Speech session used for its ears only: nothing is ever spoken through it. */
 export function createMaxSpeechTurnWatcher(
@@ -115,7 +140,16 @@ export function createMaxSpeechTurnWatcher(
   let ready = false;
   let closed = false;
   let keepAlive: NodeJS.Timeout | undefined;
+  let heartbeat: NodeJS.Timeout | undefined;
+  let lastSeen = 0;
   let heardSince = false;
+
+  const stopTimers = () => {
+    if (keepAlive) clearInterval(keepAlive);
+    if (heartbeat) clearInterval(heartbeat);
+    keepAlive = undefined;
+    heartbeat = undefined;
+  };
 
   const sendJson = (message: Record<string, unknown>) => {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
@@ -155,7 +189,9 @@ export function createMaxSpeechTurnWatcher(
             ...(settings.eagerness ? { turn: { eagerness: settings.eagerness } } : {})
           })
         );
+        upstream.on("pong", () => (lastSeen = Date.now()));
         upstream.on("message", (raw, isBinary) => {
+          lastSeen = Date.now();
           if (isBinary || closed) return;
           let message: ServerMessage;
           try {
@@ -182,6 +218,21 @@ export function createMaxSpeechTurnWatcher(
                 );
                 keepAlive.unref?.();
               }
+              lastSeen = Date.now();
+              heartbeat = setInterval(() => {
+                if (Date.now() - lastSeen > SILENT_FOR_MS) {
+                  log.warn("the turn detector stopped answering", { url: settings.url });
+                  // Its close is what says so to the engine.
+                  upstream.terminate();
+                  return;
+                }
+                try {
+                  upstream.ping();
+                } catch {
+                  /* closing: the close says so */
+                }
+              }, PING_EVERY_MS);
+              heartbeat.unref?.();
               resolve();
               return;
             }
@@ -190,7 +241,7 @@ export function createMaxSpeechTurnWatcher(
               return;
             case "transcript.final":
               // The words are the backend's to hear; whether there were any says if this was a turn at all.
-              if (ready) events.onTurnEnded(Boolean(message.text?.trim()));
+              if (ready) events.onTurnEnded(heardSpeech(message));
               return;
             case "error":
               lastError = [message.code, message.message].filter(Boolean).join(": ");
@@ -208,7 +259,7 @@ export function createMaxSpeechTurnWatcher(
         upstream.on("error", (error) => fail(new Error(`${settings.url}: ${error.message}`)));
         upstream.on("close", (code, reason) => {
           const detail = `closed (${code}${reason.length ? ` ${reason.toString("utf8").slice(0, 120)}` : ""})`;
-          if (keepAlive) clearInterval(keepAlive);
+          stopTimers();
           if (!settled) {
             fail(new Error(`${settings.url} ${detail}${lastError ? `: ${lastError}` : ""}`));
             return;
@@ -231,7 +282,7 @@ export function createMaxSpeechTurnWatcher(
     close() {
       closed = true;
       ready = false;
-      if (keepAlive) clearInterval(keepAlive);
+      stopTimers();
       try {
         socket?.close();
       } catch {
@@ -261,6 +312,8 @@ export type TurnTaking = {
   readonly wanted: boolean;
   /** Whether the relay is taking the turns of this connection. */
   readonly on: boolean;
+  /** Whether a turn of the user's is open now: begun, and not yet ended or given up. */
+  readonly open: boolean;
   /** Resolves to whether the relay's detector is in charge. Never rejects. */
   connect(languages: string[]): Promise<boolean>;
   audio(pcm: Buffer): void;
@@ -290,10 +343,17 @@ export function createTurnTaking(
   let keptBytes = 0;
   /** Runs while a turn without words waits to see whether speech follows at once. */
   let emptyTimer: NodeJS.Timeout | undefined;
+  /** Runs while a turn is open: the detector's word that it ended can be lost. */
+  let longTimer: NodeJS.Timeout | undefined;
 
   function clearEmpty(): void {
     if (emptyTimer) clearTimeout(emptyTimer);
     emptyTimer = undefined;
+  }
+
+  function clearLong(): void {
+    if (longTimer) clearTimeout(longTimer);
+    longTimer = undefined;
   }
 
   function keep(pcm: Buffer): void {
@@ -311,6 +371,15 @@ export function createTurnTaking(
       clearEmpty();
       if (speaking) return;
       speaking = true;
+      longTimer = setTimeout(() => {
+        longTimer = undefined;
+        if (!on || !speaking) return;
+        log.warn("the turn detector never said the turn was over: it is ended here");
+        clearEmpty();
+        speaking = false;
+        hooks.onEnd();
+      }, MAX_TURN_MS);
+      longTimer.unref?.();
       hooks.onStart();
       for (const pcm of kept) hooks.forward(pcm);
       kept = [];
@@ -323,12 +392,14 @@ export function createTurnTaking(
           emptyTimer = undefined;
           if (!on || !speaking) return;
           speaking = false;
+          clearLong();
           hooks.onAbandon();
         }, EMPTY_TURN_GRACE_MS);
         emptyTimer.unref?.();
         return;
       }
       clearEmpty();
+      clearLong();
       speaking = false;
       hooks.onEnd();
     },
@@ -336,6 +407,7 @@ export function createTurnTaking(
       if (!on) return;
       log.warn("the relay's turn detector went away", { reason });
       clearEmpty();
+      clearLong();
       if (speaking) {
         speaking = false;
         hooks.onEnd();
@@ -349,6 +421,9 @@ export function createTurnTaking(
     wanted: Boolean(made),
     get on() {
       return on;
+    },
+    get open() {
+      return on && speaking;
     },
     async connect(languages) {
       if (!made || closed) return false;
@@ -386,6 +461,7 @@ export function createTurnTaking(
       on = false;
       speaking = false;
       clearEmpty();
+      clearLong();
       kept = [];
       keptBytes = 0;
       (watcher ?? made)?.close();

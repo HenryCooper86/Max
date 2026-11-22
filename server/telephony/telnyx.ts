@@ -143,7 +143,8 @@ export function telnyxSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): {
   const shared = callSettingsFromEnv(env, {
     numberVariable: "TELNYX_PHONE_NUMBER",
     canTransfer: rest,
-    needs: "TELNYX_API_KEY and TELNYX_ACCOUNT_SID: a transfer goes through Telnyx's REST API"
+    needs: "TELNYX_API_KEY and TELNYX_ACCOUNT_SID: a transfer goes through Telnyx's REST API",
+    label: "Telnyx"
   });
   return {
     settings: {

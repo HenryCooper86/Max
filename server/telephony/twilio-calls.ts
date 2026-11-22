@@ -5,11 +5,14 @@ import type { Carrier, CarrierBridge } from "./carrier";
 import {
   dialTwiml,
   DtmfCollector,
+  EMPTY_TWIML,
   hangupTwiml,
   parseTwilioMessage,
   streamTwiml,
   TwilioAudioBridge,
-  validTwilioSignature
+  validTwilioSignature,
+  warmDialTwiml,
+  whisperTwiml
 } from "./twilio-stream";
 
 /**
@@ -38,6 +41,14 @@ export type CallSettings = {
   publicUrl?: string;
   /** Where the assistant may transfer a call: name → E.164 number or sip: URI. */
   transferTargets: Map<string, string>;
+  /**
+   * Warm transfers: whoever picks up hears what the call is about first, and
+   * the caller comes back to the assistant when nobody takes the call. With
+   * "confirm" the person must also press a key to take it.
+   */
+  warmTransfer?: "on" | "confirm";
+  /** What the carrier says after the summary when a key must be pressed. */
+  transferPrompt?: string;
   maxCalls: number;
 };
 
@@ -62,6 +73,28 @@ const CALL_MEMORY_MS = 24 * 60 * 60_000;
 const MAX_REMEMBERED_CALLS = 20_000;
 const DRAIN_TIMEOUT_MS = 6_000;
 const TRANSFER_ANNOUNCE_MS = 12_000;
+/** How long a warm transfer rings before the caller goes back to the assistant. */
+const TRANSFER_RING_SECONDS = 25;
+/** How long a warm transfer is remembered: the ringing, the summary and the key press fit in it many times. */
+const TRANSFER_MEMORY_MS = 5 * 60_000;
+/**
+ * How long after a warm transfer began its call is taken to be with the person
+ * it went to, when the carrier has not said otherwise: the ringing, the
+ * summary and the key press are over by then.
+ */
+const TRANSFER_SETTLE_MS = 90_000;
+/** How long after the first time the summary is given to a carrier that asks again. */
+const WHISPER_REPEAT_MS = 30_000;
+const MAX_SUMMARY_CHARS = 400;
+const MAX_TRANSFER_PROMPT_CHARS = 200;
+const DEFAULT_TRANSFER_PROMPT = "Press any key to take the call.";
+/** Why a transfer did not go through, as the assistant is told it. */
+const TRANSFER_FAILURES: Record<string, string> = {
+  busy: "the line was busy",
+  "no-answer": "nobody answered",
+  failed: "the call could not be placed",
+  canceled: "the call was cancelled"
+};
 export const MAX_CONTEXT_CHARS = 2_000;
 export const MAX_VOICEMAIL_CHARS = 500;
 const REST_TIMEOUT_MS = 10_000;
@@ -76,7 +109,7 @@ const MAX_WATCHED_CALLS = 2_000;
  */
 export function callSettingsFromEnv(
   env: NodeJS.ProcessEnv,
-  carrier: { numberVariable: string; canTransfer: boolean; needs: string }
+  carrier: { numberVariable: string; canTransfer: boolean; needs: string; warmTransfers?: boolean; label?: string }
 ): { settings: CallSettings; problems: string[] } {
   const problems: string[] = [];
   const phoneNumber = env[carrier.numberVariable]?.trim();
@@ -112,12 +145,30 @@ export function callSettingsFromEnv(
   if (transferTargets.size > 0 && !carrier.canTransfer) {
     problems.push(`TELEPHONY_TRANSFER_NUMBERS needs ${carrier.needs}`);
   }
+  let warmTransfer: "on" | "confirm" | undefined;
+  const warm = env.TELEPHONY_WARM_TRANSFER?.trim().toLowerCase();
+  if (warm && warm !== "off") {
+    if (warm !== "on" && warm !== "confirm") {
+      problems.push("TELEPHONY_WARM_TRANSFER must be on, confirm or off");
+    } else if (!carrier.warmTransfers) {
+      problems.push(
+        `TELEPHONY_WARM_TRANSFER: calls through ${carrier.label ?? "this carrier"} are transferred without it. The relay does warm transfers on Twilio.`
+      );
+    } else if (!carrier.canTransfer) {
+      problems.push(`TELEPHONY_WARM_TRANSFER needs ${carrier.needs}`);
+    } else {
+      warmTransfer = warm;
+    }
+  }
+  const transferPrompt = env.TELEPHONY_TRANSFER_PROMPT?.trim().slice(0, MAX_TRANSFER_PROMPT_CHARS);
   const maxCalls = Number(env.TELEPHONY_MAX_CALLS);
   return {
     settings: {
       ...(phoneNumber && E164.test(phoneNumber) ? { phoneNumber } : {}),
       ...(publicUrl ? { publicUrl } : {}),
       transferTargets,
+      ...(warmTransfer ? { warmTransfer } : {}),
+      ...(warmTransfer && transferPrompt ? { transferPrompt } : {}),
       maxCalls: Number.isInteger(maxCalls) && maxCalls > 0 ? Math.min(maxCalls, 1_000) : 20
     },
     problems
@@ -136,7 +187,9 @@ export function telephonySettingsFromEnv(env: NodeJS.ProcessEnv = process.env): 
   const shared = callSettingsFromEnv(env, {
     numberVariable: "TWILIO_PHONE_NUMBER",
     canTransfer: Boolean(accountSid),
-    needs: "TWILIO_ACCOUNT_SID: a transfer goes through Twilio's REST API"
+    needs: "TWILIO_ACCOUNT_SID: a transfer goes through Twilio's REST API",
+    warmTransfers: true,
+    label: "Twilio"
   });
   return {
     settings: { ...shared.settings, authToken, ...(accountSid && SID.test(accountSid) ? { accountSid } : {}) },
@@ -198,6 +251,11 @@ function twilioCarrier(
     statusUrl: (base, plan) => `${base}/telephony/twilio/status?plan=${plan}`,
     answerXml: (streamUrl, ticket) => streamTwiml(streamUrl, { ticket }),
     dialXml: (destination, options) => dialTwiml(destination, options),
+    warmTransfer: {
+      dialXml: (destination, options) => warmDialTwiml(destination, options),
+      whisperXml: (text, language, confirm) => whisperTwiml(text, language, confirm),
+      continueXml: () => EMPTY_TWIML
+    },
     hangupXml: (say, language) => hangupTwiml(say, language),
     busyXml: () => BUSY_XML,
     parse(raw) {
@@ -291,7 +349,31 @@ export type TelephonyDeps = {
   now?: () => number;
 };
 
-type Ticket = { call: CallInfo; expiresAt: number };
+/** A caller who is back with the assistant after a transfer nobody took. */
+type Returned = { name: string; why: string; resume?: string };
+type Ticket = {
+  call: CallInfo;
+  /** The relay's address as the carrier reached it, for the URLs a transfer gives the carrier. */
+  origin: string;
+  expiresAt: number;
+  returned?: Returned;
+};
+/** A warm transfer that is under way: the carrier asks about it by a token only it was given. */
+type Transfer = {
+  call: CallInfo;
+  origin: string;
+  name: string;
+  summary: string;
+  /** The session's resume id: the conversation goes on from where it was if the caller comes back. */
+  resume?: string;
+  /** The person who picked up pressed a key. */
+  accepted?: boolean;
+  /** When the carrier first asked for the summary. */
+  whisperedAt?: number;
+  /** The ticket the caller came back with, for a carrier that asks twice. */
+  ticket?: string;
+  expiresAt: number;
+};
 type OutboundPlan = { context?: string; userId?: string; voicemailMessage?: string; expiresAt: number };
 
 /**
@@ -347,6 +429,16 @@ export type Telephony = {
   statusWebhook(input: { url: string; params: Record<string, string>; signature: string | undefined }): {
     status: number;
   };
+  /**
+   * Answers what the carrier asks during a warm transfer: `whisper` (what the
+   * person who picked up hears), `accept` (they pressed a key) and `result`
+   * (the dial is over: hang up, or back to the assistant). Authenticated like
+   * the voice webhook.
+   */
+  transferWebhook(
+    kind: string,
+    input: { url: string; params: Record<string, string>; signature: string | undefined }
+  ): { status: number; body: string };
   /** Why calls cannot be placed through this carrier (what to set up), or nothing when they can. */
   placeProblem(): string | undefined;
   /** `watch` hears what becomes of the call, and its errors stay out of the call. */
@@ -375,6 +467,15 @@ function rawToString(data: unknown): string {
   if (Array.isArray(data)) return Buffer.concat(data as Buffer[]).toString("utf8");
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
   return "";
+}
+
+/** A line a model wrote for the carrier to say: one line of plain text, not too long. */
+function spokenLine(value: string): string {
+  return value
+    .replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_SUMMARY_CHARS);
 }
 
 function phoneOrUndefined(value: string | undefined): string | undefined {
@@ -406,6 +507,10 @@ export function createTelephony(
   /** Watched calls by plan id (the plan itself is gone once the voice webhook has used it), and by CallSid once answered. */
   const watched = new Map<string, Watched>();
   const watchedByCall = new Map<string, Watched>();
+  /** Warm transfers under way, by the token in the URLs the carrier was given. */
+  const transfers = new Map<string, Transfer>();
+  /** How to end the stream each call on a line has, by CallSid. */
+  const streams = new Map<string, (reason?: string) => void>();
   let active = 0;
 
   /** The last word on a watched call. Later events for it find nothing. */
@@ -458,6 +563,10 @@ export function createTelephony(
     for (const [id, plan] of outbound) {
       if (plan.expiresAt > at && outbound.size <= MAX_TICKETS) break;
       outbound.delete(id);
+    }
+    for (const [token, transfer] of transfers) {
+      if (transfer.expiresAt > at && transfers.size <= MAX_TICKETS) break;
+      transfers.delete(token);
     }
     // Watchers live for different times, so look at all of them, oldest first.
     for (const entry of [...watched.values()]) {
@@ -541,9 +650,10 @@ export function createTelephony(
     const earlier = ticketOf.get(callSid);
     const held = earlier ? tickets.get(earlier) : undefined;
     const ticket = earlier && held && held.expiresAt > now() ? earlier : randomBytes(24).toString("base64url");
+    const origin = settings.publicUrl ?? url.origin;
     if (ticket !== earlier) {
       if (earlier) tickets.delete(earlier);
-      tickets.set(ticket, { call, expiresAt: now() + TICKET_TTL_MS });
+      tickets.set(ticket, { call, origin, expiresAt: now() + TICKET_TTL_MS });
       ticketOf.set(callSid, ticket);
     }
     if (watcher && plan) {
@@ -555,9 +665,111 @@ export function createTelephony(
       startUnheardTimer(watcher);
       report(watcher, { type: "answered", callSid });
     }
-    const origin = settings.publicUrl ?? url.origin;
-    const streamUrl = `${origin.replace(/^http/, "ws")}/telephony/${carrier.id}/stream`;
-    return { status: 200, body: carrier.answerXml(streamUrl, ticket) };
+    return { status: 200, body: carrier.answerXml(streamUrlOf(origin), ticket) };
+  }
+
+  /** The last word on a watched call that was transferred and does not come back. */
+  function transferred(callSid: string): void {
+    const entry = watchedByCall.get(callSid);
+    if (!entry) return;
+    conclude(entry, {
+      type: "ended",
+      callSid,
+      reason: "transfer",
+      durationMs: Math.max(0, now() - (entry.answeredAt ?? now()))
+    });
+  }
+
+  const streamUrlOf = (origin: string): string => `${origin.replace(/^http/, "ws")}/telephony/${carrier.id}/stream`;
+
+  function transferWebhook(
+    kind: string,
+    input: { url: string; params: Record<string, string>; signature: string | undefined }
+  ): { status: number; body: string } {
+    if (!carrier.authentic(input)) return { status: 403, body: carrier.hangupXml() };
+    const warm = carrier.warmTransfer;
+    if (!warm) return { status: 404, body: carrier.hangupXml() };
+    prune();
+    let url: URL;
+    try {
+      url = new URL(input.url);
+    } catch {
+      return { status: 400, body: carrier.hangupXml() };
+    }
+    const token = url.searchParams.get("t") ?? "";
+    const transfer = transfers.get(token);
+    if (kind === "whisper") {
+      // The summary is for whoever picks up, at the moment they do. A transfer the relay no
+      // longer knows of, or a request that comes long after the first, gets none.
+      let summary: string | undefined;
+      if (transfer) {
+        transfer.whisperedAt ??= now();
+        if (now() - transfer.whisperedAt <= WHISPER_REPEAT_MS) summary = transfer.summary || undefined;
+      }
+      // The key press is asked for either way: without it an answering machine would take the call.
+      const origin = transfer?.origin ?? settings.publicUrl ?? url.origin;
+      const confirm =
+        settings.warmTransfer === "confirm"
+          ? {
+              prompt: settings.transferPrompt ?? DEFAULT_TRANSFER_PROMPT,
+              actionUrl: `${origin}/telephony/${carrier.id}/transfer/accept?t=${encodeURIComponent(token)}`
+            }
+          : undefined;
+      if (!summary && !confirm) return { status: 200, body: warm.continueXml() };
+      return { status: 200, body: warm.whisperXml(summary, deps.language, confirm) };
+    }
+    if (kind === "accept") {
+      // The carrier asks this only when a key was pressed: the two are connected next.
+      if (transfer) transfer.accepted = true;
+      return { status: 200, body: warm.continueXml() };
+    }
+    if (kind !== "result") return { status: 404, body: carrier.hangupXml() };
+    const callSid = input.params.CallSid ?? "";
+    // The dial is over. Without a transfer of this very call to go by, so is the call.
+    if (!transfer || transfer.call.callSid !== callSid) return { status: 200, body: carrier.hangupXml() };
+    if (transfer.ticket) {
+      // The carrier asks again: the same answer for as long as the ticket is still to be used.
+      const held = tickets.get(transfer.ticket);
+      return held && held.expiresAt > now()
+        ? { status: 200, body: carrier.answerXml(streamUrlOf(transfer.origin), transfer.ticket) }
+        : { status: 200, body: carrier.hangupXml() };
+    }
+    // The dial is over, and with it the stream the call had before: its line is free for the call itself.
+    streams.get(callSid)?.("transfer");
+    const status = input.params.DialCallStatus ?? "";
+    const talked = status === "completed" || status === "answered";
+    // The carrier says whether the two were connected. If it does not, a call that was answered
+    // counts, and with a key to press only one that was accepted.
+    const bridged =
+      input.params.DialBridged !== undefined
+        ? input.params.DialBridged === "true"
+        : talked && (settings.warmTransfer !== "confirm" || transfer.accepted === true);
+    if (bridged || input.params.CallStatus === "completed") {
+      transfers.delete(token);
+      log.info("transferred call ended", { callSid, to: transfer.name });
+      transferred(callSid);
+      return { status: 200, body: carrier.hangupXml() };
+    }
+    if (active >= settings.maxCalls) {
+      transfers.delete(token);
+      log.warn("a caller could not come back from a transfer: every line is busy", { callSid, to: transfer.name });
+      transferred(callSid);
+      return { status: 200, body: carrier.hangupXml() };
+    }
+    const why = TRANSFER_FAILURES[status] ?? "nobody took the call";
+    const ticket = randomBytes(24).toString("base64url");
+    const earlier = ticketOf.get(callSid);
+    if (earlier) tickets.delete(earlier);
+    tickets.set(ticket, {
+      call: transfer.call,
+      origin: transfer.origin,
+      expiresAt: now() + TICKET_TTL_MS,
+      returned: { name: transfer.name, why, ...(transfer.resume ? { resume: transfer.resume } : {}) }
+    });
+    ticketOf.set(callSid, ticket);
+    transfer.ticket = ticket;
+    log.info("transfer not taken: the caller is back with the assistant", { callSid, to: transfer.name, status });
+    return { status: 200, body: carrier.answerXml(streamUrlOf(transfer.origin), ticket) };
   }
 
   function handleStream(socket: StreamSocket, onSettled?: () => void, urlTicket?: string): void {
@@ -578,11 +790,17 @@ export function createTelephony(
     let hangingUp = false;
     let endReason: string | undefined;
     let drainTimer: NodeJS.Timeout | undefined;
+    /** The relay's address as the carrier reached it. */
+    let origin: string | undefined;
+    /** The session's resume id, as `session.started` gave it. */
+    let resumeId: string | undefined;
     /** Where the call goes once the assistant has announced the transfer. */
-    let transferTo: { name: string; destination: string } | undefined;
+    let transferTo: { name: string; destination: string; summary: string } | undefined;
     let transferTimer: NodeJS.Timeout | undefined;
     let transferSpoken = false;
     let transferring = false;
+    /** The warm transfer this stream's call left with. */
+    let transferToken: string | undefined;
     let chain: Promise<void> = Promise.resolve();
 
     const toTwilio = (message: string): void => {
@@ -611,6 +829,7 @@ export function createTelephony(
       dtmf.close();
       client.readyState = 3;
       if (counted) active -= 1;
+      if (call && streams.get(call.callSid) === finish) streams.delete(call.callSid);
       try {
         socket.close(1000);
       } catch {
@@ -620,7 +839,15 @@ export function createTelephony(
       if (call) {
         log.info("call ended", { callSid: call.callSid, reason: endReason ?? reason ?? "caller" });
         const entry = watchedByCall.get(call.callSid);
-        if (entry) {
+        const coming = transferToken ? transfers.get(transferToken) : undefined;
+        if (entry && coming && !coming.ticket) {
+          // A warm transfer is under way and the caller may come back: the last word on the call
+          // waits for what the carrier says of the dial, and not for long.
+          const callSid = call.callSid;
+          clearTimeout(entry.timer);
+          entry.timer = setTimeout(() => transferred(callSid), TRANSFER_SETTLE_MS);
+          entry.timer.unref?.();
+        } else if (entry) {
           conclude(entry, {
             type: "ended",
             callSid: call.callSid,
@@ -660,22 +887,46 @@ export function createTelephony(
       if (!target || transferring || hangingUp || closed || !call) return;
       transferring = true;
       if (transferTimer) clearTimeout(transferTimer);
+      const info = call;
       const callSid = call.callSid;
       afterPlayback("transfer", () => {
-        const update =
-          carrier.updateCall?.(
-            callSid,
-            carrier.dialXml(target.destination, settings.phoneNumber ? { callerId: settings.phoneNumber } : {})
-          ) ?? Promise.resolve({ ok: false, status: 0 });
+        const dial = settings.phoneNumber ? { callerId: settings.phoneNumber } : {};
+        const warm = settings.warmTransfer && origin ? carrier.warmTransfer : undefined;
+        let token: string | undefined;
+        let xml: string;
+        if (warm && origin) {
+          token = randomBytes(24).toString("base64url");
+          prune();
+          transfers.set(token, {
+            call: info,
+            origin,
+            name: target.name,
+            summary: target.summary,
+            ...(resumeId ? { resume: resumeId } : {}),
+            expiresAt: now() + TRANSFER_MEMORY_MS
+          });
+          const base = `${origin}/telephony/${carrier.id}/transfer`;
+          xml = warm.dialXml(target.destination, {
+            ...dial,
+            whisperUrl: `${base}/whisper?t=${token}`,
+            actionUrl: `${base}/result?t=${token}`,
+            timeoutSeconds: TRANSFER_RING_SECONDS
+          });
+        } else {
+          xml = carrier.dialXml(target.destination, dial);
+        }
+        const update = carrier.updateCall?.(callSid, xml) ?? Promise.resolve({ ok: false, status: 0 });
         void update.then((result) => {
           if (result.ok) {
             log.info("call transferred", { callSid, to: target.name });
             endReason = "transfer";
+            transferToken = token;
             // The carrier now stops the stream itself; do not wait for it forever.
             setTimeout(() => finish("transfer"), 3_000).unref?.();
             return;
           }
           log.warn("call transfer failed", { callSid, to: target.name, status: result.status });
+          if (token) transfers.delete(token);
           transferTo = undefined;
           transferring = false;
           transferSpoken = false;
@@ -695,15 +946,30 @@ export function createTelephony(
     const transferTool = (): ToolDefinition[] => {
       if (settings.transferTargets.size === 0 || !carrier.updateCall) return [];
       const names = [...settings.transferTargets.keys()];
+      const warm = Boolean(settings.warmTransfer && carrier.warmTransfer);
       return [
         {
           name: "transfer_call",
           description:
-            "Transfer the phone call to a person or department. Use it when the caller asks for a human, or needs something only that destination can do.",
+            "Transfer the phone call to a person or department. Use it when the caller asks for a human, or needs something only that destination can do. Only this tool transfers the call: saying that you will does not.",
           parameters: {
             type: "object",
-            properties: { destination: { type: "string", enum: names, description: "Where to transfer the call." } },
-            required: ["destination"]
+            properties: {
+              destination: { type: "string", enum: names, description: "Where to transfer the call." },
+              ...(warm
+                ? {
+                    summary: {
+                      type: "string",
+                      description: `One or two short sentences for the person who takes the call: who is calling and what they need. It is read to them before they are connected${
+                        deps.language
+                          ? `, by a voice for the language "${deps.language}": write it in that language`
+                          : ""
+                      }.`
+                    }
+                  }
+                : {})
+            },
+            required: warm ? ["destination", "summary"] : ["destination"]
           },
           handler: (args) => {
             const name = typeof args.destination === "string" ? args.destination.trim() : "";
@@ -711,13 +977,16 @@ export function createTelephony(
             const destination = settings.transferTargets.get(name);
             if (!destination) throw new Error(`there is no transfer destination called ${name || "that"}`);
             if (transferTo) return { ok: true, note: "The transfer is already under way. Say nothing more." };
-            transferTo = { name, destination };
+            const summary = warm && typeof args.summary === "string" ? spokenLine(args.summary) : "";
+            transferTo = { name, destination, summary };
             transferSpoken = false;
             // The assistant announces it first; if it never does, transfer anyway.
             transferTimer = setTimeout(completeTransfer, TRANSFER_ANNOUNCE_MS);
             return {
               ok: true,
-              note: `The call will be transferred to ${name} as soon as you stop speaking. Tell the caller in one short sentence that you are transferring them now, then say nothing more.`
+              note: `The call will be transferred to ${name} as soon as you stop speaking. Tell the caller in one short sentence that you are transferring them now, then say nothing more.${
+                warm ? " If nobody takes the call, the caller comes back to you." : ""
+              }`
             };
           }
         }
@@ -735,7 +1004,7 @@ export function createTelephony(
           for (const message of bridge.outbound(data)) toTwilio(message);
           return;
         }
-        let event: { type?: unknown; state?: unknown; reason?: unknown; message?: unknown };
+        let event: { type?: unknown; state?: unknown; reason?: unknown; message?: unknown; resume?: unknown };
         try {
           event = JSON.parse(data) as typeof event;
         } catch {
@@ -748,6 +1017,8 @@ export function createTelephony(
             if (event.state === "speaking") transferSpoken = true;
             else if (transferSpoken && (event.state === "listening" || event.state === "ready")) completeTransfer();
           }
+        } else if (event.type === "session.started") {
+          if (typeof event.resume === "string") resumeId = event.resume;
         } else if (event.type === "session.ended") {
           endReason = typeof event.reason === "string" ? event.reason : "agent";
         } else if (event.type === "error") {
@@ -806,6 +1077,9 @@ export function createTelephony(
           return;
         }
         call = ticket.call;
+        origin = ticket.origin;
+        const returned = ticket.returned;
+        streams.set(call.callSid, finish);
         active += 1;
         counted = true;
         connected.set(call.callSid, now() + CALL_MEMORY_MS);
@@ -826,7 +1100,12 @@ export function createTelephony(
                   : ""
               }`
             : `You placed this phone call${dialable(call.to) ? ` to ${dialable(call.to)}` : ""}. The person who answered did not expect it: say who you are and why you are calling.`,
-          ...(call.context ? [call.context] : [])
+          ...(call.context ? [call.context] : []),
+          ...(returned
+            ? [
+                `You tried to transfer this call to ${returned.name} a moment ago, and ${returned.why}. The caller is back with you.`
+              ]
+            : [])
         ].join("\n");
         const opened = deps.openSession(client, call, { sessionTools: transferTool(), trustedContext: facts });
         if ("refused" in opened) {
@@ -836,9 +1115,25 @@ export function createTelephony(
         }
         session = opened;
         clearTimeout(startTimer);
-        log.info("call connected", { callSid: call.callSid, direction: call.direction });
-        sendEvent({ type: "session.start", sampleRate: 16000, channels: 1 });
+        log.info("call connected", {
+          callSid: call.callSid,
+          direction: call.direction,
+          ...(returned ? { backFrom: returned.name } : {})
+        });
+        // A caller who is back carries on the conversation they were in.
+        sendEvent({
+          type: "session.start",
+          sampleRate: 16000,
+          channels: 1,
+          ...(returned?.resume ? { resume: returned.resume } : {})
+        });
         sendEvent({ type: "audio.start" });
+        if (returned) {
+          sendEvent({
+            type: "text.input",
+            text: `(system) The transfer to ${returned.name} did not go through: ${returned.why}. Tell the caller, and offer to help yourself, to try again or to take a message.`
+          });
+        }
         return;
       }
       if (message.event === "problem") {
@@ -996,6 +1291,7 @@ export function createTelephony(
   return {
     voiceWebhook,
     statusWebhook,
+    transferWebhook,
     handleStream,
     expectsStream,
     placeCall,

@@ -58,6 +58,10 @@
   crash, and places nothing while it cannot write. It stops placing when the relay shuts down, counts calls that are
   still ringing against `TELEPHONY_MAX_CALLS`, does not call one number for two campaigns at once, and stops itself
   with a `stoppedReason` when five calls in a row cannot be placed. `startAt` needs its offset.
+- Warm transfers on Twilio: with `TELEPHONY_WARM_TRANSFER=on` the person who picks up a transfer hears a summary the
+  assistant wrote, and a caller whose transfer nobody answers comes back to the assistant, which carries on the same
+  conversation. `confirm` also asks the person to press a key, so an answering machine cannot take the call. Tested
+  against a stand-in for Twilio, not on a real call. See [warm transfers](docs/telephony.md#warm-transfers).
 - Telnyx is a second carrier beside Twilio: set `TELNYX_WEBHOOK_SECRET` and `TELNYX_PUBLIC_KEY`, and point a TeXML
   application at `/telephony/telnyx/voice?key=<secret>`. Inbound calls, transfers, keypad input and outbound calls work as on
   Twilio. Answering-machine detection does not yet. Both carriers can be set up at once, and `POST /v1/calls` takes

@@ -329,6 +329,43 @@ export function dialTwiml(
   return `${XML_HEADER}<Response>${say(options.say, options.language)}<Dial${callerId}>${target}</Dial></Response>`;
 }
 
+/**
+ * TwiML for a transfer that can come back. Whoever answers hears the TwiML at
+ * `whisperUrl` before the two are connected, and when the dial is over Twilio
+ * asks `actionUrl` what to do with the caller. Throws on a destination that
+ * is neither an E.164 number nor a sip: URI.
+ */
+export function warmDialTwiml(
+  destination: string,
+  options: { callerId?: string; whisperUrl: string; actionUrl: string; timeoutSeconds: number }
+): string {
+  const isSip = SIP_URI.test(destination);
+  if (!isSip && !E164.test(destination)) throw new Error("Dial destination must be an E.164 number or a sip: URI");
+  const callerId = options.callerId ? ` callerId="${xml(options.callerId)}"` : "";
+  const whisper = ` url="${xml(options.whisperUrl)}" method="POST"`;
+  const target = isSip ? `<Sip${whisper}>${xml(destination)}</Sip>` : `<Number${whisper}>${xml(destination)}</Number>`;
+  const timeout = Math.min(Math.max(Math.round(options.timeoutSeconds), 5), 120);
+  return `${XML_HEADER}<Response><Dial${callerId} timeout="${timeout}" action="${xml(options.actionUrl)}" method="POST">${target}</Dial></Response>`;
+}
+
+/**
+ * TwiML for the person who picks up a transferred call: what the call is
+ * about, in the carrier's voice. With `confirm` they must press a key to take
+ * the call, and it is hung up on their side when they do not: an answering
+ * machine cannot take a call.
+ */
+export function whisperTwiml(
+  text: string | undefined,
+  language: string | undefined,
+  confirm?: { prompt: string; actionUrl: string }
+): string {
+  if (!confirm) return `${XML_HEADER}<Response>${say(text, language)}</Response>`;
+  return `${XML_HEADER}<Response><Gather numDigits="1" timeout="8" action="${xml(confirm.actionUrl)}" method="POST">${say(text, language)}${say(confirm.prompt, language)}</Gather><Hangup/></Response>`;
+}
+
+/** TwiML with nothing in it: whatever was to happen next happens. */
+export const EMPTY_TWIML = `${XML_HEADER}<Response/>`;
+
 /** TwiML that says an optional line and hangs up. */
 export function hangupTwiml(sayText?: string, language?: string): string {
   return `${XML_HEADER}<Response>${say(sayText, language)}<Hangup/></Response>`;

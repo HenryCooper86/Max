@@ -74,6 +74,40 @@ describe("telephonySettingsFromEnv", () => {
     for (const problem of problems) expect(problem).toContain("TELEPHONY_TRANSFER_NUMBERS");
   });
 
+  it("reads the warm transfer setting", () => {
+    const base = { TWILIO_AUTH_TOKEN: TOKEN, TWILIO_ACCOUNT_SID: SID };
+    expect(telephonySettingsFromEnv({ ...base, TELEPHONY_WARM_TRANSFER: " On " }).settings?.warmTransfer).toBe("on");
+    const confirm = telephonySettingsFromEnv({
+      ...base,
+      TELEPHONY_WARM_TRANSFER: "confirm",
+      TELEPHONY_TRANSFER_PROMPT: " Press 1 to take it. "
+    });
+    expect(confirm.problems).toEqual([]);
+    expect(confirm.settings).toMatchObject({ warmTransfer: "confirm", transferPrompt: "Press 1 to take it." });
+    for (const off of [undefined, "", "off"]) {
+      const { settings, problems } = telephonySettingsFromEnv({ ...base, TELEPHONY_WARM_TRANSFER: off });
+      expect(problems).toEqual([]);
+      expect(settings).not.toHaveProperty("warmTransfer");
+    }
+    // The line to say is of no use without the key press.
+    expect(
+      telephonySettingsFromEnv({ ...base, TELEPHONY_WARM_TRANSFER: "off", TELEPHONY_TRANSFER_PROMPT: "x" }).settings
+    ).not.toHaveProperty("transferPrompt");
+  });
+
+  it("says what is wrong with a warm transfer setting, and leaves it off", () => {
+    const bad = telephonySettingsFromEnv({
+      TWILIO_AUTH_TOKEN: TOKEN,
+      TWILIO_ACCOUNT_SID: SID,
+      TELEPHONY_WARM_TRANSFER: "yes"
+    });
+    expect(bad.problems).toEqual(["TELEPHONY_WARM_TRANSFER must be on, confirm or off"]);
+    expect(bad.settings).not.toHaveProperty("warmTransfer");
+    const noSid = telephonySettingsFromEnv({ TWILIO_AUTH_TOKEN: TOKEN, TELEPHONY_WARM_TRANSFER: "on" });
+    expect(noSid.problems).toEqual([expect.stringContaining("TELEPHONY_WARM_TRANSFER needs TWILIO_ACCOUNT_SID")]);
+    expect(noSid.settings).not.toHaveProperty("warmTransfer");
+  });
+
   it("reports a bad phone number and leaves it out", () => {
     const { settings, problems } = telephonySettingsFromEnv({
       TWILIO_AUTH_TOKEN: TOKEN,
@@ -1190,5 +1224,447 @@ describe("placeCall", () => {
     const result = await harness.telephony.placeCall({ to: "+14155550123" }, ORIGIN);
     expect(result).toMatchObject({ ok: false, status: 429 });
     expect(harness.request).not.toHaveBeenCalled();
+  });
+});
+
+describe("warm transfers", () => {
+  const warmSettings = {
+    accountSid: SID,
+    phoneNumber: "+14155550199",
+    warmTransfer: "on" as const,
+    transferTargets: new Map([
+      ["support", "+14155550100"],
+      ["sales", "sip:sales@example.com"]
+    ])
+  };
+  const ctx = {} as never;
+  const RESUME = `rsm_${"a".repeat(32)}`;
+  const SUMMARY = "Ana Lopez is calling about a refund for order 1182 & wants a person.";
+
+  type Live = Awaited<ReturnType<typeof connect>>;
+
+  /** The assistant asks for a transfer, announces it, and the carrier is told. */
+  async function transfer(
+    harness: Harness,
+    args: Record<string, unknown> = { destination: "support", summary: SUMMARY },
+    connected?: Live
+  ) {
+    const live = connected ?? (await connect(harness));
+    live.client.send(JSON.stringify({ type: "session.started", resume: RESUME }));
+    const result = live.opened.extras.sessionTools[0]!.handler(args, ctx) as { ok: boolean; note: string };
+    live.client.send(status("speaking"));
+    live.client.send(status("listening"));
+    live.socket.twilio({ event: "mark", mark: { name: live.socket.ofType("mark")[0]!.mark.name } });
+    await vi.advanceTimersByTimeAsync(0);
+    const [, init] = harness.request.mock.calls.at(-1) as unknown as [string, RequestInit];
+    const twiml = new URLSearchParams(String(init.body)).get("Twiml")!;
+    const token = /transfer\/result\?t=([A-Za-z0-9_-]+)"/.exec(twiml)?.[1] ?? "";
+    return { ...live, twiml, token, result };
+  }
+
+  function hook(harness: Harness, kind: string, token: string, params: Record<string, string> = {}, secret = TOKEN) {
+    const url = `https://relay.example.com/telephony/twilio/transfer/${kind}?t=${token}`;
+    const all = { CallSid: CALL_SID, ...params };
+    return harness.telephony.transferWebhook(kind, { url, params: all, signature: twilioSignature(secret, url, all) });
+  }
+
+  /** The caller's stream connects again with the ticket the result webhook gave. */
+  async function comeBack(harness: Harness, body: string, callSid = CALL_SID): Promise<Live> {
+    const socket = new FakeSocket();
+    harness.telephony.handleStream(socket);
+    socket.twilio(startMessage(ticketOf(body), callSid));
+    await vi.advanceTimersByTimeAsync(0);
+    const opened = harness.opened.at(-1)!;
+    return { socket, opened, client: opened.client, session: opened.session };
+  }
+
+  it("asks the assistant for a summary only when transfers are warm", async () => {
+    const cold = await connect(setup({ ...warmSettings, warmTransfer: undefined }));
+    const coldParameters = cold.opened.extras.sessionTools[0]!.parameters as { properties: object; required: string[] };
+    expect(Object.keys(coldParameters.properties)).toEqual(["destination"]);
+    const warm = await connect(setup(warmSettings));
+    const parameters = warm.opened.extras.sessionTools[0]!.parameters as { properties: object; required: string[] };
+    expect(Object.keys(parameters.properties)).toEqual(["destination", "summary"]);
+    expect(parameters.required).toEqual(["destination", "summary"]);
+  });
+
+  it("dials with a whisper and a way back", async () => {
+    const harness = setup(warmSettings);
+    const { twiml, token, result } = await transfer(harness);
+    expect(token).toMatch(/^[A-Za-z0-9_-]{20,}$/);
+    expect(twiml).toContain(
+      `<Dial callerId="+14155550199" timeout="25" action="https://relay.example.com/telephony/twilio/transfer/result?t=${token}" method="POST">`
+    );
+    expect(twiml).toContain(
+      `<Number url="https://relay.example.com/telephony/twilio/transfer/whisper?t=${token}" method="POST">+14155550100</Number>`
+    );
+    expect(result.note).toContain("comes back to you");
+    // Neither the summary nor anything about the caller is in what the carrier is sent.
+    expect(twiml).not.toContain("Ana");
+  });
+
+  it("dials a SIP target the same way", async () => {
+    const harness = setup(warmSettings);
+    const { twiml, token } = await transfer(harness, { destination: "sales", summary: SUMMARY });
+    expect(twiml).toContain(
+      `<Sip url="https://relay.example.com/telephony/twilio/transfer/whisper?t=${token}" method="POST">sip:sales@example.com</Sip>`
+    );
+  });
+
+  it("uses the relay's public address when it is set", async () => {
+    const harness = setup({ ...warmSettings, publicUrl: "https://voice.example.com" });
+    const { twiml } = await transfer(harness);
+    expect(twiml).toContain('action="https://voice.example.com/telephony/twilio/transfer/result?t=');
+    expect(twiml).toContain('url="https://voice.example.com/telephony/twilio/transfer/whisper?t=');
+  });
+
+  it("transfers as before when warm transfers are off", async () => {
+    const harness = setup({ ...warmSettings, warmTransfer: undefined });
+    const { twiml } = await transfer(harness, { destination: "support" });
+    expect(twiml).toContain("<Number>+14155550100</Number>");
+    expect(twiml).not.toContain("action=");
+  });
+
+  it("tells the person who picks up what the call is about", async () => {
+    const harness = setup(warmSettings, {});
+    const { token } = await transfer(harness);
+    const whisper = hook(harness, "whisper", token, { CallSid: "CAchild1" });
+    expect(whisper.status).toBe(200);
+    expect(whisper.body).toBe(
+      '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Ana Lopez is calling about a refund for order 1182 &amp; wants a person.</Say></Response>'
+    );
+  });
+
+  it("keeps a summary to one plain line of at most 400 characters", async () => {
+    const harness = setup(warmSettings);
+    const { token } = await transfer(harness, {
+      destination: "support",
+      summary: `  <Hangup/>\nline two\u0000 ${"x".repeat(600)}`
+    });
+    const body = hook(harness, "whisper", token).body;
+    const said = /<Say>(.*)<\/Say>/.exec(body)![1]!;
+    expect(said.startsWith("&lt;Hangup/&gt; line two x")).toBe(true);
+    expect(said.replace(/&lt;|&gt;/g, "_")).toHaveLength(400);
+    expect(body).not.toContain("<Hangup/>");
+  });
+
+  it("puts the call through without a word when the assistant gave no summary", async () => {
+    const harness = setup(warmSettings);
+    const { token } = await transfer(harness, { destination: "support", summary: 5 });
+    expect(hook(harness, "whisper", token).body).toBe('<?xml version="1.0" encoding="UTF-8"?><Response/>');
+  });
+
+  it("gives the summary to a carrier that asks again at once, and not half a minute later", async () => {
+    const harness = setup(warmSettings);
+    const { token } = await transfer(harness);
+    expect(hook(harness, "whisper", token).body).toContain("Ana Lopez");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(hook(harness, "whisper", token).body).toContain("Ana Lopez");
+    await vi.advanceTimersByTimeAsync(1);
+    // A copy of the request that turns up later learns nothing about the caller.
+    expect(hook(harness, "whisper", token).body).toBe('<?xml version="1.0" encoding="UTF-8"?><Response/>');
+  });
+
+  it("tells the assistant which language the summary is read in", async () => {
+    const opened: Opened[] = [];
+    const telephony = createTelephony(settingsWith(warmSettings), {
+      log: logger(),
+      language: "es-ES",
+      request: (async () => jsonResponse({ sid: "CAout1" }, 201)) as unknown as typeof fetch,
+      openSession(client, call, extras) {
+        const session = { handleMessage: vi.fn(async () => {}), close: vi.fn() };
+        opened.push({ client, call, extras, session });
+        return session;
+      }
+    });
+    await connect({ telephony, opened, request: vi.fn() } as unknown as Harness);
+    const parameters = opened[0]!.extras.sessionTools[0]!.parameters as {
+      properties: { summary: { description: string } };
+    };
+    expect(parameters.properties.summary.description).toContain('"es-ES": write it in that language');
+  });
+
+  it("refuses a callback that Twilio did not sign", async () => {
+    const harness = setup(warmSettings);
+    const { token } = await transfer(harness);
+    for (const kind of ["whisper", "accept", "result"]) {
+      const answer = hook(harness, kind, token, {}, "other-token");
+      expect(answer.status).toBe(403);
+      expect(answer.body).not.toContain("Ana");
+      expect(answer.body).not.toContain("<Stream");
+    }
+    expect(hook(harness, "elsewhere", token).status).toBe(404);
+  });
+
+  it("hangs up when the two have spoken and the call is over", async () => {
+    const harness = setup(warmSettings);
+    const { token } = await transfer(harness);
+    const result = hook(harness, "result", token, { DialCallStatus: "completed", DialBridged: "true" });
+    expect(result.body).toContain("<Hangup/>");
+    expect(result.body).not.toContain("<Stream");
+  });
+
+  it.each([
+    ["no-answer", "nobody answered"],
+    ["busy", "the line was busy"],
+    ["failed", "the call could not be placed"],
+    ["canceled", "the call was cancelled"],
+    ["something-new", "nobody took the call"]
+  ])("brings the caller back to the assistant after %s", async (dialStatus, why) => {
+    const harness = setup(warmSettings);
+    const { token, session } = await transfer(harness);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(session.close).toHaveBeenCalledExactlyOnceWith("transfer");
+    expect(harness.telephony.activeCalls()).toBe(0);
+
+    const result = hook(harness, "result", token, { DialCallStatus: dialStatus, DialBridged: "false" });
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('<Stream url="wss://relay.example.com/telephony/twilio/stream">');
+    const back = await comeBack(harness, result.body);
+    expect(harness.opened).toHaveLength(2);
+    expect(harness.telephony.activeCalls()).toBe(1);
+    expect(back.opened.call).toMatchObject({ callSid: CALL_SID, direction: "inbound", from: "+14155550111" });
+    expect(back.opened.extras.trustedContext).toContain(
+      `You tried to transfer this call to support a moment ago, and ${why}. The caller is back with you.`
+    );
+    // The conversation goes on from where it was, and the assistant is told to speak first.
+    const events = eventsTo(back.opened.session);
+    expect(events[0]).toMatchObject({ type: "session.start", resume: RESUME });
+    expect(events[1]).toMatchObject({ type: "audio.start" });
+    expect(events[2]).toMatchObject({ type: "text.input" });
+    expect(events[2]!.text).toContain(`The transfer to support did not go through: ${why}.`);
+    // It can try again.
+    expect(back.opened.extras.sessionTools.map((tool) => tool.name)).toEqual(["transfer_call"]);
+  });
+
+  it("brings the caller back when the person hung up while hearing the summary", async () => {
+    const harness = setup(warmSettings);
+    const { token } = await transfer(harness);
+    await vi.advanceTimersByTimeAsync(3_000);
+    // Answered, so "completed", and never connected to the caller.
+    const result = hook(harness, "result", token, { DialCallStatus: "completed", DialBridged: "false" });
+    expect(result.body).toContain("<Stream");
+  });
+
+  it("hangs up after a call that was answered, when the carrier does not say whether the two spoke", async () => {
+    const harness = setup(warmSettings);
+    const { token } = await transfer(harness);
+    expect(hook(harness, "result", token, { DialCallStatus: "completed" }).body).toContain("<Hangup/>");
+  });
+
+  it("lets the assistant try again after the caller is back", async () => {
+    const harness = setup(warmSettings);
+    const first = await transfer(harness);
+    await vi.advanceTimersByTimeAsync(3_000);
+    const failed = { DialCallStatus: "busy", DialBridged: "false" };
+    const back = await comeBack(harness, hook(harness, "result", first.token, failed).body);
+    const second = await transfer(harness, { destination: "sales", summary: "Second try." }, back);
+    expect(second.token).not.toBe(first.token);
+    expect(second.twiml).toContain("sip:sales@example.com");
+    expect(hook(harness, "whisper", second.token).body).toContain("<Say>Second try.</Say>");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(back.session.close).toHaveBeenCalledExactlyOnceWith("transfer");
+    // And comes back a second time.
+    const again = await comeBack(harness, hook(harness, "result", second.token, failed).body);
+    expect(harness.opened).toHaveLength(3);
+    expect(again.opened.extras.trustedContext).toContain("transfer this call to sales a moment ago");
+    expect(harness.telephony.activeCalls()).toBe(1);
+  });
+
+  describe("a call somebody watches", () => {
+    /** A watched outbound call that a person answered, with the assistant on it. */
+    async function watchedCall(harness: Harness) {
+      const events: Array<Record<string, unknown>> = [];
+      await harness.telephony.placeCall({ to: "+14155550123" }, "https://relay.example.com", (progress) =>
+        events.push(progress)
+      );
+      const [, init] = harness.request.mock.calls.at(-1) as unknown as [string, RequestInit];
+      const planUrl = new URLSearchParams(String(init.body)).get("Url")!;
+      const answer = webhook(harness.telephony, { CallSid: "CAout1", AnsweredBy: "human" }, planUrl);
+      const live = await comeBack(harness, answer.body, "CAout1");
+      return { events, live };
+    }
+    const out = { CallSid: "CAout1" };
+
+    it("is not over when the transfer begins: the caller may come back", async () => {
+      const harness = setup(warmSettings);
+      const { events, live } = await watchedCall(harness);
+      const { token } = await transfer(harness, undefined, live);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(live.session.close).toHaveBeenCalledExactlyOnceWith("transfer");
+      expect(events).toEqual([{ type: "answered", callSid: "CAout1" }]);
+
+      const result = hook(harness, "result", token, { ...out, DialCallStatus: "no-answer", DialBridged: "false" });
+      const back = await comeBack(harness, result.body, "CAout1");
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(events).toHaveLength(1);
+      // The call's last word is how the conversation that followed ended.
+      back.socket.twilio({ event: "stop" });
+      expect(events).toEqual([
+        { type: "answered", callSid: "CAout1" },
+        { type: "ended", callSid: "CAout1", reason: "caller", durationMs: expect.any(Number) }
+      ]);
+    });
+
+    it("is over when the two have spoken", async () => {
+      const harness = setup(warmSettings);
+      const { events, live } = await watchedCall(harness);
+      const { token } = await transfer(harness, undefined, live);
+      // Before the first stream has gone, even.
+      hook(harness, "result", token, { ...out, DialCallStatus: "completed", DialBridged: "true" });
+      expect(events.at(-1)).toMatchObject({ type: "ended", callSid: "CAout1", reason: "transfer" });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(events).toHaveLength(2);
+    });
+
+    it("is taken to be with the person it went to when nothing is heard for 90 seconds", async () => {
+      const harness = setup(warmSettings);
+      const { events, live } = await watchedCall(harness);
+      await transfer(harness, undefined, live);
+      await vi.advanceTimersByTimeAsync(3_000 + 89_000);
+      expect(events).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(events.at(-1)).toMatchObject({ type: "ended", callSid: "CAout1", reason: "transfer" });
+      expect(events).toHaveLength(2);
+    });
+
+    it("is over at once after a transfer that cannot come back", async () => {
+      const harness = setup({ ...warmSettings, warmTransfer: undefined });
+      const { events, live } = await watchedCall(harness);
+      await transfer(harness, { destination: "support" }, live);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(events.at(-1)).toMatchObject({ type: "ended", callSid: "CAout1", reason: "transfer" });
+    });
+  });
+
+  it("gives a carrier that asks twice the same answer, and nothing once the caller is back", async () => {
+    const harness = setup(warmSettings);
+    const { token } = await transfer(harness);
+    await vi.advanceTimersByTimeAsync(3_000);
+    const params = { DialCallStatus: "no-answer", DialBridged: "false" };
+    const first = hook(harness, "result", token, params);
+    const again = hook(harness, "result", token, params);
+    expect(ticketOf(again.body)).toBe(ticketOf(first.body));
+    await comeBack(harness, first.body);
+    const late = hook(harness, "result", token, params);
+    expect(late.body).toContain("<Hangup/>");
+    expect(late.body).not.toContain("<Stream");
+    // And the ticket was good for one stream.
+    const replay = new FakeSocket();
+    harness.telephony.handleStream(replay);
+    replay.twilio(startMessage(ticketOf(first.body)));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.opened).toHaveLength(2);
+    expect(replay.closed).toBe(true);
+  });
+
+  it("does not bring back a caller who has hung up, another call, or a transfer it does not know", async () => {
+    const harness = setup(warmSettings);
+    const { token } = await transfer(harness);
+    const failed = { DialCallStatus: "no-answer", DialBridged: "false" };
+    expect(hook(harness, "result", "unknown-token", failed).body).toContain("<Hangup/>");
+    expect(hook(harness, "result", token, { ...failed, CallSid: "CA999" }).body).toContain("<Hangup/>");
+    // Still there for the call it belongs to; the caller is gone, though.
+    const gone = hook(harness, "result", token, { ...failed, CallStatus: "completed" });
+    expect(gone.body).toContain("<Hangup/>");
+    expect(hook(harness, "result", token, failed).body).toContain("<Hangup/>");
+  });
+
+  it("forgets a transfer after five minutes", async () => {
+    const harness = setup(warmSettings);
+    const { token } = await transfer(harness);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    expect(hook(harness, "result", token, { DialCallStatus: "no-answer", DialBridged: "false" }).body).toContain(
+      "<Hangup/>"
+    );
+    // A whisper for it says nothing and lets the call through.
+    expect(hook(harness, "whisper", token).body).toBe('<?xml version="1.0" encoding="UTF-8"?><Response/>');
+  });
+
+  it("hangs up when the caller would come back and every line is taken", async () => {
+    const harness = setup({ ...warmSettings, maxCalls: 1 });
+    const { token } = await transfer(harness);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await connect(harness, { CallSid: "CAother" });
+    const result = hook(harness, "result", token, { DialCallStatus: "no-answer", DialBridged: "false" });
+    expect(result.body).toContain("<Hangup/>");
+    expect(result.body).not.toContain("<Stream");
+  });
+
+  it("lets the caller back on the line their own call still held", async () => {
+    const harness = setup({ ...warmSettings, maxCalls: 1 });
+    const { token, session, socket } = await transfer(harness);
+    // The destination could not be dialled at all: Twilio is back before the first stream has gone.
+    expect(session.close).not.toHaveBeenCalled();
+    const result = hook(harness, "result", token, { DialCallStatus: "failed", DialBridged: "false" });
+    expect(session.close).toHaveBeenCalledExactlyOnceWith("transfer");
+    expect(socket.closed).toBe(true);
+    expect(result.body).toContain("<Stream");
+    await comeBack(harness, result.body);
+    expect(harness.opened).toHaveLength(2);
+    expect(harness.telephony.activeCalls()).toBe(1);
+    // The first stream's own end changes nothing any more.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(harness.telephony.activeCalls()).toBe(1);
+    expect(harness.opened.at(-1)!.session.close).not.toHaveBeenCalled();
+  });
+
+  it("forgets the transfer when Twilio refuses it", async () => {
+    const harness = setup(warmSettings, { request: async () => jsonResponse({ message: "nope" }, 500) });
+    const { token, session } = await transfer(harness);
+    expect(token).not.toBe("");
+    expect(eventsTo(session).at(-1)!.text).toContain("The transfer did not go through");
+    expect(hook(harness, "result", token, { DialCallStatus: "no-answer", DialBridged: "false" }).body).toContain(
+      "<Hangup/>"
+    );
+  });
+
+  describe("with a key to press", () => {
+    const confirmSettings = { ...warmSettings, warmTransfer: "confirm" as const };
+
+    it("asks the person who picks up to press a key, and hangs up on their side when they do not", async () => {
+      const harness = setup(confirmSettings);
+      const { token } = await transfer(harness);
+      expect(hook(harness, "whisper", token).body).toBe(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Gather numDigits="1" timeout="8" action="https://relay.example.com/telephony/twilio/transfer/accept?t=${token}" method="POST"><Say>Ana Lopez is calling about a refund for order 1182 &amp; wants a person.</Say><Say>Press any key to take the call.</Say></Gather><Hangup/></Response>`
+      );
+    });
+
+    it("says the owner's own line", async () => {
+      const harness = setup({ ...confirmSettings, transferPrompt: "Pulse una tecla para atender." });
+      const { token } = await transfer(harness);
+      expect(hook(harness, "whisper", token).body).toContain("<Say>Pulse una tecla para atender.</Say></Gather>");
+    });
+
+    it("asks for the key press for a transfer it no longer knows, without a summary", async () => {
+      const harness = setup(confirmSettings);
+      const { token } = await transfer(harness);
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+      for (const asked of [token, "never/heard of&it"]) {
+        const body = hook(harness, "whisper", encodeURIComponent(asked)).body;
+        expect(body).toContain("<Say>Press any key to take the call.</Say></Gather><Hangup/>");
+        expect(body).not.toContain("Ana");
+        expect(body).toContain(`/transfer/accept?t=${encodeURIComponent(asked).replace(/&/g, "&amp;")}"`);
+      }
+    });
+
+    it("connects the two once a key is pressed", async () => {
+      const harness = setup(confirmSettings);
+      const { token } = await transfer(harness);
+      const accepted = hook(harness, "accept", token, { Digits: "1" });
+      expect(accepted.body).toBe('<?xml version="1.0" encoding="UTF-8"?><Response/>');
+      // A carrier that does not say whether the two were connected: the key press tells.
+      expect(hook(harness, "result", token, { DialCallStatus: "completed" }).body).toContain("<Hangup/>");
+    });
+
+    it("brings the caller back when an answering machine picked up and pressed nothing", async () => {
+      const harness = setup(confirmSettings);
+      const { token } = await transfer(harness);
+      await vi.advanceTimersByTimeAsync(3_000);
+      const result = hook(harness, "result", token, { DialCallStatus: "completed" });
+      expect(result.body).toContain("<Stream");
+      const back = await comeBack(harness, result.body);
+      expect(back.opened.extras.trustedContext).toContain("nobody took the call");
+    });
   });
 });

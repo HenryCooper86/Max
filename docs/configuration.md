@@ -250,6 +250,8 @@ See [phone calls](telephony.md).
 | `TWILIO_PHONE_NUMBER`        | none    | The number outbound calls come from, in E.164 form.                                                                              |
 | `TELEPHONY_PUBLIC_URL`       | derived | The relay's public address as Twilio reaches it. Set it behind a proxy or a tunnel.                                              |
 | `TELEPHONY_TRANSFER_NUMBERS` | none    | Where the assistant may transfer a call: `support=+14155550100,sales=sip:sales@example.com`.                                     |
+| `TELEPHONY_WARM_TRANSFER`    | `off`   | `on` or `confirm`: [warm transfers](telephony.md#warm-transfers) on Twilio.                                                      |
+| `TELEPHONY_TRANSFER_PROMPT`  | English | With `confirm`: the line that asks the person who picks up to press a key.                                                       |
 | `TELEPHONY_MAX_CALLS`        | `20`    | Simultaneous calls, 1 to 1000, on each carrier.                                                                                  |
 | `CAMPAIGNS_FILE`             | none    | Where [call campaigns](telephony.md#calling-a-list-of-numbers) are kept between restarts. Without it they are lost at a restart. |
 | `TELNYX_WEBHOOK_SECRET`      | none    | The secret in the voice URL you give Telnyx. With the public key, turns Telnyx calls on.                                         |

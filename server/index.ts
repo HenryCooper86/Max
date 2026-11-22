@@ -491,6 +491,29 @@ app.post("/telephony/twilio/status", express.urlencoded({ extended: false, limit
   res.status(answer.status).end();
 });
 
+// What Twilio asks during a warm transfer: what the person who picked up
+// hears, whether they took the call, and what to do with the caller afterwards.
+app.post("/telephony/twilio/transfer/:kind", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  if (!telephony) {
+    res.status(404).end();
+    return;
+  }
+  const params: Record<string, string> = {};
+  for (const [name, value] of Object.entries((req.body ?? {}) as Record<string, unknown>)) {
+    if (typeof value === "string") params[name] = value;
+  }
+  const origin = telephonyConfig.settings?.publicUrl ?? requestOrigin(req);
+  const signature = req.headers["x-twilio-signature"];
+  const answer = telephony.transferWebhook(String(req.params.kind), {
+    url: `${origin}${req.originalUrl}`,
+    params,
+    signature: Array.isArray(signature) ? signature[0] : signature
+  });
+  if (answer.status === 403)
+    log.warn("rejected a telephony transfer callback: bad signature", { address: clientAddress(req) });
+  res.status(answer.status).type("text/xml").send(answer.body);
+});
+
 // The same for Telnyx, authenticated by the secret in the URL.
 app.post("/telephony/telnyx/status", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
   if (!telnyx) {
@@ -1756,6 +1779,7 @@ if (telephonyConfig.settings) {
   telephony = createTelephony(telephonyConfig.settings, callDeps("telephony"));
   log.info("telephony ready", {
     transfers: [...telephonyConfig.settings.transferTargets.keys()],
+    ...(telephonyConfig.settings.warmTransfer ? { warmTransfer: telephonyConfig.settings.warmTransfer } : {}),
     outbound: Boolean(telephonyConfig.settings.accountSid && telephonyConfig.settings.phoneNumber)
   });
 }

@@ -69,6 +69,26 @@ export type Carrier = {
   answerXml(streamUrl: string, ticket: string): string;
   /** XML that transfers the call to a phone number or SIP address. */
   dialXml(destination: string, options: { callerId?: string }): string;
+  /**
+   * Transfers that tell whoever picks up what the call is about, and bring
+   * the caller back to the assistant when nobody takes it. Absent on a
+   * carrier the relay cannot do this with.
+   */
+  warmTransfer?: {
+    /** XML that dials, asks `whisperUrl` what the person who answers hears, and `actionUrl` what follows the dial. */
+    dialXml(
+      destination: string,
+      options: { callerId?: string; whisperUrl: string; actionUrl: string; timeoutSeconds: number }
+    ): string;
+    /** XML for the person who picked up. With `confirm` a key must be pressed to take the call. */
+    whisperXml(
+      text: string | undefined,
+      language: string | undefined,
+      confirm?: { prompt: string; actionUrl: string }
+    ): string;
+    /** XML with nothing in it: the call goes on to what was next. */
+    continueXml(): string;
+  };
   /** XML that says an optional line and hangs up. */
   hangupXml(say?: string, language?: string): string;
   /** XML that turns the call away because every line is taken. */

@@ -28,14 +28,16 @@ TWILIO_AUTH_TOKEN=your-twilio-auth-token
 TELEPHONY_PUBLIC_URL=https://voice.example.com
 ```
 
-| Variable                     | Default | What it does                                                                                                                                 |
-| ---------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TWILIO_AUTH_TOKEN`          | none    | Required. Your account's auth token. It turns telephony on and checks that webhooks really come from Twilio.                                 |
-| `TWILIO_ACCOUNT_SID`         | none    | Needed to transfer calls and to place outbound calls (both use Twilio's REST API), not to answer them.                                       |
-| `TWILIO_PHONE_NUMBER`        | none    | The Twilio number outbound calls come from, in E.164 form such as `+14155550100`. It is also the caller ID of a transfer.                    |
-| `TELEPHONY_PUBLIC_URL`       | derived | The relay's public address as Twilio reaches it, such as `https://voice.example.com`. When unset, the relay uses the address of the request. |
-| `TELEPHONY_TRANSFER_NUMBERS` | none    | Where the assistant may transfer a call: `support=+14155550100,sales=sip:sales@example.com`. See [transferring](#transferring-to-a-person).  |
-| `TELEPHONY_MAX_CALLS`        | `20`    | Calls at the same time, 1 to 1000. Further calls are answered with a busy signal.                                                            |
+| Variable                     | Default | What it does                                                                                                                                                                                |
+| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TWILIO_AUTH_TOKEN`          | none    | Required. Your account's auth token. It turns telephony on and checks that webhooks really come from Twilio.                                                                                |
+| `TWILIO_ACCOUNT_SID`         | none    | Needed to transfer calls and to place outbound calls (both use Twilio's REST API), not to answer them.                                                                                      |
+| `TWILIO_PHONE_NUMBER`        | none    | The Twilio number outbound calls come from, in E.164 form such as `+14155550100`. It is also the caller ID of a transfer.                                                                   |
+| `TELEPHONY_PUBLIC_URL`       | derived | The relay's public address as Twilio reaches it, such as `https://voice.example.com`. When unset, the relay uses the address of the request.                                                |
+| `TELEPHONY_TRANSFER_NUMBERS` | none    | Where the assistant may transfer a call: `support=+14155550100,sales=sip:sales@example.com`. See [transferring](#transferring-to-a-person).                                                 |
+| `TELEPHONY_WARM_TRANSFER`    | `off`   | `on` or `confirm`: the person who picks up a transfer hears what the call is about, and the caller comes back to the assistant when nobody takes it. See [warm transfers](#warm-transfers). |
+| `TELEPHONY_TRANSFER_PROMPT`  | English | With `confirm`: the line that asks the person to press a key, at most 200 characters.                                                                                                       |
+| `TELEPHONY_MAX_CALLS`        | `20`    | Calls at the same time, 1 to 1000. Further calls are answered with a busy signal.                                                                                                           |
 
 Problems with these variables (a number that is not in E.164 form, a transfer list without `TWILIO_ACCOUNT_SID`) are
 logged at startup, and the part that is wrong is left off.
@@ -125,6 +127,57 @@ finished speaking (or after 12 seconds, if it never does), the relay redirects t
 Twilio's REST API. That needs `TWILIO_ACCOUNT_SID`: without it `transfer_call` is not offered at all. If Twilio refuses
 the transfer, the assistant is told, apologises and carries on. On success the assistant leaves the call and the
 conversation record ends with the reason `transfer`.
+
+### Warm transfers
+
+Transferred like this, the person who picks up knows nothing about the call, and a caller whose transfer nobody answers
+hears the carrier give up. `TELEPHONY_WARM_TRANSFER` changes both, on Twilio:
+
+```bash
+TELEPHONY_WARM_TRANSFER=on        # or: confirm
+```
+
+- **The person who picks up hears what the call is about.** The `transfer_call` tool gets a second argument,
+  `summary`: one or two sentences the assistant writes about who is calling and what they need. Twilio reads it to the
+  person who answers before it connects the two. The caller does not hear it. The relay keeps it to one line of at
+  most 400 characters. It is never part of what the relay sends to Twilio's REST API: Twilio asks the relay for it
+  when somebody has picked up, and the relay gives it for 30 seconds from then.
+- **The caller comes back when nobody takes the call.** The destination rings for 25 seconds. If it is busy, does not
+  answer or cannot be reached, Twilio connects the caller to the relay again. The assistant carries on the same
+  conversation, is told why the transfer did not go through, and says so. It can try again, try another destination
+  or take a message.
+- **`confirm` asks for a key press.** After the summary the person hears "Press any key to take the call." (set your
+  own line with `TELEPHONY_TRANSFER_PROMPT`) and has 8 seconds to press one. If they do not, their side is hung up and
+  the caller comes back to the assistant. Use it when the destination has voicemail: an answering machine picks up,
+  presses nothing, and the caller is not left talking to it.
+
+What to know:
+
+- While the destination rings, the assistant is not on the call, so it cannot talk to the caller or to the person who
+  picks up. It briefs that person through the summary only.
+- Twilio reads the summary in its own voice, for the first language in the assistant's `languages`. The assistant is
+  asked to write the summary in that language, whatever language the caller speaks.
+- A caller who comes back is in a new session that is given the earlier conversation. That works for a software
+  assistant (`"device": "app"`, which a phone line should be). With a wearable or vehicle preset the earlier turns are
+  not carried over: the assistant knows that the transfer failed and why, and greets the caller again.
+- The relay asks Twilio to call three URLs of its own during a transfer (`/telephony/twilio/transfer/whisper`,
+  `/accept` and `/result`). Each request is checked against Twilio's signature like the voice webhook. Behind a proxy
+  or a tunnel set `TELEPHONY_PUBLIC_URL`, as for the voice webhook.
+- A call that comes back produces a second [conversation record](conversations.md) for the same `callSid`: the first
+  ends with the reason `transfer`, the second holds what was said afterwards. Recordings are split the same way.
+- A [campaign](#calling-a-list-of-numbers) call that is transferred counts as `completed` with the reason `transfer`
+  when the two have spoken, or 90 seconds after the transfer began if Twilio has said nothing by then. If the caller
+  comes back first, the call stays in progress and ends the way the rest of the conversation does.
+- The relay remembers a transfer for five minutes. That covers the ringing, the summary and the key press many times
+  over. A caller who would come back when every line of the relay is taken (`TELEPHONY_MAX_CALLS`) is hung up.
+- If the relay restarts or is shutting down while the destination rings, the caller cannot come back and the call
+  ends when the ringing does. With `confirm` the person who picks up after a restart is still asked for the key
+  press, without the summary.
+- Calls through Telnyx are transferred without any of this, and the relay says so at startup when the variable is
+  set.
+- Tried with a local model and a stand-in for Twilio that sends the documented requests: a key press on the call, the
+  transfer, the summary, no answer, and the caller back with the assistant after about two seconds. Not yet run on a
+  real Twilio call.
 
 ## Outbound calls
 
@@ -382,6 +435,7 @@ TELEPHONY_PUBLIC_URL=https://voice.example.com
 | `TELNYX_UNSIGNED_STREAMS` | off     | `allow` runs Telnyx without `TELNYX_PUBLIC_KEY`. Read [the next section](#how-the-relay-knows-it-is-telnyx) first. |
 
 `TELEPHONY_PUBLIC_URL`, `TELEPHONY_TRANSFER_NUMBERS` and `TELEPHONY_MAX_CALLS` apply to Telnyx as they do to Twilio.
+`TELEPHONY_WARM_TRANSFER` does not: a call through Telnyx is transferred without a summary and does not come back.
 Twilio and Telnyx can be set up at the same time. Each then has `TELEPHONY_MAX_CALLS` lines of its own.
 
 ### How the relay knows it is Telnyx

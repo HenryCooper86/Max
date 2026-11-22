@@ -49,7 +49,7 @@ it is not built; see [not built yet](#not-built-yet).
 | Capability                                  | Max | Notes                                                                                                                                               |
 | ------------------------------------------- | --- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Inbound and outbound calls                  | Yes | Through Twilio or Telnyx. See [phone calls](telephony.md).                                                                                          |
-| Transfer to a person, keypad input, hang up | Yes | Cold transfer to numbers you list. No warm (announced) transfer.                                                                                    |
+| Transfer to a person, keypad input, hang up | Yes | To numbers you list. On Twilio a transfer can be warm: a summary for whoever picks up, and back to the assistant when nobody does.                  |
 | Answering-machine detection                 | Yes | Twilio's; a voicemail message can be left. Not on Telnyx yet.                                                                                       |
 | A second carrier                            | Yes | Telnyx, written to its documentation; not run on a real call.                                                                                       |
 | Direct SIP trunks, further carriers         | No  |                                                                                                                                                     |
@@ -122,7 +122,9 @@ In rough order of how much they would matter to most users:
 6. **A visual flow builder, and stored agent versions.** The config is a file with a `version` label, and variants of
    it can be compared; the relay keeps no history of configs to roll back to, and does not say whether a difference
    between two variants is larger than chance.
-7. **Warm transfers.**
+7. **Warm transfers in which the assistant talks to the person first, and warm transfers on Telnyx.** On Twilio the
+   person who picks up hears a summary the assistant wrote, and the caller comes back when nobody takes the call. The
+   assistant does not hold a conversation with that person before connecting the two.
 8. **WebRTC in the native iOS and Android clients.** The web SDK has it; the native clients use the WebSocket.
 9. **Avatars.**
 

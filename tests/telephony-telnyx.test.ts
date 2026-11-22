@@ -213,6 +213,18 @@ describe("telnyxSettingsFromEnv", () => {
     expect(problems[0]).toContain("TELNYX_PUBLIC_KEY");
   });
 
+  it("says that warm transfers are not done through Telnyx", () => {
+    const { settings, problems } = telnyxSettingsFromEnv({
+      TELNYX_WEBHOOK_SECRET: SECRET,
+      TELNYX_PUBLIC_KEY: generateKeyPairSync("ed25519").publicKey.export({ format: "pem", type: "spki" }).toString(),
+      TELEPHONY_WARM_TRANSFER: "on"
+    });
+    expect(problems).toEqual([
+      "TELEPHONY_WARM_TRANSFER: calls through Telnyx are transferred without it. The relay does warm transfers on Twilio."
+    ]);
+    expect(settings).not.toHaveProperty("warmTransfer");
+  });
+
   it("says what transfers and outbound calls need", () => {
     const { settings, problems } = telnyxSettingsFromEnv({
       TELNYX_WEBHOOK_SECRET: SECRET,

@@ -13,6 +13,8 @@ import {
 import {
   checkLogoUpload,
   clearStudioVoice,
+  ConfigFileError,
+  deleteStudioVersion,
   recordStartupConfig,
   removeStudioLogo,
   restoreStudioConfig,
@@ -246,14 +248,16 @@ describe("the Studio's history", () => {
     const { versions } = studioHistory();
     expect(versions.map((version) => [version.by, version.name, version.changed, version.current])).toEqual([
       ["omar", "Iris", ["device", "greeting"], true],
-      ["nora", "Iris", [], false]
+      ["nora", "Iris", ["greeting", "name"], false],
+      // The relay's built-in assistant, as it was before the first save.
+      ["defaults", undefined, [], false]
     ]);
     // Saving the same again is not another version.
     saveStudioConfig({ name: "Iris", greeting: "Good day.", device: "app" }, "omar");
-    expect(studioHistory().versions).toHaveLength(2);
+    expect(studioHistory().versions).toHaveLength(3);
     // The files sit beside the config, for the relay's user only.
     const kept = fs.readdirSync(path.join(directory, "config-history"));
-    expect(kept).toHaveLength(2);
+    expect(kept).toHaveLength(3);
     expect(fs.statSync(path.join(directory, "config-history", kept[0]!)).mode & 0o777).toBe(0o600);
   });
 
@@ -279,11 +283,112 @@ describe("the Studio's history", () => {
     expect(assistant().name).toBe("Iris");
     expect(JSON.parse(fs.readFileSync(studioConfigPath(), "utf8"))).toEqual({ name: "Iris", greeting: "Hello." });
     const { versions } = studioHistory();
-    expect(versions).toHaveLength(3);
+    expect(versions).toHaveLength(4);
     expect(versions[0]).toMatchObject({ by: "omar", restoredFrom: first.id, name: "Iris", current: true });
     // The version it came from says the same; only the newest is marked.
-    expect(versions.map((version) => version.current)).toEqual([true, false, false]);
+    expect(versions.map((version) => version.current)).toEqual([true, false, false, false]);
     expect(restoreStudioConfig("1800000000000-00000000", "omar")).toBeUndefined();
+  });
+
+  it("has a way back to the relay's built-in assistant", () => {
+    saveStudioConfig({ name: "Iris", device: "sunglasses" }, "nora");
+    const start = studioHistory().versions.at(-1)!;
+    expect(start.by).toBe("defaults");
+    const state = restoreStudioConfig(start.id, "nora")!;
+    expect(state.assistant.name).toBe("Max");
+    expect(state.config).toEqual({});
+    expect(basePersonaPrompt()).toBe(basePersonaPrompt(DEFAULT_ASSISTANT_PROFILE));
+    // Kept once: later saves do not add it again.
+    saveStudioConfig({ name: "Nova" }, "nora");
+    expect(studioHistory().versions.filter((version) => version.by === "defaults")).toHaveLength(1);
+  });
+
+  it("does not bring back a logo whose file is gone, and keeps one whose file is there", () => {
+    saveStudioConfig({ name: "Iris" }, "nora");
+    saveStudioLogo(SVG);
+    const withSvg = studioHistory().versions[0]!;
+    saveStudioLogo(PNG);
+    const withPng = studioHistory().versions[0]!;
+    // The svg was replaced by the png: going back to that config keeps the logo there is now.
+    let state = restoreStudioConfig(withSvg.id, "nora")!;
+    expect(state.customLogo).toBe(true);
+    expect(assistant().logo?.path).toBe(path.join(directory, "brand-logo.png"));
+    expect(assistant().configProblems).toEqual([]);
+    // A config from before any logo has none; the picture stays on disk for the configs that name it.
+    const bare = studioHistory().versions.find((version) => version.by === "nora" && version.name === "Iris")!;
+    state = restoreStudioConfig(bare.id, "nora")!;
+    expect(state.customLogo).toBe(false);
+    expect(fs.existsSync(path.join(directory, "brand-logo.png"))).toBe(true);
+    state = restoreStudioConfig(withPng.id, "nora")!;
+    expect(state.customLogo).toBe(true);
+    // With no logo anywhere, a version that names a missing one is restored without it.
+    removeStudioLogo();
+    state = restoreStudioConfig(withPng.id, "nora")!;
+    expect(state.customLogo).toBe(false);
+    expect(JSON.parse(fs.readFileSync(studioConfigPath(), "utf8"))).toEqual({ name: "Iris" });
+  });
+
+  it("takes a deleted voice out of every kept config", () => {
+    saveStudioConfig({ name: "Iris", voice: { id: "v_0123456789", equalizer: { preset: "warm" } } }, "nora");
+    saveStudioConfig({ name: "Nova", voice: { id: "v_0123456789" } }, "nora");
+    saveStudioConfig({ name: "Vega" }, "nora");
+    // The current config does not use the voice, the kept ones do.
+    expect(clearStudioVoice("v_0123456789")).toBe(false);
+    const [, nova, iris] = studioHistory().versions;
+    expect(studioVersion(iris!.id)!.config).toEqual({ name: "Iris", voice: { equalizer: { preset: "warm" } } });
+    expect(studioVersion(nova!.id)!.config).toEqual({ name: "Nova" });
+    restoreStudioConfig(iris!.id, "nora");
+    expect(assistant().voiceId).toBeUndefined();
+  });
+
+  it("names for a restart only what the running relay really has differently", () => {
+    fs.writeFileSync(path.join(directory, "faq.md"), "# FAQ\n\nWe ship on Mondays.\n");
+    const started = assistantProfileFrom(
+      { name: "Iris", knowledge: { files: ["faq.md"] }, privacy: { redact: ["email", "phone"] } },
+      directory
+    );
+    setAssistantProfileForTests(started);
+    // The first save from the Studio writes the knowledge base as the loader resolved it.
+    saveStudioConfig({ name: "Nova" }, "nora");
+    const resolved = studioHistory().versions[0]!;
+    expect(studioVersion(resolved.id)!.config).toMatchObject({
+      knowledge: { files: [path.join(directory, "faq.md")] }
+    });
+    expect(restoreStudioConfig(resolved.id, "nora", started)!.restartFor).toEqual([]);
+    // The same knowledge base and the same kinds to redact, written another way by hand.
+    fs.writeFileSync(
+      studioConfigPath(),
+      JSON.stringify({ name: "Iris", knowledge: "faq.md", privacy: { redact: ["phone", "email"] } })
+    );
+    saveStudioConfig({ name: "Vega" }, "nora");
+    const byHand = studioHistory().versions[0]!;
+    expect(studioVersion(byHand.id)!.config).toMatchObject({ knowledge: "faq.md" });
+    expect(restoreStudioConfig(resolved.id, "nora", started)!.restartFor).toEqual([]);
+    expect(restoreStudioConfig(byHand.id, "nora", started)!.restartFor).toEqual([]);
+    // Against a relay that started with neither, both need a restart.
+    expect(restoreStudioConfig(byHand.id, "nora")!.restartFor).toEqual(["tools", "privacy"]);
+  });
+
+  it("removes a kept config on request", () => {
+    saveStudioConfig({ name: "Iris" }, "nora");
+    saveStudioConfig({ name: "Nova" }, "nora");
+    const iris = studioHistory().versions[1]!;
+    expect(deleteStudioVersion(iris.id)).toBe(true);
+    expect(deleteStudioVersion(iris.id)).toBe(false);
+    expect(studioHistory().versions.map((version) => version.name)).toEqual(["Nova", undefined]);
+    expect(restoreStudioConfig(iris.id, "nora")).toBeUndefined();
+  });
+
+  it("says that the file could not be written, and changes nothing, when it cannot be", () => {
+    saveStudioConfig({ name: "Iris" }, "nora");
+    saveStudioConfig({ name: "Nova" }, "nora");
+    const iris = studioHistory().versions[1]!;
+    // A directory where the temporary file goes: the write fails.
+    fs.mkdirSync(`${studioConfigPath()}.${process.pid}.tmp`);
+    expect(() => restoreStudioConfig(iris.id, "nora")).toThrow(ConfigFileError);
+    expect(assistant().name).toBe("Nova");
+    expect(JSON.parse(fs.readFileSync(studioConfigPath(), "utf8"))).toEqual({ name: "Nova" });
+    expect(studioHistory().versions[0]!.name).toBe("Nova");
   });
 
   it("brings back the keys the Studio does not edit, and says what needs a restart", () => {
@@ -335,6 +440,8 @@ describe("the Studio's history", () => {
     const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "studio-elsewhere-"));
     try {
       const raw = { name: "Iris", toolsModule: "./tools.mjs", logo: "brand/logo.svg" };
+      fs.mkdirSync(path.join(elsewhere, "brand"));
+      fs.writeFileSync(path.join(elsewhere, "brand/logo.svg"), SVG);
       recordStartupConfig({ file: path.join(elsewhere, "assistant.config.json"), raw });
       const [version] = studioHistory().versions;
       // The Studio has no file of its own yet, so nothing is the current config.
@@ -371,6 +478,6 @@ describe("the Studio's history", () => {
     expect(assistant().name).toBe("Nova");
     expect(JSON.parse(fs.readFileSync(studioConfigPath(), "utf8"))).toEqual({ name: "Nova" });
     // The list goes on without it.
-    expect(studioHistory().versions.map((kept) => kept.name)).toEqual(["Nova"]);
+    expect(studioHistory().versions.map((kept) => kept.name)).toEqual(["Nova", undefined]);
   });
 });

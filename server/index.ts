@@ -135,6 +135,8 @@ import { sendBrandLogo } from "./brand-logo-route";
 import { localizeErrors } from "./error-language";
 import {
   clearStudioVoice,
+  ConfigFileError,
+  deleteStudioVersion,
   recordStartupConfig,
   removeStudioLogo,
   restoreStudioConfig,
@@ -1075,11 +1077,31 @@ app.post("/auth/admin/studio/history/:id/restore", (req, res) => {
     });
     res.json(state);
   } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (error instanceof ConfigFileError) {
+      log.warn("the assistant config file could not be written", { message });
+      res.status(500).json({ ok: false, error: `The config file on the server could not be written: ${message}` });
+      return;
+    }
     res.status(400).json({
       ok: false,
-      error: `That version can no longer be used: ${error instanceof Error ? error.message : "it is not a valid config"}`
+      error: `That version can no longer be used: ${message || "it is not a valid config"}`
     });
   }
+});
+
+// For a kept config that held something that must not stay on disk, such as a secret that was since replaced.
+app.delete("/auth/admin/studio/history/:id", (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const id = String(req.params.id);
+  if (!deleteStudioVersion(id)) {
+    res.status(404).json({ ok: false, error: "There is no such version." });
+    return;
+  }
+  log.info("assistant config removed from history", { by: admin.username, version: id });
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json(studioHistory());
 });
 
 app.put(

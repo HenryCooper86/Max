@@ -64,7 +64,7 @@ export function removeStudioLogo(): Promise<ApiResult<StudioState>> {
 export type StudioVersion = {
   id: string;
   savedAt: number;
-  /** An admin's name, "studio", or "file" for a config found on the server's disk at startup. */
+  /** An admin's name, "studio", "file" for a config found on the server's disk at startup, or "defaults". */
   by: string;
   restoredFrom?: string;
   name?: string;

@@ -2,7 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { listConfigVersions, readConfigVersion, recordConfigVersion, stableJson } from "../server/config-history";
+import {
+  listConfigVersions,
+  readConfigVersion,
+  recordConfigVersion,
+  removeConfigVersion,
+  rewriteConfigVersions,
+  stableJson
+} from "../server/config-history";
 
 let directory: string;
 
@@ -43,10 +50,15 @@ describe("the configs that have been live", () => {
         by: "nora",
         name: "Ava",
         version: "2026-11-24",
-        changed: ["greeting", "guardrails", "version"]
+        changed: ["greeting", "guardrails", "version"],
+        current: false
       },
-      { id: first, savedAt: 1_800_000_000_000, by: "file", name: "Ava", changed: [] }
+      { id: first, savedAt: 1_800_000_000_000, by: "file", name: "Ava", changed: [], current: false }
     ]);
+    // With the live config given, the newest version that says the same is the current one.
+    expect(
+      listConfigVersions(directory, { greeting: "Hello.", name: "Ava" }).map((version) => version.current)
+    ).toEqual([false, true]);
     expect(readConfigVersion(directory, first!)).toEqual({
       id: first,
       savedAt: 1_800_000_000_000,
@@ -103,5 +115,44 @@ describe("the configs that have been live", () => {
       expect(readConfigVersion(directory, id)).toBeUndefined();
     }
     expect(listConfigVersions(path.join(directory, "nowhere"))).toEqual([]);
+  });
+
+  it("compares a new config with the newest version it can read, and stays above a damaged file", () => {
+    recordConfigVersion(directory, { name: "Ava" }, "file", { now: 1_800_000_000_000 });
+    fs.writeFileSync(path.join(directory, "1800000000500-0123abcd.json"), "not json");
+    // The same config again: the damaged file in between does not make it new.
+    expect(recordConfigVersion(directory, { name: "Ava" }, "nora", { now: 1_800_000_000_100 })).toBeUndefined();
+    // A new one sorts above the damaged file although the clock says otherwise.
+    expect(recordConfigVersion(directory, { name: "Bea" }, "nora", { now: 1_800_000_000_100 })).toMatch(
+      /^1800000000501-/
+    );
+    expect(listConfigVersions(directory).map((version) => version.name)).toEqual(["Bea", "Ava"]);
+  });
+
+  it("removes one version, and only a version", () => {
+    const first = recordConfigVersion(directory, { name: "Ava", secret: "s3" }, "file")!;
+    recordConfigVersion(directory, { name: "Ava" }, "nora");
+    expect(removeConfigVersion(directory, "../history")).toBe(false);
+    expect(removeConfigVersion(directory, "1800000000000-00000000")).toBe(false);
+    expect(removeConfigVersion(directory, first)).toBe(true);
+    expect(removeConfigVersion(directory, first)).toBe(false);
+    expect(listConfigVersions(directory)).toHaveLength(1);
+    expect(fs.readdirSync(directory)).toHaveLength(1);
+  });
+
+  it("changes kept configs in place, keeping when and by whom", () => {
+    const first = recordConfigVersion(directory, { name: "Ava", voice: { id: "v_1" } }, "file", {
+      now: 1_800_000_000_000
+    })!;
+    recordConfigVersion(directory, { name: "Bea" }, "nora", { now: 1_800_000_000_001 });
+    const changed = rewriteConfigVersions(directory, (config) => (config.voice ? { name: config.name } : undefined));
+    expect(changed).toBe(1);
+    expect(readConfigVersion(directory, first)).toEqual({
+      id: first,
+      savedAt: 1_800_000_000_000,
+      by: "file",
+      config: { name: "Ava" }
+    });
+    expect(fs.statSync(path.join(directory, `${first}.json`)).mode & 0o777).toBe(0o600);
   });
 });

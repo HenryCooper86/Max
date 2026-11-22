@@ -79,7 +79,9 @@ export function ConfigHistory({
       ? say("服务器上的配置文件", "the config file on the server")
       : by === "studio"
         ? say("管理后台", "the Studio")
-        : by;
+        : by === "defaults"
+          ? say("中继内置的默认助手", "the relay's built-in assistant")
+          : by;
 
   const restore = async (version: StudioVersion) => {
     const time = when(version.savedAt, language);
@@ -156,6 +158,10 @@ export function ConfigHistory({
                   type="button"
                   className="studioButton quiet"
                   disabled={disabled || restoring !== null}
+                  aria-label={say(
+                    `恢复 ${when(version.savedAt, language)} 的配置`,
+                    `Restore the settings of ${when(version.savedAt, language)}`
+                  )}
                   onClick={() => void restore(version)}
                 >
                   <ClockCounterClockwise size={16} aria-hidden="true" />{" "}

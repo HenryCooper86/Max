@@ -211,8 +211,8 @@ export function AssistantStudio({
     if (
       !window.confirm(
         say(
-          "把助手恢复为默认的 Max？这会清除保存的配置和上传的标志，无法撤销。",
-          "Reset the assistant to the default Max? This clears the saved settings and any uploaded logo, and cannot be undone."
+          "把助手恢复为默认的 Max？这会清除保存的配置和上传的标志。配置可以从“历史版本”里恢复，标志不能。",
+          "Reset the assistant to the default Max? This clears the saved settings and any uploaded logo. The settings can be brought back from History; the logo cannot."
         )
       )
     )

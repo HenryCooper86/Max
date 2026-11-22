@@ -16,6 +16,8 @@ import {
   listConfigVersions,
   readConfigVersion,
   recordConfigVersion,
+  removeConfigVersion,
+  rewriteConfigVersions,
   stableJson,
   type ConfigVersionSummary
 } from "./config-history";
@@ -159,6 +161,19 @@ function remember(stored: Record<string, unknown>, by: string, restoredFrom?: st
 }
 
 /**
+ * Before the first config is saved on a relay that runs its built-in
+ * assistant: keeps that as the first entry, so there is a way back to it.
+ */
+function rememberDefaults(): void {
+  if (!assistant().isDefault || fs.existsSync(studioConfigPath())) return;
+  try {
+    if (listConfigVersions(historyDirectory()).length === 0) recordConfigVersion(historyDirectory(), {}, "defaults");
+  } catch {
+    /* the save itself goes on without a history */
+  }
+}
+
+/**
  * Keeps the config the relay started with, when it is not the newest one
  * kept already: a file edited by hand is part of the history too.
  *
@@ -181,15 +196,11 @@ export function recordStartupConfig(loaded = loadedAssistantConfig()): void {
   remember(config, "file");
 }
 
-export type StudioHistory = { ok: true; versions: Array<ConfigVersionSummary & { current: boolean }> };
+export type StudioHistory = { ok: true; versions: ConfigVersionSummary[] };
 
 /** The configs kept, newest first. `current` marks the newest one that says what the config file says now. */
 export function studioHistory(): StudioHistory {
-  const now = stableJson(readStored());
-  const directory = historyDirectory();
-  const versions = listConfigVersions(directory);
-  const current = versions.find((version) => stableJson(readConfigVersion(directory, version.id)?.config) === now)?.id;
-  return { ok: true, versions: versions.map((version) => ({ ...version, current: version.id === current })) };
+  return { ok: true, versions: listConfigVersions(historyDirectory(), readStored()) };
 }
 
 /** One kept config in full, or nothing when there is none of that id. The logo's path stays on the server. */
@@ -207,36 +218,89 @@ export function studioVersion(
   };
 }
 
+/** Removes one kept config: for one that held a secret, say. Returns whether there was one. */
+export function deleteStudioVersion(id: string): boolean {
+  return removeConfigVersion(historyDirectory(), id);
+}
+
+/** The config file could not be written. Nothing about the assistant changed. */
+export class ConfigFileError extends Error {}
+
+/** A logo path is worth keeping when the file is there. */
+function logoReadable(value: unknown): value is string {
+  if (typeof value !== "string" || !value) return false;
+  try {
+    return fs.statSync(path.resolve(path.dirname(studioConfigPath()), value)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** What the relay reads of a profile only when it starts, in a form that compares. */
+function readAtStartup(profile: AssistantProfile): Record<string, string> {
+  return {
+    // The knowledge base as the loader resolved it: the same files written another way are the same.
+    tools: stableJson({
+      tools: profile.tools.tools,
+      module: profile.tools.modulePath,
+      mcpServers: profile.tools.mcpServers,
+      knowledge: profile.deployerConfig.knowledge
+    }),
+    analysis: stableJson(profile.analysis),
+    privacy: stableJson([...profile.redact].sort()),
+    variants: String(profile.variants.length > 0)
+  };
+}
+
 /**
  * Makes a kept config the live one again: the whole file as it was, the keys
  * the Studio does not edit included. Returns nothing when there is no such
- * version, and throws when the config is no longer valid. `restartFor` names
- * what the running relay read only once, at startup, and so still has from
- * the config it started with.
+ * version, and throws when the config is no longer valid or the file cannot
+ * be written. `restartFor` names what the running relay read only once, at
+ * startup, and so still has from the config it started with.
+ *
+ * The history keeps the logo's path, not the picture. A version whose logo
+ * file is gone gets the logo there is now.
  */
-export function restoreStudioConfig(id: string, by: string): (StudioState & { restartFor: string[] }) | undefined {
+export function restoreStudioConfig(
+  id: string,
+  by: string,
+  /** The assistant the relay started with. Given in tests. */
+  startedWith: AssistantProfile = atStart
+): (StudioState & { restartFor: string[] }) | undefined {
   const version = readConfigVersion(historyDirectory(), id);
   if (!version) return undefined;
-  const before = readStored();
-  writeStored(version.config);
+  const file = studioConfigPath();
+  let previous: string | undefined;
+  try {
+    previous = fs.readFileSync(file, "utf8");
+  } catch {
+    /* there was no file */
+  }
+  const config = { ...version.config };
+  if (config.logo !== undefined && !logoReadable(config.logo)) {
+    const current = readStored().logo;
+    if (logoReadable(current)) config.logo = current;
+    else delete config.logo;
+  }
+  try {
+    writeStored(config);
+  } catch (error) {
+    throw new ConfigFileError(error instanceof Error ? error.message : String(error), { cause: error });
+  }
   let profile: AssistantProfile;
   try {
-    profile = apply(version.config);
+    profile = apply(config);
   } catch (error) {
-    if (Object.keys(before).length > 0) writeStored(before);
-    else fs.rmSync(studioConfigPath(), { force: true });
+    // Back to the file exactly as it was, readable or not.
+    if (previous !== undefined) fs.writeFileSync(file, previous, { mode: 0o600 });
+    else fs.rmSync(file, { force: true });
     throw error;
   }
-  remember(version.config, by, id);
-  const restartFor = [
-    ...(stableJson(without(profile.tools, "baseDir")) !== stableJson(without(atStart.tools, "baseDir"))
-      ? ["tools"]
-      : []),
-    ...(stableJson(profile.analysis) !== stableJson(atStart.analysis) ? ["analysis"] : []),
-    ...(stableJson(profile.redact) !== stableJson(atStart.redact) ? ["privacy"] : []),
-    ...(profile.variants.length > 0 !== atStart.variants.length > 0 ? ["variants"] : [])
-  ];
-  return { ...studioState(), restartFor };
+  remember(config, by, id);
+  const now = readAtStartup(profile);
+  const then = readAtStartup(startedWith);
+  return { ...studioState(), restartFor: Object.keys(now).filter((key) => now[key] !== then[key]) };
 }
 
 export function studioState(): StudioState {
@@ -297,6 +361,7 @@ export function saveStudioConfig(raw: unknown, by = "studio"): StudioState {
   }
 
   const before = readStored();
+  rememberDefaults();
   writeStored(next);
   try {
     apply(next);
@@ -311,6 +376,18 @@ export function saveStudioConfig(raw: unknown, by = "studio"): StudioState {
 /** Clears the assistant's saved voice id when it is `id`, through the same
  *  validated save the Studio uses. Returns whether it changed anything. */
 export function clearStudioVoice(id: string): boolean {
+  // The voice is gone for good: no kept config may bring its id back.
+  try {
+    rewriteConfigVersions(historyDirectory(), (config) => {
+      if (!isRecord(config.voice) || config.voice.id !== id) return undefined;
+      const rest = without(config.voice, "id");
+      return Object.keys(rest).length > 0 ? { ...config, voice: rest } : without(config, "voice");
+    });
+  } catch (error) {
+    log.warn("a deleted voice could not be taken out of the config history", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
   const stored = readStored();
   const voice = stored.voice;
   if (!isRecord(voice) || voice.id !== id) return false;
@@ -356,6 +433,7 @@ export function saveStudioLogo(body: Buffer): StudioState {
   fs.mkdirSync(directory, { recursive: true });
   removeLogoFiles();
   const file = path.join(directory, `brand-logo.${extension}`);
+  rememberDefaults();
   fs.writeFileSync(file, body, { mode: 0o644 });
   const stored = { ...readStored(), logo: file };
   writeStored(stored);

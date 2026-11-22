@@ -19,6 +19,8 @@ export type Project = {
   keyPrefix: string;
   backend: Backend;
   hasModelKey: boolean;
+  /** Whether request headers for the project's trace collector are saved; their value is never sent back. */
+  hasTracesHeaders?: boolean;
   assistantName: string;
   instructions: string;
   greeting: string;
@@ -36,6 +38,8 @@ export type ProjectPatch = Partial<{
   name: string;
   backend: Backend;
   modelKey: string;
+  /** The trace collector's request headers (`name=value,…`); "" removes them. Absent leaves them as they are. */
+  tracesHeaders: string;
   assistantName: string;
   instructions: string;
   greeting: string;
@@ -84,6 +88,7 @@ export type ProjectFlow = { ok: true; steps: FlowStep[]; tools: string[]; proble
 /** How the last delivery of a conversation to the project's server went. */
 export type WebhookDelivery = { at: number; ok: boolean; attempts: number; status?: number; error?: string };
 export type WebhookTestResult = { ok: boolean; status?: number; error?: string; ms: number };
+export type TracesTestResult = { ok: true } | { ok: false; error: string };
 export type ToolTestResult = { ok: true; result: unknown; ms: number } | { ok: false; error: string; ms: number };
 export type Usage = {
   month: string;
@@ -197,6 +202,8 @@ export function createCloudApi(fetcher?: FetchLike) {
       get<{ url: string; last: WebhookDelivery | null }>(token, `/projects/${id(projectId)}/conversation-webhook`),
     testConversationWebhook: (token: string, projectId: string) =>
       send<WebhookTestResult>(token, "POST", `/projects/${id(projectId)}/conversation-webhook/test`),
+    testTraces: (token: string, projectId: string) =>
+      send<TracesTestResult>(token, "POST", `/projects/${id(projectId)}/traces-test`),
     conversations: (token: string, projectId: string) =>
       get<{ conversations: ConversationSummary[] }>(token, `/projects/${id(projectId)}/conversations`),
     conversation: (token: string, conversationId: string) =>

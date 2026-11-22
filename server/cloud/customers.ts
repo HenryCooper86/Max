@@ -31,6 +31,7 @@ import {
   type ProjectRow
 } from "./store";
 import { checkedProjectFlow } from "./flow";
+import { tracesHeadersProblem } from "./traces";
 import {
   decryptModelKey,
   encryptModelKey,
@@ -53,6 +54,8 @@ export type PublicProject = {
   keyPrefix: string;
   backend: Backend;
   hasModelKey: boolean;
+  /** Whether request headers for the trace collector are saved. Their value is never returned. */
+  hasTracesHeaders: boolean;
   assistantName: string;
   instructions: string;
   greeting: string;
@@ -249,6 +252,7 @@ function publicProject(row: ProjectRow): PublicProject {
     keyPrefix: row.key_prefix,
     backend: row.backend,
     hasModelKey: Boolean(row.model_key_enc),
+    hasTracesHeaders: Boolean(row.traces_headers_enc),
     assistantName: row.assistant_name,
     instructions: row.instructions,
     greeting: row.greeting,
@@ -264,6 +268,22 @@ function publicProject(row: ProjectRow): PublicProject {
 const newPublicId = () => `pub_${randomBytes(12).toString("hex")}`;
 /** What a project's webhook secret is bound to, so it cannot be swapped with its model key. */
 export const webhookSecretScope = (projectId: string) => `${projectId}#webhook-secret`;
+
+/** What a project's trace headers are bound to, so they cannot be swapped with its model key or signing secret. */
+export const tracesHeadersScope = (projectId: string) => `${projectId}#traces-headers`;
+
+/** The project's trace collector headers, decrypted: none when it has none, `unreadable` when they cannot be read. */
+export function projectTracesHeaders(row: Pick<ProjectRow, "id" | "traces_headers_enc">): {
+  headers?: string;
+  unreadable?: true;
+} {
+  if (!row.traces_headers_enc) return {};
+  const key = cloudSecretKey();
+  const headers = key
+    ? decryptModelKey(row.traces_headers_enc, cloudSecretKeys(), tracesHeadersScope(row.id))
+    : undefined;
+  return headers === undefined ? { unreadable: true } : { headers };
+}
 
 /** The project's webhook signing secret, decrypted; undefined when it has none. */
 export function projectWebhookSecret(row: Pick<ProjectRow, "id" | "webhook_secret_enc">): string | undefined {
@@ -339,6 +359,7 @@ export function createProject(
     studio: JSON.stringify(studio.value),
     public_id: newPublicId(),
     webhook_secret_enc: needsSigningSecret(studio.value) ? (newWebhookSecret(id) ?? null) : null,
+    traces_headers_enc: null,
     monthly_minutes_cap: null,
     created_at: now(),
     deleted_at: null
@@ -381,7 +402,7 @@ export function patchProject(
     const sent = body.studio !== undefined ? body.studio : projectStudio(current);
     // A save of the settings that says nothing of the flow leaves the flow as it is: the flow has a save of
     // its own, and a Studio opened before that one must not put an older flow back, or none.
-    // The same for the analysis settings: a client that does not know of them (an older console, a script
+    // The same for the analysis and the traces settings: a client that does not know of them (an older console, a script
     // that sets one thing) must not switch a project's analysis off by saving something else.
     const stored = projectStudio(current);
     const record =
@@ -390,7 +411,8 @@ export function patchProject(
       ? {
           ...record,
           ...(record.flow === undefined ? { flow: stored.flow } : {}),
-          ...(record.analysis === undefined ? { analysis: stored.analysis } : {})
+          ...(record.analysis === undefined ? { analysis: stored.analysis } : {}),
+          ...(record.traces === undefined ? { traces: stored.traces } : {})
         }
       : sent;
     let studio = parseStudio(raw, backend);
@@ -437,6 +459,20 @@ export function patchProject(
       const secret = cloudSecretKey();
       if (!secret) return fail(503, "Max Cloud is not configured");
       changes.model_key_enc = encryptModelKey(modelKey, secret, projectId);
+    }
+  }
+  if (body.tracesHeaders !== undefined) {
+    if (typeof body.tracesHeaders !== "string") return fail(400, "Traces headers must be text.");
+    // Checked as typed: a line break at the end is not trimmed away unseen.
+    const problem = tracesHeadersProblem(body.tracesHeaders);
+    const headers = body.tracesHeaders.trim();
+    if (problem) return fail(400, problem);
+    if (!headers) {
+      changes.traces_headers_enc = null;
+    } else {
+      const secret = cloudSecretKey();
+      if (!secret) return fail(503, "Max Cloud is not configured");
+      changes.traces_headers_enc = encryptModelKey(headers, secret, tracesHeadersScope(projectId));
     }
   }
   if (!updateProject(projectId, customerId, changes)) return fail(404, "Project not found.");

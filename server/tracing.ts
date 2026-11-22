@@ -65,7 +65,7 @@ function decodeComponent(value: string): string {
 }
 
 /** The OTLP spec's `k=v,k2=v2` header list; values are URL-encoded. */
-function parseHeaders(raw: string | undefined): Record<string, string> {
+export function parseHeaders(raw: string | undefined): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const part of (raw ?? "").split(",")) {
     const at = part.indexOf("=");
@@ -148,6 +148,8 @@ export type SpanExporterOptions = {
   clearTimer?: (handle: TimerHandle) => void;
   /** Reported as `service.version` and the instrumentation scope version. */
   version?: string;
+  /** False: a failed request is not tried again (a one-off test export). Default true. */
+  retry?: boolean;
 };
 
 function stringAttr(key: string, value: string): OtlpKeyValue {
@@ -173,6 +175,7 @@ export function createSpanExporter(settings: TracingSettings, options: SpanExpor
     });
   const clearTimer = options.clearTimer ?? ((handle: TimerHandle) => clearTimeout(handle as NodeJS.Timeout));
   const version = options.version ?? "0";
+  const retries = options.retry !== false;
 
   let queue: OtlpSpan[] = [];
   let timer: TimerHandle | undefined;
@@ -251,7 +254,7 @@ export function createSpanExporter(settings: TracingSettings, options: SpanExpor
       return;
     }
     let result = await attempt(payload);
-    if (!result.ok && result.retry) {
+    if (!result.ok && result.retry && retries) {
       await sleep(RETRY_DELAY_MS);
       result = await attempt(payload);
     }
@@ -348,6 +351,8 @@ export type SessionTraceInfo = {
   userId?: string;
   channel?: "web" | "phone";
   assistant?: string;
+  /** Further attributes of the session span (a test trace says so here). */
+  attributes?: Record<string, string | number | boolean>;
 };
 
 export type SessionTracerOptions = {
@@ -448,6 +453,7 @@ export function createSessionTracer(
   if (session.channel) root.attributes.set("voice.channel", session.channel);
   if (session.userId) root.attributes.set("enduser.id", session.userId);
   if (session.assistant) root.attributes.set("gen_ai.agent.name", session.assistant);
+  for (const [key, value] of Object.entries(session.attributes ?? {})) root.attributes.set(key, value);
 
   function cut(text: string, limit: number): string {
     return text.length > limit ? text.slice(0, limit) : text;

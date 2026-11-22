@@ -39,6 +39,8 @@ export type ProjectRow = {
   public_id: string | null;
   /** The webhook signing secret, encrypted like the model key. */
   webhook_secret_enc: string | null;
+  /** The request headers of the project's trace collector (they carry its API key), encrypted like the model key. */
+  traces_headers_enc: string | null;
   /** The owner's limit on this project's minutes per calendar month (UTC); null for none. */
   monthly_minutes_cap: number | null;
   created_at: number;
@@ -210,6 +212,9 @@ function database(): DatabaseSync {
     if (!projectColumns.has("webhook_secret_enc")) {
       db.exec("ALTER TABLE projects ADD COLUMN webhook_secret_enc TEXT NULL");
     }
+    if (!projectColumns.has("traces_headers_enc")) {
+      db.exec("ALTER TABLE projects ADD COLUMN traces_headers_enc TEXT NULL");
+    }
     if (!projectColumns.has("monthly_minutes_cap")) {
       db.exec("ALTER TABLE projects ADD COLUMN monthly_minutes_cap INTEGER NULL");
     }
@@ -317,8 +322,8 @@ export function insertProject(row: ProjectRow, limit: number): boolean {
     if (count >= limit) return false;
     db.prepare(
       `INSERT INTO projects (id, customer_id, name, key_hash, key_prefix, backend, model_key_enc, assistant_name,
-         instructions, greeting, studio, public_id, webhook_secret_enc, created_at, deleted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+         instructions, greeting, studio, public_id, webhook_secret_enc, traces_headers_enc, created_at, deleted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
     ).run(
       row.id,
       row.customer_id,
@@ -333,6 +338,7 @@ export function insertProject(row: ProjectRow, limit: number): boolean {
       row.studio,
       row.public_id,
       row.webhook_secret_enc,
+      row.traces_headers_enc,
       row.created_at
     );
     return true;
@@ -375,6 +381,7 @@ export type ProjectChanges = Partial<
     | "studio"
     | "public_id"
     | "webhook_secret_enc"
+    | "traces_headers_enc"
     | "monthly_minutes_cap"
   >
 >;
@@ -389,6 +396,7 @@ const PROJECT_COLUMNS = [
   "studio",
   "public_id",
   "webhook_secret_enc",
+  "traces_headers_enc",
   "monthly_minutes_cap"
 ] as const;
 
@@ -809,16 +817,21 @@ export function projectSecondsIn(projectId: string, month: string): number {
 
 // --- encrypted secrets --------------------------------------------------------------
 
-export type EncryptedSecretColumn = "model_key_enc" | "webhook_secret_enc";
+export type EncryptedSecretColumn = "model_key_enc" | "webhook_secret_enc" | "traces_headers_enc";
 
 /** Every live project's encrypted secrets, for checking and re-encrypting them under a new key. */
-export function projectSecrets(): Pick<ProjectRow, "id" | "model_key_enc" | "webhook_secret_enc">[] {
+export function projectSecrets(): Pick<
+  ProjectRow,
+  "id" | "model_key_enc" | "webhook_secret_enc" | "traces_headers_enc"
+>[] {
   return database()
     .prepare(
-      `SELECT id, model_key_enc, webhook_secret_enc FROM projects
-       WHERE deleted_at IS NULL AND (model_key_enc IS NOT NULL OR webhook_secret_enc IS NOT NULL) ORDER BY id`
+      `SELECT id, model_key_enc, webhook_secret_enc, traces_headers_enc FROM projects
+       WHERE deleted_at IS NULL
+         AND (model_key_enc IS NOT NULL OR webhook_secret_enc IS NOT NULL OR traces_headers_enc IS NOT NULL)
+       ORDER BY id`
     )
-    .all() as Pick<ProjectRow, "id" | "model_key_enc" | "webhook_secret_enc">[];
+    .all() as Pick<ProjectRow, "id" | "model_key_enc" | "webhook_secret_enc" | "traces_headers_enc">[];
 }
 
 /** Replaces one encrypted secret only if it is still `from`, so a key the customer saved meanwhile is never undone. */

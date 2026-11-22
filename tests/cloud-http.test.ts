@@ -219,6 +219,59 @@ describe("a project's conversation webhook over HTTP", () => {
   });
 });
 
+describe("a project's traces collector over HTTP", () => {
+  it("keeps its headers secret, and tests the saved endpoint for its owner alone", async () => {
+    await startApp();
+    const owner = await signupCustomer();
+    const { project } = await createProject(owner.token);
+    const route = `/cloud/api/projects/${project.id}/traces-test`;
+    // Nothing saved yet: nothing to test.
+    expect(await call("POST", route, { token: owner.token })).toMatchObject({
+      status: 400,
+      body: { ok: false, error: "Save the endpoint first." }
+    });
+    const secret = "x-api-key=sk-lf-very-secret-value";
+    const saved = await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: owner.token,
+      json: {
+        studio: { traces: { endpoint: "https://collector.example.com/v1/traces", content: false } },
+        tracesHeaders: secret
+      }
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.project).toMatchObject({
+      hasTracesHeaders: true,
+      studio: { traces: { endpoint: "https://collector.example.com/v1/traces", content: false } }
+    });
+    expect((await call("GET", "/cloud/api/projects", { token: owner.token })).body.projects).toMatchObject([
+      { hasTracesHeaders: true }
+    ]);
+    const refused = await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: owner.token,
+      json: { tracesHeaders: "host=evil.example.com" }
+    });
+    expect(refused).toMatchObject({ status: 400, body: { error: "The host header cannot be set here." } });
+    // The request goes out by the rules of a tool call: a name that leads to a private address is refused.
+    const lookup = vi
+      .spyOn(dns, "lookup")
+      .mockImplementation(((
+        _host: string,
+        _options: unknown,
+        callback: (error: null, addresses: dns.LookupAddress[]) => void
+      ) => callback(null, [{ address: "127.0.0.1", family: 4 }])) as unknown as typeof dns.lookup);
+    const tested = await call("POST", route, { token: owner.token });
+    lookup.mockRestore();
+    expect(tested.status).toBe(200);
+    expect(tested.body).toEqual({ ok: false, error: "the address must be public, not a private one" });
+    // Another customer has no such project.
+    const other = await signupCustomer();
+    expect((await call("POST", route, { token: other.token })).status).toBe(404);
+    expect((await call("POST", route)).status).toBe(401);
+    // Nothing the server said held the headers.
+    expect(seenBodies.join("\n")).not.toContain("sk-lf-very-secret-value");
+  });
+});
+
 // These suites exercise accounts, projects and money; signup by invitation has
 // its own tests (tests/cloud-invites.test.ts).
 const savedSignup = process.env.CLOUD_SIGNUP;
@@ -393,6 +446,7 @@ describe("projects", () => {
       keyPrefix: created.apiKey.slice(0, 8),
       backend: "openai",
       hasModelKey: false,
+      hasTracesHeaders: false,
       assistantName: "",
       instructions: "",
       greeting: "",

@@ -4,6 +4,7 @@ import { STUDIO_LIMITS, toolUrlProblem } from "../../../shared/cloud-studio";
 import type { Conversation, ConversationSummary, ConversationTurn, WebhookDelivery, WebhookTestResult } from "../api";
 import { useSay } from "../hooks";
 import { AnalysisMarks, AnalysisSetting, AnalysisView } from "./AnalysisSetting";
+import { TracesSetting } from "./TracesSetting";
 import type { StudioTabProps } from "./types";
 import "./history-tab.css";
 
@@ -425,6 +426,7 @@ export function HistoryTab(props: StudioTabProps) {
       {setting}
       <WebhookSetting {...props} />
       <AnalysisSetting {...props} />
+      <TracesSetting {...props} />
     </div>
   );
 }

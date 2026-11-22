@@ -46,7 +46,8 @@ export function patchFromDraft(draft: StudioDraft): ProjectPatch {
     greeting: draft.greeting,
     studio,
     ...(cap !== undefined ? { monthlyMinutesCap: cap } : {}),
-    ...(draft.modelKey.trim() ? { modelKey: draft.modelKey.trim() } : {})
+    ...(draft.modelKey.trim() ? { modelKey: draft.modelKey.trim() } : {}),
+    ...(draft.tracesHeaders.trim() ? { tracesHeaders: draft.tracesHeaders.trim() } : {})
   };
 }
 

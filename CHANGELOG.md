@@ -230,6 +230,15 @@
 - Redaction does not apply to audio, and the relay does not announce the recording to callers. See
   [recording the audio](docs/conversations.md#recording-the-audio).
 
+### Max Cloud traces
+
+- A Max Cloud project can name its own OpenTelemetry collector (Langfuse, Honeycomb, Grafana Tempo, Datadog: anything
+  that takes OTLP/HTTP), and its conversations are exported there, one trace each with a span per turn and per tool
+  call. The collector's headers are a stored, encrypted, write-only secret; what was said is sent only if the owner
+  turns it on; the address must be public https, by the rules of a tool call. "Send test trace" in the Conversations
+  tab checks it. A collector that is down costs the project its traces and nothing else. The relay operator's own
+  tracing still does not include projects' conversations. See [Traces](docs/cloud.md#traces).
+
 ### Tools and knowledge
 
 - Background tools. A tool marked `"background": true` does not hold the conversation up: the assistant says the work

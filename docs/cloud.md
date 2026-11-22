@@ -91,6 +91,10 @@ their website in a few minutes, without writing a backend:
   after the analysis, so it arrives up to half a minute later than it would without one. A conversation is analysed
   only when the visitor said something and the result has somewhere to go (kept transcripts or a server address).
   See [who pays for an analysis](#who-pays-for-an-analysis).
+  A project can also have its conversations traced to its own collector: see [Traces](#traces). Over the API that is
+  `studio.traces` (`{ "endpoint", "content" }`, left as it is by a `PATCH` whose `studio` has no `traces`) and the
+  write-only `tracesHeaders`; the project says `hasTracesHeaders`, and `POST /cloud/api/projects/:id/traces-test`
+  sends the test.
 
 ### Who pays for an analysis
 
@@ -122,6 +126,43 @@ stopping".
 This was run end to end with a local model through `CLOUD_ANALYSIS_LLM_BASE_URL` (`qwen3:8b` on Ollama: about seven
 seconds for a six-line conversation and four fields). The three vendor endpoints and model names are from the
 vendors' documentation and were not called.
+
+### Traces
+
+A project can name its own OpenTelemetry collector (Langfuse, Honeycomb, Grafana Tempo, Datadog: anything that takes
+OTLP/HTTP), and each of its conversations is exported there as one trace. It is set in the Conversations tab, next to
+the conversation webhook: the collector's full traces address (for Langfuse,
+`https://cloud.langfuse.com/api/public/otel/v1/traces`), its request headers, and whether what was said goes with it.
+
+- **What is sent.** One trace per conversation, written when the conversation ends: a `voice.session` span (the
+  session id, the voice backend, how it ended, and counts of turns, tool calls, interruptions and errors), a
+  `voice.turn` span for each turn with how long the speech recognition, the thinking and the first sound took, and a
+  `voice.tool` span for each tool call with its name, how long it took and whether it worked. The project's name is
+  the `service.name` and the agent's name. Tool arguments and results are never sent. A failed tool call carries
+  its error message, and an error the relay reported is an event on its span, with or without the setting below.
+- **What was said.** Off unless the owner turns on "Include what was said": then each turn's span also carries what
+  the visitor and the agent said, cut at 2,000 characters each. The console says that transcripts go to that
+  collector. Nothing else about the visitor is sent.
+- **Where.** The address has to be https to a public host, by the same rules as a tool call: no user name or
+  password, the standard port, private addresses refused when the name is looked up, and no redirects followed.
+- **The headers.** They usually carry the collector's API key, so they are a stored secret of their own: written as
+  `name=value,name2=value2` with URL-encoded values (the form of `OTEL_EXPORTER_OTLP_HEADERS`), at most 2,000
+  characters and 10 headers, and not `host`, `content-length`, `content-type`, `transfer-encoding` or `connection`.
+  They are encrypted with `CLOUD_SECRET_KEY` like a model key (and move with it in
+  [a rotation](#rotating-cloud_secret_key)), are not part of the Studio settings, and are never shown again or
+  returned by any request: the project only says `hasTracesHeaders`. Saving them without `CLOUD_SECRET_KEY` set
+  fails as saving a model key does. If they cannot be decrypted, the project's conversations are not traced, and the
+  relay logs one warning.
+- **Send test trace.** Sends one small sample trace (a session with one turn, marked `max.test` in its attributes) to
+  the saved address with the saved headers, once and without a retry, and says in words how it went: that the
+  collector answered HTTP 401 and did not accept the headers, for example, or that the host could not be found.
+- **When the collector is down.** Spans are sent when a conversation ends, in batches, with a request timeout of 10
+  seconds. A request that fails with a network error, a 429 or a 5xx answer is tried once more after a second; then
+  the traces of that batch are dropped, and the relay logs it. A conversation does not wait for any of this and is
+  not affected by it. When the relay is stopped, it gives traces still being sent three seconds.
+
+The relay operator's own tracing (`OTEL_EXPORTER_OTLP_ENDPOINT`, see [Tracing](conversations.md#tracing)) does not include
+projects' conversations: they are their customers', and go only to the collector their owner named.
 
 ## How customers connect
 
@@ -191,7 +232,7 @@ the relay reconnects to it, whatever the client does meanwhile.
 
 ## Rotating CLOUD_SECRET_KEY
 
-Customers' model keys and webhook secrets are encrypted with `CLOUD_SECRET_KEY`, and each one records which key it was
+Customers' model keys, webhook secrets and trace headers are encrypted with `CLOUD_SECRET_KEY`, and each one records which key it was
 written with. To change the key (it leaked, someone who knew it left, or as routine):
 
 1. Generate a new key: `openssl rand -base64 32`.

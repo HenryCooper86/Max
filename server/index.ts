@@ -78,6 +78,7 @@ import {
   projectForApiKey,
   projectLimitRefusal,
   projectWebhooks,
+  projectTraces,
   cloudConversationEnded,
   settleConversationAnalyses,
   pruneOldConversations,
@@ -2028,6 +2029,18 @@ wss.on("connection", (client, request) => {
   // Or sends each one to their own server. (What is said is collected for no other reason.)
   const recorder =
     runtime?.studio.keepConversations || runtime?.studio.conversationWebhook ? conversationRecorder() : undefined;
+  // Traces to the project's own collector, when it names one: its conversations, not the relay owner's.
+  const tracer = runtime
+    ? projectTraces.open({
+        projectId: runtime.projectId,
+        name: runtime.name,
+        sessionId: usageSessionId,
+        backend: runtime.backend,
+        traces: runtime.studio.traces,
+        ...(runtime.tracesHeaders ? { headers: runtime.tracesHeaders } : {}),
+        ...(runtime.tracesHeadersUnreadable ? { headersUnreadable: true } : {})
+      })
+    : undefined;
   // Billed only while the voice model can talk, checkpointed and checked every few seconds.
   const cloudSession = cloudProject ? openCloudSession(usageSessionId, cloudProject, address) : undefined;
   const usageCheck = cloudSession
@@ -2111,6 +2124,7 @@ wss.on("connection", (client, request) => {
       onServerEvent: (payload) => {
         cloudSession?.observe(payload, sessionProvider?.upstreamUsable?.());
         recorder?.event(payload);
+        tracer?.event(payload);
         observer?.event(payload);
         const event = payload as { type?: unknown; state?: unknown };
         if (event?.type === "tool.activity" && event.state === "started") meteredSession.toolCall();
@@ -2120,7 +2134,7 @@ wss.on("connection", (client, request) => {
     }
   );
   activeSessions.set(client, session);
-  if (cloudProject && recorder) cloudConversationsOpen.add(client);
+  if (cloudProject && (recorder || tracer)) cloudConversationsOpen.add(client);
 
   client.on("message", async (data, isBinary) => {
     markClientActivity(client);
@@ -2142,6 +2156,7 @@ wss.on("connection", (client, request) => {
       code === 1000 || code === 1005 ? "client" : "disconnected",
       recorded ? { recording: recorded } : undefined
     );
+    tracer?.end(code === 1000 || code === 1005 ? "client" : "disconnected");
     const endedAt = usage?.endedAt ?? Date.now();
     const billedSeconds = cloudSession?.close(endedAt);
     if (cloudProject && recorder) {
@@ -2155,8 +2170,8 @@ wss.on("connection", (client, request) => {
         keep: Boolean(runtime?.studio.keepConversations),
         recorder
       });
-      cloudConversationsOpen.delete(client);
     }
+    cloudConversationsOpen.delete(client);
     if (cloudProject && billedSeconds !== undefined) {
       try {
         // A failed booking is kept and retried by the booking timer below.
@@ -2379,7 +2394,7 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     // it goes without.
     await settleConversationAnalyses(2_000);
     // Conversations that just ended still owe their webhook and their traces.
-    await Promise.all([conversations.drain(3_000), projectWebhooks.drain(3_000)]);
+    await Promise.all([conversations.drain(3_000), projectWebhooks.drain(3_000), projectTraces.drain(3_000)]);
     await recordings?.close();
     await campaigns.close();
     await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);

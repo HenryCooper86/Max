@@ -116,6 +116,15 @@ export const DEFAULT_ANALYSIS: StudioAnalysis = {
   fields: []
 };
 
+/**
+ * Where the project's conversations are traced: the full URL of an OpenTelemetry (OTLP/HTTP) traces endpoint of
+ * the customer's own collector, or "" for nowhere. The collector's request headers are a secret of their own and
+ * are not part of this. `content`: whether what was said is put on the spans.
+ */
+export type StudioTraces = { endpoint: string; content: boolean };
+
+export const DEFAULT_TRACES: StudioTraces = { endpoint: "", content: false };
+
 export type ProjectStudio = {
   /** The template the project started from, for reference only. */
   template: string;
@@ -145,6 +154,8 @@ export type ProjectStudio = {
   flow: Record<string, unknown>[];
   /** What each conversation is analysed for when it ends (server/cloud/analysis.ts). */
   analysis: StudioAnalysis;
+  /** Where each conversation is traced (server/cloud/traces.ts). */
+  traces: StudioTraces;
 };
 
 export const DEFAULT_STUDIO: ProjectStudio = {
@@ -158,7 +169,8 @@ export const DEFAULT_STUDIO: ProjectStudio = {
   keepConversations: false,
   conversationWebhook: "",
   flow: [],
-  analysis: DEFAULT_ANALYSIS
+  analysis: DEFAULT_ANALYSIS,
+  traces: DEFAULT_TRACES
 };
 
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
@@ -371,6 +383,17 @@ function parseAnalysis(raw: unknown): { value: StudioAnalysis } | { error: strin
   return { value };
 }
 
+/** A project's trace settings. Absent (a project saved before there were any): off. */
+function parseTraces(raw: unknown): { value: StudioTraces } | { error: string } {
+  if (raw === undefined || raw === null) return { value: { ...DEFAULT_TRACES } };
+  if (!isRecord(raw)) return { error: "The traces settings must be an object." };
+  const endpoint = text(raw.endpoint, "The traces endpoint", STUDIO_LIMITS.url);
+  if (endpoint.error !== undefined) return { error: endpoint.error };
+  const problem = endpoint.value ? toolUrlProblem(endpoint.value) : undefined;
+  if (problem) return { error: `The traces endpoint's address ${problem}` };
+  return { value: { endpoint: endpoint.value, content: raw.content === true } };
+}
+
 /** The analysis to run for a project's conversations, or none when it is off. */
 export function studioAnalysisConfig(studio: Pick<ProjectStudio, "analysis">): AnalysisConfig | undefined {
   const analysis = studio.analysis;
@@ -459,6 +482,9 @@ export function parseStudio(raw: unknown, backend: CloudBackend): Outcome<Projec
   const analysis = parseAnalysis(raw.analysis);
   if ("error" in analysis) return { error: analysis.error };
 
+  const traces = parseTraces(raw.traces);
+  if ("error" in traces) return { error: traces.error };
+
   return {
     value: {
       template: template.value,
@@ -471,7 +497,8 @@ export function parseStudio(raw: unknown, backend: CloudBackend): Outcome<Projec
       keepConversations: raw.keepConversations === true,
       conversationWebhook: webhook.value,
       flow: JSON.parse(flowText) as Record<string, unknown>[],
-      analysis: analysis.value
+      analysis: analysis.value,
+      traces: traces.value
     }
   };
 }

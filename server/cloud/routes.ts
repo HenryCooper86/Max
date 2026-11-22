@@ -10,6 +10,7 @@ import { PACKS } from "./billing";
 import { cloudEnabled, cloudPaymentProvider, cloudPaymentProviders, now } from "./context";
 import { flowFrom } from "../flow";
 import { projectWebhooks } from "./conversation-webhook";
+import { projectTraces } from "./traces";
 import { listConversations, readConversation } from "./conversations";
 import {
   createProject,
@@ -21,6 +22,7 @@ import {
   patchProject,
   projectStudioReadable,
   projectStudio,
+  projectTracesHeaders,
   projectWebhookSecret,
   publicCustomer,
   revealWebhookSecret,
@@ -298,6 +300,32 @@ export function registerCloudRoutes(app: express.Express): void {
         return;
       }
       res.json(await projectWebhooks.test({ projectId: row.id, url, secret: projectWebhookSecret(row) }));
+    })
+  );
+  // The traces collector: one sample trace to the saved endpoint, with the saved headers.
+  api.post(
+    "/projects/:id/traces-test",
+    handle(async (req, res) => {
+      const row = liveProject(param(req, "id"), customerOf(res).id);
+      if (!row) {
+        res.status(404).json({ ok: false, error: "Project not found." });
+        return;
+      }
+      const endpoint = projectStudio(row).traces.endpoint;
+      if (!endpoint) {
+        res.status(400).json({ ok: false, error: "Save the endpoint first." });
+        return;
+      }
+      if (!checkAuthRateLimit(`project:${row.id}`, Date.now(), "tool-test")) {
+        res.status(429).json({ ok: false, error: "Too many test requests. Try again in a minute." });
+        return;
+      }
+      const { headers, unreadable } = projectTracesHeaders(row);
+      if (unreadable) {
+        res.json({ ok: false, error: "The saved headers cannot be read: enter them again and save." });
+        return;
+      }
+      res.json(await projectTraces.test({ name: row.name, endpoint, ...(headers ? { headers } : {}) }));
     })
   );
   api.get(

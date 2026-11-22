@@ -1,4 +1,4 @@
-import { agentStagesFrom, MAIN_AGENT } from "./conversation-config";
+import { agentStagesFrom, MAIN_AGENT, NO_HANDOFF_LEFT } from "./conversation-config";
 
 /**
  * The assistant's agents as a flow: steps a conversation moves through, and
@@ -23,6 +23,7 @@ export type FlowStep = {
 const MAX_STEPS = 12;
 const LIMITS = { instructions: 8000, description: 400, when: 300 } as const;
 const CANVAS = 4000;
+const STEP_KEYS: ReadonlySet<string> = new Set(["id", "description", "instructions", "tools", "handoffs", "at"]);
 const DEFAULT_MAIN_DESCRIPTION = "The agent every conversation starts with; handles everything else.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -76,7 +77,11 @@ export function checkFlow(raw: unknown): { agents: FlowStep[] | undefined } | { 
   const problems: string[] = [];
   for (const entry of raw) {
     if (!isRecord(entry)) continue;
-    const id = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : "a step";
+    const id = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim().slice(0, 64) : "a step";
+    // The loader ignores a key it does not know. Here that would save less than was sent.
+    for (const key of Object.keys(entry)) {
+      if (!STEP_KEYS.has(key)) problems.push(`${id}: a step has no "${key.slice(0, 40)}"`);
+    }
     // The loader shortens a text that is too long. Here that would save something other than what was written.
     for (const key of ["instructions", "description"] as const) {
       if (typeof entry[key] === "string" && entry[key].trim().length > LIMITS[key]) {
@@ -85,10 +90,16 @@ export function checkFlow(raw: unknown): { agents: FlowStep[] | undefined } | { 
     }
     if (Array.isArray(entry.tools) && entry.tools.length > 64) problems.push(`${id}: at most 64 tools`);
     if (Array.isArray(entry.handoffs)) {
-      for (const handoff of entry.handoffs) {
-        if (isRecord(handoff) && typeof handoff.when === "string" && handoff.when.trim().length > LIMITS.when) {
+      if (entry.handoffs.length > MAX_STEPS) problems.push(`${id}: at most ${MAX_STEPS} handoffs`);
+      for (const handoff of entry.handoffs.slice(0, MAX_STEPS)) {
+        if (!isRecord(handoff)) continue;
+        if (handoff.when !== undefined && handoff.when !== null && typeof handoff.when !== "string") {
+          problems.push(`${id}: the condition of a handoff must be text`);
+        } else if (typeof handoff.when === "string" && handoff.when.trim().length > LIMITS.when) {
           problems.push(`${id}: the condition of a handoff can be at most ${LIMITS.when} characters`);
         }
+        const extra = Object.keys(handoff).find((key) => key !== "to" && key !== "when");
+        if (extra) problems.push(`${id}: a handoff has no "${extra.slice(0, 40)}"`);
       }
     }
     if (entry.at !== undefined && entry.at !== null && !placeFrom(entry.at)) {
@@ -114,7 +125,12 @@ export function checkFlow(raw: unknown): { agents: FlowStep[] | undefined } | { 
   }
   if (raw.length === 0) return { agents: undefined };
   const read = flowFrom(raw);
-  problems.push(...read.problems.map((problem) => `${problem[0]!.toUpperCase()}${problem.slice(1)}.`));
+  problems.push(
+    ...read.problems
+      // What the loader would do with the rest does not matter here: a flow with a problem is not saved.
+      .filter((problem) => !problem.includes(NO_HANDOFF_LEFT))
+      .map((problem) => `${problem[0]!.toUpperCase()}${problem.slice(1)}.`)
+  );
   if (problems.length > 0) return { problems };
   // The starting step is stored only when something is written in it.
   const [main, ...rest] = read.steps;

@@ -942,6 +942,16 @@ export function createLiveProvider(
             agent: target.id,
             ...(target.instructions ? { instructions: target.instructions } : {}),
             ...(target.tools ? { tools: target.tools } : {}),
+            // Where the conversation can go from here: an upstream that keeps its first instructions
+            // would otherwise go by the list of the agent it started as.
+            ...(target.handoffs
+              ? {
+                  canHandOverTo: handoffTargets(target).map(({ agent, when }) => ({
+                    agent: agent.id,
+                    when: when ?? agent.description
+                  }))
+                }
+              : {}),
             note: `You are now the ${target.id} agent. Follow these instructions from here on and carry on helping the user. Do not greet again, and mention the handover only if it helps the user.`
           };
         }

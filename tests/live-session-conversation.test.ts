@@ -579,7 +579,13 @@ describe("a flow: agents that hand over only along the arrows drawn", () => {
     );
     expect(client.ofType("agent.changed")).toEqual([]);
     await handOver(events, "billing", "c2");
+    // The result says where the conversation can go next, for an upstream that keeps its first instructions.
+    expect(JSON.parse(toolResults[1]![1]).canHandOverTo).toEqual([
+      { agent: "refunds", when: "The invoice is found and the user wants the money back." },
+      { agent: "main", when: "The agent every conversation starts with; handles everything else." }
+    ]);
     await handOver(events, "refunds", "c3");
+    expect(JSON.parse(toolResults[2]![1]).canHandOverTo).toEqual([]);
     expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["billing", "refunds"]);
     // The last step leads nowhere.
     await handOver(events, "main", "c4");

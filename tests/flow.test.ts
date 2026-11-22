@@ -108,5 +108,16 @@ describe("checkFlow", () => {
       "billing: at most 64 tools"
     ]);
     expect(problems([billing, 5])).toEqual(["Every agent must be an object."]);
+    // What the loader would quietly leave out is refused too: what is saved is what was sent.
+    expect(problems([{ ...billing, voice: "low" }])).toEqual(['billing: a step has no "voice"']);
+    expect(problems([{ ...billing, handoffs: [{ to: "main", when: 7 }] }])).toEqual([
+      "billing: the condition of a handoff must be text"
+    ]);
+    expect(problems([{ ...billing, handoffs: [{ to: "main", unless: "never" }] }])).toEqual([
+      'billing: a handoff has no "unless"'
+    ]);
+    expect(problems([{ ...billing, handoffs: Array.from({ length: 13 }, () => "main") }])[0]).toBe(
+      "billing: at most 12 handoffs"
+    );
   });
 });

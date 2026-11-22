@@ -201,9 +201,11 @@ flow: steps that a conversation moves through along the arrows you draw, each ar
   request has nowhere to go.
 - An agent without `handoffs` stays open to every agent, as before. The two kinds mix.
 - A handoff to an agent there is not, to the agent itself, or listed twice, is dropped with a problem in the startup
-  log.
-- The conditions are instructions to a model, not code: the relay guarantees that a conversation never moves along
-  an arrow that is not drawn, and does not check that the condition on a drawn one was met. What does hold a step to
+  log. The list stays a limit all the same: an agent whose every handoff was dropped (a mistyped id) hands over to
+  nobody, and the log says that too.
+- The conditions are instructions to a model, not code: the relay never hands a conversation over along
+  an arrow that is not drawn, and does not check that the condition on a drawn one was met. (A conversation that is
+  [resumed](#carrying-a-conversation-across-a-dropped-connection) carries on with the agent it was with.) What does hold a step to
   its job is its `tools`: with the example above no refund can be made before the conversation is in `refunds`,
   because no other agent has the tool. An agent with every tool can do the other steps' work itself instead of
   handing over, so give the starting agent only the tools it needs. For a condition on what a tool is called with,
@@ -212,11 +214,14 @@ flow: steps that a conversation moves through along the arrows you draw, each ar
 **The flow builder.** Admin → Flow draws the same thing. Each agent is a step on a canvas; Start is `main`. Add a
 step, write when to come to it and what it does, tick its tools, and draw an arrow by dragging from the dot on a
 step's right edge to another step (or choose the target in the step's editor, which also works from the keyboard).
-The condition is written on the arrow. Saving writes the `agents` key of the config file and nothing else, takes
+The condition is written on the arrow. Saving changes the `agents` key and leaves every other setting as it is, takes
 effect for new conversations at once, and is kept in the [config history](#going-back-to-an-earlier-config), so a
-flow can be gone back to. A flow that is not right in every part (a step without instructions, a name used twice,
-an arrow to a step that was deleted) is not saved, and the builder says what to fix. Where each step sits is stored
-with it as `at`, which the relay itself does not read.
+flow can be gone back to. It writes the same file as a save in Admin → Studio: the file `ASSISTANT_CONFIG` names
+(rewritten as plain JSON), or else the Studio's own file, which from then on wins over `./assistant.config.json`
+(see [the config file](configuration.md)). A flow that is not right in every part (a step without instructions, a
+name used twice) is not saved, and the builder says what to fix. It also points out, without stopping the save, a
+step that no arrow leads to from Start. A step's name is taken when you leave the field, and the arrows that lead to
+the step follow it. Where each step sits is stored with it as `at`, which the relay itself does not read.
 
 The builder edits the config's own `agents`. A [variant](#versions-and-ab-tests) that replaces `agents` keeps its own
 and is edited in the file. Tools are chosen by name from the relay's tools; a client's own tool is typed in. Max
@@ -225,7 +230,8 @@ Cloud projects do not have agents.
 Over HTTP, with an admin's bearer token: `GET /auth/admin/studio/flow` answers `steps` (the starting step first),
 the relay's tool names as `tools`, and `problems` for what the relay skipped in a config written by hand.
 `PUT /auth/admin/studio/flow` takes `{ "steps": [...] }` in the same form and answers the same, or 400 with
-`problems`.
+`problems`. Unlike the config loader it skips nothing: a step with a key it does not know, a text that is too long
+or an arrow to no step is refused, and nothing is saved. (A place on the canvas is rounded and kept within it.)
 
 **What was tested.** The flow above was drawn and saved in the builder in Chrome (adding a step, dragging one,
 drawing an arrow with the mouse) and then run on a relay with a local model (`qwen3:8b`): the conversation went from

@@ -163,6 +163,24 @@ describe("agentStagesFrom", () => {
       "agent billing lists the handoff to sales twice; the first is used",
       "agent billing lists the handoff to sales twice; the first is used"
     ]);
+    // A list is a limit even when nothing in it can be used: the agent hands over to nobody, and that is said.
+    const typo = agentStagesFrom([
+      { ...billing, handoffs: ["Slaes"] },
+      { id: "sales", description: "Buying.", instructions: "You sell." }
+    ]);
+    expect(typo.agents[0]!.handoffs).toEqual([]);
+    expect(typo.problems).toEqual([
+      "agent billing: there is no agent Slaes to hand over to",
+      "agent billing: none of its handoffs can be used, so it cannot hand the conversation over at all"
+    ]);
+    // A list longer than any flow could need is read only so far, and a long id is not echoed whole.
+    const many = agentStagesFrom([
+      { ...billing, handoffs: [...Array.from({ length: 30 }, () => "sales"), "x".repeat(500)] },
+      { id: "sales", description: "Buying.", instructions: "You sell." }
+    ]);
+    expect(many.agents[0]!.handoffs).toEqual([{ to: "sales" }]);
+    expect(many.problems[0]).toBe("agent billing: only its first 24 handoffs are read");
+    expect(many.problems.every((problem) => problem.length < 200)).toBe(true);
     // Not a list at all: the agent is skipped, like one with a bad tool list.
     expect(agentStagesFrom([{ ...billing, handoffs: "sales" }])).toEqual({
       agents: [],

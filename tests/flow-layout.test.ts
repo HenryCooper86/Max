@@ -6,6 +6,8 @@ import {
   curve,
   flowProblems,
   flowToSave,
+  flowWarnings,
+  nameProblem,
   NODE,
   placed,
   removeStep,
@@ -188,5 +190,50 @@ describe("what has to be right before a flow is saved", () => {
       { id: "main", handoffs: [{ to: "a" }], at: [40, 40] },
       { id: "a", description: "Buying.", instructions: "Sell.", tools: [], handoffs: [{ to: "main", when: "Done." }] }
     ]);
+  });
+});
+
+describe("naming a step", () => {
+  it("takes a name no step has, and refuses the rest with the reason", () => {
+    expect(nameProblem(flow, "orders", "order_desk")).toBeUndefined();
+    // A step may keep its own name in other letters.
+    expect(nameProblem(flow, "orders", "Orders")).toBeUndefined();
+    expect(nameProblem(flow, "orders", "")).toBe("empty");
+    expect(nameProblem(flow, "orders", "9lives")).toBe("invalid");
+    expect(nameProblem(flow, "orders", "has space")).toBe("invalid");
+    expect(nameProblem(flow, "orders", "x".repeat(33))).toBe("invalid");
+    // The relay tells agents apart without the case of the letters.
+    expect(nameProblem(flow, "orders", "Main")).toBe("start");
+    expect(nameProblem(flow, "orders", "REFUNDS")).toBe("twice");
+  });
+});
+
+describe("what a flow is warned about", () => {
+  const kinds = (steps: FlowStep[]) => flowWarnings(steps).map((warning) => `${warning.step}:${warning.kind}`);
+
+  it("says which steps no arrow leads to from the start", () => {
+    // sales has no arrow leading to it.
+    expect(kinds(flow)).toEqual(["sales:unreachable"]);
+    expect(kinds(flow.slice(0, 3))).toEqual([]);
+    // A step reached only from an unreachable one is unreachable too.
+    expect(
+      kinds([
+        { id: "main", handoffs: [{ to: "a" }] },
+        { id: "a", handoffs: [] },
+        { id: "b", handoffs: [{ to: "c" }] },
+        { id: "c", handoffs: [{ to: "b" }] }
+      ])
+    ).toEqual(["b:unreachable", "c:unreachable"]);
+  });
+
+  it("counts a step without arrows of its own as leading everywhere", () => {
+    expect(kinds([{ id: "main" }, { id: "a" }, { id: "b", handoffs: [] }])).toEqual([]);
+    expect(kinds([{ id: "main", handoffs: [{ to: "a" }] }, { id: "a" }, { id: "b", handoffs: [] }])).toEqual([]);
+  });
+
+  it("says when the start leads nowhere, and nothing about a start that is alone", () => {
+    expect(kinds([{ id: "main", handoffs: [] }, { id: "a" }])).toEqual(["main:ends"]);
+    expect(kinds([{ id: "main", handoffs: [] }])).toEqual([]);
+    expect(kinds([])).toEqual([]);
   });
 });

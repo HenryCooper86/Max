@@ -180,6 +180,23 @@ export function addStep(steps: readonly FlowStep[], after?: string): FlowStep[] 
   return [...steps, { id: newStepId(steps), description: "", instructions: "", at: snap(at[0], at[1]) }];
 }
 
+/**
+ * Why a step cannot take a name, if it cannot: nothing written, not a name the
+ * relay takes, the start's own name, or another step's (whatever the case of
+ * the letters: the relay tells agents apart without it).
+ */
+export function nameProblem(
+  steps: readonly FlowStep[],
+  current: string,
+  name: string
+): "empty" | "invalid" | "start" | "twice" | undefined {
+  if (!name) return "empty";
+  if (!STEP_ID.test(name)) return "invalid";
+  if (same(name, START)) return "start";
+  if (steps.some((step) => step.id !== current && same(step.id, name))) return "twice";
+  return undefined;
+}
+
 /** Renames a step, and with it every arrow that leads to it. */
 export function renameStep(steps: readonly FlowStep[], from: string, to: string): FlowStep[] {
   return steps.map((step) => ({
@@ -249,6 +266,31 @@ export function flowProblems(steps: readonly FlowStep[]): FlowProblem[] {
     }
   }
   return problems;
+}
+
+export type FlowWarning = { step: string; kind: "ends" | "unreachable" };
+
+/**
+ * What can be saved but is probably not meant: a start that leads nowhere
+ * although there are other steps, and steps no arrow leads to from the start.
+ */
+export function flowWarnings(steps: readonly FlowStep[]): FlowWarning[] {
+  const start = steps.find((step) => same(step.id, START));
+  if (!start || steps.length < 2) return [];
+  if (start.handoffs?.length === 0) return [{ step: start.id, kind: "ends" }];
+  const reached = new Set<string>();
+  const queue = [start];
+  while (queue.length > 0) {
+    const step = queue.pop()!;
+    if (reached.has(step.id)) continue;
+    reached.add(step.id);
+    // Without arrows of its own a step is open to every other.
+    const next = step.handoffs
+      ? steps.filter((other) => step.handoffs!.some((handoff) => same(handoff.to, other.id)))
+      : steps;
+    queue.push(...next.filter((other) => !reached.has(other.id)));
+  }
+  return steps.filter((step) => !reached.has(step.id)).map((step) => ({ step: step.id, kind: "unreachable" as const }));
 }
 
 /** The steps as the relay takes them: trimmed, and without what is empty. */

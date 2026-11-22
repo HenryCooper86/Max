@@ -10588,6 +10588,25 @@ button.opsCard:disabled {
   text-align: left;
 }
 
+.flowWarnings {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 12px 8px 30px;
+  border-radius: 10px;
+  background: var(--warn-soft);
+  font-size: var(--fs-13);
+}
+
+.studioScope .flowWarnings button.linkButton {
+  color: inherit;
+  text-align: left;
+}
+
+.studioScope .flowNameRefused {
+  color: var(--danger);
+}
+
 @media (max-width: 860px) {
   .flowEditorColumns {
     grid-template-columns: minmax(0, 1fr);

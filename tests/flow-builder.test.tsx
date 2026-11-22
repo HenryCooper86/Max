@@ -143,18 +143,86 @@ describe("flow builder", () => {
     expect(button(/保存流程/).props.disabled).toBe(true);
   });
 
-  it("renames a step along with the arrows that lead to it", async () => {
+  /** Types a name into the field and leaves it, as a user does. */
+  async function rename(to: string) {
+    await act(async () => field("flow-step-id").props.onChange({ currentTarget: { value: to } }));
+    await act(async () => field("flow-step-id").props.onBlur());
+  }
+
+  it("renames a step along with the arrows that lead to it, once the field is left", async () => {
     const { api } = await mount();
     await select("orders");
+    // Typing alone renames nothing: the name is a draft until the field is left.
     await act(async () => field("flow-step-id").props.onChange({ currentTarget: { value: "order desk" } }));
+    expect(byClass("flowStep").map((node) => node.props["data-step"])).toEqual(["main", "orders", "refunds"]);
+    await act(async () => field("flow-step-id").props.onBlur());
     expect(field("flow-step-id").props.value).toBe("order_desk");
-    // A name another step has is not taken.
-    await act(async () => field("flow-step-id").props.onChange({ currentTarget: { value: "refunds" } }));
-    expect(field("flow-step-id").props.value).toBe("order_desk");
+    expect(byClass("flowStep").map((node) => node.props["data-step"])).toEqual(["main", "order_desk", "refunds"]);
     await act(async () => button(/保存流程/).props.onClick());
     const sent = api.saveStudioFlow.mock.calls[0]![0];
     expect(sent.map((step) => step.id)).toEqual(["main", "order_desk", "refunds"]);
     expect(sent[0]!.handoffs).toEqual([{ to: "order_desk", when: "An order." }]);
+  });
+
+  it("lets a name be typed through another step's name, and takes Enter as well", async () => {
+    await mount();
+    await select("orders");
+    for (const typed of ["r", "refunds", "refunds_desk"]) {
+      await act(async () => field("flow-step-id").props.onChange({ currentTarget: { value: typed } }));
+      expect(field("flow-step-id").props.value).toBe(typed);
+    }
+    const prevented = vi.fn();
+    await act(async () => field("flow-step-id").props.onKeyDown({ key: "Enter", preventDefault: prevented }));
+    expect(prevented).toHaveBeenCalled();
+    expect(byClass("flowStep").map((node) => node.props["data-step"])).toEqual(["main", "refunds_desk", "refunds"]);
+  });
+
+  it("refuses another step's name, the start's and one the relay would not take, and says so", async () => {
+    await mount();
+    await select("orders");
+    const refusal = () => byClass("flowNameRefused").map(textOf).join("");
+    for (const [name, said] of [
+      ["Refunds", /已经有一步叫 Refunds/],
+      ["MAIN", /main 是“开始”这一步的名称/],
+      ["9lives", /这个名称不能用/]
+    ] as const) {
+      await rename(name);
+      expect(refusal()).toMatch(said);
+      expect(field("flow-step-id").props["aria-invalid"]).toBe(true);
+      // The step keeps its name, and is still one that can be renamed and deleted.
+      expect(byClass("flowStep").map((node) => node.props["data-step"])).toEqual(["main", "orders", "refunds"]);
+      expect(button(/删除这一步/)).toBeTruthy();
+    }
+    expect(button(/保存流程/).props.disabled).toBe(true);
+    // An emptied field goes back to the name the step has.
+    await rename("  ");
+    expect(field("flow-step-id").props.value).toBe("orders");
+    expect(refusal()).toBe("");
+    // Escape gives the draft up.
+    await act(async () => field("flow-step-id").props.onChange({ currentTarget: { value: "elsewhere" } }));
+    await act(async () => field("flow-step-id").props.onKeyDown({ key: "Escape", stopPropagation: () => {} }));
+    expect(field("flow-step-id").props.value).toBe("orders");
+  });
+
+  it("goes back to the saved names on Discard after a rename", async () => {
+    await mount();
+    await select("orders");
+    await rename("desk");
+    await act(async () => button(/放弃修改/).props.onClick());
+    expect(byClass("flowStep").map((node) => node.props["data-step"])).toEqual(["main", "orders", "refunds"]);
+    expect(root().findAll((node) => node.props.id === "flow-step-id")).toHaveLength(0);
+  });
+
+  it("warns about steps no arrow leads to, without stopping the save", async () => {
+    const { api } = await mount();
+    const warnings = () => byClass("flowWarnings").map(textOf).join("");
+    expect(warnings()).toBe("");
+    // Deleting orders leaves refunds with no way in: Start's only arrow went with it.
+    await select("orders");
+    await act(async () => button(/删除这一步/).props.onClick());
+    expect(warnings()).toMatch(/“开始”没有通往任何一步的箭头/);
+    await act(async () => button(/保存流程/).props.onClick());
+    expect(api.saveStudioFlow).toHaveBeenCalledOnce();
   });
 
   it("adds a step, and will not save it until it says when to come to it and what to do", async () => {

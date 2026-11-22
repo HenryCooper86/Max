@@ -61,6 +61,9 @@ export type AgentStage = {
   handoffs?: AgentHandoff[];
 };
 
+/** How the loader says that an agent's every handoff was dropped: a consequence of loading on regardless. */
+export const NO_HANDOFF_LEFT = "none of its handoffs can be used";
+
 type AgentHandoff = {
   /** The id of the agent to hand over to, as that agent writes it. */
   to: string;
@@ -181,9 +184,14 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
         continue;
       }
       handoffs = [];
-      for (const item of entry.handoffs) {
-        const to =
-          typeof item === "string" ? item.trim() : isRecord(item) && typeof item.to === "string" ? item.to.trim() : "";
+      // No agent has more targets than there are agents; what is beyond that is a mistake, not a flow.
+      if (entry.handoffs.length > MAX_AGENTS * 2) {
+        problems.push(`agent ${id}: only its first ${MAX_AGENTS * 2} handoffs are read`);
+      }
+      for (const item of entry.handoffs.slice(0, MAX_AGENTS * 2)) {
+        const to = (
+          typeof item === "string" ? item.trim() : isRecord(item) && typeof item.to === "string" ? item.to.trim() : ""
+        ).slice(0, 64);
         const when = isRecord(item) ? line(item.when, 300) : undefined;
         // Which agents there are is known only once every entry is read: the targets are checked below.
         if (to) handoffs.push({ to, ...(when ? { when } : {}) });
@@ -215,6 +223,11 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
       else if (kept.some((other) => other.to === target)) {
         problems.push(`agent ${agent.id} lists the handoff to ${target} twice; the first is used`);
       } else kept.push({ ...handoff, to: target });
+    }
+    // A list is a limit, and a wrong entry does not lift it: an agent whose every handoff was
+    // dropped hands over to nobody, which is worth saying in so many words.
+    if (kept.length === 0 && agent.handoffs.length > 0) {
+      problems.push(`agent ${agent.id}: ${NO_HANDOFF_LEFT}, so it cannot hand the conversation over at all`);
     }
     agent.handoffs = kept;
   }

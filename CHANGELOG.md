@@ -86,7 +86,8 @@
 - Flows. An agent's new `handoffs` key lists the agents it may hand over to, each with a condition, so the agents
   become steps a conversation moves through along the arrows you draw. The relay refuses a handover along no arrow
   and tells the model where the conversation can go. Admin → Flow is a canvas for the same thing: add steps, drag
-  them, draw arrows, write conditions, tick each step's tools, save. Agents without `handoffs` behave as before.
+  them, draw arrows, write conditions, tick each step's tools, save. Agents without `handoffs` behave as before. The
+  builder points out a step that no arrow leads to.
   See [flows](docs/conversations.md#flows).
 - The relay keeps the last 50 assistant configs that were live: each save from the Studio, each restore, and a file
   edited by hand when the relay next starts. Admin → Studio → History lists them with who made each live and which

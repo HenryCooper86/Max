@@ -7,7 +7,9 @@ import {
   curve,
   flowProblems,
   flowToSave,
+  flowWarnings,
   MAX_STEPS,
+  nameProblem,
   NODE,
   placed,
   removeStep,
@@ -36,6 +38,96 @@ type Props = {
 type Status = { kind: "idle" | "saved" | "error"; message?: string };
 
 const isStart = (id: string) => id.toLowerCase() === START;
+/** How far a pressed step has to be moved before that is a drag and not a click. */
+const DRAG_THRESHOLD = 4;
+
+/**
+ * The name of a step. It is typed as a draft and taken when the field is left
+ * or Enter is pressed: a name is only ever given to a step whole, so typing
+ * through another step's name ("refund" on the way to "refund_policy") is not
+ * in the way, and the arrows are rewritten once.
+ */
+function StepName({
+  steps,
+  id,
+  say,
+  onRename
+}: {
+  steps: FlowStep[];
+  id: string;
+  say: (zh: string, en: string) => string;
+  onRename: (name: string) => void;
+}) {
+  const [draft, setDraft] = useState(id);
+  const [refused, setRefused] = useState<ReturnType<typeof nameProblem>>(undefined);
+  const commit = () => {
+    const name = draft.trim().replace(/\s+/g, "_");
+    if (name === id || !name) {
+      setDraft(id);
+      setRefused(undefined);
+      return;
+    }
+    const problem = nameProblem(steps, id, name);
+    setRefused(problem);
+    if (problem) setDraft(name);
+    else onRename(name);
+  };
+  return (
+    <div className="studioField">
+      <label className="studioLabel" htmlFor="flow-step-id">
+        {say("名称", "Name")}
+      </label>
+      <input
+        id="flow-step-id"
+        className="studioInput mono"
+        value={draft}
+        maxLength={32}
+        spellCheck={false}
+        aria-invalid={refused ? true : undefined}
+        aria-describedby="flow-step-id-hint"
+        onChange={(event) => {
+          setDraft(event.currentTarget.value);
+          setRefused(undefined);
+        }}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+          } else if (event.key === "Escape") {
+            event.stopPropagation();
+            setDraft(id);
+            setRefused(undefined);
+          }
+        }}
+      />
+      {refused ? (
+        <p className="studioHint flowNameRefused" role="alert">
+          {refused === "twice"
+            ? say(
+                `已经有一步叫 ${draft}，这一步仍然叫 ${id}。`,
+                `Another step is called ${draft}. This step is still called ${id}.`
+              )
+            : refused === "start"
+              ? say(
+                  `main 是“开始”这一步的名称，这一步仍然叫 ${id}。`,
+                  `main is the name of Start. This step is still called ${id}.`
+                )
+              : say(
+                  `这个名称不能用，这一步仍然叫 ${id}。以字母开头，只用字母、数字、_ 和 -，最多 32 个字符。`,
+                  `That cannot be a step's name, so this step is still called ${id}. Start with a letter and use letters, digits, _ and -, 32 characters at most.`
+                )}
+        </p>
+      ) : null}
+      <p className="studioHint" id="flow-step-id-hint">
+        {say(
+          "以字母开头，只用字母、数字、_ 和 -。客户端会在 agent.changed 事件里收到它。",
+          "Starts with a letter; letters, digits, _ and - only. The client receives it in the agent.changed event."
+        )}
+      </p>
+    </div>
+  );
+}
 
 /**
  * Admin → Studio → Flow: the assistant's agents drawn as steps, with an arrow
@@ -58,7 +150,7 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
   // An arrow being drawn: from which step, and where the pointer is on the canvas.
   const [linking, setLinking] = useState<{ from: string; x: number; y: number } | null>(null);
   const surface = useRef<HTMLDivElement | null>(null);
-  const drag = useRef<{ id: string; pointer: [number, number]; origin: [number, number] } | null>(null);
+  const drag = useRef<{ id: string; pointer: [number, number]; origin: [number, number]; moved: boolean } | null>(null);
 
   const adopt = useCallback((flow: { steps: FlowStep[]; tools: string[]; problems: string[] }) => {
     const laid = placed(flow.steps);
@@ -117,6 +209,7 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
   }, [selected]);
 
   const problems = useMemo(() => (steps ? flowProblems(steps) : []), [steps]);
+  const warnings = useMemo(() => (steps ? flowWarnings(steps) : []), [steps]);
   const arrows = useMemo(() => (steps ? arrowsOf(steps) : []), [steps]);
 
   if (loadError) {
@@ -223,13 +316,18 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
 
   const startDrag = (event: PointerEvent<HTMLDivElement>, step: FlowStep) => {
     if (event.button !== 0 || !step.at) return;
-    drag.current = { id: step.id, pointer: [event.clientX, event.clientY], origin: step.at };
+    drag.current = { id: step.id, pointer: [event.clientX, event.clientY], origin: step.at, moved: false };
     event.currentTarget.setPointerCapture?.(event.pointerId);
     setSelected(step.id);
   };
   const moveDrag = (event: PointerEvent<HTMLDivElement>) => {
     const held = drag.current;
     if (!held) return;
+    // A click with an unsteady hand is not a move.
+    if (!held.moved && Math.hypot(event.clientX - held.pointer[0], event.clientY - held.pointer[1]) < DRAG_THRESHOLD) {
+      return;
+    }
+    held.moved = true;
     const at = snap(held.origin[0] + event.clientX - held.pointer[0], held.origin[1] + event.clientY - held.pointer[1]);
     setSteps((all) => (all ? all.map((step) => (step.id === held.id ? { ...step, at } : step)) : all));
   };
@@ -463,31 +561,16 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
             <div>
               {isStart(current.id) ? null : (
                 <>
-                  <div className="studioField">
-                    <label className="studioLabel" htmlFor="flow-step-id">
-                      {say("名称", "Name")}
-                    </label>
-                    <input
-                      id="flow-step-id"
-                      className="studioInput mono"
-                      value={current.id}
-                      maxLength={32}
-                      spellCheck={false}
-                      onChange={(event) => {
-                        const id = event.currentTarget.value.replace(/\s+/g, "_");
-                        // Two steps of one name could not be told apart from here on.
-                        if (steps.some((step) => step !== current && step.id === id)) return;
-                        change(renameStep(steps, current.id, id));
-                        setSelected(id);
-                      }}
-                    />
-                    <p className="studioHint">
-                      {say(
-                        "以字母开头，只用字母、数字、_ 和 -。客户端会在 agent.changed 事件里收到它。",
-                        "Starts with a letter; letters, digits, _ and - only. The client receives it in the agent.changed event."
-                      )}
-                    </p>
-                  </div>
+                  <StepName
+                    key={current.id}
+                    steps={steps}
+                    id={current.id}
+                    say={say}
+                    onRename={(name) => {
+                      change(renameStep(steps, current.id, name));
+                      setSelected(name);
+                    }}
+                  />
                   <div className="studioField">
                     <label className="studioLabel" htmlFor="flow-step-description">
                       {say("什么时候进入这一步", "When to come to this step")}
@@ -710,6 +793,26 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
       ) : (
         <p className="flowNote">{say("选中一步来编辑它。", "Select a step to edit it.")}</p>
       )}
+
+      {warnings.length > 0 ? (
+        <ul className="flowWarnings">
+          {warnings.map((warning) => (
+            <li key={`${warning.step}:${warning.kind}`}>
+              <button type="button" className="linkButton" onClick={() => setSelected(warning.step)}>
+                {warning.kind === "ends"
+                  ? say(
+                      "“开始”没有通往任何一步的箭头，对话到不了其他步骤。",
+                      "Start has no arrow to any step, so a conversation never reaches the other steps."
+                    )
+                  : say(
+                      `从“开始”出发，没有箭头能走到 ${nameOf(warning.step)}。`,
+                      `No arrows lead from Start to ${nameOf(warning.step)}, so a conversation never reaches it.`
+                    )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       {showProblems && problems.length > 0 ? (
         <ul className="flowProblems" role="alert">

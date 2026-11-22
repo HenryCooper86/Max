@@ -735,8 +735,9 @@ was said that has to be taken back.
   call was not run". With `toolRules` set and no model to judge them, the tools they cover never run, and the relay
   says so at startup.
 - **A mistake in the key stops every tool.** Any other mistake in `guardrails` turns the whole key off with a warning.
-  When the key has `toolRules` or `checkedTools` in it, the relay instead runs no tool at all until the mistake is
-  fixed, and the startup log says so: a typing error must not be what lets every call through.
+  When the key has `toolRules`, `checkedTools`, `resultRules` or `checkedResults` in it, or any key with "tool" or
+  "result" in its name (`resultRule`, say), the relay instead runs no tool at all until the mistake is fixed, and
+  the startup log says so: a typing error must not be what lets every call through.
 - **Name the tools that matter.** Every checked call waits for the judge, which takes as long as a check of `rules`.
   With `checkedTools` only the tools you name wait, and only they stop working when the judge is down. Leave lookups
   out and list the tools that change something: refunds, bookings, messages. A name that is none of the relay's tools
@@ -767,8 +768,15 @@ words that it could not get that. The conversation carries on.
   slow or answers nonsense. The relay logs "a tool's result was withheld". With `resultRules` set and no model to
   judge them, the tools they cover are not run at all, because their work would be done and nobody told of it; the
   relay says so at startup. A mistake in the key stops every tool, as with `toolRules`.
-- **The whole result is read.** The relay cuts a tool's output at 16 KB. The judge reads it in pieces of 6,000
-  characters that overlap, at the same time, and one piece that breaks a rule withholds the result.
+- **The whole result is read, and so the whole result is sent to the judge.** The relay cuts a tool's output at
+  16 KB. The judge reads it in pieces of 6,000 characters that overlap, at the same time, and one piece that breaks
+  a rule withholds the result. Redaction does not apply to it. Without `GUARDRAILS_LLM_*` the judge is the model
+  of the analysis or of the pipeline, so a customer record a tool looked up goes to that endpoint: name the tools
+  in `checkedResults`, or give the judge an endpoint you would send those records to.
+- **What the judge is shown is the tool's name and its result**, not the tool's description: for a tool of a page
+  or of someone else's MCP server the description comes from the same hands as the result. An error a tool
+  answered with is judged like a result. Characters of the Unicode "tag" block, which nobody sees and a model
+  reads, are taken out of a checked result before the judge and the assistant read it.
 - **Name the tools that read what others wrote.** Every checked result waits for the judge before the assistant can
   answer. With `checkedResults` only the tools you name wait: a page fetcher, a search, a CRM lookup, an MCP server
   you do not run. A tool whose results your own code makes needs no check. Names the relay does not know are
@@ -802,7 +810,8 @@ GUARDRAILS_LLM_MODEL=qwen3:8b
 Without these the relay uses the model of the [analysis](#analysis): `ANALYSIS_LLM_*`, else the pipeline's chat model,
 else the local one. `GUARDRAILS_LLM_MODEL` alone changes only the model name. Every check sends the judge the answer
 so far (at most the last 1,500 characters) and the user's last turn, so choose an endpoint you would send transcripts
-to. A check of a tool call sends the tool's name and description, its arguments and the user's last turn. With rules
+to. A check of a tool call sends the tool's name and description, its arguments and the user's last turn. A check
+of what a tool returned sends the tool's name and the whole result. With rules
 set and no model to judge them, the relay says so at startup and checks only the blocked terms.
 
 What else to know:
@@ -814,7 +823,7 @@ What else to know:
   `tool`; a tool's result that a rule withheld has `"kind": "result"` and the tool's name. The relay's log has a "guardrail" line without the words.
 - Guardrails apply to the relay's own assistant and to every channel: web, apps, devices and phone calls. They do not
   apply to Max Cloud projects.
-- Not built: holding speech back on the speech-to-speech backends, and checks on what tools return.
+- Not built: holding speech back on the speech-to-speech backends.
 
 ### Tracing
 

@@ -119,7 +119,8 @@ In rough order of how much they would matter to most users:
    before it is spoken. On OpenAI Realtime, Gemini Live and Grok the vendor makes the speech, so rules are judged
    while the assistant speaks and the start of an answer that breaks one is usually heard before it is cut. Tool
    calls are judged before they run (`guardrails.toolRules`) and what tools return before the assistant reads it
-   (`guardrails.resultRules`), on every backend.
+   (`guardrails.resultRules`), on every backend that runs tools with a model. The demo backend has no judge and
+   does not run a tool the rules cover.
 6. **Flow steps that run without a model.** The flow builder draws agents and the handoffs between them, and the
    relay holds a conversation to the arrows drawn. Every step is still a model following instructions: there is no
    step that says a fixed sentence, branches on a variable, or calls a tool by itself, and Max Cloud projects have

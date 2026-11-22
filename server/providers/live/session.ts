@@ -73,6 +73,7 @@ import {
   guardrailModelFromEnv,
   resultIsChecked,
   toolIsChecked,
+  withoutHiddenText,
   type BlockedTerms,
   type GuardrailJudge,
   type GuardrailsConfig
@@ -410,6 +411,8 @@ export function createLiveProvider(
   /** True when the relay, not the upstream, decides when a reply starts. */
   let manualResponse = false;
   let closed = false;
+  /** Aborted when the session closes: checks still under way are for nobody then. */
+  const closing = new AbortController();
   let audioActive = false;
   let upstreamRetries = 0;
   let reconnectTimer: NodeJS.Timeout | undefined;
@@ -1324,6 +1327,8 @@ export function createLiveProvider(
     if (!resultIsChecked(config, name) || builtinTools.some((tool) => tool.name === name)) {
       return Promise.resolve(outcome);
     }
+    // A name that is no tool: what came back is the broker's own refusal, and nobody else's words.
+    if (!tools?.specs().some((tool) => tool.name === name)) return Promise.resolve(outcome);
     const unread = {
       ok: false,
       output: toolErrorText(
@@ -1331,8 +1336,9 @@ export function createLiveProvider(
       )
     };
     if (!guardJudge || config?.toolsUnchecked) return Promise.resolve(unread);
-    const description = offeredTools().find((tool) => tool.name === name)?.description;
-    return guardJudge.checkResult({ name, description, result: outcome.output }).then((verdict) => {
+    // The judge and the assistant read the same text: what cannot be seen in it is taken out for both.
+    const output = withoutHiddenText(outcome.output);
+    const judged = guardJudge.checkResult({ name, result: output, signal: closing.signal }).then((verdict) => {
       if (verdict.broken) {
         log.warn("guardrail", { speaker: "assistant", kind: "result", tool: name });
         telemetry?.relayEvent?.({
@@ -1355,8 +1361,10 @@ export function createLiveProvider(
         log.warn("a tool's result was withheld: it could not be checked", { tool: name, problem: verdict.unchecked });
         return unread;
       }
-      return outcome;
+      return { ...outcome, output };
     });
+    // Whatever goes wrong while a result is judged, the result is not what gets through.
+    return judged.catch(() => unread);
   }
 
   /** Looks for a blocked term in the reply. True when one was found: the reply is stopped. */
@@ -1928,6 +1936,8 @@ export function createLiveProvider(
         void broker
           .run(call)
           .then((outcome) => checkedResult(name, outcome))
+          // The count of background tools comes down whatever happened to this one.
+          .catch(() => ({ ok: false, output: toolErrorText(`${name} failed`) }))
           .then((outcome) => {
             backgroundRunning = Math.max(0, backgroundRunning - 1);
             if (closed) return;
@@ -2209,6 +2219,7 @@ export function createLiveProvider(
     },
     async close() {
       closed = true;
+      closing.abort();
       audioActive = false;
       engineReady = false;
       clearGateTimer();

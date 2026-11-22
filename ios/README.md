@@ -53,8 +53,22 @@ Set `AMAP_IOS_KEY` only in the ignored `Config/Secrets.xcconfig`; never commit t
 open `MaxHelmet.xcworkspace` in Xcode and press Run. The app uses `SwiftUI`, `AVFoundation`,
 `CoreLocation`, `Combine`, and the native AMap iOS 3D Map SDK provided by CocoaPods.
 
-On a physical device, select your team under **Signing & Capabilities** first (the bundle ID is
-`io.github.henrycooper86.max`; change it if it collides).
+### Signing, versions and the relay host
+
+Per-machine values live in the ignored `Config/Secrets.xcconfig` (copy
+`Config/Secrets.xcconfig.example`); shared defaults live in the tracked `Config/Base.xcconfig`.
+
+| Setting                | Where                                            | Purpose                                                                                                               |
+| ---------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `MAX_DEVELOPMENT_TEAM` | `Secrets.xcconfig`                               | Your Apple team ID for device builds. Empty by default, so Simulator builds and CI need no Apple account.             |
+| `MAX_RELAY_HOST`       | `Secrets.xcconfig`                               | Relay host for device builds (`wss://<host>/agent`). A Release build for a device will not compile without it.        |
+| `MARKETING_VERSION`    | `Base.xcconfig`                                  | The version riders see (`1.0.0`). Edit it there, never in the project file.                                           |
+| `MAX_BUILD_NUMBER`     | `Base.xcconfig` default `1`, or the command line | Becomes `CFBundleVersion`. CI and release scripts pass `MAX_BUILD_NUMBER=<n>` to `xcodebuild`, like `MAX_GIT_COMMIT`. |
+
+A device build without `MAX_RELAY_HOST` (a Debug build, since Release refuses to compile) shows
+**Relay not configured** on the main screen with the fix, instead of failing to connect to the
+placeholder host; typing a relay address under Settings › Connection also clears it. The bundle ID is
+`io.github.henrycooper86.max`; change it if it collides.
 
 > New Swift files dropped into `MaxHelmet/` are picked up automatically — the target uses a
 > synchronized group, so there is no "add to target" step.
@@ -83,15 +97,17 @@ explicit `DEVELOPER_DIR` command above or switch the machine to full Xcode with 
    field is prefilled from an environment-aware default (`MainViewModel.defaultRelayURL`) —
    override it for any of the rows below:
 
-| Where the app runs    | Relay URL                                           | Default?                       |
-| --------------------- | --------------------------------------------------- | ------------------------------ |
-| iOS Simulator         | `ws://localhost:8787/agent`                         | ✅ on the simulator            |
-| Physical iPhone       | `wss://3.35.135.136/agent` (Lightsail, self-signed) | ✅ in Debug (trust auto-on)    |
-| Physical iPhone (LAN) | `ws://<Mac-LAN-IP>:8787/agent`                      | override for a local Mac relay |
+| Where the app runs    | Relay URL                                                            | Default?                        |
+| --------------------- | -------------------------------------------------------------------- | ------------------------------- |
+| iOS Simulator         | `ws://localhost:8787/agent`                                          | ✅ on the simulator             |
+| Physical iPhone       | `wss://<MAX_RELAY_HOST>/agent`, e.g. `wss://relay.example.com/agent` | ✅ when `MAX_RELAY_HOST` is set |
+| Physical iPhone (LAN) | `ws://<Mac-LAN-IP>:8787/agent`                                       | override for a local Mac relay  |
 
-On a physical device `localhost` is the phone itself, so a Debug build defaults to the shared AWS
-Lightsail test relay and turns the self-signed trust toggle on for that first connection.
-Point it back at a Mac relay by typing the LAN URL (and toggling self-signed off for `ws://`).
+On a physical device `localhost` is the phone itself, so the default comes from `MAX_RELAY_HOST`
+in `Config/Secrets.xcconfig`. With none set, tapping the visor shows the **Relay not configured**
+card instead of connecting anywhere. A Debug device build turns the self-signed trust toggle on by
+default for a test relay; point the app at a Mac relay by typing the LAN URL (and toggling
+self-signed off for `ws://`).
 
 3. Tap the helmet. The app asks for microphone (required) and location (optional, used for live
    weather). With `VOICE_PROVIDER=mock` you get the scripted demo session; with
@@ -157,10 +173,10 @@ The simulator can connect to the Mac relay at `ws://localhost:8787/agent`.
 ### Physical device quick start
 
 Running on a real iPhone needs a signing team. With a **free** Apple ID, add it once in
-**Xcode ▸ Settings ▸ Accounts**, then select your **(Personal Team)** under the MaxHelmet target's
-**Signing & Capabilities** so Xcode provisions an _Apple Development_ certificate. The repo already
-pins `DEVELOPMENT_TEAM = V487HQQLC6`; change it to your own team if you are not on that account.
-Run the following commands from the repository root.
+**Xcode ▸ Settings ▸ Accounts** so Xcode can provision an _Apple Development_ certificate, then put
+your team ID in `Config/Secrets.xcconfig` as `MAX_DEVELOPMENT_TEAM = <TEAM_ID>` (Xcode shows it under
+**Signing & Capabilities**). The project file no longer pins a team, so every contributor signs with
+their own. Run the following commands from the repository root.
 
 ```bash
 # Find your connected device's UDID
@@ -181,7 +197,7 @@ xcrun devicectl device process launch --device "$UDID" io.github.henrycooper86.m
 The device must have **Developer Mode** enabled (Settings ▸ Privacy & Security ▸ Developer Mode).
 On the first launch, trust the developer under **Settings ▸ General ▸ VPN & Device Management** if
 iOS shows an "Untrusted Developer" prompt. A free personal team's signature **expires after 7 days** —
-re-run the build/install to refresh it. The installed app defaults to the Lightsail relay above.
+re-run the build/install to refresh it. The installed app defaults to `wss://<MAX_RELAY_HOST>/agent`.
 
 ### Permissions
 
@@ -202,7 +218,7 @@ under lock. Force-quit terminates forwarding, and neither login nor relaunch res
 
 ### Self-signed test server
 
-The Lightsail test box uses a self-signed certificate. In Debug only, the toggle
+A test relay may use a self-signed certificate. In Debug only, the toggle
 **信任自签名证书（仅调试）** gates a trust-all path and defaults on for a physical device. The
 simulator defaults it off because it talks to local `ws://`. Release builds compile out the bypass,
 hide the toggle, use the hardened `Info.plist`, and require a trusted certificate and hostname.
@@ -252,11 +268,49 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
   session (the screen stays awake), so it needs no background-location permission. Honest limits:
   car routing only, so it does not respect 摩托车禁行 roads, and there is no MKDirections fallback —
   a relay that's down or unreachable is a spoken failure, not a silent retry elsewhere.
-- Reconnect with exponential backoff and user-visible connection status.
+- Reconnect with exponential backoff and user-visible connection status. An `NWPathMonitor`
+  reconnects the moment the network returns (or the phone hands over between Wi-Fi and cellular) with
+  a fresh retry budget; drops while there is no network at all do not spend that budget.
+- Interruption recovery: a phone call or Siri pauses capture and playback (the relay session stays
+  open, with `audio.stop`/`audio.start` around the pause) and the HUD says so. When the interruption
+  ends the session resumes even if iOS omits `shouldResume`, because a rider cannot reach the phone to
+  restart hands-free; it waits a second first so the call can release the audio, retries after 1, 2, 4
+  and 8 s, and tells the rider if the microphone still will not come back. Because iOS does not always
+  send the end of an interruption, it then keeps trying every 15 s for as long as the session lasts,
+  never while a call is in progress (CallKit's call observer), and a headset connecting triggers an
+  attempt too. Route changes (a Bluetooth helmet
+  connecting or dropping) are debounced and re-assert the voice route without dropping the relay, and
+  a media-services reset rebuilds the audio engine.
+- Typed turns: when the backend reports `capabilities.textInput`, the captions card has a text field
+  that sends `text.input` (for noise, or riders who cannot speak). `tool.activity` shows “Looking that
+  up…” while a relay-side tool runs. The app declares no client tools; an unexpected `tool.call` gets
+  one `tool.result` error at once so the model does not wait out the timeout.
+- Ride speed comes from the phone's own GPS (`CLLocation.speed` from the session's existing location
+  stream). It feeds crash detection, the SMS gate and the typing lock. A fix counts only with speed
+  accuracy of 3 m/s or better; a fix without a usable speed makes the speed unknown at once. GPS speed
+  counts for 5 s, and for only 2 s in crash detection so a pre-impact speed cannot veto the stillness
+  that confirms a crash. Crash detection uses the phone's GPS only; its speed gate also remembers the
+  last usable GPS speed for 15 s, so a tunnel does not close the gate just before an impact (stillness
+  never reads that value). For SMS, typing and the HUD, the relay's `ride.context.speedKmh` is used
+  only in a mock session (a live relay just echoes the phone's own old speed) and is forgotten when the
+  socket closes; otherwise the speed is unknown, never 0. Unknown speed
+  refuses SMS composition (at 5 km/h or more it is refused too) and keeps crash detection on its
+  stricter below-gate rule; typing is locked at 5 km/h or more and allowed when unknown, so it still
+  works indoors without GPS. `location.update` carries `speedKmh` when a fresh GPS speed is known.
+  Plain hands-free does not enable background location, so when the app leaves the foreground iOS
+  stops delivering fixes; the screen normally stays awake while riding.
+- Heat and Low Power Mode: at `serious` thermal state video recording stops (the clip is kept) and
+  gallery image analysis is refused; at `critical` photos are refused too and the visor animation
+  stops. The rider hears this once per hot spell; the voice session and crash detection are never shed.
+  At `critical` the torch can't be turned on and music can only be paused (play, next and previous are
+  refused), and entering `critical` turns the torch off; turning the torch off and pausing music are
+  always allowed. Entering `critical` also stops music Max is playing (not QQ Music) and HUD casting,
+  as on Android. Low Power Mode only refuses new recordings. Refusals are sent as `denied` with reason
+  `device.hot` or `device.powerSave`.
 - Live weather card and fused `态势摘要` ride-pulse card.
 - Transcript with in-place updates, deduplication, timestamps, and JSON export via share sheet.
 - `AVSpeechSynthesizer` fallback when the provider sends text without audio.
-- Debug-only trust-all TLS path for the self-signed Lightsail test server.
+- Debug-only trust-all TLS path for a self-signed test relay.
 - Keychain storage for relay/login bearer tokens, with migration from older `UserDefaults` values.
 - Release-run/test-case/assignment attribution with explicit iOS platform and stamped git commit.
 
@@ -334,22 +388,43 @@ publicly trusted TLS certificate.
 
 ## Troubleshooting
 
-| Symptom                               | Check                                                                                                                                                               |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `xcodebuild` cannot find simulators   | Use full Xcode via `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.                                                                                      |
-| Simulator app stays offline           | Use `ws://localhost:8787/agent` and make sure `npm run dev:server` is running.                                                                                      |
-| Physical iPhone cannot connect        | Default is `wss://3.35.135.136/agent` (self-signed on); for a Mac relay use `ws://<Mac-LAN-IP>:8787/agent`, grant local-network permission, and check the firewall. |
-| Device app won't launch after ~7 days | Free personal-team signature expired — re-run the device build/install to refresh it.                                                                               |
-| Mic permission prompt does not appear | Reset app privacy in Simulator or delete/reinstall the app.                                                                                                         |
-| Self-signed test server fails         | Use a Debug build and enable its self-signed certificate toggle. Release builds require trusted TLS.                                                                |
-| App launches but no live weather      | Grant location permission or configure fallback coordinates on the server.                                                                                          |
-| Bluetooth route is not selected       | Pair the headset before starting the session; iOS chooses HFP routing automatically.                                                                                |
+| Symptom                               | Check                                                                                                                                                                                                                        |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `xcodebuild` cannot find simulators   | Use full Xcode via `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.                                                                                                                                               |
+| Simulator app stays offline           | Use `ws://localhost:8787/agent` and make sure `npm run dev:server` is running.                                                                                                                                               |
+| Physical iPhone cannot connect        | Default is `wss://<MAX_RELAY_HOST>/agent` (e.g. `wss://relay.example.com/agent`, self-signed trust on in Debug); for a Mac relay use `ws://<Mac-LAN-IP>:8787/agent`, grant local-network permission, and check the firewall. |
+| Device app won't launch after ~7 days | Free personal-team signature expired — re-run the device build/install to refresh it.                                                                                                                                        |
+| Mic permission prompt does not appear | Reset app privacy in Simulator or delete/reinstall the app.                                                                                                                                                                  |
+| Self-signed test server fails         | Use a Debug build and enable its self-signed certificate toggle. Release builds require trusted TLS.                                                                                                                         |
+| App launches but no live weather      | Grant location permission or configure fallback coordinates on the server.                                                                                                                                                   |
+| Bluetooth route is not selected       | iOS chooses HFP routing automatically; a headset that connects mid-session is picked up after the route settles. If it is not, end and restart hands-free.                                                                   |
+| Relay not configured                  | The build has no `MAX_RELAY_HOST`: set it in `Config/Secrets.xcconfig` and rebuild, or type a relay address under Settings › Connection.                                                                                     |
+
+## Known limitations
+
+- **A phone call can suspend the app mid-ride.** In the background the app stays alive only because
+  `UIBackgroundModes = audio` lets it run while its audio session is active and the engine is running
+  (plus `location` while an explicit Helmet Ride is forwarding). A call or Siri interrupts the session
+  and the system stops the engine; the app's own pause does not change that. With the call screen in
+  front (or the screen off), iOS may then suspend the app: the relay socket stalls and may be dropped,
+  and crash detection stops receiving motion data until the app runs again. iOS may or may not wake
+  the app to deliver the end of the interruption; when it does not, recovery happens when the app next
+  runs (an `.appWasSuspended` interruption is resumed at once, and the app retries every 15 s while it
+  is running). Options, none enabled: (1) keep location updates running in the background during
+  hands-free (`allowsBackgroundLocationUpdates`), which keeps the app alive but shows the location
+  indicator, changes the privacy wording and needs App Review justification; (2) accept the gap and
+  document it for riders. Playing silent audio to stay alive is not acceptable and is not done.
+- **Ride speed needs the app in the foreground.** Plain hands-free does not use background location,
+  so with the app in the background the speed is unknown after the freshness window (see ride speed above).
 
 ## Release caveats
 
 - `NSAllowsArbitraryLoads` and the trust-all path are restricted to Debug; Release uses normal ATS
   certificate and hostname validation.
-- Configure a real signing team, bundle ID, versioning, icons, and privacy text before TestFlight.
+- Set `MAX_DEVELOPMENT_TEAM` and `MAX_RELAY_HOST`, pass `MAX_BUILD_NUMBER`, and check the bundle ID
+  and icons before TestFlight. Permission prompts and the app name are localised in
+  `MaxHelmet/en.lproj` and `MaxHelmet/zh-Hans.lproj` (`InfoPlist.strings`); keep them in step with
+  both Info.plists.
 - Keep the protocol parity checklist in sync with web and Android whenever `/agent` changes.
 
 ## Wi-Fi navigation HUD casting (bench prototype)

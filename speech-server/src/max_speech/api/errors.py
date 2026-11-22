@@ -21,6 +21,7 @@ class OpenAIError(Exception):
         type: str = "invalid_request_error",
         param: str | None = None,
         code: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -28,13 +29,14 @@ class OpenAIError(Exception):
         self.type = type
         self.param = param
         self.code = code
+        self.headers = headers
 
     def body(self) -> dict:
         return {"error": {"message": self.message, "type": self.type, "param": self.param, "code": self.code}}
 
 
 def _response(err: OpenAIError) -> JSONResponse:
-    return JSONResponse(err.body(), status_code=err.status)
+    return JSONResponse(err.body(), status_code=err.status, headers=err.headers)
 
 
 def install_error_handlers(app: FastAPI) -> None:

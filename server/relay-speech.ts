@@ -49,6 +49,9 @@ const LINES: Record<string, string> = {
   "我没有相机权限，去设置里开启后我再帮你拍。": "I don't have camera access. Turn it on in Settings and I'll take it.",
   "存储快满了，导出或删除一些内容后我再帮你拍。":
     "Storage is nearly full. Export or delete something and I'll take it.",
+  "手机过热，这个操作先暂停，语音和摔车检测照常。":
+    "The phone is too hot, so that's paused for now. Voice and crash detection keep running.",
+  "手机在省电模式，暂时不录像。": "The phone is in power-saving mode, so I'm not recording video for now.",
   "已经在录了。": "Already recording.",
   "现在没有在录像。": "Nothing is recording right now.",
   "现在没有要关机。": "There's no shutdown to cancel.",

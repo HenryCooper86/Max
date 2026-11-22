@@ -1,3 +1,8 @@
+/**
+ * Volcengine/Doubao realtime TTS helper: speaks short, exact lines (navigation prompts) through Doubao's speech
+ * service. Despite the name, this is not the client of the Max Speech server in `speech-server/`; that client is
+ * `providers/live/max-speech.ts`.
+ */
 import { randomUUID } from "node:crypto";
 import { WebSocket, type RawData } from "ws";
 

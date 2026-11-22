@@ -6,6 +6,8 @@
  * file is free of browser APIs and safe to unit-test in Node.
  */
 
+import { PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
+
 /** Sample rate of the microphone stream the relay expects (PCM16 mono). */
 const UPLINK_SAMPLE_RATE = 16000;
 /** Sample rate of the agent voice the relay sends back (PCM16 mono). */
@@ -16,6 +18,8 @@ export const FRAME_SAMPLES = 320;
 export const IDLE_CLOSE_CODE = 4001;
 /** The relay closes with this when the user has used up their voice minutes. */
 export const USAGE_LIMIT_CLOSE_CODE = 4003;
+/** Policy close: the relay refused the credentials (signed out, expired, deleted). */
+export const UNAUTHORIZED_CLOSE_CODE = 1008;
 /** Longest context string the relay accepts. */
 const MAX_CONTEXT_CHARS = 2000;
 /** Longest typed message the relay accepts. */
@@ -75,6 +79,10 @@ export type SessionStartMessage = {
   sampleRate: number;
   channels: number;
   platform: "web";
+  /** The wire protocol this SDK speaks, so the relay can tell when it is behind. */
+  protocol: number;
+  /** `max-voice-agent@<version>`, for the relay's logs and QA records. */
+  appVersion: string;
   language?: string;
   voiceGender?: VoiceGender;
   voiceProvider?: string;
@@ -122,7 +130,14 @@ export type ToolActivityEvent = {
 
 /** Relay to client messages the SDK understands. Anything else is ignored. */
 export type RelayEvent =
-  | { type: "session.started"; provider: string; mode?: string; capabilities?: AgentCapabilities }
+  | {
+      type: "session.started";
+      provider: string;
+      mode?: string;
+      capabilities?: AgentCapabilities;
+      /** The relay's wire protocol; absent from relays older than the version handshake. */
+      protocol?: number;
+    }
   | { type: "status"; state: string; detail?: string }
   | { type: "connection"; state: string; detail?: string }
   | TranscriptEvent
@@ -266,6 +281,8 @@ export function buildSessionStart(input: SessionStartInput): SessionStartMessage
     sampleRate: UPLINK_SAMPLE_RATE,
     channels: 1,
     platform: "web",
+    protocol: PROTOCOL_VERSION,
+    appVersion: `max-voice-agent@${SDK_VERSION}`,
     ...(input.language ? { language: input.language } : {}),
     ...(input.voice ? { voiceGender: input.voice } : {}),
     ...(input.backend ? { voiceProvider: input.backend } : {}),
@@ -279,10 +296,18 @@ export function reconnectDelayMs(attempt: number): number {
   return Math.min(8000, 1000 * 2 ** Math.max(0, attempt - 1));
 }
 
-/** Whether to reconnect after a close. Idle closes (4001) and used-up voice
- *  minutes (4003) are final: reconnecting would only be refused again. */
+/** Whether to reconnect after a close. Idle closes (4001), used-up voice
+ *  minutes (4003) and refused credentials (1008) are final: reconnecting with
+ *  the same inputs would only be refused again. (The client makes one extra
+ *  attempt after 1008 when it can fetch a fresh token.) */
 export function shouldReconnect(code: number, attempt: number, enabled = true): boolean {
-  return enabled && code !== IDLE_CLOSE_CODE && code !== USAGE_LIMIT_CLOSE_CODE && attempt <= MAX_RECONNECT_ATTEMPTS;
+  return (
+    enabled &&
+    code !== IDLE_CLOSE_CODE &&
+    code !== USAGE_LIMIT_CLOSE_CODE &&
+    code !== UNAUTHORIZED_CLOSE_CODE &&
+    attempt <= MAX_RECONNECT_ATTEMPTS
+  );
 }
 
 /**

@@ -20,17 +20,22 @@ final class GalleryDescribeController: IdentifiedDeviceActionHandler {
     private let send: (String) -> Void
     private let extractPhoto: (Data) -> String?
     private let extractVideo: (URL) -> [String]?
+    /// Read on whatever thread `perform` runs on, so it must be thread-safe
+    /// (AgentSession passes ThermalGovernor's locked snapshot).
+    private let capturePolicy: () -> CapturePolicy
 
     init(
         store: CaptureStoring,
         send: @escaping (String) -> Void,
         extractPhoto: @escaping (Data) -> String? = FrameExtraction.photoBase64,
-        extractVideo: @escaping (URL) -> [String]? = { FrameExtraction.videoFramesBase64(from: $0) }
+        extractVideo: @escaping (URL) -> [String]? = { FrameExtraction.videoFramesBase64(from: $0) },
+        capturePolicy: @escaping () -> CapturePolicy = { .unrestricted }
     ) {
         self.store = store
         self.send = send
         self.extractPhoto = extractPhoto
         self.extractVideo = extractVideo
+        self.capturePolicy = capturePolicy
     }
 
     /// gallery.describe is the only route registered with an
@@ -48,6 +53,8 @@ final class GalleryDescribeController: IdentifiedDeviceActionHandler {
         guard let target = resolveTarget(kind: kind) else {
             return .failed("gallery.empty")
         }
+        // Decoding frames is the expensive part, so a hot phone refuses before it.
+        if let refusal = capturePolicy().visionFrames { return refusal.result }
 
         let frames: [String]
         switch target.type {

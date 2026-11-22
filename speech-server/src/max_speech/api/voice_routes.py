@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import secrets
@@ -13,9 +14,17 @@ from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 from starlette.concurrency import run_in_threadpool
 
 from max_speech.api.errors import OpenAIError
-from max_speech.api.openai_routes import _pcm_chunks, _read_upload, require_ready
+from max_speech.api.openai_routes import (
+    RETRY_AFTER_S,
+    SentenceJobs,
+    _read_upload,
+    batch_ticket,
+    require_ready,
+    run_for,
+)
 from max_speech.audio import INPUT_RATE, OUTPUT_RATE, float_to_pcm16, resample, wav_bytes
 from max_speech.engines.base import UnknownVoiceError
+from max_speech.engines.mlx_gate import Abandoned
 from max_speech.engines.router import speech_engine_id
 from max_speech.voices.candidates import expires_iso
 from max_speech.voices.lexicon import LexiconError
@@ -54,6 +63,20 @@ def _not_found(voice_id: str) -> OpenAIError:
 
 def _cloning_unavailable() -> OpenAIError:
     return OpenAIError(409, "voice cloning is not available on this server", code="cloning_unavailable")
+
+
+def _caller(request: Request) -> dict[str, str]:
+    """All the server knows about who is calling: the peer address (proxy headers are not trusted) and how it was
+    let in. There is one shared API key, so `key_id` tells keys apart across a rotation, not people."""
+    settings = request.app.state.settings
+    client = request.client.host if request.client else ""
+    if settings.api_key:
+        return {
+            "client": client,
+            "auth": "api_key",
+            "key_id": hashlib.sha256(settings.api_key.encode()).hexdigest()[:12],
+        }
+    return {"client": client, "auth": "loopback"}
 
 
 def _custom_json(v: CustomVoice) -> dict:
@@ -126,8 +149,11 @@ async def create_voice(
             )
         hint = (languages or "").split(",")[0].strip().lower().split("-")[0] or None
         samples = resample(reference.audio, reference.rate, INPUT_RATE)
-        async with slots.stt_lock:
-            result = await run_in_threadpool(lambda: stt.transcribe(samples, INPUT_RATE, language=hint))
+        async with slots.batch_stt_lock(), batch_ticket(request) as ticket:
+            try:
+                result = await run_for(ticket, lambda: stt.transcribe(samples, INPUT_RATE, language=hint))
+            except Abandoned:
+                return Response(status_code=499)  # the client left; the voice is not created
         text, source = result.text.strip(), "stt"
         if not text:
             raise OpenAIError(
@@ -149,6 +175,7 @@ async def create_voice(
         consent_speaker=consent_speaker,
         created_by=created_by,
         transcript_source=source,
+        provenance=_caller(request),
     )
     return JSONResponse(_custom_json(voice), status_code=201, headers={"Location": f"/v1/voices/{voice.id}"})
 
@@ -186,7 +213,7 @@ async def patch_voice(voice_id: str, body: VoicePatch, request: Request):
 
 @router.delete("/voices/{voice_id}", status_code=204)
 async def delete_voice(voice_id: str, request: Request):
-    await _blocking(_store(request).delete, voice_id)
+    await _blocking(_store(request).delete, voice_id, provenance=_caller(request))
     return Response(status_code=204)
 
 
@@ -225,11 +252,16 @@ async def preview_voice(voice_id: str, request: Request, body: PreviewRequest | 
             400, f"text must be at most {MAX_PREVIEW_CHARS} characters", param="text", code="text_too_long"
         )
     tts = slots.tts
-    async with slots.tts_lock:
-        try:
-            pcm = await run_in_threadpool(lambda: b"".join(_pcm_chunks(tts, text, voice_id, 1.0, language)))
-        except UnknownVoiceError as exc:
-            raise _not_found(voice_id) from exc
+    # Like /v1/audio/speech: one sentence per hold of the cloning engine's lock, and live (realtime) work at the GPU
+    # gate. Work that holds a speech lock must be realtime: a live sentence queued behind that lock waits on the lock,
+    # not at the gate, so batch work there could make it wait for a whole transcription or design.
+    job = SentenceJobs(tts, slots.speech_lock(voice_id), text, voice_id, language=language)
+    try:
+        pcm = b"".join([c async for c in job.chunks()])
+    except UnknownVoiceError as exc:
+        raise _not_found(voice_id) from exc
+    finally:
+        job.cancel()
     return Response(
         wav_bytes(pcm, OUTPUT_RATE),
         media_type="audio/wav",
@@ -240,6 +272,7 @@ async def preview_voice(voice_id: str, request: Request, body: PreviewRequest | 
 # ---- voice design --------------------------------------------------------------------------------------------------
 
 MAX_DESIGN_TEXT = 300
+MAX_DESIGN_REQUESTS = 2  # in progress at once: one designing, one waiting its turn; more get 429
 # Sample sentences measured on the real model (6 voices each, trimmed): English 4.9 to 6.1 s, Chinese 4.3 to 7.3 s.
 # A reference under MIN_DESIGN_SECONDS (3 s) is refused at save time, so these stay well above it.
 DESIGN_TEXT = {
@@ -496,35 +529,28 @@ async def design_voice(body: DesignRequest, request: Request):
                 code="sample_text_too_short",
             )
     text = text or DESIGN_TEXT.get(language, DESIGN_TEXT["en"])
-    # Load the weights (several seconds the first time) before taking the speech lock, so live speech never waits
-    # for the load, only for one generated sentence at a time.
+    # One design runs at a time (the engine has one model) and the next waits here, on the event loop: a request
+    # waiting inside the threadpool would park a worker thread on the engine's own lock, and enough of them would
+    # leave no thread for live sessions. Beyond MAX_DESIGN_REQUESTS in progress, refuse.
+    if slots.designs >= MAX_DESIGN_REQUESTS:
+        raise OpenAIError(
+            429,
+            "a voice design is already in progress; retry shortly",
+            type="rate_limit_error",
+            code="too_many_requests",
+            headers={"Retry-After": str(RETRY_AFTER_S)},
+        )
+    slots.designs += 1
     try:
-        await run_in_threadpool(engine.ensure_loaded)
-    except Exception as exc:  # a failed load (missing weights, out of memory) is a 503, not a crash
-        log.exception("voice design model failed to load")
+        async with slots.design_lock, batch_ticket(request) as ticket:
+            made = await _design_candidates(slots, engine, ticket, body.count, description, text, language)
+    except Abandoned:
+        return Response(status_code=499)  # the client left; its GPU time went back at the next chunk
+    finally:
+        slots.designs -= 1
+    if made is None:
         raise OpenAIError(
             503, "the voice design model could not be loaded", type="server_error", code="design_unavailable"
-        ) from exc
-    base_seed = secrets.randbelow(2**31 - 4)
-    made = []
-    for i in range(body.count):
-        seed = base_seed + i  # distinct, so the candidates differ
-        # One candidate per lock hold: live speech waits for at most one sentence, not the whole batch.
-        async with slots.tts_lock:
-            try:
-                audio = await run_in_threadpool(lambda s=seed: engine.design(description, text, language, s))
-            except ValueError as exc:
-                raise OpenAIError(400, str(exc), param="description", code="invalid_field") from exc
-        made.append(
-            slots.candidates.add(
-                audio=audio,
-                rate=engine.sample_rate,
-                text=text,
-                description=description,
-                language=language,
-                seed=seed,
-                model=engine.model_id,
-            )
         )
     expires = expires_iso(slots.candidates.ttl)
     return {
@@ -539,6 +565,41 @@ async def design_voice(body: DesignRequest, request: Request):
             for c in made
         ]
     }
+
+
+async def _design_candidates(slots, engine, ticket, count, description, text, language):
+    """Make `count` candidates (None when the model cannot be loaded). Batch work on `ticket`: the GPU goes to live
+    speech between chunks, and the request's own work stops when its client leaves."""
+    # Load the weights first (a 503 rather than a failed candidate if that goes wrong).
+    try:
+        await run_for(ticket, engine.ensure_loaded)
+    except Abandoned:
+        raise
+    except Exception:  # a failed load (missing weights, out of memory) is a 503, not a crash
+        log.exception("voice design model failed to load")
+        return None
+    base_seed = secrets.randbelow(2**31 - 4)
+    made = []
+    for i in range(count):
+        seed = base_seed + i  # distinct, so the candidates differ
+        # No speech lock: design is a separate model, and it shares the GPU through the MLX gate as batch work, a
+        # streamed chunk at a time, so live speech (preset or custom) never waits for a whole candidate.
+        try:
+            audio = await run_for(ticket, lambda s=seed: engine.design(description, text, language, s))
+        except ValueError as exc:
+            raise OpenAIError(400, str(exc), param="description", code="invalid_field") from exc
+        made.append(
+            slots.candidates.add(
+                audio=audio,
+                rate=engine.sample_rate,
+                text=text,
+                description=description,
+                language=language,
+                seed=seed,
+                model=engine.model_id,
+            )
+        )
+    return made
 
 
 @router.get("/voices/design/{cid}/audio")
@@ -569,14 +630,14 @@ async def save_designed_voice(cid: str, body: DesignSave, request: Request):
     if item is None:
         raise _no_candidate(cid)
     try:
-        voice = await _save_candidate(store, item, body)
+        voice = await _save_candidate(store, item, body, _caller(request))
     except BaseException:
         slots.candidates.restore(item)
         raise
     return JSONResponse(_custom_json(voice), status_code=201, headers={"Location": f"/v1/voices/{voice.id}"})
 
 
-async def _save_candidate(store: VoiceStore, item, body: DesignSave) -> CustomVoice:
+async def _save_candidate(store: VoiceStore, item, body: DesignSave, provenance: dict) -> CustomVoice:
     # The sample becomes the voice's reference and its text the transcript; the cloning engine then speaks it.
     reference = await _blocking(reference_from_samples, item.audio, item.rate)
     return await _blocking(
@@ -590,6 +651,7 @@ async def _save_candidate(store: VoiceStore, item, body: DesignSave) -> CustomVo
         languages=body.languages if body.languages not in (None, "", []) else item.language,
         gender=body.gender,
         created_by=body.created_by,
+        provenance=provenance,
     )
 
 

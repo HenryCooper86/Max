@@ -12,6 +12,8 @@ export type StudioDraft = {
   instructions: string;
   greeting: string;
   studio: ProjectStudio;
+  /** As typed: whole minutes, or "" for no limit. */
+  monthlyMinutesCap: string;
 };
 
 /** What every Studio tab receives. */
@@ -41,8 +43,16 @@ export function draftFromProject(project: Project): StudioDraft {
     assistantName: project.assistantName,
     instructions: project.instructions,
     greeting: project.greeting,
-    studio: structuredClone(project.studio)
+    studio: structuredClone(project.studio),
+    monthlyMinutesCap: project.monthlyMinutesCap ? String(project.monthlyMinutesCap) : ""
   };
+}
+
+/** The typed limit as saved: whole minutes, null for none, undefined when it is not a whole number. */
+export function minutesCapFromDraft(typed: string): number | null | undefined {
+  const text = typed.trim();
+  if (!text) return null;
+  return /^\d{1,7}$/.test(text) && Number(text) > 0 ? Number(text) : undefined;
 }
 
 /** True when the draft has changes worth saving. */

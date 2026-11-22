@@ -1,6 +1,8 @@
 import { APP_DEMO_CAPABILITIES, providerCapabilities, type AgentHealth } from "../shared/agent";
 import { buildInfo } from "./build-info";
 import { accountsStorageHealthy, authActive, registrationOpen } from "./accounts";
+import { untrustedProxyHeadersSeen } from "./auth";
+import { cloudEnabled } from "./cloud/context";
 import { metrics, metricsWindow, testingSnapshot } from "./metrics";
 import { userMemoryEnabled, userMemoryStorageHealthy } from "./user-memory";
 
@@ -63,6 +65,7 @@ export function describeConfig(): string[] {
     `Relay heartbeat: ${config.heartbeatMs ? `ping every ${Math.round(config.heartbeatMs / 1000)} s` : "off"}`,
     `Relay idle timeout: ${config.idleTimeoutMs ? describeDuration(config.idleTimeoutMs) : "off"}`,
     `Relay proxy trust: ${config.trustProxy ? `on (${config.trustedProxyHops} hop${config.trustedProxyHops === 1 ? "" : "s"} via X-Forwarded-For)` : "off (client IP = socket address)"}`,
+    `Metrics endpoint: ${config.metricsToken ? "/metrics (bearer METRICS_TOKEN)" : "off"}`,
     `Crash notification channel: ${config.crashNotifier}`
   ];
 }
@@ -108,17 +111,33 @@ export function validateConfig(): string[] {
   // Behind a reverse proxy (the documented Caddy/Lightsail deploy), every client
   // shares the proxy's socket address unless X-Forwarded-For is trusted, so the
   // per-IP limiter collapses into a single global bucket that can lock everyone
-  // out. Flag it when running the real backend without proxy trust enabled.
-  if (usesLiveBackend() && !config.trustProxy) {
+  // out. Flag it for anything that is likely deployed publicly: the real
+  // backend, or Max Cloud (whose operators may run only the mock backend).
+  // English follows the Chinese because Cloud operators are often not readers
+  // of Chinese, and this one can take a whole deployment offline.
+  if ((usesLiveBackend() || cloudEnabled()) && !config.trustProxy) {
     warnings.push(
       "RELAY_TRUST_PROXY=off：若本服务位于反向代理（如部署文档中的 Caddy）之后，所有客户端会被算作同一个代理 IP —— WebSocket 速率限制和 /auth 登录限制（每 IP 每分钟 " +
-        `${config.authAttemptsPerMinute} 次）都会退化为全局限制并可能锁死所有人。反代后请设置 RELAY_TRUST_PROXY=on（并按需设置 RELAY_TRUSTED_PROXY_HOPS）。`
+        `${config.authAttemptsPerMinute} 次）都会退化为全局限制并可能锁死所有人。反代后请设置 RELAY_TRUST_PROXY=on（并按需设置 RELAY_TRUSTED_PROXY_HOPS）。` +
+        " / RELAY_TRUST_PROXY=off: if this relay is behind a reverse proxy (such as the Caddy setup in the deployment " +
+        "guide), every client is counted as the proxy's single address, so the WebSocket, login " +
+        `(${config.authAttemptsPerMinute} per IP per minute) and embed limits become global and one visitor can lock ` +
+        "everyone out. Behind a proxy, set RELAY_TRUST_PROXY=on (and RELAY_TRUSTED_PROXY_HOPS if there is more than one)."
     );
   }
 
   if (process.env.NODE_ENV === "production" && config.authRegistration && !config.relayAuthToken) {
     warnings.push(
       "AUTH_REGISTRATION 在生产环境仍为开放状态：完成首批账号引导后请设置 AUTH_REGISTRATION=off，并使用单次邀请链接添加测试员。"
+    );
+  }
+
+  // The metrics token is compared in constant time but not rate-limited, so it
+  // must be long enough that guessing is hopeless.
+  if (config.metricsToken && config.metricsToken.length < 24) {
+    warnings.push(
+      "METRICS_TOKEN 过短（少于 24 个字符）：请使用随机生成的长令牌，例如 openssl rand -hex 32。 / " +
+        "METRICS_TOKEN is shorter than 24 characters: use a long random token, for example openssl rand -hex 32."
     );
   }
 
@@ -146,6 +165,16 @@ export function readinessIssues(): string[] {
     issues.push("open-registration-enabled");
   }
   return issues;
+}
+
+/** Conditions an operator should fix that do not make the relay unready. They
+ * ride along on /ready without turning it 503: a load balancer pulling a
+ * working relay out of rotation over a rate-limit misconfiguration would be
+ * worse than the misconfiguration. */
+export function readinessWarnings(): string[] {
+  const warnings: string[] = [];
+  if (untrustedProxyHeadersSeen()) warnings.push("proxy-headers-untrusted");
+  return warnings;
 }
 
 export function buildHealth(uptimeSec: number, includeTesting = false): AgentHealth {

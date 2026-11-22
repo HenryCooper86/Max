@@ -1,11 +1,11 @@
 import { useState } from "react";
 import type { Project } from "../api";
 import { useSay } from "../hooks";
-import type { StudioTabProps } from "./types";
+import { minutesCapFromDraft, type StudioTabProps } from "./types";
 
 type Confirm = "none" | "rotate" | "delete";
 
-/** Studio → Settings: the project's name, its API key and deleting it. */
+/** Studio → Settings: the project's name, its monthly minutes limit, its API key and deleting it. */
 export function SettingsTab({
   session,
   project,
@@ -22,6 +22,8 @@ export function SettingsTab({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const id = `cxs-${project.id}-name`;
+  const capId = `cxs-${project.id}-minutes-cap`;
+  const capInvalid = minutesCapFromDraft(draft.monthlyMinutesCap) === undefined;
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -42,6 +44,36 @@ export function SettingsTab({
         <input id={id} maxLength={60} required value={draft.name} onChange={(e) => update({ name: e.target.value })} />
         <small>{say("只有你能看到。", "Only you see this.")}</small>
       </label>
+
+      <label className="cxField" htmlFor={capId}>
+        <span>{say("每月分钟上限", "Monthly minutes limit")}</span>
+        <input
+          id={capId}
+          type="number"
+          inputMode="numeric"
+          min={1}
+          step={1}
+          placeholder={say("不限", "No limit")}
+          aria-invalid={capInvalid ? true : undefined}
+          aria-describedby={`${capId}-hint`}
+          value={draft.monthlyMinutesCap}
+          onChange={(e) => update({ monthlyMinutesCap: e.target.value })}
+        />
+        <small id={`${capId}-hint`}>
+          {say(
+            "这个项目每个自然月（UTC）最多通话多少分钟，包括网站嵌入、你的后端和测试。用完后新对话会被拒绝、进行中的对话会结束，直到下个月或你调高上限。留空表示不限，只受余额限制。",
+            "How many minutes this project may talk per calendar month (UTC), counting the website embed, your backend and tests. Once they are used, new conversations are refused and open ones end, until the next month or until you raise the limit. Leave it empty for no limit other than your balance."
+          )}
+        </small>
+      </label>
+      {capInvalid ? (
+        <p className="cxError" role="alert">
+          {say(
+            "请填写整数分钟，例如 500；不限请留空。",
+            "Enter whole minutes, like 500, or leave it empty for no limit."
+          )}
+        </p>
+      ) : null}
 
       <div className="cxSubsection">
         <h4>{say("项目密钥", "Project key")}</h4>

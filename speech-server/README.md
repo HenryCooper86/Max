@@ -59,23 +59,30 @@ blocks DNS rebinding. It covers `/healthz` and `/.well-known/max-speech` too. An
 
 ## Configuration
 
-| Variable                  | Default             | Meaning                                                                                                                                      |
-| ------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SPEECH_API_KEY`          | unset               | Bearer token required on `/v1`. Unset means loopback only.                                                                                   |
-| `SPEECH_PROFILE`          | detected            | `mlx`, `cuda` or `cpu`. Detected from the hardware when unset.                                                                               |
-| `SPEECH_DATA_DIR`         | `~/.max-speech`     | Where models are stored (`models/` under this directory).                                                                                    |
-| `SPEECH_STT_ENGINE`       | profile default     | `whisper-ct2`, `whisper-mlx`, or `off`.                                                                                                      |
-| `SPEECH_TTS_ENGINE`       | `kokoro`            | `kokoro`, or `off`.                                                                                                                          |
-| `SPEECH_STT_MODEL`        | profile default     | Any speech-to-text model id in the license registry.                                                                                         |
-| `SPEECH_TTS_MODEL`        | `kokoro-v1.0`       | Any text-to-speech model id in the license registry.                                                                                         |
-| `SPEECH_TTS_ZH_MODEL`     | `kokoro-v1.1-zh`    | Chinese text-to-speech model, or `off` to use v1.0 for Chinese.                                                                              |
-| `SPEECH_CLONING_MODEL`    | `mlx` only          | Voice cloning model (a registry entry with `cloning = true`), or `off`.                                                                      |
-| `SPEECH_DESIGN_MODEL`     | `mlx` only          | Voice design model (a registry entry with `design = true`), or `off`. On by default only with 24 GB of RAM or more; setting it forces it on. |
-| `SPEECH_VAD_MODEL`        | `silero-vad-v6.2`   | Voice activity model for the live session, or `off`.                                                                                         |
-| `SPEECH_TURN_MODEL`       | `smart-turn-v3.2`   | End-of-turn model for the live session, or `off`.                                                                                            |
-| `SPEECH_STREAM_STT_MODEL` | `x-asr-zh-en-480ms` | Streaming speech-to-text for the live session (must be a streaming model), or `off`.                                                         |
-| `SPEECH_SECOND_PASS`      | `auto`              | `on`, `off` or `auto` (on for the `mlx` and `cuda` profiles).                                                                                |
-| `SPEECH_ALLOWED_ORIGINS`  | unset               | Comma-separated browser origins allowed on WebSockets, beyond localhost.                                                                     |
+| Variable                             | Default                    | Meaning                                                                                                                                      |
+| ------------------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SPEECH_API_KEY`                     | unset                      | Bearer token required on `/v1`. Unset means loopback only.                                                                                   |
+| `SPEECH_PROFILE`                     | detected                   | `mlx`, `cuda` or `cpu`. Detected from the hardware when unset.                                                                               |
+| `SPEECH_DATA_DIR`                    | `~/.max-speech`            | Where models are stored (`models/` under this directory).                                                                                    |
+| `SPEECH_STT_ENGINE`                  | profile default            | `whisper-ct2`, `whisper-mlx`, or `off`.                                                                                                      |
+| `SPEECH_TTS_ENGINE`                  | `kokoro`                   | `kokoro`, or `off`.                                                                                                                          |
+| `SPEECH_STT_MODEL`                   | profile default            | Any speech-to-text model id in the license registry.                                                                                         |
+| `SPEECH_TTS_MODEL`                   | `kokoro-v1.0`              | Any text-to-speech model id in the license registry.                                                                                         |
+| `SPEECH_TTS_ZH_MODEL`                | `kokoro-v1.1-zh`           | Chinese text-to-speech model, or `off` to use v1.0 for Chinese.                                                                              |
+| `SPEECH_CLONING_MODEL`               | `mlx` only                 | Voice cloning model (a registry entry with `cloning = true`), or `off`.                                                                      |
+| `SPEECH_DESIGN_MODEL`                | `mlx` only                 | Voice design model (a registry entry with `design = true`), or `off`. On by default only with 24 GB of RAM or more; setting it forces it on. |
+| `SPEECH_VAD_MODEL`                   | `silero-vad-v6.2`          | Voice activity model for the live session, or `off`.                                                                                         |
+| `SPEECH_TURN_MODEL`                  | `smart-turn-v3.2`          | End-of-turn model for the live session, or `off`.                                                                                            |
+| `SPEECH_STREAM_STT_MODEL`            | `x-asr-zh-en-480ms`        | Streaming speech-to-text for the live session (must be a streaming model), or `off`.                                                         |
+| `SPEECH_SECOND_PASS`                 | `auto`                     | `on`, `off` or `auto` (on for the `mlx` and `cuda` profiles).                                                                                |
+| `SPEECH_ALLOWED_ORIGINS`             | unset                      | Comma-separated browser origins allowed on WebSockets, beyond localhost.                                                                     |
+| `SPEECH_MAX_SESSIONS`                | `cpu` 2, `mlx` 4, `cuda` 8 | Live sessions open at once; more are refused (see [Limits and errors](#limits-and-errors)).                                                  |
+| `SPEECH_SESSION_HANDSHAKE_TIMEOUT_S` | `15`                       | Seconds a new session may take to send its first `session.update`. `0` turns the limit off.                                                  |
+| `SPEECH_SESSION_IDLE_TIMEOUT_S`      | `0` (off)                  | Seconds a session may go without receiving anything from the client (audio or JSON); `0` is off. Dead clients are caught by ping instead.    |
+| `SPEECH_MAX_TRANSCRIPTIONS`          | `4`                        | Transcription requests handled at once (upload, decode and wait for the engine); more get `429` with `Retry-After`.                          |
+| `SPEECH_UPLOAD_TIMEOUT_S`            | `300`                      | Seconds a transcription request may take to send its body; later it gets `408 upload_timeout` and its place is freed. `0` is off.            |
+| `SPEECH_LOAD_ATTEMPTS`               | `4`                        | Tries to load the models before the process gives up and exits non-zero (only download and network failures are retried).                    |
+| `SPEECH_LOAD_BACKOFF_S`              | `5`                        | Wait before the second try; it doubles each time, up to 60 s.                                                                                |
 
 `serve` also takes `--host`, `--port` and `--profile`, which override the environment.
 
@@ -116,13 +123,29 @@ Max Speech needs Python 3.12 exactly (`>=3.12,<3.13`). misaki, the Chinese G2P, 
 
 | Method | Path                       | Notes                                                   |
 | ------ | -------------------------- | ------------------------------------------------------- |
-| GET    | `/healthz`                 | `{"ok": true, "ready": bool}`                           |
+| GET    | `/healthz`                 | `{"ok": true, "ready": bool}`; see below                |
 | GET    | `/.well-known/max-speech`  | Protocol version, active engines and model attributions |
 | POST   | `/v1/audio/speech`         | Text to audio (see below)                               |
 | POST   | `/v1/audio/transcriptions` | Audio to text (see below)                               |
 | GET    | `/v1/audio/voices`         | Voice ids, names, languages and gender                  |
 | GET    | `/v1/models`               | The active model ids plus the OpenAI aliases            |
 | GET    | `/v1/models/{id}`          | One model, or `404`                                     |
+
+### Health and model loading
+
+`/healthz` answers `200 {"ok": true, "ready": false}` while the models load, so a healthcheck with a start period
+does not kill a slow first download, and `200 {"ok": true, "ready": true}` once they have. If a download or network
+step fails, the server retries it (`SPEECH_LOAD_ATTEMPTS` tries, backing off from `SPEECH_LOAD_BACKOFF_S`, doubling up
+to 60 s) and the last error is in the body as `"error"` meanwhile. When the tries run out, or the failure is not a
+network one (a bad configuration, a missing package, a corrupt model), the body becomes
+`503 {"ok": false, "ready": false, "error": "..."}` and the process exits with status 1, so Docker's
+`restart: unless-stopped`, systemd or launchd start it again. Without a supervisor the server simply stops; the
+error is in the log. A cloning model that fails to warm up is still the one exception: with the default cloning
+model the server starts without cloning and logs why.
+
+A model download that was interrupted and then started offline is refused, with the error that stopped the download
+and how to resume (start with network access, or run `max-speech download`; partial files are kept). The server
+checks the files against the revision's file list, so truncated weights are not loaded.
 
 ### Speech (`POST /v1/audio/speech`)
 
@@ -146,6 +169,28 @@ otherwise the preset engine. When the client disconnects, synthesis stops.
 Multipart form with a `file` field: WAV, FLAC or OGG, up to 25 MB and 15 minutes long. Optional `language` and
 `prompt`. `response_format` is `json` (default), `text` or `verbose_json` (adds language, duration and segments).
 `model` and `temperature` are accepted for SDK compatibility and ignored: the active model serves every name.
+The language can be any of Whisper's ISO 639-1 codes; this path is not limited to Chinese and English.
+
+At most `SPEECH_MAX_TRANSCRIPTIONS` (default 4) requests are in progress at once, counted from the upload to the
+response, because each holds the file (up to 25 MB) and its decoded audio (up to about 110 MB for 15 minutes of 48 kHz
+stereo). Another one gets `429` with `Retry-After: 2` and error code `too_many_requests` before any of its body is
+read; retry after a moment. A request that ends in any way (answered, failed, or the client disconnected mid-upload)
+frees its place, and one whose body has not fully arrived after `SPEECH_UPLOAD_TIMEOUT_S` (300 s: the largest upload
+at about 0.7 Mbit/s) gets `408 upload_timeout`, so slow uploads cannot hold every place. At most two files are decoded
+at the same time. A client that disconnects while its audio is being transcribed stops the transcription at the next
+30 s window (`mlx` profile), which frees the GPU and its place.
+
+Request bodies other than uploads are limited to 256 KB (`413 request_too_large`): `POST /v1/voices/design`,
+`PATCH /v1/voices/{id}`, `POST /v1/audio/speech` and the rest of the JSON endpoints. `PUT /v1/lexicon` is allowed
+1,172,096 bytes, the largest body a valid lexicon can take: 500 entries at the key and value limits, every character
+written the longest way JSON allows (12 bytes for a character outside the BMP as a `\uXXXX\uXXXX` pair), plus 32
+bytes per entry for punctuation and indentation. A full lexicon in Chinese is about 282 KB as UTF-8 and 560 KB
+escaped.
+
+**Long transcriptions and live speech** (`mlx` profile). A long upload is transcribed in 30 s windows with the GPU
+handed to live work between them, so it never holds up a rider's speech for more than one window; see
+[MLX evaluation](#mlx-evaluation-live-work-first). The transcript is the same: the windows are the ones mlx-whisper
+uses anyway, and nothing in between changes them.
 
 ## Custom voices
 
@@ -157,6 +202,24 @@ spoken.
 
 `created_by` (stored with the consent record) is supplied by the client and not verified by this server. The relay or
 Studio that calls `POST /v1/voices` should fill it in with the signed-in admin rather than pass through user input.
+
+### What the consent record does and does not prove
+
+Besides the statement and the speaker's name, the stored record (`voice.json`, `consent`) carries what the server
+itself observed: `recorded_at` (UTC time), `audio_sha256` (SHA-256 of the stored `reference.wav`), `upload_sha256`
+(SHA-256 of the file as uploaded), `client` (the peer address; proxy headers are not trusted, so behind a reverse
+proxy this is the proxy) and `auth` (`api_key` or `loopback`). With an API key it also has `key_id`, the first 12 hex
+characters of the key's SHA-256, which tells keys apart after a rotation. Creating and deleting a voice, designed
+voices included, append a JSON line to `SPEECH_DATA_DIR/voice-audit.log` (mode 0600) with the time, event, voice id,
+name, speaker, audio hash and the same caller fields. An audit-log write failure is logged and does not undo the
+change.
+
+What it proves: that this recording, byte for byte, was stored by a caller holding the key (or on loopback) at that
+time, together with a statement that caller supplied. What it does not prove: that the speaker said, heard or agreed
+to anything. The statement and speaker name are free text typed by the caller, there is one shared API key and no
+user identity (`created_by` is self-declared), and the audio is not checked against the statement. There is no
+spoken challenge. The log is an ordinary file the operator can edit; ship it somewhere append-only if you need it to
+stand as evidence.
 
 ### Cloning engines
 
@@ -231,8 +294,12 @@ similarity 0.72 to 0.82, against 0.27 for design alone).
   record (`description`, `seed`, `model`, `text`), and the same seed, text and description give the same audio.
 - Candidates live in memory only: 15 minutes each, at most 30 per server (the oldest is dropped first). A restart
   forgets them. Candidate ids look like `c_3f9a0c12ab45`.
-- Generation takes the same lock as speech, one candidate at a time, so live speech waits for at most one sentence (about
-  1.5 to 3 s). It runs at a real-time factor near 0.25.
+- Generation takes no speech lock. It is batch work on the GPU, streamed in chunks of 0.5 s of audio (about 0.2 s of
+  work each), and live speech gets the GPU between two chunks, so a rider waits for one chunk at most; a preset voice
+  never waits for it. One design request runs at a time and one more waits its turn (on the event loop, not in a
+  worker thread); a third gets `429 too_many_requests` with `Retry-After`. A request whose client disconnects stops at
+  its next chunk. The streamed audio is the non-streamed audio up to float rounding (same seed, same samples to
+  within -64 dB). It runs at a real-time factor near 0.3 on an idle server and slows down while riders are talking.
 - Memory: the model is 4.5 GB on disk and peaks near 8.6 GB while generating. It is downloaded at startup (and by
   `max-speech download`) but loaded into memory only on the first design request, and unloaded after 10 idle minutes.
   Memory use of the rest of the server is unchanged until then.
@@ -245,8 +312,10 @@ similarity 0.72 to 0.82, against 0.27 for design alone).
 - **Sample length.** A saved reference must be at least 3 s of speech. The default sample sentences give 4.9 to 6.1 s
   (English) and 4.3 to 7.3 s (Chinese) on the real model. A `text` of your own must have at least 25 characters (12
   Han characters for Chinese), otherwise `400 sample_text_too_short` at design time.
-- **Loading.** The first design request loads the model before it takes the speech lock, so the multi-second load
-  never blocks live speech; only each generated sentence does.
+- **Loading.** The first design request loads the model: one unit of setup that includes the 651 MB speech tokenizer
+  (0.16-0.18 s on an M5 Max with the files cached; that step is inside mlx-audio and not split), then the other weights
+  in pieces of 256 MB (0.04 s each), letting live speech use the GPU between pieces. Unloading after 10 idle minutes
+  frees the memory with the gate held.
 - **Memory default.** On the `mlx` profile design is on by default only with at least 24 GB of RAM (the server logs why
   it is off otherwise). `SPEECH_DESIGN_MODEL=qwen3-tts-1.7b-voicedesign-mlx` forces it on.
 - **Real people.** A description that asks for a particular person's voice is refused with `400 design_refused`.
@@ -274,6 +343,17 @@ One WebSocket does both directions of a voice conversation. The server listens w
 client sends microphone audio and the reply text; the server sends back when the user started and stopped talking,
 the transcript, and reply audio. The chat model stays on the client side.
 
+**Languages.** The live recognizer is a Chinese and English model (both `x-asr-zh-en-480ms` and
+`paraformer-zh-en-streaming`): it transcribes `zh` and `en` and nothing else, whatever `languages` says. Its
+`languages` are published in `ready` and in `/.well-known/max-speech` (`live.languages`). Another language works only
+through the second pass, where Whisper re-transcribes each finished turn (on by default for `mlx` and `cuda`, off for
+`cpu`, see `SPEECH_SECOND_PASS`); that is best effort within the second pass's 300 ms deadline, and the live partials
+stay wrong. When a session asks for a language the recognizer cannot do and the second pass is off, the server sends a
+`warning` (`language_unsupported`). The recognizer does not support `keyterms` either (sherpa-onnx hotwords need
+modified beam search and a BPE vocabulary file that the model does not ship), so `ready` has `keyterms: false` and a
+request that sends them gets a `keyterms_unsupported` warning. `languages` is matched by primary tag (`zh-CN` is
+`zh`); a code Whisper does not know is dropped with a `language_unknown` warning.
+
 The session needs the VAD, turn, streaming speech-to-text and text-to-speech engines. If any is `off` the server
 closes the session with an `engine_disabled` error. While models load it sends `loading` and closes with 1013.
 Auth is the same as `/v1`: a bearer key when `SPEECH_API_KEY` is set, otherwise loopback only. A refused connection
@@ -293,25 +373,40 @@ Client to server:
 
 Server to client:
 
-| Message                                                             | Meaning                                                                                                                                                                |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `{"type":"ready","protocol":"max-speech.session.v1","engines":{…}}` | Sent after the first `session.update`. `engines` names the vad, turn, stt and tts models.                                                                              |
-| `{"type":"speech.started"}`                                         | The user started talking. This is also the barge-in signal.                                                                                                            |
-| `{"type":"transcript.partial","text":"…"}`                          | Cumulative text of this turn, sent only when it changes.                                                                                                               |
-| `{"type":"transcript.final","text":"…","ms":{"turn":N,"stt":N}}`    | The turn ended. `turn` is the audio time since the speaker stopped, plus the time the turn check took; `stt` is the decision to the final text. The text may be empty. |
-| `{"type":"audio.start","id":"r1","sampleRate":24000}`               | Reply `r1` starts. Binary frames of 24 kHz PCM16 follow.                                                                                                               |
-| `{"type":"audio.done","id":"r1","cancelled":false}`                 | Reply `r1` ended. Every `speak` id gets exactly one `audio.done`; `cancelled` is true after `cancel`.                                                                  |
-| `{"type":"error","code":"…","message":"…"}`                         | A recoverable problem, such as a bad message or an unknown voice. The session continues.                                                                               |
+| Message                                                             | Meaning                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{"type":"ready","protocol":"max-speech.session.v1","engines":{…}}` | Sent after the first `session.update`. `engines` names the vad, turn, stt and tts models. `idle_timeout_s` is `null` unless the server closes quiet sessions (then the seconds). It also has `languages` (what the streaming recognizer transcribes) and `keyterms` (whether it uses them) when the recognizer says so. |
+| `{"type":"speech.started"}`                                         | The user started talking. This is also the barge-in signal.                                                                                                                                                                                                                                                             |
+| `{"type":"transcript.partial","text":"…"}`                          | Cumulative text of this turn, sent only when it changes.                                                                                                                                                                                                                                                                |
+| `{"type":"transcript.final","text":"…","ms":{"turn":N,"stt":N}}`    | The turn ended. `turn` is the audio time since the speaker stopped, plus the time the turn check took; `stt` is the decision to the final text. The text may be empty.                                                                                                                                                  |
+| `{"type":"audio.start","id":"r1","sampleRate":24000}`               | Reply `r1` starts. Binary frames of 24 kHz PCM16 follow.                                                                                                                                                                                                                                                                |
+| `{"type":"audio.done","id":"r1","cancelled":false}`                 | Reply `r1` ended. Every `speak` id gets exactly one `audio.done`; `cancelled` is true after `cancel`.                                                                                                                                                                                                                   |
+| `{"type":"error","code":"…","message":"…"}`                         | A recoverable problem, such as a bad message or an unknown voice. The session continues. An error about one reply (`speak_too_long`, `reply_too_long`, `bad_speak`, `unknown_voice`, `tts_failed`, `speak_failed`, or a `bad_message` for a `speak`) also has `"id":"r1"`, so a client can report a failing reply once. |
+| `{"type":"warning","code":"…","message":"…"}`                       | Not an error: the session works, but not quite as asked. `language_unsupported` (with `languages` and `supported`), `language_unknown` and `keyterms_unsupported`. Sent once per distinct request.                                                                                                                      |
 
 ### Limits and errors
 
-| Limit                                  | Value                                  | What happens                                                                         |
-| -------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------ |
-| Text of one `speak`                    | 8 KB (UTF-8)                           | Error `speak_too_long`; that message is ignored.                                     |
-| Text of one reply                      | 64 KB (UTF-8)                          | Error `reply_too_long`, then the reply is cancelled (`audio.done` with `cancelled`). |
-| One WebSocket message                  | 1 MiB                                  | The connection is closed (uvicorn `ws_max_size`).                                    |
-| Microphone audio waiting to be handled | about 10 s (320 KB)                    | Queued audio is dropped, the turn restarts, error `overrun`.                         |
-| Reply audio the client has not taken   | about 5 s queued, or one send over 5 s | The server closes the socket with 1008 and reason `slow_reader`.                     |
+| Limit                                  | Value                                              | What happens                                                                              |
+| -------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Text of one `speak`                    | 8 KB (UTF-8)                                       | Error `speak_too_long`; that message is ignored.                                          |
+| Text of one reply                      | 64 KB (UTF-8)                                      | Error `reply_too_long`, then the reply is cancelled (`audio.done` with `cancelled`).      |
+| One WebSocket message                  | 1 MiB                                              | The connection is closed (uvicorn `ws_max_size`).                                         |
+| Microphone audio waiting to be handled | about 10 s (320 KB)                                | Queued audio is dropped, the turn restarts, error `overrun`.                              |
+| Reply audio the client has not taken   | about 5 s queued, or one send over 5 s             | The server closes the socket with 1008 and reason `slow_reader`.                          |
+| Live sessions at once                  | `SPEECH_MAX_SESSIONS` (`cpu` 2, `mlx` 4, `cuda` 8) | The new session gets error `busy` and is closed with 1013 and reason `busy`. Retry later. |
+| Time to the first `session.update`     | `SPEECH_SESSION_HANDSHAKE_TIMEOUT_S` (15 s)        | Error `handshake_timeout`, closed with 1008.                                              |
+| Time with nothing received             | `SPEECH_SESSION_IDLE_TIMEOUT_S` (off)              | Only when set: error `idle_timeout`, closed with 1000. Audio, JSON or `turn.end` count.   |
+| Client that stops answering pings      | ping every 20 s, pong within 20 s (fixed)          | The connection is closed (1011) and its session slot freed, within 40 s.                  |
+
+Close code 1013 means "try again later" for both `busy` and `loading`; the error message sent just before it says
+which. The relay turns each into its own message.
+
+The idle timeout is off by default because a quiet session is normal: the relay stops sending audio while the rider
+is muted, and closing that session (and, with the server full, refusing its reconnects with `busy`) ended rides. A
+client that is really gone is caught by the WebSocket ping instead (uvicorn's `ws_ping_interval` and
+`ws_ping_timeout`, 20 s each, set in `cli.py`): measured on the real server, a client that stopped answering freed
+its slot after 40 s, and a muted client that sent nothing for 70 s was still served. `/.well-known/max-speech`
+publishes the setting as `live.idle_timeout_s` (`null` when off).
 
 When the server drops a turn that is in progress, because an engine failed, the audio overran, or `session.update`
 changed the languages or keyterms, the client still gets a `transcript.final` with empty text and `ms` of 0, so a
@@ -319,7 +414,8 @@ turn that began with `speech.started` always ends.
 
 Replies are spoken one at a time, in the order their ids first appear. A reply keeps at most two sentences queued
 for synthesis and asks for the next when one finishes, so several sessions and HTTP requests share the speech engine
-sentence by sentence instead of one long reply holding it. Engine work for microphone audio is cut into pieces of
+sentence by sentence instead of one long reply holding it. Preset voices (Kokoro) and custom voices (the cloning
+engine) are different engines with separate locks, so a preset sentence never queues behind a cloned one. Engine work for microphone audio is cut into pieces of
 at most 1 s per engine lock hold.
 Binary frames from the server belong to the
 reply whose `audio.start` came last. Audio sent before `ready` is kept and processed after it.
@@ -352,7 +448,8 @@ Lower eagerness waits longer, so it interrupts slow talkers less. Higher eagerne
 
 At the end of a turn the streaming recognizer is flushed and the final text is sent. If a batch speech-to-text model
 is loaded and `SPEECH_SECOND_PASS` is not `off`, the utterance is also transcribed by it under a 300 ms deadline, and
-its text replaces the streaming text when it arrives in time and is not empty. `auto` turns this on for the `mlx` and
+its text replaces the streaming text when it arrives in time and is not empty. A second pass that misses the deadline
+is cancelled (its text would be dropped), which frees the GPU and Whisper for the next turn. `auto` turns this on for the `mlx` and
 `cuda` profiles and off for `cpu`. Some short Chinese phrases can still sit at the maximum wait, because
 Smart Turn judges them unfinished even on the second check.
 
@@ -439,3 +536,52 @@ MAX_SPEECH_MODEL_TESTS=1 uv run --extra mlx pytest -q -m models
 ```
 
 On Linux, drop `--extra mlx`.
+
+On the `mlx` profile, `tests/test_mlx_gate_real.py` runs transcription and synthesis at the same time on the real
+models (it needs the Whisper and Qwen3-TTS cloning models in the cache; it skips otherwise).
+
+### MLX evaluation: live work first
+
+mlx-whisper and the Qwen3 cloning and design engines are separate engines on separate locks, so a second-pass
+transcription could encode Metal work while a custom voice was being synthesised, which not every MLX release
+survives. `engines/mlx_gate.py` keeps one process-wide gate: only one thread runs MLX work at a time. The `cpu` and
+`cuda` profiles never take it, and Kokoro and the streaming recognizer are ONNX and never wait for it, so preset voices
+and live partials are unaffected by anything on the GPU.
+
+The gate has two lanes. Live work (a session's cloned sentence or second pass, `/v1/audio/speech`, a voice preview:
+anything that holds a speech lock, because a live sentence queued behind that lock cannot ask the gate for priority)
+is realtime; uploads to `/v1/audio/transcriptions`, voice design and voice-reference transcripts are batch, each
+request with its own ticket that is abandoned when its client disconnects. Batch work is
+cut into units and hands the gate to a waiting live call between two units: mlx-whisper before each 30 s window it
+decodes, voice design between streamed chunks, a design-model load between 256 MB pieces of weights. After a live unit
+ends, batch work also stays off the gate for 0.15 s, so a cloned sentence keeps the GPU from its first chunk to its
+last. A live call therefore waits for at most one batch unit; on an M5 Max the longest is a Whisper window, 0.65 s
+(0.24 s on average), then a design chunk, 0.19 s, and the design model's setup unit, 0.18 s. Batch work runs in the
+gaps and is slower while riders talk; it is not refused, and it cannot be starved: a batch waiter that has waited 2 s
+becomes due and takes the next free moment for one unit, ahead of live waiters, so batch work gets at least one unit
+every 2 s and live work waits for at most that one unit. The 2 s count from when batch work last ran, and nothing
+becomes due while batch work holds the gate, so two batch calls (a transcription and a design) cannot hand the gate
+to each other while live work waits. Waiters of each lane are served first come, first served, and
+a batch call yields to other batch waiters at its yield points too.
+
+Speech in a cloned voice holds the cloning engine one sentence at a time (`/v1/audio/speech` and previews make one job
+per sentence, at most two queued; a session's reply does the same), so a long request does not keep other sessions'
+cloned speech waiting; the audio is the same as one synthesis of the whole input. A session that closes while its sentence waits for the gate gives up its place at once.
+
+Lock order: an engine's asyncio lock (on the event loop), then the design engine's own lock, then the gate (in a worker
+thread). A thread holding the gate never waits for anything else. A cloned synthesis is advanced on one thread for its
+whole length (MLX keeps GPU streams per thread), and mlx-whisper interleaving with live calls leaves its transcript
+unchanged: a 15-minute upload gave the same text and segments alone and with 18 cloned sentences spoken between its
+windows.
+
+Measured on an M5 Max with a 15-minute upload in flight (895 s of speech, 8.5 s to transcribe), time from `speak` to
+the first audio of a sentence in another session:
+
+| Voice                  | Idle   | Before (one lock for the whole upload) | Now         |
+| ---------------------- | ------ | -------------------------------------- | ----------- |
+| Custom (cloned)        | 0.17 s | 6.7 s                                  | 0.16-0.42 s |
+| Preset, beside a clone | 0.27 s | 8.1-8.4 s                              | 0.26-0.77 s |
+
+Most preset sentences matched idle (0.26-0.31 s); the slower ones took no lock and waited for no GPU time, only for
+CPU. The session's second pass also runs during the upload now (before, a busy Whisper made it fall back to the
+streaming text).

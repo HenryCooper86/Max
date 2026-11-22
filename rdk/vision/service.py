@@ -26,6 +26,9 @@ class VisionConfig:
     gallery_dir: str = "/var/lib/max/gallery"
     min_free_mb: int = 1024
     preview_port: int = 8081
+    #: Bench HTTP surface on every interface instead of loopback only. Off
+    #: unless MAX_VISION_LISTEN is exactly "all".
+    listen_all: bool = False
     corpus_dir: str = "/var/lib/max/corpus"
     adas_shadow: bool = False
     share_frames: bool = False
@@ -44,6 +47,7 @@ class VisionConfig:
             gallery_dir=values.get("MAX_GALLERY_DIR", "/var/lib/max/gallery"),
             min_free_mb=int(values.get("MAX_GALLERY_MIN_FREE_MB", "1024")),
             preview_port=int(values.get("MAX_VISION_PREVIEW_PORT", "8081")),
+            listen_all=values.get("MAX_VISION_LISTEN", "loopback").strip() == "all",
             corpus_dir=values.get("MAX_CORPUS_DIR", "/var/lib/max/corpus"),
             adas_shadow=values.get("MAX_ADAS_SHADOW", "0") == "1",
             share_frames=values.get("MAX_VISION_SHARE", "0") == "1",
@@ -391,10 +395,19 @@ def _run(config: VisionConfig, runtime: VisionRuntime, started: "_Started") -> N
             "127.0.0.1 only and refuses every other peer",
             flush=True,
         )
+    print(
+        f"[vision] bench HTTP surface on {'0.0.0.0 (MAX_VISION_LISTEN=all)' if config.listen_all else '127.0.0.1'}:"
+        f"{config.preview_port}",
+        flush=True,
+    )
     threading.Thread(
         target=serve_bench,
         args=(runtime.cameras, runtime.gallery, config.preview_port),
-        kwargs={"share_frames": config.share_frames, "token": config.vision_token},
+        kwargs={
+            "share_frames": config.share_frames,
+            "token": config.vision_token,
+            "listen_all": config.listen_all,
+        },
         daemon=True,
     ).start()
 

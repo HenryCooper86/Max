@@ -92,6 +92,21 @@ export function buildRideContextSummary(context: RideContext): string {
   return parts.join("；");
 }
 
+/**
+ * What a wearable that is not a helmet tells the model about itself: only
+ * facts about the device, none of the ride mode, demo scenario or HUD focus.
+ * Returns "" when there is nothing to say.
+ */
+export function buildDeviceContextSummary(context: RideContext): string {
+  const parts: string[] = [];
+  if (context.mode === "navigation") parts.push("正在导航");
+  if (context.mode === "emergency") parts.push("紧急模式");
+  if (typeof context.speedKmh === "number") parts.push(`估计移动速度：${context.speedKmh} km/h`);
+  if (context.network) parts.push(`网络：${context.network}`);
+  if (typeof context.batteryPct === "number") parts.push(`设备电量：${context.batteryPct}%`);
+  return parts.join("；");
+}
+
 export function rideModeFromScenario(mode: RideMode | undefined, scenario: DemoScenario): RideMode {
   return mode ?? scenarioDefaultMode(scenario);
 }

@@ -3,12 +3,13 @@ from __future__ import annotations
 import threading
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from max_speech import __version__
 from max_speech.api import discovery, openai_routes, session_ws, voice_routes
 from max_speech.api.auth import AuthMiddleware
 from max_speech.api.errors import install_error_handlers
-from max_speech.api.limits import UploadLimitMiddleware
+from max_speech.api.limits import TranscriptionSlotMiddleware, UploadLimitMiddleware
 from max_speech.api.slots import EngineSlots
 from max_speech.engines.base import (
     CloningTtsEngine,
@@ -54,7 +55,9 @@ def create_app(
     if isinstance(tts, VoiceRouter):
         router, voice_store, lexicon, cloning = tts, tts.store, tts.lexicon, tts.cloning
     else:
-        voice_store = voice_store or VoiceStore(settings.data_dir / "voices")
+        voice_store = voice_store or VoiceStore(
+            settings.data_dir / "voices", audit_log=settings.data_dir / "voice-audit.log"
+        )
         lexicon = lexicon or Lexicon(settings.data_dir / "lexicon.json")
         router = None if tts is None else VoiceRouter(tts, cloning, voice_store, lexicon)
     app.state.slots = EngineSlots(
@@ -69,8 +72,10 @@ def create_app(
         stt_stream=stt_stream,
         second_pass=second_pass,
         ready_event=event,
+        max_transcriptions=settings.max_transcriptions,
     )
     install_error_handlers(app)
+    app.add_middleware(TranscriptionSlotMiddleware)  # inside the auth check, before any body is read
     app.add_middleware(UploadLimitMiddleware)
     app.add_middleware(
         AuthMiddleware,
@@ -81,7 +86,12 @@ def create_app(
 
     @app.get("/healthz")
     async def healthz():
-        return {"ok": True, "ready": app.state.slots.ready}
+        # 503 only once the load has failed for good, so a healthcheck's start period can cover a slow first
+        # download; the error is in the body while it is retrying too.
+        slots = app.state.slots
+        error = slots.load_error or slots.retry_error
+        body = {"ok": slots.load_error is None, "ready": slots.ready, **({"error": error} if error else {})}
+        return JSONResponse(body, status_code=503 if slots.load_error else 200)
 
     app.include_router(discovery.router)
     app.include_router(openai_routes.router)

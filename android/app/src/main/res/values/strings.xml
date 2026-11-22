@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- English is the default so the launcher and system surfaces read in English on
+     every locale the app has no translation for; values-zh holds Chinese. This
+     matches AppLanguage.fromLocale, which picks Chinese only for zh locales. -->
 <resources>
-    <string name="app_name">Max 头盔助手</string>
-    <string name="notification_channel_name">免提语音会话</string>
+    <string name="app_name">Max helmet assistant</string>
+    <string name="notification_channel_name">Hands-free voice session</string>
     <!-- %1$s = assistant name (runtime-branded, default "Max"). -->
-    <string name="notification_title">%1$s 免提语音运行中</string>
-    <string name="notification_text">正在监听你的语音</string>
+    <string name="notification_title">%1$s hands-free voice is running</string>
+    <string name="notification_text">Listening to your voice</string>
+    <!-- Shown in Settings > Notification access for the QQ Music media-session bridge. -->
+    <string name="music_access_label">Max music control</string>
 </resources>

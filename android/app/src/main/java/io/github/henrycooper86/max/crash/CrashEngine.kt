@@ -6,7 +6,8 @@ data class CrashTuning(val impactG: Double = 4.5, val impactS: Double = .02,
     val confirmS: Double = 5.0, val confirmDelayS: Double = .5, val stillSpeed: Double = 2.0,
     val stillVariance: Double = .05, val stillWindowS: Double = 1.0,
     val checkInS: Double = 15.0, val alarmS: Double = 30.0, val contextS: Double = 5.0)
-data class CrashSample(val t: Double, val accelG: Double, val rotation: Double, val speed: Double? = null)
+/** [speed] is the fresh speed (also used for stillness); [gateSpeed] is a longer-lived speed that only opens the speed gate. */
+data class CrashSample(val t: Double, val accelG: Double, val rotation: Double, val speed: Double? = null, val gateSpeed: Double? = null)
 enum class CrashPhase { ARMED, CANDIDATE, CHECK_IN, ALARM, ESCALATED }
 enum class CrashEffect { CHECK_IN, ALARM, ESCALATE, DISMISS, NEAR_MISS, CANCEL }
 data class CrashState(val phase: CrashPhase = CrashPhase.ARMED, val since: Double = 0.0,
@@ -19,7 +20,8 @@ object CrashEngine {
     fun step(s: CrashState, sample: CrashSample, t: CrashTuning = CrashTuning()): CrashUpdate {
         if (!sample.t.isFinite() || !sample.accelG.isFinite() || !sample.rotation.isFinite() ||
             sample.accelG < 0 || sample.rotation < 0 || (s.recent.lastOrNull()?.t ?: sample.t) > sample.t) return CrashUpdate(s)
-        val x = sample.copy(speed = sample.speed?.takeIf { it.isFinite() && it >= 0 })
+        val x = sample.copy(speed = sample.speed?.takeIf { it.isFinite() && it >= 0 },
+            gateSpeed = sample.gateSpeed?.takeIf { it.isFinite() && it >= 0 })
         var n = s.copy(recent = (s.recent + x).filter { it.t >= x.t - t.contextS }.takeLast(1200))
         when (s.phase) {
             CrashPhase.ARMED -> {
@@ -27,7 +29,8 @@ object CrashEngine {
                     tumbleStart = if (x.rotation >= t.tumbleRadS) s.tumbleStart ?: x.t else null)
                 val impact = n.impactStart?.let { x.t - it >= t.impactS } == true
                 val tumble = n.tumbleStart?.let { x.t - it >= t.tumbleS } == true
-                val speed = n.recent.mapNotNull { it.speed }.maxOrNull()
+                // The gate opens on either input; stillness below reads only the fresh speed.
+                val speed = n.recent.flatMap { listOfNotNull(it.speed, it.gateSpeed) }.maxOrNull()
                 if (((speed ?: 0.0) >= t.speedGate && (impact || tumble)) || (impact && tumble))
                     n = n.copy(phase = CrashPhase.CANDIDATE, since = x.t, impactStart = null, tumbleStart = null, peakSpeed = speed)
             }

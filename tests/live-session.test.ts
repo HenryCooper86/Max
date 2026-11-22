@@ -347,6 +347,21 @@ describe("live voice session", () => {
     expect(client.closed?.code).toBe(1011);
   });
 
+  it("says the backend is unusable while it reconnects, whatever status a mute reports", async () => {
+    const { client, provider, engine } = await open("auto");
+    expect(provider.upstreamUsable!()).toBe(true);
+    engine().events.onClosed("closed (1006)");
+    expect(provider.upstreamUsable!()).toBe(false);
+    await provider.stopAudio();
+    // The mute still reports "ready"; Max Cloud's billed clock goes by upstreamUsable.
+    expect(client.statuses().at(-1)).toBe("ready");
+    expect(provider.upstreamUsable!()).toBe(false);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(provider.upstreamUsable!()).toBe(true);
+    await provider.close();
+    expect(provider.upstreamUsable!()).toBe(false);
+  });
+
   it("folds weather into the instructions once it arrives", async () => {
     const { client, engine } = await open("manual-capable");
     await vi.advanceTimersByTimeAsync(0);
@@ -380,5 +395,40 @@ describe("live instructions", () => {
     expect(text).toContain("written in Chinese");
     expect(text).not.toContain("[语言与交互规则]");
     expect(text).not.toContain("[唤醒规则]");
+  });
+});
+
+describe("speed from the phone", () => {
+  // No backend measures speed: the phone's GPS, sent with its position, is the only source.
+  beforeEach(() => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("no network in tests"));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reaches the client's ride context and the model's safety rule", async () => {
+    const { client, provider, engine } = await open("manual-capable");
+    expect(client.of("ride.context").at(-1)).not.toHaveProperty("speedKmh");
+    await provider.updateLocation!(31.23, 121.47, 72.4);
+    expect(client.of("ride.context").at(-1)).toMatchObject({ speedKmh: 72 });
+    expect(engine().instructions.at(-1)).toContain("估计速度：72 km/h");
+    expect(engine().instructions.at(-1)).toContain("高速/较快移动");
+  });
+
+  it("is unknown again when a position arrives without it", async () => {
+    const { client, provider, engine } = await open("manual-capable");
+    await provider.updateLocation!(31.23, 121.47, 72);
+    await provider.updateLocation!(31.24, 121.48);
+    expect(client.of("ride.context").at(-1)).not.toHaveProperty("speedKmh");
+    expect(engine().instructions.at(-1)).not.toContain("估计速度");
+  });
+
+  it("does not repeat the ride context while the speed holds", async () => {
+    const { client, provider } = await open("manual-capable");
+    await provider.updateLocation!(31.23, 121.47, 40.2);
+    const sent = client.of("ride.context").length;
+    await provider.updateLocation!(31.231, 121.471, 39.8);
+    expect(client.of("ride.context")).toHaveLength(sent);
   });
 });

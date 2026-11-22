@@ -286,6 +286,7 @@ describe("projects", () => {
       studio: { ...DEFAULT_STUDIO, keepConversations: true },
       publicId: expect.stringMatching(/^pub_[0-9a-f]{24}$/),
       hasWebhookSecret: false,
+      monthlyMinutesCap: null,
       createdAt: START
     });
     const id = created.project.id;

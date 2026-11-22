@@ -7,10 +7,18 @@ import Foundation
 struct DeviceActionRouter {
     private let handlers: [DeviceActionRoute: DeviceActionHandler]
     private let isDeviceUnlocked: () -> Bool
+    /// A refusal the phone's current load imposes (critical heat), checked
+    /// before the handler so a refused action never starts.
+    private let loadRefusal: (DeviceAction) -> DeviceActionResult?
 
-    init(handlers: [DeviceActionRoute: DeviceActionHandler], isDeviceUnlocked: @escaping () -> Bool) {
+    init(
+        handlers: [DeviceActionRoute: DeviceActionHandler],
+        isDeviceUnlocked: @escaping () -> Bool,
+        loadRefusal: @escaping (DeviceAction) -> DeviceActionResult? = { _ in nil }
+    ) {
         self.handlers = handlers
         self.isDeviceUnlocked = isDeviceUnlocked
+        self.loadRefusal = loadRefusal
     }
 
     @MainActor func handle(_ command: DeviceCommand) async -> DeviceActionResult {
@@ -21,6 +29,7 @@ struct DeviceActionRouter {
         guard let handler = handlers[DeviceActionRoute(command.action)] else {
             return .unsupported("handler.missing")
         }
+        if let refusal = loadRefusal(command.action) { return refusal }
         if let identified = handler as? IdentifiedDeviceActionHandler {
             return await identified.perform(command.action, commandId: command.commandId)
         }

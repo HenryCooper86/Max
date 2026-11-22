@@ -122,8 +122,9 @@ Tools are how the agent does real work. Declare them once and every voice backen
 use them.
 
 ```ts
-// agent-tools.ts: runs inside the relay ("toolsModule" in assistant.config.json)
-import { defineTool, defineTools } from "./server/tools";
+// agent-tools.ts: runs inside the relay ("toolsModule" in assistant.config.json).
+// Save it in the root of this checkout, next to assistant.config.json: the import below is relative to that file.
+import { defineTool, defineTools } from "./server/tools/index";
 
 export default defineTools([
   defineTool<{ orderId: string }>({

@@ -92,3 +92,37 @@ def test_settings_is_frozen():
     settings = Settings.from_env({})
     with pytest.raises(AttributeError):
         settings.port = 9999  # type: ignore[misc]
+
+
+def test_limits_have_defaults_and_parse_from_env():
+    settings = Settings.from_env({})
+    assert (settings.load_attempts, settings.session_handshake_timeout_s) == (4, 15.0)
+    # Off: a muted rider's relay sends nothing for minutes, and dead peers are caught by the WebSocket ping.
+    assert settings.session_idle_timeout_s == 0 and settings.max_transcriptions == 4
+    env = {
+        "SPEECH_LOAD_ATTEMPTS": "2",
+        "SPEECH_LOAD_BACKOFF_S": "0.5",
+        "SPEECH_MAX_SESSIONS": "7",
+        "SPEECH_SESSION_HANDSHAKE_TIMEOUT_S": "3",
+        "SPEECH_SESSION_IDLE_TIMEOUT_S": "0",  # (also the default)
+        "SPEECH_MAX_TRANSCRIPTIONS": "1",
+    }
+    settings = Settings.from_env(env)
+    assert (settings.load_attempts, settings.load_backoff_s, settings.max_sessions) == (2, 0.5, 7)
+    assert settings.session_handshake_timeout_s == 3 and settings.session_idle_timeout_s == 0
+    assert settings.max_transcriptions == 1
+
+
+def test_session_limit_defaults_per_profile():
+    s = Settings.from_env({})
+    assert (s.session_limit("cpu"), s.session_limit("mlx"), s.session_limit("cuda")) == (2, 4, 8)
+    assert Settings.from_env({"SPEECH_MAX_SESSIONS": "3"}).session_limit("cpu") == 3
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [("SPEECH_MAX_SESSIONS", "0"), ("SPEECH_MAX_SESSIONS", "many"), ("SPEECH_LOAD_ATTEMPTS", "0")],
+)
+def test_bad_limits_raise_naming_the_variable(name, value):
+    with pytest.raises(ValueError, match=name):
+        Settings.from_env({name: value})

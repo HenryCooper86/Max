@@ -283,3 +283,10 @@ def test_finish_keeps_the_last_word_when_the_turn_ends_early(real_engines, text,
         stream.accept(audio[i : i + 512])
     final = stream.finish()
     assert last in final.lower(), (text, final)
+
+
+def test_the_engine_declares_what_it_can_transcribe():
+    from max_speech.engines.streaming_sherpa import SherpaStreamingStt
+
+    assert SherpaStreamingStt.languages == ("zh", "en")
+    assert SherpaStreamingStt.keyterms is False

@@ -5,7 +5,11 @@ import base64
 import io
 import json
 import logging
+import weakref
+from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
 import soundfile as sf
@@ -25,6 +29,7 @@ from max_speech.audio import (
     wav_bytes,
 )
 from max_speech.engines.base import UnknownVoiceError
+from max_speech.engines.mlx_gate import Abandoned, Ticket, working_for
 from max_speech.engines.router import speech_engine_id
 from max_speech.languages import whisper_language
 
@@ -33,6 +38,10 @@ log = logging.getLogger(__name__)
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_INPUT_CHARS = 4096
 MAX_DURATION_S = 15 * 60
+# A worst-case upload decodes to ~110 MB of float32 (15 min, 48 kHz, stereo) and keeps a core busy for seconds, so
+# only this many decode at once; the rest of the requests in flight wait their turn, bounded by `max_transcriptions`.
+MAX_CONCURRENT_DECODES = 2
+RETRY_AFTER_S = 2
 
 MODEL_ALIASES = ("tts-1", "tts-1-hd", "gpt-4o-mini-tts", "whisper-1", "gpt-4o-transcribe")
 FEMALE_VOICES = frozenset({"alloy", "nova", "shimmer", "coral", "sage"})
@@ -107,18 +116,35 @@ def _sse(payload: dict) -> bytes:
 
 
 _END = object()
+# One long-lived thread per engine lock. Jobs under one lock never overlap, so one thread is all they need, and keeping
+# it warm matters: a new thread costs Kokoro's phonemizer and MLX a fresh per-thread setup (about 0.6 s measured).
+_THREADS: weakref.WeakKeyDictionary[asyncio.Lock, ThreadPoolExecutor] = weakref.WeakKeyDictionary()
+
+
+def _thread_for(lock: asyncio.Lock) -> ThreadPoolExecutor:
+    thread = _THREADS.get(lock)
+    if thread is None:
+        thread = _THREADS[lock] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="synth")
+    return thread
 
 
 class SynthJob:
     """Produces audio under the engine lock, separately from whoever consumes it.
 
     The consumer only drains an unbounded queue, so a slow or stalled client can never hold the engine.
-    Cancelling stops production between chunks (and instantly while still queued for the lock).
+    Cancelling stops production between chunks (and instantly while still queued for the lock, or while its thread
+    waits for the MLX gate). The work is realtime for the MLX gate unless `realtime=False`.
+
+    The generator runs on the lock's own thread (`_thread_for`), not the shared threadpool: MLX keeps GPU streams per
+    thread, and a streamed synthesis whose next chunk is computed on another thread fails ("There is no Stream(gpu, N)
+    in current thread"), which happens as soon as other sessions keep the shared pool busy.
     """
 
-    def __init__(self, lock: asyncio.Lock, gen: Iterator[bytes]) -> None:
+    def __init__(self, lock: asyncio.Lock, gen: Iterator[bytes], *, realtime: bool = True) -> None:
         self._lock = lock
         self._gen = gen
+        self._ticket = Ticket(realtime=realtime)
+        self._thread = _thread_for(lock)
         self._cancelled = False
         self._running = False
         self.queue: asyncio.Queue = asyncio.Queue()
@@ -126,6 +152,7 @@ class SynthJob:
 
     def cancel(self) -> None:
         self._cancelled = True
+        self._ticket.abandon()  # a thread waiting for the MLX gate gives up now
         if not self._running:
             # Still waiting for the lock (or not started): safe to cancel, no thread is involved yet.
             self._task.cancel()
@@ -142,6 +169,13 @@ class SynthJob:
         """Returns once production has stopped and the engine lock has been released."""
         await asyncio.wait({self._task})
 
+    def _next(self):
+        with working_for(self._ticket):
+            return next(self._gen, _END)
+
+    async def _on_thread(self, fn):
+        return await asyncio.get_running_loop().run_in_executor(self._thread, fn)
+
     async def _run(self) -> None:
         try:
             if self._cancelled:
@@ -152,18 +186,19 @@ class SynthJob:
                 self._running = True
                 try:
                     while not self._cancelled:
-                        chunk = await run_in_threadpool(next, self._gen, _END)
+                        chunk = await self._on_thread(self._next)
                         if chunk is _END:
                             break
                         self.queue.put_nowait(chunk)
                 finally:
                     # The worker thread is idle here (we never cancel mid-chunk), so close is safe.
-                    await run_in_threadpool(self._gen.close)
+                    await self._on_thread(self._gen.close)
             self.queue.put_nowait(_END)
         except asyncio.CancelledError:
             self.queue.put_nowait(_END)
         except Exception as exc:  # noqa: BLE001 - handed to the consumer, which re-raises it
-            self.queue.put_nowait(exc)
+            # Once cancelled nobody wants the audio, and the failure may only be the abandoned wait for the gate.
+            self.queue.put_nowait(_END if self._cancelled else exc)
 
     async def chunks(self) -> AsyncIterator[bytes]:
         while True:
@@ -175,7 +210,114 @@ class SynthJob:
             yield item
 
 
-async def _watch_disconnect(request: Request, job: SynthJob) -> None:
+MAX_IN_FLIGHT = 2  # sentence jobs of one request queued or running at once
+
+
+class SentenceJobs:
+    """Speaks `text` one sentence per SynthJob, so each holds the engine's lock for one sentence and other sessions get
+    the engine between two; at most `MAX_IN_FLIGHT` are queued or running, and the audio comes out in order. The audio
+    is exactly what one synthesis of the whole text gives (a custom voice's downsampler carries over between sentences).
+
+    It has the consumer side of a SynthJob: `chunks()` and `cancel()`."""
+
+    def __init__(
+        self,
+        tts,
+        lock: asyncio.Lock,
+        text: str,
+        voice: str,
+        *,
+        speed: float = 1.0,
+        language: str | None = None,
+        realtime: bool = True,
+    ) -> None:
+        self._tts, self._lock, self._voice = tts, lock, voice
+        self._speed, self._language, self._realtime = speed, language, realtime
+        # A bare engine (not the VoiceRouter, which every server installs) is spoken in one job, as it is given.
+        self._routed = hasattr(tts, "sentences")
+        self._down = tts.down_resampler(voice) if self._routed else None
+        self._sentences = deque(tts.sentences(text) if self._routed else [text])
+        self._jobs: deque[SynthJob] = deque()
+        self._cancelled = False
+        self._pump()
+
+    def _pcm(self, sentence: str) -> Iterator[bytes]:
+        tts = self._tts
+        extra = {"lexicon": False, "resampler": self._down} if self._routed else {}
+        chunks = tts.synthesize(sentence, self._voice, speed=self._speed, language=self._language, **extra)
+        for chunk in chunks:
+            yield float_to_pcm16(resample(chunk, tts.sample_rate, OUTPUT_RATE))
+
+    def _pump(self) -> None:
+        # Jobs are created in sentence order and asyncio.Lock is FIFO, so they also produce in order: the shared
+        # downsampler is never used by two at once.
+        while (
+            self._sentences
+            and not self._cancelled
+            and sum(not j.finished for j in self._jobs) < MAX_IN_FLIGHT
+        ):
+            job = SynthJob(self._lock, self._pcm(self._sentences.popleft()), realtime=self._realtime)
+            job.on_finished(self._pump)
+            self._jobs.append(job)
+
+    def cancel(self) -> None:
+        self._cancelled = True
+        self._sentences.clear()
+        for job in self._jobs:
+            job.cancel()
+
+    async def chunks(self) -> AsyncIterator[bytes]:
+        while self._jobs:
+            async for chunk in self._jobs[0].chunks():
+                yield chunk
+            self._jobs.popleft()
+            self._pump()
+        if self._down is not None and not self._cancelled:
+            tail = self._down.flush()
+            if len(tail):
+                yield float_to_pcm16(resample(tail, self._tts.sample_rate, OUTPUT_RATE))
+
+
+@asynccontextmanager
+async def batch_ticket(request: Request) -> AsyncIterator[Ticket]:
+    """A batch ticket of this request's own, abandoned when the client disconnects, so its MLX work stops at the next
+    yield point (a Whisper window, a design chunk) and gives back the GPU, its engine lock and its place."""
+    ticket = Ticket()
+
+    async def watch() -> None:
+        while not await request.is_disconnected():
+            await asyncio.sleep(0.05)
+        ticket.abandon()
+
+    watcher = asyncio.create_task(watch())
+    try:
+        yield ticket
+    finally:
+        watcher.cancel()
+        ticket.abandon()  # the request is over however it ended: nothing may keep working for it
+
+
+async def run_for[T](ticket: Ticket, fn: Callable[[], T]) -> T:
+    """`run_in_threadpool(fn)` on behalf of `ticket`, like `run_serialized`: if the caller is cancelled, the ticket is
+    abandoned and the thread waited out (it stops at its next yield point) before the cancellation goes on, so the
+    caller's engine lock and request place are never released while the thread still works."""
+
+    def call() -> T:
+        with working_for(ticket):
+            return fn()
+
+    fut = asyncio.ensure_future(run_in_threadpool(call))
+    try:
+        return await asyncio.shield(fut)
+    except asyncio.CancelledError:
+        ticket.abandon()
+        await asyncio.wait({fut})
+        if not fut.cancelled():
+            fut.exception()  # retrieved (usually `Abandoned`), so asyncio does not report it
+        raise
+
+
+async def _watch_disconnect(request: Request, job: SynthJob | SentenceJobs) -> None:
     while not await request.is_disconnected():
         await asyncio.sleep(0.05)
     job.cancel()
@@ -207,7 +349,7 @@ async def speech(request: Request, body: SpeechRequest):
     headers = {"X-Max-Speech-Engine": speech_engine_id(tts, voice)}
     # The language is an optional hint, so an unknown value is ignored rather than rejected.
     hint = whisper_language(body.language)
-    job = SynthJob(slots.tts_lock, _pcm_chunks(tts, body.input, voice, body.speed, hint))
+    job = SentenceJobs(tts, slots.speech_lock(voice), body.input, voice, speed=body.speed, language=hint)
 
     if body.stream_format is None:
         # The relay aborts a request on barge-in, so watch for the client leaving and stop synthesizing.
@@ -227,10 +369,10 @@ async def speech(request: Request, body: SpeechRequest):
     chunks = job.chunks()
     try:
         first = await anext(chunks, None)
-    except UnknownVoiceError as exc:
-        raise _unknown_voice(body.voice) from exc
-    except BaseException:
-        job.cancel()
+    except BaseException as exc:
+        job.cancel()  # no stream will follow: stop the sentence jobs still queued
+        if isinstance(exc, UnknownVoiceError):
+            raise _unknown_voice(body.voice) from exc
         raise
 
     async def pieces() -> AsyncIterator[bytes]:
@@ -311,6 +453,12 @@ async def transcriptions(
                 param="language",
                 code="invalid_language",
             )
+    # The place this request holds (each holds tens of MB) was taken by TranscriptionSlotMiddleware (api/limits.py)
+    # before the upload was read, so a flood is refused instead of spooled.
+    return await _transcribe(request, slots, stt, file, stt_language, prompt, response_format)
+
+
+async def _transcribe(request, slots, stt, file, stt_language, prompt, response_format):
     data = await _read_upload(file)
 
     def decode():
@@ -339,13 +487,21 @@ async def transcriptions(
             raise OpenAIError(400, str(exc), param="file", code="invalid_audio") from exc
         return resample(samples, rate, INPUT_RATE)
 
-    samples = await run_in_threadpool(decode)
-    async with slots.stt_lock:
+    if slots.decode_gate is None:
+        slots.decode_gate = asyncio.Semaphore(MAX_CONCURRENT_DECODES)
+    async with slots.decode_gate:
+        samples = await run_in_threadpool(decode)
+    async with slots.batch_stt_lock():
         if await request.is_disconnected():
             return Response(status_code=499)  # the client left while queued; skip the inference
-        result = await run_in_threadpool(
-            lambda: stt.transcribe(samples, INPUT_RATE, language=stt_language, prompt=prompt or None)
-        )
+        async with batch_ticket(request) as ticket:
+            try:
+                result = await run_for(
+                    ticket,
+                    lambda: stt.transcribe(samples, INPUT_RATE, language=stt_language, prompt=prompt or None),
+                )
+            except Abandoned:
+                return Response(status_code=499)  # the client left mid-transcription
     if response_format == "text":
         return PlainTextResponse(result.text)
     if response_format == "verbose_json":

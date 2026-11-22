@@ -51,4 +51,11 @@ class AgentProtocolTest {
         assertEquals(false, startJson("  ").has("voiceProvider"))
         assertEquals("female", startJson("live").getString("voiceGender"))
     }
+
+    @Test
+    fun `session start declares protocol version 1 for the relay's mismatch log`() {
+        val start = startJson()
+        assertEquals(1, start.getInt("protocol"))
+        assertEquals(PROTOCOL_VERSION, start.getInt("protocol"))
+    }
 }

@@ -75,15 +75,27 @@ Notes:
 ## Reverse proxy with TLS
 
 Browsers need a secure origin for the microphone, and a token in a URL needs TLS. Put a proxy in front that terminates
-TLS and forwards WebSocket upgrades. Then tell the relay it is behind a proxy:
+TLS and forwards WebSocket upgrades.
+
+> **Behind a proxy you must set `RELAY_TRUST_PROXY=on`.** It is off by default, and with it off every client has the
+> proxy's address. The per-IP limits on `/agent` connections, logins and sign-ups, and the public embed then become one
+> limit shared by everyone: a single visitor, or one script, can lock every user out for a minute at a time.
 
 ```dotenv
 RELAY_TRUST_PROXY=on
 RELAY_TRUSTED_PROXY_HOPS=1
 ```
 
-With this on, the per-IP rate limit reads the real client address from `X-Forwarded-For`. Without it every client looks
-like the proxy. Turn it on only when the relay is reachable through the proxy alone.
+With this on, the rate limits read the real client address from `X-Forwarded-For`, counting `RELAY_TRUSTED_PROXY_HOPS`
+entries from the right: 1 for Caddy alone, 2 for a CDN in front of Caddy. Turn it on only when the relay is reachable
+through the proxy alone: firewall port 8787 so only the proxy reaches it (with Docker, publish it as
+`-p 127.0.0.1:8787:8787`). With the setting on and the relay reachable directly, a client can send its own
+`X-Forwarded-For` and pick its address. That is why it is not on by default.
+
+The relay helps you notice. At startup it warns when a live backend or Max Cloud runs with the setting off. The first
+time a request arrives carrying `X-Forwarded-For` or `Forwarded` while it is off, it logs a warning starting with
+`!!!`, and `/ready` lists `proxy-headers-untrusted` under `warnings` from then on (without turning `503`, so a load
+balancer does not take the relay out of service over it).
 
 ### Caddy
 
@@ -134,30 +146,32 @@ Query strings carry tokens, so do not write them to access logs. Prefer logging 
 
 Before going live:
 
-| Check                      | Setting                                                                                                        |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| A real backend and its key | `VOICE_PROVIDER` and its API key (see [backends](backends.md)). `mock` is for development.                     |
-| Access control             | `RELAY_AUTH_TOKEN` set to a long random value: `openssl rand -hex 32`.                                         |
-| Browser origins            | `RELAY_ALLOWED_ORIGINS` set to your site origins, if browsers connect.                                         |
-| Proxy awareness            | `RELAY_TRUST_PROXY=on` behind exactly one trusted proxy, with `RELAY_TRUSTED_PROXY_HOPS` set to the hop count. |
-| Production mode            | `NODE_ENV=production`.                                                                                         |
-| Rate limits                | `RELAY_CONN_PER_MINUTE` suits your traffic (default 30 per IP per minute).                                     |
-| Account sign-up            | `AUTH_REGISTRATION=off` if you use accounts and the team has registered.                                       |
-| Backend switching          | `VOICE_PROVIDER_SWITCHING=off` if clients must not choose a backend.                                           |
-| Webhook secrets            | `TOOL_WEBHOOK_SECRET` (or your name) set, and referenced as `${TOOL_WEBHOOK_SECRET}`.                          |
-| Assistant identity         | `ASSISTANT_CONFIG` points at your `assistant.config.json`, or run `npm run setup`.                             |
-| Data directory             | A persistent volume or disk for `STUDIO_DIR` / `HOME`. See below.                                              |
-| Spend limit                | A budget alert or hard limit with your model vendor.                                                           |
+| Check                      | Setting                                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------ |
+| A real backend and its key | `VOICE_PROVIDER` and its API key (see [backends](backends.md)). `mock` is for development.             |
+| Access control             | `RELAY_AUTH_TOKEN` set to a long random value: `openssl rand -hex 32`.                                 |
+| Browser origins            | `RELAY_ALLOWED_ORIGINS` set to your site origins, if browsers connect.                                 |
+| Proxy awareness            | `RELAY_TRUST_PROXY=on` behind a proxy, with `RELAY_TRUSTED_PROXY_HOPS` set to the hop count. Required. |
+| Production mode            | `NODE_ENV=production`.                                                                                 |
+| Rate limits                | `RELAY_CONN_PER_MINUTE` suits your traffic (default 30 per IP per minute).                             |
+| Account sign-up            | `AUTH_REGISTRATION=off` if you use accounts and the team has registered.                               |
+| Backend switching          | `VOICE_PROVIDER_SWITCHING=off` if clients must not choose a backend.                                   |
+| Webhook secrets            | `TOOL_WEBHOOK_SECRET` (or your name) set, and referenced as `${TOOL_WEBHOOK_SECRET}`.                  |
+| Assistant identity         | `ASSISTANT_CONFIG` points at your `assistant.config.json`, or run `npm run setup`.                     |
+| Data directory             | A persistent volume or disk for `STUDIO_DIR` / `HOME`. See below.                                      |
+| Spend limit                | A budget alert or hard limit with your model vendor.                                                   |
+| Monitoring                 | `METRICS_TOKEN` set if you scrape `/metrics`; `LOG_FORMAT=json` if a log collector parses the lines.   |
 
 All variables are described in `.env.example`. The values for sessions are in [security](security.md#rate-limits).
 Note that `RELAY_MAX_PAYLOAD_BYTES` is clamped to 320 KiB–1 MiB; the default is 384 KiB.
 
 ## Health and readiness
 
-| Endpoint      | Use it for | Answer                                                                         |
-| ------------- | ---------- | ------------------------------------------------------------------------------ |
-| `GET /health` | Liveness   | `200` with JSON: provider, assistant, voice backends, uptime, build, counters. |
-| `GET /ready`  | Readiness  | `200` when ready, `503` with a list of issues.                                 |
+| Endpoint       | Use it for | Answer                                                                         |
+| -------------- | ---------- | ------------------------------------------------------------------------------ |
+| `GET /health`  | Liveness   | `200` with JSON: provider, assistant, voice backends, uptime, build, counters. |
+| `GET /ready`   | Readiness  | `200` when ready, `503` with a list of issues.                                 |
+| `GET /metrics` | Monitoring | Prometheus text format. Only with `METRICS_TOKEN` set; `404` otherwise.        |
 
 `/health` answers `200` whenever the process is up. Point load balancers and container health checks at it.
 
@@ -172,36 +186,89 @@ Note that `RELAY_MAX_PAYLOAD_BYTES` is clamped to 320 KiB–1 MiB; the default i
 | `user-memory-storage-unavailable` | The per-user memory file cannot be written.                                     |
 | `shutting-down`                   | The relay received a stop signal and is draining.                               |
 
+`/ready` also returns `warnings`: problems an operator should fix that do not make the relay unready, so they never turn
+the answer into `503`.
+
+| Warning                    | Meaning                                                                                                                        |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `proxy-headers-untrusted`  | A request arrived through a proxy (`X-Forwarded-For` or `Forwarded`) while `RELAY_TRUST_PROXY` is off.                         |
+| `cloud-secrets-unreadable` | Max Cloud holds a stored model key or webhook secret that no configured `CLOUD_SECRET_KEY` can read. See [cloud.md](cloud.md). |
+
 Both endpoints send `Cache-Control: no-store`. A relay with `VOICE_PROVIDER=mock` and `NODE_ENV=production` and no token
 reports `access-control-not-configured` and `503`: that is the check working.
 
+### Metrics
+
+Set `METRICS_TOKEN` to a long random value (`openssl rand -hex 32`) and scrape `GET /metrics` with it as a bearer token.
+Without the token the endpoint answers `404`; with a wrong one, `401`. A Prometheus job:
+
+```yaml
+scrape_configs:
+  - job_name: max-relay
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      credentials: <METRICS_TOKEN>
+    static_configs:
+      - targets: ["relay.example.com"]
+```
+
+It exports the relay's counters (`max_relay_sessions_total`, `max_relay_rejected_upgrades_total`,
+`max_relay_upstream_failures_total`, audio bytes, Max Speech outcomes and more), gauges for open voice sessions and open
+`/agent` and `/companion` sockets, the number of account names under login backoff, `max_relay_process_uptime_seconds`
+and `max_relay_build_info`. Counters start from zero when the process starts, which Prometheus' `rate()` handles.
+
+With Max Cloud on, it also exports the billing counters. Alert on the second one: it means finished sessions could not
+be written to the ledger (they are kept and retried, but something is wrong with the database or its disk).
+
+| Counter                                        | Counts                                                                |
+| ---------------------------------------------- | --------------------------------------------------------------------- |
+| `max_cloud_sessions_booked_total`              | Finished sessions written to the ledger.                              |
+| `max_cloud_booking_failures_total`             | Failed attempts to write one; the session is kept and retried.        |
+| `max_cloud_bookings_retried_total`             | Sessions booked by a retry after a failed first attempt.              |
+| `max_cloud_sessions_recovered_total`           | Sessions left by a stopped relay, booked up to their last checkpoint. |
+| `max_cloud_topups_credited_total`              | Paid top-ups credited to a balance.                                   |
+| `max_cloud_topups_refused_total`               | Verified payments that could not be credited.                         |
+| `max_cloud_sessions_killed_key_rotation_total` | Sessions closed because the project key was rotated or deleted.       |
+| `max_cloud_spend_cap_refusals_total`           | Tokens or sessions refused, or closed, by a project's monthly limit.  |
+| `max_cloud_secrets_unreadable`                 | Stored secrets no configured key can read (a gauge; 0 is healthy).    |
+
 ## Scaling
 
-One relay process holds, in memory:
+**The relay is single-instance by design: run one process per data directory.** Two processes sharing a data directory,
+or two replicas behind one address, give wrong answers rather than more capacity:
 
-- every live voice session (a WebSocket and its upstream connection to the model), and
-- every live session token.
+- **State in process memory.** Minted session tokens, live voice sessions, the per-customer session caps of Max Cloud,
+  the per-IP rate limits and the per-account login backoff exist only inside the process. A second process has its own
+  copies, so a token minted on one is refused by the other, and every cap and limit doubles.
+- **Whole-file rewrites.** `accounts.json`, `companion-bindings.json`, `user-memory.json`, the usage file, the Studio
+  files and the session history archive are each loaded into memory and rewritten in full on every change (write a
+  temporary file, then rename). Two processes writing the same file do not merge: the last writer wins, and the other's
+  change (a new account, a logout, a pairing, a booked minute) is silently lost.
+- **The exception.** Max Cloud's SQLite database is the only store that is safe for concurrent access. Even so, run one
+  relay against it: the caps and limits above live in memory.
 
 A single small process handles many sessions, because audio is relayed, not processed. When you need more:
 
 - **Vertical first.** Give the process more CPU and memory. The `pipeline` and `local` backends do the most work in
   the relay, because they detect speech and resample audio there.
 - **One relay per region.** Run an independent relay near each group of users, each with its own token and its own
-  data directory. This is the simplest way to cut latency.
-- **Several relays behind one address.** Mint a session token against the relay that will serve the session, because
-  tokens exist only on the relay that issued them. Either route by a stable key (sticky routing by the token, the user
-  or a cookie) so the connect reaches the issuing relay, or have your backend return both the token and the relay URL
-  it came from. A connect that lands on another relay gets 401, so your backend must be able to mint again.
-- **Shared state.** Accounts, history and memory are files and a SQLite database in the data directory. They are not
-  shared between relays. If you use accounts, run one relay, or accept that each relay has its own users.
+  data directory. They share nothing: each has its own accounts and its own limits.
+- **Several relays behind one address** works only if each has its own data directory and you route by a stable key.
+  Mint a session token against the relay that will serve the session, because tokens exist only on the relay that
+  issued them: route sticky (by the token, the user or a cookie), or have your backend return both the token and the
+  relay URL it came from. A connect that lands on another relay gets 401, so your backend must be able to mint again.
+  Accounts and Max Cloud do not work this way; run them on one relay.
 
-The relay restarts quickly and revokes all session tokens when it does. Active sessions drop with close code 1001, and
-the SDK reconnects with a fresh token.
+The relay restarts quickly and revokes all minted session tokens when it does. Login sessions survive a restart. Active
+voice sessions drop with close code 1001, and the SDK reconnects with a fresh token.
 
 ## Logs
 
 The relay writes plain-text log lines to standard output and standard error, one event per line, with a timestamp,
-a level and a source such as `relay` or `sess:8021ea69`. Collect them with your platform:
+a level and a source such as `relay` or `sess:8021ea69`. With `LOG_FORMAT=json` each line is instead one JSON object
+with `time`, `level`, `scope`, `message` and the event's own fields at the top level (a field that would clash with
+those four is renamed `field_<name>`). Collect them with your platform:
 
 ```bash
 docker compose logs -f relay          # Docker Compose
@@ -221,7 +288,7 @@ to move the Studio's files, and `HOME` (or the per-file variables below) to move
 
 | File                      | Contents                                                                               | Override                                           |
 | ------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `accounts.json`           | Users and login sessions (passwords hashed).                                           | `ACCOUNTS_FILE` (`off` keeps it in memory)         |
+| `accounts.json`           | Users and login sessions (passwords and session tokens hashed).                        | `ACCOUNTS_FILE` (`off` keeps it in memory)         |
 | `user-memory.json`        | Per-user conversation memory.                                                          | `USER_MEMORY_FILE` (`off` disables it)             |
 | `testing.sqlite`          | QA evidence, runs, reviews, policies and audit log.                                    | `TESTING_DATABASE` (`off` for ephemeral runs)      |
 | `sessions.jsonl`          | Append-only archive of completed sessions, with transcripts.                           | `TESTING_HISTORY_DIR` (`off` disables it)          |
@@ -235,13 +302,26 @@ it like user data, and set a retention policy (`TESTING_HISTORY_MAX_SESSIONS`, `
 embed the SDK only and want no persistence, you can set `ACCOUNTS_FILE=off`, `USER_MEMORY_FILE=off` and
 `TESTING_DATABASE=off`.
 
-Session tokens are never written to disk.
+Minted session tokens (`vst_...`) are never written to disk. Login session tokens are stored only as SHA-256 hashes; see
+[security](security.md#accounts).
 
 ## Updating
 
 1. Build the new version (`npm run build`, or `docker build`).
-2. Replace the running process. Active sessions end with 1001 and clients reconnect.
+2. Replace the running process: **stop the old process, then start the new one.** Do not run a rolling or
+   blue-green deploy that starts the new process while the old one still runs against the same data directory: for
+   that overlap both write the same files, and whichever writes last silently undoes the other (see
+   [Scaling](#scaling)). `SIGTERM` makes the old process close sessions with 1001 and flush its files before it exits;
+   wait for it to exit. Clients reconnect.
 3. Check `/ready` and `/health`. `build.gitCommit` in the answer tells you which version is running.
+
+In Docker Compose this is the default (`docker compose up -d` stops the old container first). In Kubernetes use the
+`Recreate` strategy with one replica. With pm2, `pm2 restart` stops before it starts; do not use `pm2 reload` or cluster
+mode.
+
+The first start of this version rewrites `accounts.json` so that it holds session-token hashes instead of the tokens
+themselves. Existing logins keep working. An older relay cannot read the hashes back, so after a rollback to an older
+version everyone has to sign in again.
 
 `deploy-lightsail.command` automates this for the maintainers' own test server and rolls back when the health check
 fails. It is specific to that host, so treat it as an example.

@@ -8,6 +8,7 @@ import {
   type VoiceAgentOptions,
   type WebSocketLike
 } from "../sdk/src/client";
+import { PROTOCOL_VERSION, SDK_VERSION } from "../sdk/src/version";
 
 class FakeSocket implements WebSocketLike {
   static instances: FakeSocket[] = [];
@@ -61,13 +62,16 @@ class FakeSocket implements WebSocketLike {
 function fakeAudio() {
   let onFrame: ((pcm: ArrayBuffer) => void) | undefined;
   let setPlaying: (playing: boolean) => void = () => undefined;
+  let setBlocked: (blocked: boolean) => void = () => undefined;
+  let canResume = true;
+  let micError: Error | undefined;
   const calls: string[] = [];
   const audio: AudioIO = {
     prepare: () => Promise.resolve(),
     startMic: (cb) => {
       calls.push("startMic");
       onFrame = cb;
-      return Promise.resolve();
+      return micError ? Promise.reject(micError) : Promise.resolve();
     },
     setMicEnabled: (enabled) => void calls.push(`mic:${enabled}`),
     releaseMic: () => void calls.push("releaseMic"),
@@ -75,17 +79,25 @@ function fakeAudio() {
     speak: (text) => void calls.push(`speak:${text}`),
     clearPlayback: () => void calls.push("clear"),
     levels: () => ({ mic: 0, output: 0 }),
+    resume: () => {
+      calls.push("resume");
+      return Promise.resolve(canResume);
+    },
     close: () => void calls.push("close")
   };
-  const factory = (onPlayingChange: (playing: boolean) => void) => {
+  const factory = (onPlayingChange: (playing: boolean) => void, onBlockedChange: (blocked: boolean) => void) => {
     setPlaying = onPlayingChange;
+    setBlocked = onBlockedChange;
     return audio;
   };
   return {
     audio: factory,
     calls,
     frame: (pcm: ArrayBuffer) => onFrame?.(pcm),
-    setPlaying: (p: boolean) => setPlaying(p)
+    setPlaying: (p: boolean) => setPlaying(p),
+    setBlocked: (b: boolean) => setBlocked(b),
+    allowResume: (allowed: boolean) => (canResume = allowed),
+    failMic: (error: Error) => (micError = error)
   };
 }
 
@@ -144,6 +156,8 @@ describe("VoiceAgent session", () => {
       sampleRate: 16000,
       channels: 1,
       platform: "web",
+      protocol: PROTOCOL_VERSION,
+      appVersion: `max-voice-agent@${SDK_VERSION}`,
       language: "en",
       tools: [{ name: "lookup", description: "Look something up", parameters: { type: "object" } }],
       context: "pricing page"
@@ -491,5 +505,250 @@ describe("lifecycle", () => {
     socket.serverSends({ type: "status", state: "thinking" });
     expect(seen).toEqual(["thinking"]);
     spy.mockRestore();
+  });
+});
+
+/** Starts an agent and returns its first socket, before it has opened. */
+async function connecting(options: Partial<VoiceAgentOptions> = {}) {
+  const a = fakeAudio();
+  const agent = new VoiceAgent({
+    url: "https://relay.example.com",
+    ...options,
+    internals: { WebSocket: FakeSocket, audio: a.audio, ...options.internals }
+  });
+  const errors: VoiceAgentError[] = [];
+  agent.on("error", (error) => errors.push(error));
+  const start = agent.start();
+  const rejection = start.then(
+    () => undefined,
+    (error: unknown) => error
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  return { agent, errors, rejection, ...a };
+}
+
+describe("close codes map to error codes", () => {
+  it("reports 4003 before the session starts as usage_limit", async () => {
+    const { agent, errors, rejection } = await connecting();
+    FakeSocket.instances[0]!.serverCloses(4003);
+    const error = (await rejection) as VoiceAgentError;
+    expect(error).toBeInstanceOf(VoiceAgentError);
+    expect(error.code).toBe("usage_limit");
+    expect(error.closeCode).toBe(4003);
+    expect(error.message).toBe("Voice minutes used up for this month");
+    expect(errors.map((e) => e.code)).toEqual(["usage_limit"]);
+    expect(agent.status).toBe("error");
+  });
+
+  it("reports 4003 after the session started as usage_limit, without reconnecting", async () => {
+    const { agent, socket } = await started();
+    const errors: string[] = [];
+    agent.on("error", (e) => errors.push(e.code));
+    socket.serverCloses(4003);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(errors).toEqual(["usage_limit"]);
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("keeps connection for other closes, with the close code attached", async () => {
+    const { rejection } = await connecting();
+    FakeSocket.instances[0]!.serverCloses(1011);
+    const error = (await rejection) as VoiceAgentError;
+    expect(error.code).toBe("connection");
+    expect(error.closeCode).toBe(1011);
+  });
+
+  it("stops at once on 1008 with a static token", async () => {
+    const { rejection, errors } = await connecting({ token: "vst_static" });
+    FakeSocket.instances[0]!.serverCloses(1008);
+    expect(((await rejection) as VoiceAgentError).code).toBe("unauthorized");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(errors.map((e) => e.code)).toEqual(["unauthorized"]);
+  });
+
+  it("stops at once on 1008 without any token", async () => {
+    const { rejection } = await connecting();
+    FakeSocket.instances[0]!.serverCloses(1008);
+    expect(((await rejection) as VoiceAgentError).code).toBe("unauthorized");
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("retries a refused first connect once with a fresh token, then reports unauthorized", async () => {
+    const token = vi.fn().mockResolvedValueOnce("old").mockResolvedValueOnce("new");
+    const { rejection, errors } = await connecting({ token });
+    FakeSocket.instances[0]!.serverCloses(1008);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(FakeSocket.instances[1]!.url).toContain("token=new");
+    FakeSocket.instances[1]!.serverCloses(1008);
+    expect(((await rejection) as VoiceAgentError).code).toBe("unauthorized");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(token).toHaveBeenCalledTimes(2);
+    expect(errors.map((e) => e.code)).toEqual(["unauthorized"]);
+  });
+
+  it("lets the retried first connect succeed", async () => {
+    const token = vi.fn().mockResolvedValueOnce("old").mockResolvedValueOnce("new");
+    const { agent } = await connecting({ token });
+    FakeSocket.instances[0]!.serverCloses(1008);
+    await vi.advanceTimersByTimeAsync(0);
+    const second = FakeSocket.instances[1]!;
+    second.open();
+    second.serverSends(STARTED);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(agent.status).toBe("listening");
+  });
+
+  it("retries a refused reconnect once with a fresh token, then stops with unauthorized", async () => {
+    let n = 0;
+    const token = vi.fn(() => Promise.resolve(`t${(n += 1)}`));
+    const { agent, socket } = await started({ token });
+    const errors: string[] = [];
+    agent.on("error", (e) => errors.push(e.code));
+    socket.serverCloses(1008);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(FakeSocket.instances[1]!.url).toContain("token=t2");
+    FakeSocket.instances[1]!.serverCloses(1008);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(errors).toEqual(["unauthorized"]);
+    expect(agent.status).toBe("error");
+  });
+
+  it("grants a new retry after a session starts again", async () => {
+    const token = vi.fn(() => Promise.resolve("t"));
+    const { agent, socket } = await started({ token });
+    socket.serverCloses(1008);
+    await vi.advanceTimersByTimeAsync(1000);
+    const second = FakeSocket.instances[1]!;
+    second.open();
+    second.serverSends(STARTED);
+    second.serverCloses(1008);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeSocket.instances).toHaveLength(3);
+    expect(agent.status).toBe("connecting");
+  });
+
+  it("does not retry 1008 when autoReconnect is off", async () => {
+    const { agent, socket } = await started({ token: () => Promise.resolve("t"), autoReconnect: false });
+    socket.serverCloses(1008);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(agent.status).toBe("error");
+  });
+
+  it("stops at once on 1008 mid-session with a static token", async () => {
+    const { agent, socket } = await started({ token: "vst_static" });
+    const errors: string[] = [];
+    agent.on("error", (e) => errors.push(e.code));
+    socket.serverCloses(1008);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(errors).toEqual(["unauthorized"]);
+  });
+});
+
+describe("blocked audio", () => {
+  it("emits a warning once, then audioresume, and exposes the state", async () => {
+    const { agent, setBlocked } = await started();
+    const seen: string[] = [];
+    agent.on("warning", (w) => seen.push(w.code));
+    agent.on("audioresume", () => seen.push("resume"));
+    setBlocked(true);
+    setBlocked(true);
+    expect(agent.audioBlocked).toBe(true);
+    setBlocked(false);
+    expect(agent.audioBlocked).toBe(false);
+    expect(seen).toEqual(["audio_blocked", "resume"]);
+  });
+
+  it("resumeAudio asks the audio layer and clears the warning when it runs", async () => {
+    const { agent, setBlocked, calls, allowResume } = await started();
+    setBlocked(true);
+    allowResume(false);
+    expect(await agent.resumeAudio()).toBe(false);
+    expect(agent.audioBlocked).toBe(true);
+    allowResume(true);
+    expect(await agent.resumeAudio()).toBe(true);
+    expect(agent.audioBlocked).toBe(false);
+    expect(calls.filter((c) => c === "resume")).toHaveLength(2);
+  });
+
+  it("does not break listeners that only know the old events", async () => {
+    const { agent, setBlocked } = await started();
+    const statuses: string[] = [];
+    agent.on("status", (s) => statuses.push(s));
+    setBlocked(true);
+    expect(statuses).toEqual([]);
+  });
+});
+
+describe("microphone errors", () => {
+  it("reports a refused microphone as code microphone, not connection", async () => {
+    const a = fakeAudio();
+    const denied = Object.assign(new Error("Permission denied"), { name: "NotAllowedError" });
+    a.failMic(denied);
+    const agent = new VoiceAgent({
+      url: "https://relay.example.com",
+      internals: { WebSocket: FakeSocket, audio: a.audio }
+    });
+    const errors: VoiceAgentError[] = [];
+    agent.on("error", (e) => errors.push(e));
+    const start = agent.start();
+    const rejection = start.then(
+      () => undefined,
+      (error: unknown) => error as VoiceAgentError
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    FakeSocket.instances[0]?.open();
+    const error = await rejection;
+    expect(error?.code).toBe("microphone");
+    expect(error?.cause).toBe(denied);
+    expect(errors.map((e) => e.code)).toEqual(["microphone"]);
+    expect(agent.status).toBe("error");
+  });
+});
+
+describe("protocol version", () => {
+  async function startedWith(relay: Record<string, unknown>) {
+    const a = fakeAudio();
+    const agent = new VoiceAgent({
+      url: "https://relay.example.com",
+      internals: { WebSocket: FakeSocket, audio: a.audio, toolTimeoutMs: 50 }
+    });
+    const warnings: string[] = [];
+    agent.on("warning", (w) => warnings.push(w.code));
+    const promise = agent.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const socket = FakeSocket.instances.at(-1)!;
+    socket.open();
+    socket.serverSends({ ...STARTED, ...relay });
+    await promise;
+    return { agent, socket, warnings };
+  }
+
+  it("sends the SDK's protocol and version in session.start", async () => {
+    const { socket } = await started();
+    expect(socket.ofType("session.start")[0]).toMatchObject({
+      type: "session.start",
+      protocol: PROTOCOL_VERSION,
+      appVersion: `max-voice-agent@${SDK_VERSION}`
+    });
+  });
+
+  it("says nothing to a relay on the same protocol, or one too old to say", async () => {
+    expect((await startedWith({ protocol: PROTOCOL_VERSION })).warnings).toEqual([]);
+    expect((await startedWith({})).warnings).toEqual([]);
+  });
+
+  it("warns once when the relay is ahead, and keeps the session", async () => {
+    const { agent, socket, warnings } = await startedWith({ protocol: PROTOCOL_VERSION + 1 });
+    expect(warnings).toEqual(["protocol_mismatch"]);
+    expect(agent.status).not.toBe("idle");
+    socket.serverSends({ ...STARTED, protocol: PROTOCOL_VERSION + 1 });
+    expect(warnings).toEqual(["protocol_mismatch"]);
   });
 });

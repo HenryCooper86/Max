@@ -87,6 +87,11 @@ class _Stream:
 
 class SherpaStreamingStt:
     id = "sherpa-onnx"
+    # Both supported models (the X-ASR zipformer and the streaming paraformer) are bilingual Chinese/English only.
+    languages = ("zh", "en")
+    # Hotwords need modified_beam_search plus a BPE vocab file; the X-ASR download ships only bpe.model, and the
+    # greedy decoder used here ignores them. Advertised as unsupported rather than accepted and dropped.
+    keyterms = False
 
     def __init__(self, model_dir: Path, kind: str = "transducer", model_id: str = "x-asr-zh-en-480ms"):
         if kind not in KINDS:
@@ -127,8 +132,7 @@ class SherpaStreamingStt:
     # -- StreamingSttEngine ---------------------------------------------------------------------------------
 
     def new_stream(self, *, language: str | None = None, keyterms: tuple[str, ...] = ()) -> SttStream:
-        # TODO: keyterms need sherpa hotwords, which require modified_beam_search; accepted and ignored for now.
-        # The model is bilingual, so `language` is not needed either.
+        # `language` and `keyterms` are accepted for the protocol; the model is bilingual and `keyterms` is False.
         return _Stream(self)
 
     def warm_up(self) -> None:

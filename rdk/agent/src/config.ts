@@ -2,9 +2,12 @@ export type RdkConfig = {
   relayUrl: string;
   /** Operator relay token. The relay refuses the /agent upgrade with 401 once
    *  accounts exist or RELAY_AUTH_TOKEN is set, so a production relay needs
-   *  this. Sent as `?token=…`, matching the web client. */
+   *  this. Sent as an `Authorization: Bearer` header, never in the URL. */
   relayToken: string;
   insecureTls: boolean;
+  /** MAX_REQUIRE_TLS=on: refuse to start when the relay URL would send the
+   *  token and microphone audio unencrypted to a non-loopback host. */
+  requireTls: boolean;
   alsaCapture: string;
   alsaPlayback: string;
   cameraFront: string;
@@ -101,11 +104,58 @@ function optionalFlag(env: NodeJS.ProcessEnv, key: string): boolean {
   return env[key]?.trim() === "1";
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "localhost" || host === "[::1]" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+/**
+ * Plain ws:// to anything but this board carries the rider's microphone audio
+ * and the relay token in clear text to every hop on the path. Returns the
+ * reason when the URL is in that state, null when it is safe (wss, or loopback).
+ * A URL that is not ws/wss at all is reported only so strict mode can refuse it.
+ */
+function cleartextRelayReason(relayUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(relayUrl);
+  } catch {
+    return "MAX_RELAY_URL is not a valid URL";
+  }
+  if (parsed.protocol === "wss:") return null;
+  if (parsed.protocol !== "ws:") return `MAX_RELAY_URL uses ${parsed.protocol}, not wss:`;
+  if (isLoopbackHost(parsed.hostname)) return null;
+  return `MAX_RELAY_URL is plain ws:// to ${parsed.hostname}`;
+}
+
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (line: string) => void = (line) => console.warn(line)
+): RdkConfig {
+  const relayUrl = requireString(env, "MAX_RELAY_URL");
+  const requireTls = optionalEnum(env, "MAX_REQUIRE_TLS", ["on", "off"] as const, "off") === "on";
+  const cleartext = cleartextRelayReason(relayUrl);
+  if (cleartext && requireTls) {
+    throw new Error(`MAX_REQUIRE_TLS=on: ${cleartext}; use a wss:// relay URL`);
+  }
+  const insecureTls = optionalFlag(env, "MAX_RELAY_INSECURE_TLS");
+  if (requireTls && insecureTls && !isLoopbackHost(new URL(relayUrl).hostname)) {
+    throw new Error(
+      "MAX_REQUIRE_TLS=on conflicts with MAX_RELAY_INSECURE_TLS=1: TLS without certificate verification " +
+        "defeats the strict mode; unset MAX_RELAY_INSECURE_TLS or set MAX_REQUIRE_TLS=off"
+    );
+  }
+  if (cleartext && /^ws:/i.test(relayUrl)) {
+    warn(
+      `[config] WARNING: ${cleartext}. The relay token and the rider's microphone audio cross the network ` +
+        "unencrypted. Use wss://, or set MAX_REQUIRE_TLS=on to refuse to start like this."
+    );
+  }
   return {
-    relayUrl: requireString(env, "MAX_RELAY_URL"),
+    relayUrl,
+    requireTls,
     relayToken: optionalString(env, "MAX_RELAY_TOKEN", ""),
-    insecureTls: optionalFlag(env, "MAX_RELAY_INSECURE_TLS"),
+    insecureTls,
     alsaCapture: optionalString(env, "RDK_ALSA_CAPTURE", "plughw:0,0"),
     alsaPlayback: optionalString(env, "RDK_ALSA_PLAYBACK", "plughw:0,0"),
     // VCON index, not a guess: on this board vcon@0/@1 sit on i2c bus 6, which

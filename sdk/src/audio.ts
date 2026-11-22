@@ -11,13 +11,16 @@ import type { VoiceGender } from "./protocol.js";
  * Resumes a suspended context, but never waits for it longer than `ms`.
  * Outside a user gesture, browsers leave `resume()` pending until the next
  * one; blocking on it would hang `start()` forever. The context still
- * resumes on its own once the page is allowed to play sound.
+ * resumes on its own once the page is allowed to play sound. A context that
+ * is still suspended after the wait is reported through `onBlocked`, so the
+ * page can ask the user for a tap instead of staying silent.
  */
-function resumeWithin(context: AudioContext, ms = 1000): Promise<void> {
-  return Promise.race([
+async function resumeWithin(context: AudioContext, onBlocked: () => void, ms = 1000): Promise<void> {
+  await Promise.race([
     context.resume().catch(() => undefined),
     new Promise<void>((resolve) => setTimeout(resolve, ms))
   ]);
+  if (context.state === "suspended") onBlocked();
 }
 
 /** Everything the client needs from audio hardware; fakeable in tests. */
@@ -38,6 +41,8 @@ export interface AudioIO {
   clearPlayback(): void;
   /** Current meter levels, 0..1. */
   levels(): { mic: number; output: number };
+  /** Resumes suspended audio. Call from a user gesture. Resolves to whether audio is running. */
+  resume(): Promise<boolean>;
   /** Releases everything. */
   close(): void;
 }
@@ -49,6 +54,8 @@ export type BrowserAudioOptions = {
   voice?: VoiceGender;
   /** Called when agent audio starts or finishes playing. */
   onPlayingChange(playing: boolean): void;
+  /** Called when the browser keeps audio suspended (`true`) and when it runs again (`false`). */
+  onBlockedChange?(blocked: boolean): void;
 };
 
 /**
@@ -145,6 +152,32 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
     options.onPlayingChange(next);
   };
 
+  let blocked = false;
+  // Set by close(): a late timer or statechange must not report to a client that is gone.
+  let closed = false;
+  const setBlocked = (next: boolean) => {
+    if (closed || next === blocked) return;
+    blocked = next;
+    options.onBlockedChange?.(next);
+  };
+  // A context that runs again, for any reason, clears the warning. The
+  // listeners are removed on close: a page may hand in a context that outlives
+  // this client, and a listener left on it would keep the client in memory.
+  const watched: Array<() => void> = [];
+  const watching = new Set<AudioContext>();
+  const watch = (context: AudioContext) => {
+    if (closed || !context.addEventListener || watching.has(context)) return;
+    watching.add(context);
+    const onStateChange = () => {
+      if (context.state === "running") setBlocked(false);
+    };
+    context.addEventListener("statechange", onStateChange);
+    watched.push(() => {
+      context.removeEventListener?.("statechange", onStateChange);
+      watching.delete(context);
+    });
+  };
+
   const ensurePlayContext = (): AudioContext => {
     if (playContext && playContext.state !== "closed") return playContext;
     if (options.audioContext) {
@@ -155,6 +188,7 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
       ownsPlayContext = true;
     }
     const ctx = playContext;
+    watch(ctx);
     gain = ctx.createGain();
     gain.gain.value = PLAYBACK_GAIN;
     const limiter = ctx.createDynamicsCompressor();
@@ -192,7 +226,10 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
         context = new AudioContext();
         owns = true;
       }
-      if (context.state === "suspended") await resumeWithin(context);
+      // The microphone's context can be a different one from playback's, and
+      // can be the one the browser keeps suspended.
+      watch(context);
+      if (context.state === "suspended") await resumeWithin(context, () => setBlocked(true));
       const source = context.createMediaStreamSource(media);
       nodes.push(source);
       if (context.audioWorklet && typeof Blob !== "undefined" && typeof URL.createObjectURL === "function") {
@@ -267,7 +304,14 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
   return {
     async prepare() {
       const ctx = ensurePlayContext();
-      if (ctx.state === "suspended") await resumeWithin(ctx);
+      if (ctx.state === "suspended") await resumeWithin(ctx, () => setBlocked(true));
+    },
+    async resume() {
+      const contexts = [playContext, micContext].filter((c): c is AudioContext => c !== undefined);
+      await Promise.all(contexts.map((c) => (c.state === "suspended" ? c.resume().catch(() => undefined) : undefined)));
+      const running = contexts.every((c) => c.state === "running");
+      if (running) setBlocked(false);
+      return running;
     },
     startMic(onFrame) {
       if (stream) return Promise.resolve();
@@ -309,7 +353,13 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(gain!);
-      if (ctx.state === "suspended") void ctx.resume();
+      if (ctx.state === "suspended") {
+        void ctx.resume().catch(() => undefined);
+        // Audio queued while suspended is silent; surface it if the page never gets the gesture.
+        setTimeout(() => {
+          if (ctx.state === "suspended") setBlocked(true);
+        }, 1000);
+      }
       source.onended = () => {
         sources = sources.filter((item) => item !== source);
         setPlaying();
@@ -349,6 +399,8 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
       if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
       sources = [];
       speaking = false;
+      closed = true;
+      for (const unwatch of watched.splice(0)) unwatch();
       if (playContext && ownsPlayContext && playContext.state !== "closed") void playContext.close();
       playContext = undefined;
       gain = undefined;

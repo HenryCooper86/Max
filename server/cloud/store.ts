@@ -39,6 +39,8 @@ export type ProjectRow = {
   public_id: string | null;
   /** The webhook signing secret, encrypted like the model key. */
   webhook_secret_enc: string | null;
+  /** The owner's limit on this project's minutes per calendar month (UTC); null for none. */
+  monthly_minutes_cap: number | null;
   created_at: number;
   deleted_at: number | null;
 };
@@ -208,7 +210,18 @@ function database(): DatabaseSync {
     if (!projectColumns.has("webhook_secret_enc")) {
       db.exec("ALTER TABLE projects ADD COLUMN webhook_secret_enc TEXT NULL");
     }
+    if (!projectColumns.has("monthly_minutes_cap")) {
+      db.exec("ALTER TABLE projects ADD COLUMN monthly_minutes_cap INTEGER NULL");
+    }
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_public_id ON projects(public_id)");
+    // A project's minutes this month, read by its spend limit every few seconds while it talks.
+    db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_project_month ON ledger(project_id, kind, month)");
+    const liveColumns = new Set(
+      (db.prepare("PRAGMA table_info(live_sessions)").all() as { name: string }[]).map((column) => column.name)
+    );
+    if (!liveColumns.has("instance_id")) db.exec("ALTER TABLE live_sessions ADD COLUMN instance_id TEXT NULL");
+    if (!liveColumns.has("seconds")) db.exec("ALTER TABLE live_sessions ADD COLUMN seconds REAL NULL");
+    if (!liveColumns.has("ended_at")) db.exec("ALTER TABLE live_sessions ADD COLUMN ended_at INTEGER NULL");
   } catch (error) {
     db.close();
     throw error;
@@ -357,6 +370,7 @@ export type ProjectChanges = Partial<
     | "studio"
     | "public_id"
     | "webhook_secret_enc"
+    | "monthly_minutes_cap"
   >
 >;
 
@@ -369,7 +383,8 @@ const PROJECT_COLUMNS = [
   "greeting",
   "studio",
   "public_id",
-  "webhook_secret_enc"
+  "webhook_secret_enc",
+  "monthly_minutes_cap"
 ] as const;
 
 /** Applies changes to a live project of `customerId`; false when there is no such project. */
@@ -437,19 +452,52 @@ export type UsageBooking = {
   at: number;
 };
 
-/** Books one session's usage; false when that session was already booked. */
-export function bookUsage(usage: UsageBooking): boolean {
+/** Seconds the ledger already holds for a session: its entry and any remainder entries. */
+export function sessionSecondsBooked(sessionId: string): number {
+  // `;` is the character after `:`, so the range covers exactly the refs that start with "<id>:rest:".
+  const held = database()
+    .prepare(
+      `SELECT COALESCE(SUM(seconds), 0) AS seconds FROM ledger
+       WHERE kind = 'usage' AND (ref = ? OR (ref >= ? AND ref < ?))`
+    )
+    .get(sessionId, `${sessionId}:rest:`, `${sessionId}:rest;`) as { seconds: number };
+  return held.seconds;
+}
+
+/**
+ * Books a session's usage up to `seconds` in total, idempotently: seconds the
+ * ledger already holds for the session are never booked again.
+ *
+ * - "booked": the session's first entry.
+ * - "remainder": the session was booked before for fewer seconds (another
+ *   relay took it for abandoned and booked it up to a checkpoint while it was
+ *   still running); the difference is booked as a further entry whose ref is
+ *   the session id followed by `:rest:<n>`.
+ * - "already-booked": the ledger holds at least `seconds` for it.
+ */
+export function bookUsage(usage: UsageBooking): "booked" | "remainder" | "already-booked" {
   return immediate((db) => {
-    const existing = db.prepare("SELECT 1 FROM ledger WHERE kind = 'usage' AND ref = ?").get(usage.sessionId);
-    if (existing) return false;
+    // `;` is the character after `:`, so the range covers exactly the refs that start with "<id>:rest:".
+    const held = db
+      .prepare(
+        `SELECT COUNT(*) AS entries, COALESCE(SUM(seconds), 0) AS seconds FROM ledger
+         WHERE kind = 'usage' AND (ref = ? OR (ref >= ? AND ref < ?))`
+      )
+      .get(usage.sessionId, `${usage.sessionId}:rest:`, `${usage.sessionId}:rest;`) as {
+      entries: number;
+      seconds: number;
+    };
+    const seconds = usage.seconds - held.seconds;
+    if (held.entries > 0 && seconds <= 0) return "already-booked";
     const month = monthOf(usage.endedAt);
     const left = freeSecondsLeft(freeSecondsUsedIn(db, usage.customerId, month));
-    const { freeSeconds, costFen } = usageCharge(usage.seconds, left);
+    const { freeSeconds, costFen } = usageCharge(seconds, left);
+    const ref = held.entries === 0 ? usage.sessionId : `${usage.sessionId}:rest:${held.entries}`;
     db.prepare(
       `INSERT INTO ledger (customer_id, kind, amount_fen, free_seconds, seconds, project_id, ref, month, created_at)
        VALUES (?, 'usage', ?, ?, ?, ?, ?, ?, ?)`
-    ).run(usage.customerId, -costFen, freeSeconds, usage.seconds, usage.projectId, usage.sessionId, month, usage.at);
-    return true;
+    ).run(usage.customerId, -costFen, freeSeconds, seconds, usage.projectId, ref, month, usage.at);
+    return held.entries === 0 ? "booked" : "remainder";
   });
 }
 
@@ -599,8 +647,19 @@ export function customerExists(customerId: string): boolean {
 
 /**
  * Sessions in progress, checkpointed while they run, so a crash or a restart
- * that skips the close handler cannot lose their charge: at startup every row
- * left behind is booked up to its last checkpoint.
+ * that skips the close handler cannot lose their charge. A row lives until its
+ * session is booked:
+ *
+ *  - while the session runs, its relay process (`instance_id`) updates
+ *    `last_seen` and the billable `seconds` so far every few seconds;
+ *  - when it ends, `ended_at` and the final `seconds` are written before the
+ *    booking, and the row is deleted once the booking is in the ledger. A row
+ *    with `ended_at` is a booking that failed and is retried.
+ *
+ * A running row whose `last_seen` stopped moving belongs to a relay that
+ * crashed or was stopped, and is booked up to its last checkpoint. Rows from
+ * before these columns existed have no instance and no seconds: their time is
+ * `last_seen - started_at`, as it was then.
  */
 export type LiveSessionRow = {
   session_id: string;
@@ -608,27 +667,166 @@ export type LiveSessionRow = {
   project_id: string;
   started_at: number;
   last_seen: number;
+  instance_id: string | null;
+  seconds: number | null;
+  ended_at: number | null;
 };
 
-export function startLiveSession(row: { sessionId: string; customerId: string; projectId: string; at: number }): void {
-  database()
-    .prepare(
-      `INSERT OR REPLACE INTO live_sessions (session_id, customer_id, project_id, started_at, last_seen)
-       VALUES (?, ?, ?, ?, ?)`
-    )
-    .run(row.sessionId, row.customerId, row.projectId, row.at, row.at);
+/** Billable seconds a row stands for: its checkpoint, or for an old row the time it was open. */
+export function liveSessionSeconds(row: Pick<LiveSessionRow, "seconds" | "started_at" | "last_seen">): number {
+  return row.seconds ?? Math.max(0, (row.last_seen - row.started_at) / 1000);
 }
 
-export function touchLiveSession(sessionId: string, at: number): void {
-  database().prepare("UPDATE live_sessions SET last_seen = ? WHERE session_id = ?").run(at, sessionId);
+export function startLiveSession(row: {
+  sessionId: string;
+  customerId: string;
+  projectId: string;
+  instanceId: string;
+  at: number;
+}): void {
+  database()
+    .prepare(
+      `INSERT OR REPLACE INTO live_sessions
+         (session_id, customer_id, project_id, started_at, last_seen, instance_id, seconds, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, NULL)`
+    )
+    .run(row.sessionId, row.customerId, row.projectId, row.at, row.at, row.instanceId);
+}
+
+/**
+ * A checkpoint of a running session. When its row is missing (its start could
+ * not be recorded, or another relay took it for abandoned and booked it) the
+ * row is written again, so a crash from here on still has something to book.
+ * Returns "restored" in that case, and "ended" for a session already ended.
+ */
+export function touchLiveSession(row: {
+  sessionId: string;
+  customerId: string;
+  projectId: string;
+  instanceId: string;
+  at: number;
+  seconds: number;
+}): "updated" | "restored" | "ended" {
+  const db = database();
+  const updated = db
+    .prepare("UPDATE live_sessions SET last_seen = ?, seconds = ? WHERE session_id = ? AND ended_at IS NULL")
+    .run(row.at, row.seconds, row.sessionId);
+  if (updated.changes === 1) return "updated";
+  const restored = db
+    .prepare(
+      `INSERT OR IGNORE INTO live_sessions
+         (session_id, customer_id, project_id, started_at, last_seen, instance_id, seconds, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
+    )
+    .run(
+      row.sessionId,
+      row.customerId,
+      row.projectId,
+      Math.round(row.at - row.seconds * 1000),
+      row.at,
+      row.instanceId,
+      row.seconds
+    );
+  return restored.changes === 1 ? "restored" : "ended";
+}
+
+/** Records how a session ended, before it is booked, so a failed booking can be retried. */
+export function finishLiveSession(row: {
+  sessionId: string;
+  customerId: string;
+  projectId: string;
+  instanceId: string;
+  seconds: number;
+  endedAt: number;
+}): void {
+  database()
+    .prepare(
+      `INSERT INTO live_sessions
+         (session_id, customer_id, project_id, started_at, last_seen, instance_id, seconds, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(session_id) DO UPDATE SET
+         last_seen = excluded.last_seen, seconds = excluded.seconds, ended_at = excluded.ended_at`
+    )
+    .run(
+      row.sessionId,
+      row.customerId,
+      row.projectId,
+      Math.round(row.endedAt - row.seconds * 1000),
+      row.endedAt,
+      row.instanceId,
+      row.seconds,
+      row.endedAt
+    );
 }
 
 export function endLiveSession(sessionId: string): void {
   database().prepare("DELETE FROM live_sessions WHERE session_id = ?").run(sessionId);
 }
 
-export function leftoverLiveSessions(): LiveSessionRow[] {
-  return database().prepare("SELECT * FROM live_sessions").all() as LiveSessionRow[];
+/**
+ * Rows to book now: every ended row (a failed booking, retried by whichever
+ * relay gets there first; booking is idempotent), and running rows of any
+ * other relay process that has not checkpointed since `staleBefore`.
+ */
+export function unbookedLiveSessions(instanceId: string, staleBefore: number): LiveSessionRow[] {
+  return database()
+    .prepare(
+      `SELECT * FROM live_sessions
+       WHERE ended_at IS NOT NULL OR ((instance_id IS NULL OR instance_id <> ?) AND last_seen < ?)
+       ORDER BY started_at`
+    )
+    .all(instanceId, staleBefore) as LiveSessionRow[];
+}
+
+/** Rows not yet booked for a customer or a project: running elsewhere, or waiting for a retried booking. */
+export function liveSessionRows(scope: { customerId: string } | { projectId: string }): LiveSessionRow[] {
+  const [column, value] = "customerId" in scope ? ["customer_id", scope.customerId] : ["project_id", scope.projectId];
+  return database().prepare(`SELECT * FROM live_sessions WHERE ${column} = ?`).all(value) as LiveSessionRow[];
+}
+
+/** The owner's monthly minutes limit of a live project; null for none (or no such project). */
+export function projectMinutesCap(projectId: string): number | null {
+  const row = database()
+    .prepare("SELECT monthly_minutes_cap FROM projects WHERE id = ? AND deleted_at IS NULL")
+    .get(projectId) as { monthly_minutes_cap: number | null } | undefined;
+  return row?.monthly_minutes_cap ?? null;
+}
+
+/** Seconds of a project's sessions booked to a month. */
+export function projectSecondsIn(projectId: string, month: string): number {
+  const row = database()
+    .prepare(
+      "SELECT COALESCE(SUM(seconds), 0) AS seconds FROM ledger WHERE project_id = ? AND kind = 'usage' AND month = ?"
+    )
+    .get(projectId, month) as { seconds: number };
+  return row.seconds;
+}
+
+// --- encrypted secrets --------------------------------------------------------------
+
+export type EncryptedSecretColumn = "model_key_enc" | "webhook_secret_enc";
+
+/** Every live project's encrypted secrets, for checking and re-encrypting them under a new key. */
+export function projectSecrets(): Pick<ProjectRow, "id" | "model_key_enc" | "webhook_secret_enc">[] {
+  return database()
+    .prepare(
+      `SELECT id, model_key_enc, webhook_secret_enc FROM projects
+       WHERE deleted_at IS NULL AND (model_key_enc IS NOT NULL OR webhook_secret_enc IS NOT NULL) ORDER BY id`
+    )
+    .all() as Pick<ProjectRow, "id" | "model_key_enc" | "webhook_secret_enc">[];
+}
+
+/** Replaces one encrypted secret only if it is still `from`, so a key the customer saved meanwhile is never undone. */
+export function replaceProjectSecret(
+  projectId: string,
+  column: EncryptedSecretColumn,
+  from: string,
+  to: string
+): boolean {
+  const result = database()
+    .prepare(`UPDATE projects SET ${column} = ? WHERE id = ? AND ${column} = ?`)
+    .run(to, projectId, from);
+  return result.changes === 1;
 }
 
 /** An invitation to sign up for Max Cloud: one use, until it expires. */

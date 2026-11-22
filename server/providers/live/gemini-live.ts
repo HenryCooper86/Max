@@ -81,6 +81,24 @@ function rawToString(raw: RawData): string {
   return Buffer.from(raw as ArrayBuffer).toString("utf8");
 }
 
+/**
+ * Strips the API key from text about this engine's connection. The key rides
+ * in the WebSocket URL (`?key=`), and a malformed URL, a socket error or a
+ * close reason can quote that URL; the text is then logged and shown to the
+ * connected client, and in Max Cloud the key is a customer's. Both the raw and
+ * URL-encoded forms are removed, and any `key=` parameter whatever its value.
+ * Exported for tests.
+ */
+export function redactGeminiSecrets(text: string, secrets: string[]): string {
+  let redacted = text;
+  for (const secret of secrets) {
+    if (!secret) continue;
+    for (const form of new Set([secret, encodeURIComponent(secret)]))
+      redacted = redacted.split(form).join("[redacted]");
+  }
+  return redacted.replace(/([?&]key=)[^&\s"'#]+/gi, "$1[redacted]");
+}
+
 export function geminiConfigured(): boolean {
   return Boolean(env("GEMINI_API_KEY", "GOOGLE_API_KEY"));
 }
@@ -122,9 +140,12 @@ export function createGeminiLiveEngine(
     events?.onResponseStarted();
   }
 
+  let secrets: string[] = [];
+  const redact = (text: string) => redactGeminiSecrets(text, secrets);
+
   function handle(message: ServerMessage): void {
     if (message.goAway) log.info("gemini live session ending soon", { timeLeft: message.goAway.timeLeft });
-    if (message.error?.message) events?.onError(message.error.message);
+    if (message.error?.message) events?.onError(redact(message.error.message));
     for (const call of message.toolCall?.functionCalls ?? []) {
       if (!call.id || !call.name) continue;
       // The model asking for a tool is it answering: the wearer's turn is
@@ -224,6 +245,7 @@ export function createGeminiLiveEngine(
       events = engineEvents;
       const apiKey = apiKeyOverride ?? env("GEMINI_API_KEY", "GOOGLE_API_KEY");
       if (!apiKey) return Promise.reject(new Error("Gemini Live: API key is not configured on the relay"));
+      secrets = [apiKey];
       const base = env("GEMINI_LIVE_URL") ?? DEFAULT_URL;
       return new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -233,7 +255,14 @@ export function createGeminiLiveEngine(
             reject(error);
           }
         };
-        const upstream = createSocket(`${base}?key=${encodeURIComponent(apiKey)}`);
+        let upstream: WebSocket;
+        try {
+          upstream = createSocket(`${base}?key=${encodeURIComponent(apiKey)}`);
+        } catch (error) {
+          // ws rejects a malformed URL by quoting it, key included.
+          fail(new Error(`Gemini Live: ${redact(error instanceof Error ? error.message : String(error))}`));
+          return;
+        }
         socket = upstream;
         upstream.on("open", () => sendMessage(setup(config)));
         // Gemini sends JSON in binary frames as well as text frames.
@@ -257,12 +286,15 @@ export function createGeminiLiveEngine(
           fail(new Error(`Gemini Live: HTTP ${response.statusCode}${hint}`));
         });
         upstream.on("error", (error) => {
-          log.warn("gemini live socket error", { message: error.message });
-          fail(new Error(`Gemini Live: ${error.message}`));
+          const message = redact(error.message);
+          log.warn("gemini live socket error", { message });
+          fail(new Error(`Gemini Live: ${message}`));
         });
         upstream.on("close", (code, reason) => {
           // A rejected setup (bad model, bad key) arrives as a close with the reason.
-          const detail = `closed (${code}${reason.length ? ` ${reason.toString("utf8").slice(0, 160)}` : ""})`;
+          // Redacted before trimming, so a cut cannot leave part of the key behind.
+          const text = reason.length ? ` ${redact(reason.toString("utf8")).slice(0, 160)}` : "";
+          const detail = `closed (${code}${text})`;
           fail(new Error(`Gemini Live: ${detail}`));
           if (!closedByRelay && ready) events?.onClosed(detail);
         });

@@ -31,11 +31,19 @@ class LocationManagerSource(private val context: Context) : LocationSource {
 
     private var listener: LocationListenerAdapter? = null
 
+    override fun start(onFix: (LatLon) -> Unit) = start(onFix) { _, _, _ -> }
+
+    /**
+     * Also reports each fix's ground speed (km/h, null when the fix has none
+     * usable), the fix's elapsedRealtime in millis and whether it came from the
+     * GPS provider, before [onFix] sees the position. Same single stream: no
+     * extra provider or accuracy request.
+     */
     @SuppressLint("MissingPermission")
-    override fun start(onFix: (LatLon) -> Unit) {
+    fun start(onFix: (LatLon) -> Unit, onSpeed: (kmh: Double?, fixAtMs: Long, fromGps: Boolean) -> Unit) {
         if (listener != null) return // idempotent: already streaming
         if (!hasPermission()) return
-        val newListener = LocationListenerAdapter(onFix)
+        val newListener = LocationListenerAdapter(onFix, onSpeed)
         val service = manager ?: return
         val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
             .filter { runCatching { service.isProviderEnabled(it) }.getOrDefault(false) }
@@ -67,10 +75,22 @@ class LocationManagerSource(private val context: Context) : LocationSource {
 
     /** A named class (rather than a SAM lambda) so `stop()` can hand the
      *  exact same listener instance back to `removeUpdates`. */
-    private class LocationListenerAdapter(private val onFix: (LatLon) -> Unit) : android.location.LocationListener {
+    private class LocationListenerAdapter(
+        private val onFix: (LatLon) -> Unit,
+        private val onSpeed: (Double?, Long, Boolean) -> Unit
+    ) : android.location.LocationListener {
         var active = true
         override fun onLocationChanged(location: Location) {
-            if (active && validNavigationFix(location)) onFix(LatLon(location.latitude, location.longitude))
+            if (!active || !validNavigationFix(location)) return
+            onSpeed(
+                io.github.henrycooper86.max.agent.gpsSpeedKmh(
+                    location.hasSpeed(), location.speed,
+                    location.hasSpeedAccuracy(), location.speedAccuracyMetersPerSecond
+                ),
+                location.elapsedRealtimeNanos / 1_000_000,
+                location.provider == LocationManager.GPS_PROVIDER
+            )
+            onFix(LatLon(location.latitude, location.longitude))
         }
     }
 }

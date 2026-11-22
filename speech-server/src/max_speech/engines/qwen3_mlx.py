@@ -15,6 +15,7 @@ import numpy as np
 from max_speech.audio import resample
 from max_speech.chunker import split_sentences
 from max_speech.engines.base import ReferenceVoice
+from max_speech.engines.mlx_gate import MLX_GATE, stepwise
 
 MODEL_RATE = 24000
 # primary language tag -> the name Qwen3-TTS expects as lang_code
@@ -101,8 +102,9 @@ class Qwen3MlxCloning:
             import mlx.core as mx
             from mlx_audio.tts.utils import load_model
 
-            model = load_model(str(model_dir))
-            mx.eval(model.parameters())
+            with MLX_GATE:
+                model = load_model(str(model_dir))
+                mx.eval(model.parameters())
         self._model = model
         self._to_array = to_array or _mx_array
 
@@ -111,7 +113,8 @@ class Qwen3MlxCloning:
         cached = reference.cache.get(_CACHE_KEY)
         if cached is None:
             samples = resample(np.asarray(reference.audio, dtype=np.float32), reference.rate, MODEL_RATE)
-            cached = self._to_array(samples)
+            with MLX_GATE:
+                cached = self._to_array(samples)
             reference.cache[_CACHE_KEY] = cached
         return cached
 
@@ -124,13 +127,15 @@ class Qwen3MlxCloning:
             if not sentence.strip():
                 continue
             lang_code = lang_code_for(sentence, language, reference.language)
-            for result in self._model.generate(
-                text=sentence,
-                ref_audio=ref_audio,
-                ref_text=reference.transcript,
-                lang_code=lang_code,
-                stream=True,
-                streaming_interval=self.streaming_interval,
+            for result in stepwise(
+                self._model.generate(
+                    text=sentence,
+                    ref_audio=ref_audio,
+                    ref_text=reference.transcript,
+                    lang_code=lang_code,
+                    stream=True,
+                    streaming_interval=self.streaming_interval,
+                )
             ):
                 chunk = np.asarray(result.audio, dtype=np.float32).reshape(-1)
                 if chunk.size:

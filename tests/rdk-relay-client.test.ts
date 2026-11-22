@@ -305,6 +305,22 @@ describe("createRelayClient lifecycle", () => {
   });
 });
 
+describe("relay credentials", () => {
+  it("passes the token as an Authorization header and keeps it out of the URL", () => {
+    const socket = fakeSocket();
+    const seen: Array<{ url: string; headers?: Record<string, string> }> = [];
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: (url, options) => {
+        seen.push({ url, headers: options.headers });
+        return socket;
+      },
+      log: () => {}
+    });
+    client.connect();
+    expect(seen).toEqual([{ url: "wss://relay.example/agent", headers: { Authorization: "Bearer tok" } }]);
+  });
+});
+
 describe("defaultSocketOptions", () => {
   it("gives the real WebSocket constructor a bounded handshake alongside TLS policy", () => {
     const opts = defaultSocketOptions(CONFIG);

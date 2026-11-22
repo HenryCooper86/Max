@@ -31,6 +31,34 @@ val maxGitCommit = if (maxGitCommitRaw.matches(Regex("^[0-9a-fA-F]{7,40}$"))) {
     maxGitCommitRaw
 }
 
+// CI passes a monotonically increasing build number with -PversionCode=; local
+// builds default to 1. A malformed value fails the build instead of silently
+// shipping an APK that cannot upgrade the installed one.
+val maxVersionCode = providers.gradleProperty("versionCode").orNull?.trim()?.let { raw ->
+    raw.toIntOrNull()?.takeIf { it in 1..2_100_000_000 }
+        ?: throw GradleException("-PversionCode must be an integer between 1 and 2100000000, got '$raw'")
+} ?: 1
+
+// Release signing is optional: with none of these set, assembleRelease still
+// produces an unsigned APK (the CI default). Each value comes from a Gradle
+// property (-P or ~/.gradle/gradle.properties) or the matching environment
+// variable, so keystore secrets never need to live in the repository.
+fun releaseSigningValue(property: String, environment: String): String? =
+    (providers.gradleProperty(property).orNull ?: providers.environmentVariable(environment).orNull)
+        ?.takeIf { it.isNotBlank() }
+val releaseSigning = mapOf(
+    "storeFile" to releaseSigningValue("maxReleaseStoreFile", "MAX_RELEASE_STORE_FILE"),
+    "storePassword" to releaseSigningValue("maxReleaseStorePassword", "MAX_RELEASE_STORE_PASSWORD"),
+    "keyAlias" to releaseSigningValue("maxReleaseKeyAlias", "MAX_RELEASE_KEY_ALIAS"),
+    "keyPassword" to releaseSigningValue("maxReleaseKeyPassword", "MAX_RELEASE_KEY_PASSWORD")
+)
+val releaseSigningConfigured = releaseSigning.values.all { it != null }
+if (!releaseSigningConfigured && releaseSigning.values.any { it != null }) {
+    // Half a configuration is a mistake, not a request for an unsigned build.
+    val missing = releaseSigning.filterValues { it == null }.keys.joinToString()
+    throw GradleException("Release signing is partly configured; missing: $missing")
+}
+
 android {
     namespace = "io.github.henrycooper86.max"
     compileSdk {
@@ -43,15 +71,31 @@ android {
         applicationId = "io.github.henrycooper86.max"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = maxVersionCode
+        // Matches the iOS marketing version.
+        versionName = "1.0.0"
         testInstrumentationRunner = "io.github.henrycooper86.max.agent.SyntheticQaInstrumentation"
         buildConfigField("String", "GIT_COMMIT", "\"$maxGitCommit\"")
         buildConfigField("String", "AMAP_ANDROID_KEY", "\"${amapAndroidKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                val keystore = file(releaseSigning.getValue("storeFile")!!)
+                if (!keystore.isFile) throw GradleException("Release keystore not found: $keystore")
+                storeFile = keystore
+                storePassword = releaseSigning.getValue("storePassword")
+                keyAlias = releaseSigning.getValue("keyAlias")
+                keyPassword = releaseSigning.getValue("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseSigningConfigured) signingConfig = signingConfigs.getByName("release")
+            // R8 stays off until the checks listed in proguard-rules.pro pass.
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

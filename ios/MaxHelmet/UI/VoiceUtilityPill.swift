@@ -18,7 +18,9 @@ struct MuteUtilityPill: View {
         .buttonStyle(.plain)
         .frame(minHeight: muteUtilityMinimumHitHeight)
         .contentShape(Rectangle())
-        .accessibilityLabel(muted ? L("pill.unmute") : L("pill.mute"))
+        .accessibilityLabel(muteUtilityAccessibility(muted: muted).label)
+        .accessibilityValue(muteUtilityAccessibility(muted: muted).value)
+        .accessibilityHint(muteUtilityAccessibility(muted: muted).hint)
         .accessibilityIdentifier(HudAccessibilityID.muteUtility)
     }
 }

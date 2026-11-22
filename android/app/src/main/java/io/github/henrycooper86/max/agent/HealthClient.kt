@@ -2,8 +2,6 @@ package io.github.henrycooper86.max.agent
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.os.Handler
-import android.os.Looper
 import io.github.henrycooper86.max.BuildConfig
 import io.github.henrycooper86.max.ui.HealthInfo
 import io.github.henrycooper86.max.ui.parseHealth
@@ -13,39 +11,33 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
 
 /**
  * Best-effort GET /health against the relay (same base-URL derivation and
  * debug-only self-signed trust as [AuthClient]). Failures are silent: the
  * callback simply never fires, so branding and voice defaults stay in place.
  */
-class HealthClient {
-    private val mainHandler = Handler(Looper.getMainLooper())
+class HealthClient(
+    private val debugBuild: Boolean = BuildConfig.DEBUG,
+    private val deliver: (() -> Unit) -> Unit = MainThread::post
+) {
     private var allowSelfSigned = false
-    private var httpClient = buildClient(false)
+    private var httpClient = relayHttpClient(allowSelfSigned = false, debugBuild = debugBuild)
 
     fun fetch(relayUrl: String, token: String, allowSelfSignedTls: Boolean, onResult: (HealthInfo) -> Unit) {
         val base = AuthClient.authBaseUrl(relayUrl) ?: return
-        val trust = BuildConfig.DEBUG && allowSelfSignedTls
-        if (trust != allowSelfSigned) {
-            allowSelfSigned = trust
-            httpClient = buildClient(trust)
-        }
+        val client = clientFor(allowSelfSignedTls)
         val request = runCatching {
             Request.Builder().url("$base/health").apply {
                 if (token.isNotBlank()) header("Authorization", "Bearer ${token.trim()}")
             }.build()
         }.getOrNull() ?: return
-        httpClient.newCall(request).enqueue(object : Callback {
+        client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = Unit
             override fun onResponse(call: Call, response: Response) {
                 val body = response.use { if (it.isSuccessful) it.body?.string() else null }
                 val info = body?.let(::parseHealth) ?: return
-                mainHandler.post { onResult(info) }
+                deliver { onResult(info) }
             }
         })
     }
@@ -57,17 +49,13 @@ class HealthClient {
      */
     fun fetchLogo(relayUrl: String, token: String, allowSelfSignedTls: Boolean, path: String, onResult: (Bitmap?) -> Unit) {
         val base = AuthClient.authBaseUrl(relayUrl) ?: return
-        val trust = BuildConfig.DEBUG && allowSelfSignedTls
-        if (trust != allowSelfSigned) {
-            allowSelfSigned = trust
-            httpClient = buildClient(trust)
-        }
+        val client = clientFor(allowSelfSignedTls)
         val request = runCatching {
             Request.Builder().url(base + path).apply {
                 if (token.isNotBlank()) header("Authorization", "Bearer ${token.trim()}")
             }.build()
         }.getOrNull() ?: return
-        httpClient.newCall(request).enqueue(object : Callback {
+        client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = Unit
             override fun onResponse(call: Call, response: Response) {
                 val bitmap = response.use { r ->
@@ -77,24 +65,19 @@ class HealthClient {
                     val bytes = body.source().let { src -> src.request(MAX_LOGO_BYTES + 1); src.buffer.readByteArray() }
                     if (bytes.size > MAX_LOGO_BYTES) null else decodeLogo(bytes)
                 }
-                mainHandler.post { onResult(bitmap) }
+                deliver { onResult(bitmap) }
             }
         })
     }
 
-    private fun buildClient(trustAll: Boolean): OkHttpClient {
-        val builder = OkHttpClient.Builder()
-        if (BuildConfig.DEBUG && trustAll) {
-            val manager = object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
-                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            }
-            val context = SSLContext.getInstance("TLS").apply { init(null, arrayOf(manager), SecureRandom()) }
-            builder.sslSocketFactory(context.socketFactory, manager)
-            builder.hostnameVerifier { _, _ -> true }
+    @Synchronized
+    internal fun clientFor(allowSelfSignedTls: Boolean): OkHttpClient {
+        val trust = selfSignedTrustAllowed(debugBuild, allowSelfSignedTls)
+        if (trust != allowSelfSigned) {
+            allowSelfSigned = trust
+            httpClient = relayHttpClient(trust, debugBuild)
         }
-        return builder.build()
+        return httpClient
     }
 }
 

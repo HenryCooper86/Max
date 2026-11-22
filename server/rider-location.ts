@@ -1,5 +1,6 @@
 import { wgs84ToGcj02, type GeoPoint } from "../shared/geo";
 import { haversineMeters } from "../shared/guidance";
+import type { PromptAudience } from "../shared/session";
 
 export function asksCurrentLocation(text: string): boolean {
   const value = text
@@ -41,8 +42,9 @@ export class RiderLocationContext {
     return `我已收到手机 GPS 位置：纬度 ${fix.lat.toFixed(5)}，经度 ${fix.lon.toFixed(5)}。暂时还没有解析出街道地址。`;
   }
 
-  role(): string {
-    return `\n\n[手机实时定位] ${this.answer()}这是手机提供的位置，与导航是否启动无关。只能复述此定位，不得猜测街道、门牌或地点；默认/演示天气地点不是骑手位置。`;
+  role(audience: PromptAudience = "rider"): string {
+    const who = audience === "rider" ? "骑手" : "用户";
+    return `\n\n[手机实时定位] ${this.answer()}这是手机提供的位置，与导航是否启动无关。只能复述此定位，不得猜测街道、门牌或地点；默认/演示天气地点不是${who}位置。`;
   }
 
   async update(lat: number, lon: number): Promise<void> {

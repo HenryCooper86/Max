@@ -71,7 +71,13 @@ Keep the key you generated: the relay needs it as `MAX_SPEECH_API_KEY` (live ses
 - **Models** download into `/data/models` on first start. Keep `/data` on a volume so a restart does not download
   them again.
 - **Health.** `/healthz` returns `{"ok": true, "ready": false}` while models load and `ready: true` after. The image's
-  healthcheck is healthy once `ready` is true, with a 20 minute start period for the first download.
+  healthcheck is healthy once `ready` is true, with a 20 minute start period for the first download. A failed load
+  is not left hanging: download and network failures are retried (4 tries, 5 s then 10 s then 20 s apart; see
+  `SPEECH_LOAD_ATTEMPTS` and `SPEECH_LOAD_BACKOFF_S`), and the last error is in the `/healthz` body as `error`. When
+  the tries run out, or the failure is a configuration or install problem, `/healthz` answers `503` with the error and
+  the process exits with status 1, so `restart: unless-stopped` (or systemd, launchd) starts it again. Read the reason
+  with `docker logs max-speech`. A bad configuration therefore shows as a restart loop, not as a server that stays up
+  answering 503.
 - **Port clash.** A native Max Speech on the same machine also uses 8790. Publish the container elsewhere, for
   example `-p 127.0.0.1:18790:8790`, and point the relay at that port.
 - **Runs as user 10001**, not root. A bind mount for `/data` must be writable by that user.
@@ -82,6 +88,26 @@ Keep the key you generated: the relay needs it as `MAX_SPEECH_API_KEY` (live ses
 echo "SPEECH_API_KEY=$(openssl rand -hex 24)" >> .env
 docker compose -f docker-compose.local-voice.yml up -d --build
 ```
+
+To run it together with the relay from `docker-compose.yml`, list both files:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-voice.yml up -d --build
+```
+
+Compose starts the relay without waiting for Ollama, so its first chat request can fail while Ollama is still
+starting (Ollama has a healthcheck, `ollama list`). To make the relay wait, put this in a third file and add
+`-f` for it (it cannot be in the local-voice file, which has to stay valid on its own):
+
+```yaml
+services:
+  relay:
+    depends_on:
+      ollama: { condition: service_healthy }
+```
+
+The Ollama image is pinned to a tested release (`ollama/ollama:0.40.17`), so it does not change when images are pulled
+again. Raise the tag in `docker-compose.local-voice.yml` when you have tested a newer one.
 
 The compose file publishes both ports on `127.0.0.1` only. Ollama has no authentication, so do not publish `11434`
 beyond loopback unless something in front of it authenticates; with the relay in the same network you can remove that
@@ -160,6 +186,33 @@ cpu one. Uncomment the `deploy` block on `max-speech`, then:
 MAX_SPEECH_TARGET=cuda docker compose -f docker-compose.local-voice.yml up -d --build
 ```
 
+## Limits
+
+| What                                                      | Default                     | Setting                              |
+| --------------------------------------------------------- | --------------------------- | ------------------------------------ |
+| Live sessions at once                                     | `cpu` 2, `mlx` 4, `cuda` 8  | `SPEECH_MAX_SESSIONS`                |
+| Time for a new session to send its first `session.update` | 15 s                        | `SPEECH_SESSION_HANDSHAKE_TIMEOUT_S` |
+| Time a session may receive nothing from its client        | off (`0`)                   | `SPEECH_SESSION_IDLE_TIMEOUT_S`      |
+| A client that stops answering WebSocket pings             | closed within 40 s          | fixed (ping 20 s, pong 20 s)         |
+| Transcription requests in progress                        | 4                           | `SPEECH_MAX_TRANSCRIPTIONS`          |
+| Time a transcription upload may take to arrive            | 300 s                       | `SPEECH_UPLOAD_TIMEOUT_S`            |
+| Voice design requests in progress                         | 1 running, 1 waiting        | fixed                                |
+| JSON request body (everything except audio uploads)       | 256 KB; lexicon 1,172,096 B | fixed                                |
+| Uploaded audio                                            | 25 MB, 15 minutes           | fixed                                |
+
+A session over the cap gets the error `busy` and is closed with code 1013 and reason `busy`; the relay reports
+"Max Speech is at its limit of live sessions". A timeout of `0` turns that timeout off. Each session holds a voice
+detector and recognizer stream and shares one speech engine with the others, so raise the cap only as far as the
+machine keeps up: the defaults are conservative. A transcription over the cap gets `429` with `Retry-After` before its
+upload is read, and one whose upload has not arrived after `SPEECH_UPLOAD_TIMEOUT_S` gets `408`; a design request
+beyond the two in progress gets `429`. `curl` the `live.max_sessions` field of `/.well-known/max-speech` to see the cap a server is running with.
+
+The idle timeout is off because the relay sends no audio while a rider is muted: with a timeout, a muted rider's
+session was closed every 10 minutes, and on a full server its reconnects were refused with `busy`. A client whose
+network is gone stops answering the server's WebSocket pings and is closed within 40 s, which frees its slot. Set
+`SPEECH_SESSION_IDLE_TIMEOUT_S` only if you also want quiet sessions closed; `ready` and `live.idle_timeout_s` in
+`/.well-known/max-speech` report it (`null` when off).
+
 ## Behind a reverse proxy
 
 Always set `SPEECH_API_KEY`. A proxy on the same machine makes every client look like loopback, so without a key
@@ -201,6 +254,9 @@ anything (`docker run --rm max-speech:cpu max-speech engines`). Neither needs an
 `SPEECH_DATA_DIR` (`/data`, or `~/.max-speech` natively) holds:
 
 - `models/`: downloaded models. Safe to delete; they download again.
+- `voice-audit.log`: one JSON line for every voice created or deleted (when, which voice, speaker, audio hash, caller
+  address and key id), mode 0600. It is personal data too, and it is an ordinary file: see what the consent record
+  does and does not prove in the [Max Speech README](../speech-server/README.md#what-the-consent-record-does-and-does-not-prove).
 - `voices/`: custom voices. These are **consented recordings of real people** and the cloning data derived from them.
   Treat them as personal data: back them up to somewhere access-controlled, delete a voice when its owner withdraws
   consent, and do not copy them into shared storage.
@@ -248,7 +304,12 @@ The CPU Docker image is about 800 MB; the CUDA image about 4.1 GB. The `cpu` fig
   server's `SPEECH_API_KEY`. Check that a native server on 8790 is not answering instead of your container.
 - **403 `forbidden_origin`** on a WebSocket from a web page: add the page's origin to `SPEECH_ALLOWED_ORIGINS`.
 - **503 while starting**: the models are still downloading or loading. Watch `docker logs -f max-speech` and
-  `/healthz` for `ready: true`. This is normal for the first few minutes.
+  `/healthz` for `ready: true`. This is normal for the first few minutes. If `/healthz` itself answers 503, the load
+  failed for good and the container is restarting; its `error` field and the log say why.
+- **"incomplete ... interrupted first download"** at start: a model download was cut off and the server started
+  without a network. Start it again with network access, or run `max-speech download`; partial files are kept and the
+  download continues.
+- **Sessions are refused with `busy`**: the server is at `SPEECH_MAX_SESSIONS`. Close idle clients or raise it.
 - **A download stalls**: the models come from Hugging Face and GitHub releases, and some downloads go slowly for
   minutes without failing. Wait, or stop and start the container; completed files are kept in the volume and the
   download resumes. Behind a proxy, pass `HTTPS_PROXY` to the container. Corporate networks may block one of the hosts.

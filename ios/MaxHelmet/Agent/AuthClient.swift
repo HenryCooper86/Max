@@ -122,8 +122,8 @@ final class AuthClient: NSObject {
     }
 }
 
-// Self-signed TLS opt-in, mirroring AgentSession's delegate: the Lightsail
-// test relay uses a self-signed certificate, gated behind the settings toggle.
+// Self-signed TLS opt-in, mirroring AgentSession's delegate: a test relay may
+// use a self-signed certificate, gated behind the settings toggle.
 extension AuthClient: URLSessionDelegate {
     func urlSession(
         _ session: URLSession,

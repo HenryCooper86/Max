@@ -223,7 +223,8 @@ internal fun SettingsPanel(
             SettingsRow(tr(Str.WEATHER), supporting = tr(Str.WEATHER_PENDING))
         }
         SettingsRow(tr(Str.SPEED_SEGMENT), supporting = relocalize(state.rideContext.routePhase)) {
-            Text("${state.rideContext.speedKmh} km/h", color = c.text, style = VisorType.mono)
+            // Unknown speed is shown as unknown, not as standing still.
+            Text("${state.speedKmh?.let { Math.round(it) } ?: "—"} km/h", color = c.text, style = VisorType.mono)
         }
         SettingsRow(tr(Str.BATTERY)) { Text("${state.rideContext.batteryPct}%", color = c.text, style = VisorType.mono) }
         SettingsBlock {

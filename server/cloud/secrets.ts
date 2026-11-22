@@ -17,7 +17,9 @@ const scrypt = promisify(scryptCallback) as (password: string, salt: string, key
 const SCRYPT_KEY_LENGTH = 64;
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
-const ENCRYPTION_VERSION = "v1";
+const ENCRYPTION_VERSION = "v2";
+/** Written before key ids existed; still read. */
+const LEGACY_VERSION = "v1";
 
 /** SHA-256 hex digest of a token, the only form tokens are stored in. */
 export function hashToken(token: string): string {
@@ -56,23 +58,42 @@ function associatedData(projectId: string): Buffer {
   return Buffer.from(`max-cloud:model-key:${projectId}`, "utf8");
 }
 
-/** Encrypts a model key as `v1:<iv>:<tag>:<ciphertext>` (base64 parts). */
+/**
+ * A short public fingerprint of an encryption key, written into every new
+ * ciphertext so the relay knows which key it needs, and an operator rotating
+ * CLOUD_SECRET_KEY can tell which rows still use the old one. 32 bits of a
+ * hash say nothing useful about a 256-bit random key.
+ */
+export function secretKeyId(key: Buffer): string {
+  return createHash("sha256").update("max-cloud:key-id:").update(key).digest("hex").slice(0, 8);
+}
+
+/** Encrypts a model key as `v2:<key id>:<iv>:<tag>:<ciphertext>` (base64 parts). */
 export function encryptModelKey(plain: string, key: Buffer, projectId: string): string {
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
   cipher.setAAD(associatedData(projectId));
   const ciphertext = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return [ENCRYPTION_VERSION, iv.toString("base64"), tag.toString("base64"), ciphertext.toString("base64")].join(":");
+  return [
+    ENCRYPTION_VERSION,
+    secretKeyId(key),
+    iv.toString("base64"),
+    tag.toString("base64"),
+    ciphertext.toString("base64")
+  ].join(":");
 }
 
-/** Decrypts a stored model key; undefined when it is malformed, tampered with or under another key. */
-export function decryptModelKey(stored: string, key: Buffer, projectId: string): string | undefined {
+/** The key id a stored secret names; undefined for `v1` ciphertexts, which name none. */
+export function storedSecretKeyId(stored: string): string | undefined {
   const parts = stored.split(":");
-  if (parts.length !== 4 || parts[0] !== ENCRYPTION_VERSION) return undefined;
-  const iv = Buffer.from(parts[1] ?? "", "base64");
-  const tag = Buffer.from(parts[2] ?? "", "base64");
-  const ciphertext = Buffer.from(parts[3] ?? "", "base64");
+  return parts.length === 5 && parts[0] === ENCRYPTION_VERSION ? parts[1] : undefined;
+}
+
+function openWith(key: Buffer, parts: string[], projectId: string): string | undefined {
+  const iv = Buffer.from(parts[0] ?? "", "base64");
+  const tag = Buffer.from(parts[1] ?? "", "base64");
+  const ciphertext = Buffer.from(parts[2] ?? "", "base64");
   if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES) return undefined;
   try {
     const decipher = createDecipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
@@ -82,4 +103,29 @@ export function decryptModelKey(stored: string, key: Buffer, projectId: string):
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Decrypts a stored model key with whichever of `keys` it was written with
+ * (the current key and, while rotating, the previous one). Reads `v2` and the
+ * older `v1`, which names no key and so is tried with each. Undefined when it
+ * is malformed, tampered with or under none of the keys.
+ */
+export function decryptModelKey(
+  stored: string,
+  keys: Buffer | readonly Buffer[],
+  projectId: string
+): string | undefined {
+  const candidates = Buffer.isBuffer(keys) ? [keys] : keys;
+  const parts = stored.split(":");
+  if (parts.length === 4 && parts[0] === LEGACY_VERSION) {
+    for (const key of candidates) {
+      const plain = openWith(key, parts.slice(1), projectId);
+      if (plain !== undefined) return plain;
+    }
+    return undefined;
+  }
+  if (parts.length !== 5 || parts[0] !== ENCRYPTION_VERSION) return undefined;
+  const key = candidates.find((candidate) => secretKeyId(candidate) === parts[1]);
+  return key ? openWith(key, parts.slice(2), projectId) : undefined;
 }

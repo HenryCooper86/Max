@@ -127,3 +127,31 @@ database work the same way: the webhook gives you one line per session.
 The relay meters minutes; what you charge is up to you. Your cost per minute is mostly your model provider's realtime
 audio price plus a little hosting. Check your provider's current price list, add your margin, and consider a free
 allowance so people can try your product before they pay.
+
+## Max Cloud billing
+
+A relay running [Max Cloud](cloud.md) bills its customers' projects from their prepaid balance by different rules from
+the metering above, because there money changes hands:
+
+- **The clock starts when the agent can talk.** A Max Cloud session is billed from the moment the project's voice model
+  (OpenAI Realtime, Gemini Live or Grok Voice) has accepted the session, not from when the socket connected. The time
+  spent opening the socket, sending `session.start` and waiting for the model is free.
+- **Upstream outages are not billed.** If the model drops mid-session, the clock stops while the relay reconnects to it
+  and starts again once it is back. A session whose model never connects, or which ends because the model stayed down,
+  is booked at 0 seconds.
+- **The clock stops when the connection closes**, whoever closes it.
+- Each session is booked once, rounded up to the whole second, against the month's free seconds first and then the
+  balance at ¥0.15 a minute (rounded up to the whole fen).
+- **Months** are calendar months in UTC. A session that crosses midnight at a month's end is booked whole to the month
+  it **ended** in: its seconds count against that month's free allowance and appear in that month's usage, and none in
+  the month it started in.
+- **Running sessions are checked every 5 seconds.** A session starts only when the customer has at least 5 seconds
+  left, and is closed with code `4003` when their balance (or the project's monthly minutes limit) runs out, so a
+  customer can go at most 5 seconds per open session past what they had.
+- **A crash loses at most 5 seconds.** Sessions are checkpointed every 5 seconds; a session cut off by a crash or a
+  killed relay is booked up to its last checkpoint once the relay that ran it has been silent for a minute.
+- **Nothing is lost when the database refuses a write.** A session whose booking fails (a full disk, a locked
+  database) is kept and booked by a later retry, every 15 seconds, exactly once.
+
+The relay-wide meter above still counts a Max Cloud session's whole connection time under `project:<id>`; it is not
+what the customer pays.

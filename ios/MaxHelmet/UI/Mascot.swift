@@ -128,6 +128,8 @@ struct Mascot: View {
     let mood: MascotMood
     /// Off when the phone is sideways: the tilt axes are the portrait ones.
     var tiltEnabled = true
+    /// Critical heat: the animated film stops along with the visor.
+    var animationsPaused = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var pilot = MascotPilot.shared
     @State private var drifting = false
@@ -161,7 +163,7 @@ struct Mascot: View {
                 width: (pose.offset.width + pilot.tilt.offset.width) * size.width,
                 height: (pose.offset.height + pilot.tilt.offset.height) * size.height
             )
-            MascotFilm(still: reduceMotion || Loc.isRunningTests)
+            MascotFilm(still: reduceMotion || animationsPaused || Loc.isRunningTests)
                 // A slow drift, so the bird never hangs perfectly still.
                 .offset(y: reduceMotion ? 0 : (drifting ? -size.height * 0.05 : size.height * 0.03))
                 .scaleEffect(x: facingLeft ? -pose.scale : pose.scale, y: pose.scale)
@@ -171,8 +173,9 @@ struct Mascot: View {
                 .animation(reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.62), value: mood)
                 .animation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.7), value: finger)
         }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        // Decoration: VoiceOver skips it and touches fall through to the visor.
+        .allowsHitTesting(mascotAccessibilityContract.hitTestable)
+        .accessibilityHidden(mascotAccessibilityContract.hidden)
         .onAppear {
             guard !reduceMotion else { return }
             withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) { drifting = true }

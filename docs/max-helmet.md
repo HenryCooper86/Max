@@ -67,7 +67,7 @@ The native iOS client (`ios/`, Swift + SwiftUI) also speaks the same `/agent` re
 the web HUD and Android app. It mirrors the hands-free HUD, mic streaming, 24 kHz PCM playback,
 barge-in, reconnect handling, live weather, transcript export, and TTS fallback while using
 iOS-native audio routing and background audio. See the [iOS guide](../ios/README.md) ([中文](../ios/README.zh-CN.md)) for Xcode,
-relay URL, and self-signed test-server setup.
+relay URL, and `MAX_RELAY_HOST` setup.
 
 ## RDK Helmet
 
@@ -84,7 +84,7 @@ The embedded RDK X5 client runs the helmet audio, camera, local HUD, and ADAS de
 - Proactive scene watching (环境观察) — embedded board only, off by default. When enabled via voice ("开启环境观察"), the helmet's camera samples the forward scene at 1 frame/30 s behind a grayscale-histogram change gate; unchanged scenes cost nothing. Changed frames are submitted for brief unsolicited observation via the relay's proactive vision governor, which enforces, in order: disabled / 40 model calls per rolling hour / 30 s ADAS-deduplication window / speech gate (honoring thinking window) / 2 min cooldown between observations. Every dropped frame is metered in `/health`'s `watchDrops` counters. Surviving frames receive the watching prompt and the agent speaks at most one short non-hazard observation, or stays silent (无-sentinel; processing failures always silent). Off by default and dies with the session: the board disables watching on relay disconnect or control-socket disconnect, and the governor refuses frames from sessions that never enabled it. Unset `ARK_API_KEY` and `ARK_MODEL` use the deterministic keyless mock provider (replies "前方有施工路段，注意慢行。" deterministically). The live Ark path remains unverified — no quality claims about model accuracy; the relay makes no promise the model notices everything. Privacy: only the sampled frame and metadata travel; nothing is cached server-side.
 - Voice-triggered device actions (iOS) — spoken commands drive real device capabilities over a `device.command` / `device.result` protocol: torch, Max's own playback volume, Apple Music / local-library playback, SMS composition, and dialing (incl. 110/120/122). The relay parses the rider's utterance with a pure zh+en command grammar, dispatches the action, and reconciles the result so Max's spoken confirmation always matches the real outcome — on failure it truncates the reply and speaks the truth. Limits are honest: dialing and SMS require the native iOS confirmation tap, music can't reach third-party players, SMS is refused above 5 km/h. Contact numbers never leave the device; spoken names are redacted from stored QA transcripts. Works on the mock provider without Doubao credentials.
 - Voice-triggered live navigation (iOS) — "导航去X" starts in-app turn-by-turn guidance built on a pure `GuidanceEngine` (route matching, off-route detection, prompt timing — all unit-tested from lat/lon literals). Routing is relay-side: `nav.request`/`nav.route`/`nav.error` over the agent socket reach the same Amap driving service the web HUD uses (GCJ-02 on the wire, WGS-84 inside the app, converted at the protocol boundary), so destinations resolve identically across platforms and the keyless mock route works end-to-end with no Amap key configured. Guidance semantics are shared verbatim with web — one six-rule `GuidanceEngine` contract, ported to Swift and tested against the same table — and speak maneuver prompts at ~400 m / ~150 m / the turn, with one debounced reroute per wrong turn and an arrival announcement. The route card uses the native AMap iOS 3D Map SDK only after just-in-time consent, converts WGS-84 display inputs to GCJ-02, and shows an honest unavailable state when maps cannot be used; there is no MapKit fallback. "停止导航" ends it. Stays in-app (never hands off) so the device-action layer keeps working; runs during the foreground hands-free session, so no background-location permission. Honest limits kept: car routing only, so it does not respect 摩托车禁行 roads, and a relay that's down or unreachable is a spoken failure, not a silent retry elsewhere.
-- Voice-triggered live navigation (web) — the same "导航去X" / "停止导航" flow now guides from the browser HUD too. Routing runs relay-side (`nav.request`/`nav.route`/`nav.error` over `/agent`) against the Amap Web 服务 REST API (place search + v5 driving, GCJ-02 throughout); with no `AMAP_API_KEY` configured the relay falls back to a deterministic mock route so the demo still works keylessly. The web HUD guides with the same maneuver-timing rules as iOS, ported to a shared TypeScript `GuidanceEngine` (`shared/guidance.ts`) so both platforms are tested against one table, plus an on-map ride simulator (演示导航 walks the route; 演示偏航 forces an off-route reroute) for demoing without a real ride; if that reroute request fails, guidance stops cleanly with a spoken "无法重新规划路线，已停止导航" instead of continuing on the stale route, matching iOS and Android. The Amap JS API tile layer renders the route on a live map; its 安全密钥 (`AMAP_JS_SECRET`) never reaches the browser — it stays server-side inside the `/_AMapService` proxy, which signs requests on the map's behalf. Same honesty limit as iOS: car routing only, no motorcycle profile, so 摩托车禁行 roads aren't respected.
+- Voice-triggered live navigation (web) — the same "导航去X" / "停止导航" flow now guides from the browser HUD too. Routing runs relay-side (`nav.request`/`nav.route`/`nav.error` over `/agent`) against the Amap Web 服务 REST API (place search + v5 driving, GCJ-02 throughout); with no `AMAP_API_KEY` configured the relay falls back to a deterministic mock route so the demo still works keylessly. The web HUD guides with the same maneuver-timing rules as iOS, ported to a shared TypeScript `GuidanceEngine` (`shared/guidance.ts`) so both platforms are tested against one table, plus an on-map ride simulator (演示导航 walks the route; 演示偏航 forces an off-route reroute) for demoing without a real ride; if that reroute request fails, guidance stops cleanly with a spoken "无法重新规划路线，已停止导航" instead of continuing on the stale route, matching iOS and Android. The Amap JS API tile layer renders the route on a live map, using the browser key in `AMAP_JS_KEY` (the map panel is hidden without it); its 安全密钥 (`AMAP_JS_SECRET`) never reaches the browser — it stays server-side inside the `/_AMapService` proxy, which signs requests on the map's behalf. Same honesty limit as iOS: car routing only, no motorcycle profile, so 摩托车禁行 roads aren't respected.
 - Voice-triggered live navigation (Android) — the same "导航去X" / "停止导航" flow guides from the native app on the shared relay route protocol. GCJ-02 stays on the wire and inside the app; GPS fixes are converted once at the controller boundary. The Kotlin guidance engine follows the same six-rule contract as web and iOS. The Android AMap SDK displays the route, destination, and rider position after map consent when a separately registered Android key is configured; without a usable key, text and voice guidance continue with an unavailable-map state. The first-fix deadline is 8 s. Guidance runs inside the foreground session and uses car routing, which does not account for motorcycle-restricted roads.
 - iPhone companion navigation for the RDK helmet — an authenticated iOS account pairs to one durable RDK device with a six-digit, single-use code, then explicitly starts a separate **Helmet Ride** to forward precise phone fixes through `/companion`. The RDK HUD and ranked audio path own route guidance, pause when the fix is stale or unavailable, resume on a fresh fix, and let armed ADAS alerts preempt ordinary navigation speech. Pairing never starts location, login/app launch never resumes a ride, and Stop Helmet Ride, Unpair, logout, or force-quit ends forwarding. No map or raw-coordinate UI and no fix persistence are added to the phone companion flow.
 - Agent identity — names no company and never the underlying model vendor, in Chinese and English.
@@ -123,7 +123,7 @@ The embedded RDK X5 client runs the helmet audio, camera, local HUD, and ADAS de
 - Vitest for pure helper/protocol tests
 - Native Android: Kotlin, Jetpack Compose, OkHttp, AudioRecord/AudioTrack
 - Native iOS: Swift, SwiftUI, URLSessionWebSocketTask, AVAudioEngine/AVAudioPlayerNode
-- pm2 · Caddy · AWS Lightsail (test deployment)
+- pm2 · Caddy · AWS Lightsail (example deployment)
 
 ## Project Structure
 
@@ -173,13 +173,13 @@ All clients use the same `/agent` relay and session contract. The web HUD is the
 implementation; Android and iOS port the same protocol helpers, transcript rules, ride-context
 mapping, audio frame sizes, reconnect behavior, barge-in, and TTS fallback.
 
-| Client  | Location   | UI/audio stack                                                                | Local relay URL                                                            | Notes                                                                                                                          |
-| ------- | ---------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Web     | `src/`     | React + Web Audio + `AudioWorklet`                                            | same-origin `/agent` through Vite proxy                                    | Best for fast iteration, screenshots, and browser mic/TTS behavior.                                                            |
-| Android | `android/` | Jetpack Compose + `AudioRecord` + `AudioTrack`                                | emulator: `ws://10.0.2.2:8787/agent`                                       | Foreground service keeps the mic session alive with screen off.                                                                |
-| iOS     | `ios/`     | SwiftUI + shared `AVAudioEngine` (voice-processing AEC) + `AVAudioPlayerNode` | simulator: `ws://localhost:8787/agent`; device: `wss://3.35.135.136/agent` | Environment-aware default relay; background audio keeps the hands-free session alive; built-in-speaker echo cancellation.      |
-| Helmet  | `rdk/`     | RDK X5 board: Node agent + ALSA + WebRTC-APM AEC; Python camera/ADAS sidecar  | `MAX_RELAY_URL` in `/etc/max/agent.env`                                    | The real hardware: screenless voice client with cameras, gallery, and ADAS shadow mode. See [rdk/README.md](../rdk/README.md). |
-| Test    | any client | Browser/mobile client pointed at shared deployment                            | `wss://3.35.135.136/agent` with self-signed TLS                            | Uses `VOICE_PROVIDER=doubao` and the server's private `.env` values.                                                           |
+| Client  | Location   | UI/audio stack                                                                | Local relay URL                                                                 | Notes                                                                                                                                                              |
+| ------- | ---------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Web     | `src/`     | React + Web Audio + `AudioWorklet`                                            | same-origin `/agent` through Vite proxy                                         | Best for fast iteration, screenshots, and browser mic/TTS behavior.                                                                                                |
+| Android | `android/` | Jetpack Compose + `AudioRecord` + `AudioTrack`                                | emulator: `ws://10.0.2.2:8787/agent`                                            | Foreground service keeps the mic session alive with screen off.                                                                                                    |
+| iOS     | `ios/`     | SwiftUI + shared `AVAudioEngine` (voice-processing AEC) + `AVAudioPlayerNode` | simulator: `ws://localhost:8787/agent`; device: `wss://<your-relay-host>/agent` | Simulator defaults to localhost; device builds use your `MAX_RELAY_HOST`; background audio keeps the hands-free session alive; built-in-speaker echo cancellation. |
+| Helmet  | `rdk/`     | RDK X5 board: Node agent + ALSA + WebRTC-APM AEC; Python camera/ADAS sidecar  | `MAX_RELAY_URL` in `/etc/max/agent.env`                                         | The real hardware: screenless voice client with cameras, gallery, and ADAS shadow mode. See [rdk/README.md](../rdk/README.md).                                     |
+| Staging | any client | Browser/mobile client pointed at your own deployed relay                      | `wss://<your-relay-host>/agent`                                                 | Uses the `VOICE_PROVIDER` and credentials in that relay's own `.env`.                                                                                              |
 
 ### Runtime topology
 
@@ -195,7 +195,7 @@ Browser
         |    down: binary voice PCM16  +  JSON (transcript, status, metric, error)
         v                                                       |
   dev:  Vite dev server :5173 ...... proxies /agent + /health -->|
-  prod: Caddy :443 (self-signed TLS) .. reverse_proxy ---------->|
+  prod: Caddy :443 (TLS) .......... reverse_proxy ---------->|
         |
         v
 Node server :8787  (Express + ws, server/index.ts)
@@ -394,18 +394,20 @@ npm run dev:server
 Then set the app's relay URL. Open the **设置** sheet with the gear button to edit the relay URL and, in Debug builds, the
 self-signed test-certificate option:
 
-| Client                 | URL                            |
-| ---------------------- | ------------------------------ |
-| Android emulator       | `ws://10.0.2.2:8787/agent`     |
-| Android physical phone | `ws://<Mac-LAN-IP>:8787/agent` |
-| iOS Simulator          | `ws://localhost:8787/agent`    |
-| iPhone (default)       | `wss://3.35.135.136/agent`     |
-| iPhone on LAN          | `ws://<Mac-LAN-IP>:8787/agent` |
-| Shared test server     | `wss://3.35.135.136/agent`     |
+| Client                 | URL                             |
+| ---------------------- | ------------------------------- |
+| Android emulator       | `ws://10.0.2.2:8787/agent`      |
+| Android physical phone | `ws://<Mac-LAN-IP>:8787/agent`  |
+| iOS Simulator          | `ws://localhost:8787/agent`     |
+| iPhone (your relay)    | `wss://<your-relay-host>/agent` |
+| iPhone on LAN          | `ws://<Mac-LAN-IP>:8787/agent`  |
+| Any deployed relay     | `wss://<your-relay-host>/agent` |
 
 The iOS app picks its default relay by environment: the simulator uses `ws://localhost:8787/agent`,
-while a physical device defaults to the shared Lightsail relay (`wss://3.35.135.136/agent`). Debug
-builds on physical devices enable the self-signed test option by default. Release builds on both
+while a physical device connects to `wss://<MAX_RELAY_HOST>/agent`, where `MAX_RELAY_HOST` comes from
+`ios/Config/Secrets.xcconfig` (copy it from `Secrets.xcconfig.example`; until you set it the app falls back to
+a `relay.example.com` placeholder that does not exist). Point it at your own relay. If your relay
+uses a self-signed certificate, Debug builds can enable the self-signed test option. Release builds on both
 platforms enforce normal certificate/hostname validation, hide the exception toggle, and Android
 also blocks cleartext traffic. A release build therefore requires a trusted certificate and domain.
 
@@ -512,7 +514,7 @@ Amap transport, response, credential, quota, and IP errors produce `route.unavai
 only a successful empty place search produces `destination.notFound`. Relay logs
 retain sanitized `api.<infocode>` diagnostics without keys or query URLs. For
 `api.10005` (`INVALID_USER_IP`), verify the deployed server's outbound IP in the
-Amap Web Service key's IP whitelist; this deployment uses `3.35.135.136`.
+Amap Web Service key's IP whitelist; use the outbound IP of the server your relay runs on.
 
 `/health` includes cumulative and trailing-window `maxSpeechRequested`,
 `maxSpeechDelivered`, `maxSpeechFailed`, `maxSpeechCancelled`, `maxSpeechExpired`,
@@ -810,7 +812,7 @@ Companion telemetry is aggregate-only (`companionEventsAccepted` and
 `companionEventsRejected`); raw fixes and pairing codes are not logged, added to tester evidence,
 or recorded in user memory. Current location necessarily appears in the protocol payload while
 Helmet Ride is active, but it is not persisted by the relay. That payload is protected in
-production `wss://` with trusted TLS; the controlled self-signed test endpoint also uses TLS with
+production `wss://` with trusted TLS; a self-signed test endpoint also uses TLS with
 an explicit Debug trust opt-in. A Debug `ws://` LAN transport is not encrypted.
 
 ## Scripts
@@ -834,7 +836,7 @@ npm run check        # Local/CI gate: format, lint, unit, fault matrix, build
 ### Pipeline overview
 
 ```text
- Develop              Verify                 Build                Deploy to test server
+ Develop              Verify                 Build                Deploy to your server
  -------              ------                 -----                ---------------------
  npm install          npm run lint           npm run build        archive committed source
  npm run dev          npm run format:check     tsc --noEmit        build archive locally
@@ -872,42 +874,42 @@ npm run build          # tsc --noEmit type-check, then vite build -> dist/
 
 `tsc` only type-checks (`noEmit: true`); `vite build` emits the hashed client bundle to `dist/`. The server runs its TypeScript directly with `tsx`, so there is no separate server build step.
 
-### 4. Test server
+### 4. Example deployment
 
-A shared test server runs on **AWS Lightsail** (region `ap-northeast-2`) so the team can try the product:
+`deploy-lightsail.command` deploys the relay to any Ubuntu host that runs `pm2`; AWS Lightsail is the setup it was written for. A typical host looks like this:
 
-| Item            | Value                                                                            |
-| --------------- | -------------------------------------------------------------------------------- |
-| URL             | `https://max.bionicloud.net/` — trusted HTTPS with automatic certificate renewal |
-| Host            | Ubuntu; app deployed at `/home/ubuntu/app`                                       |
-| Process manager | `pm2`, process name `max` (runs `tsx server/index.ts` on port `8787`)            |
-| Reverse proxy   | `Caddy` — `:80` redirects to `:443`, terminates TLS, proxies to `:8787`          |
-| Provider        | `VOICE_PROVIDER=doubao` — testers get real Doubao realtime voice                 |
+| Item            | Value                                                                          |
+| --------------- | ------------------------------------------------------------------------------ |
+| URL             | `https://<your-domain>/`, with trusted HTTPS and automatic certificate renewal |
+| Host            | Ubuntu; app deployed at `/home/ubuntu/app` (`LIGHTSAIL_APP_DIR`)               |
+| Process manager | `pm2`, process name `max` (runs `tsx server/index.ts` on port `8787`)          |
+| Reverse proxy   | `Caddy` — `:80` redirects to `:443`, terminates TLS, proxies to `:8787`        |
+| Provider        | Whatever `VOICE_PROVIDER` and credentials you put in the host's own `.env`     |
 
-The `max.bionicloud.net` A record points to `3.35.135.136` in the existing Lightsail DNS zone for `bionicloud.net`. Caddy manages its Let's Encrypt certificate. The IP URL remains available with its existing self-signed certificate. The web app includes motorcycle helmet SVG/ICO favicons and an Apple touch icon in `public/`.
+Point a DNS record at the host and let Caddy obtain the Let's Encrypt certificate for it. The web app includes motorcycle helmet SVG/ICO favicons and an Apple touch icon in `public/`.
 
-The Lightsail box cannot reach the internal GitLab, so deployment is an **rsync push from a developer machine** — not a `git pull` on the server.
+Deployment is an **rsync push from a developer machine**, not a `git pull` on the server, so the host does not need access to your Git remote.
+
 QA evidence and operations are indexed in `~/.max-relay/testing.sqlite`; completed sessions are also appended to `sessions.jsonl` as a recovery archive. Both live outside `/home/ubuntu/app`, so deploys do not erase evidence. The default directory is owner-only (`0700`) and evidence files are `0600`. Set `TESTING_DATABASE` or `TESTING_HISTORY_DIR` to relocate them, or `TESTING_HISTORY_MAX_SESSIONS=500` to raise the in-memory dashboard window. The recovery archive is unbounded by default; `TESTING_ARCHIVE_MAX_SESSIONS` adds an explicit retention cap without truncating SQLite.
 
-### 5. Deploy to the test server
+### 5. Deploy
 
-Use a branch and merge request for every delivery. Protect `main` in GitLab
-(`Settings → Repository → Protected branches`) so developers may merge approved
-MRs but cannot push it directly:
+Use a branch and pull request for every delivery. Protect `main` on your Git host
+so developers may merge approved pull requests but cannot push it directly:
 
 ```bash
 git switch -c improve/short-description
 # edit + npm run check
-git push -u gitlab improve/short-description
-# open MR, record local verification, complete review, merge in GitLab
+git push -u origin improve/short-description
+# open a pull request, record local verification, complete review, merge
 git switch main
-git pull --ff-only gitlab main
+git pull --ff-only origin main
 ```
 
 Then run the deploy from the project root. The server keeps its own `.env`;
 credentials are never copied from a developer machine. The deploy command
 refuses a dirty tree, a non-`main` branch, or a commit that does not exactly
-match `gitlab/main`. It archives and stamps that reviewed commit, builds it
+match `origin/main` (set `LIGHTSAIL_DEPLOY_REMOTE` to use another remote). It archives and stamps that reviewed commit, builds it
 locally, copies `dist/`, installs runtime-only packages remotely, activates the
 prepared release with directory renames, restarts PM2, and polls both liveness
 and readiness until they report the expected SHA. If activation, health, or
@@ -915,8 +917,14 @@ readiness fails, the command restores and restarts the previous release
 automatically. Building locally avoids OOM failures on the small Lightsail
 instance.
 
+The script needs your own host and key. Put them in `deploy.local.env` next to it (ignored by git) or export them:
+
 ```bash
-LIGHTSAIL_KEY=/path/to/LightsailDefaultKey-ap-northeast-2.pem ./deploy-lightsail.command
+LIGHTSAIL_KEY=/path/to/key.pem \
+LIGHTSAIL_HOST=ubuntu@your-server \
+LIGHTSAIL_HEALTH_URL=https://your-domain/health \
+LIGHTSAIL_READY_URL=https://your-domain/ready \
+  ./deploy-lightsail.command
 ```
 
 An intentional staging deployment from another branch requires the explicit
@@ -953,7 +961,7 @@ in [`docs/rdk-ios-companion-acceptance.md`](rdk-ios-companion-acceptance.md).
 
 Roll out one reviewed SHA in this order: **relay first**, then the signed iOS build, then the RDK
 board. `deploy-lightsail.command` refuses a dirty tree, the wrong branch, or a local `HEAD` that
-differs from `gitlab/main`; it archives and stamps that exact SHA, restarts the expected PM2
+differs from `origin/main`; it archives and stamps that exact SHA, restarts the expected PM2
 service `max`, and accepts the release only when both `/health` and `/ready` report the stamp.
 The script's `LIGHTSAIL_KEY`, `LIGHTSAIL_HOST`, `LIGHTSAIL_APP_DIR`,
 `LIGHTSAIL_HEALTH_URL`, `LIGHTSAIL_READY_URL`, and `LIGHTSAIL_DEPLOY_REMOTE` inputs identify the deployment without placing
@@ -1028,22 +1036,21 @@ on a developer machine.
 
 ## Troubleshooting
 
-| Symptom                              | Check                                                                                                                                                                                                                                                              |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/health` fails                      | Make sure `npm run dev:server` is running and port `8787` is not already occupied.                                                                                                                                                                                 |
-| Browser cannot open mic              | Use `localhost` or HTTPS; browsers block mic capture on insecure non-local origins.                                                                                                                                                                                |
-| Native app says offline              | Verify the relay URL for emulator/simulator/LAN and confirm the server listens on `0.0.0.0`.                                                                                                                                                                       |
-| Native app says 需要登录 (HTTP 401)  | Accounts are active on the relay: open 设置 → 账号 in the app and sign in with your web-platform username/password (the settings sheet opens automatically on 401). Pasting a token from the web HUD's 复制令牌（App 用） into 认证令牌 still works as a fallback. |
-| Doubao session starts but no voice   | Confirm `DOUBAO_API_KEY` or legacy credentials, resource ID, realtime model, and voice IDs.                                                                                                                                                                        |
-| Weather does not appear              | Grant location permission or set `DEFAULT_RIDER_LAT` / `DEFAULT_RIDER_LON` in `.env`.                                                                                                                                                                              |
-| Self-signed test server fails mobile | Use a Debug build and enable its test-only certificate toggle. Release builds intentionally require a trusted certificate and hostname.                                                                                                                            |
-| WebSocket test fails with `EPERM`    | The test binds `127.0.0.1`; rerun in an environment that permits local loopback listeners.                                                                                                                                                                         |
+| Symptom                             | Check                                                                                                                                                                                                                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/health` fails                     | Make sure `npm run dev:server` is running and port `8787` is not already occupied.                                                                                                                                                                                 |
+| Browser cannot open mic             | Use `localhost` or HTTPS; browsers block mic capture on insecure non-local origins.                                                                                                                                                                                |
+| Native app says offline             | Verify the relay URL for emulator/simulator/LAN and confirm the server listens on `0.0.0.0`.                                                                                                                                                                       |
+| Native app says 需要登录 (HTTP 401) | Accounts are active on the relay: open 设置 → 账号 in the app and sign in with your web-platform username/password (the settings sheet opens automatically on 401). Pasting a token from the web HUD's 复制令牌（App 用） into 认证令牌 still works as a fallback. |
+| Doubao session starts but no voice  | Confirm `DOUBAO_API_KEY` or legacy credentials, resource ID, realtime model, and voice IDs.                                                                                                                                                                        |
+| Weather does not appear             | Grant location permission or set `DEFAULT_RIDER_LAT` / `DEFAULT_RIDER_LON` in `.env`.                                                                                                                                                                              |
+| Self-signed relay fails mobile      | Use a Debug build and enable its test-only certificate toggle. Release builds intentionally require a trusted certificate and hostname.                                                                                                                            |
+| WebSocket test fails with `EPERM`   | The test binds `127.0.0.1`; rerun in an environment that permits local loopback listeners.                                                                                                                                                                         |
 
 ## Next Steps
 
 1. Add a verified nearby-stop tool; navigation is already implemented on web, iOS, and Android.
-2. Mirror the cross-platform GitHub Actions gate to GitLab when an active runner is available.
-3. Replace the simulated ADAS hazard injector with real sensor input + confidence scoring.
+2. Replace the simulated ADAS hazard injector with real sensor input + confidence scoring.
 
 Recently shipped (see CHANGELOG): auto-fit web cockpit (start button always visible at any viewport
 height), concurrent startup weather fetch so the rider's opening words aren't clipped, relay

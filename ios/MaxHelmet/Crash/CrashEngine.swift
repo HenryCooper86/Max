@@ -23,7 +23,11 @@ struct CrashSample: Equatable {
     var t: TimeInterval        // monotonic seconds
     var accelG: Double         // |userAcceleration| in g
     var rotationRadS: Double   // |rotationRate| in rad/s
-    var speedKmh: Double?      // ride-context speed; nil = unknown
+    var speedKmh: Double?      // ride speed (2 s fresh GPS); nil = unknown
+    /// Opens the speed gate only: the last usable GPS speed up to 15 s old, so
+    /// a tunnel does not close the gate seconds before an impact. Stillness
+    /// never reads it.
+    var gateSpeedKmh: Double? = nil
 }
 
 enum CrashPhase: Equatable {
@@ -79,7 +83,9 @@ enum CrashEngine {
             s.tumbleStart = sample.rotationRadS >= tuning.tumbleThresholdRadS ? (s.tumbleStart ?? sample.t) : nil
             let impact = s.impactStart.map { sample.t - $0 >= tuning.impactSustainS } ?? false
             let tumble = s.tumbleStart.map { sample.t - $0 >= tuning.tumbleSustainS } ?? false
-            let recentSpeed = s.recent.compactMap(\.speedKmh).max()
+            // The gate opens on the fastest speed seen in the window, counting
+            // the longer-lived gate speed; stillness below reads speedKmh only.
+            let recentSpeed = s.recent.flatMap { [$0.speedKmh, $0.gateSpeedKmh] }.compactMap { $0 }.max()
             let fast = (recentSpeed ?? 0) >= tuning.speedGateKmh
             if (fast && (impact || tumble)) || (impact && tumble) {
                 s.phase = .impactCandidate(since: sample.t)

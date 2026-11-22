@@ -1,5 +1,141 @@
 # Changelog
 
+## 2026-11-22 — Reliability, security and billing fixes across the kit
+
+A review of the whole project turned up gaps in billing, security, the SDK's failure handling and release hygiene.
+This release closes them.
+
+### Max Cloud
+
+- A session whose booking fails (a busy or full database) is no longer lost: it is kept and retried every 15 seconds
+  and at startup, and can never be charged twice.
+- A session that another relay booked early as abandoned while it was still running has the rest booked when it
+  closes, as a second ledger entry.
+- Billing starts when the voice backend is ready, pauses while the relay reconnects to it, and stops when the socket
+  closes. Connect time, failed starts and upstream outages are no longer billed.
+- Checkpoints, balance checks and key-rotation checks run every 5 seconds instead of 15.
+- A relay no longer books the running sessions of another relay process on the same database; sessions left by a
+  stopped process are booked up to their last checkpoint about a minute later.
+- Projects can set a monthly minutes limit (Studio → Settings). Embed tokens open one session each, and a visitor
+  address can hold at most 2 embed sessions.
+- `CLOUD_SECRET_KEY` can be rotated: set the old key as `CLOUD_SECRET_KEY_PREVIOUS`, run `npm run cloud:reencrypt`,
+  then remove it. `/ready` reports a key that cannot read the stored secrets, and warns about any secret no key
+  can read. See [docs/cloud.md](docs/cloud.md).
+
+### Relay
+
+- Login session tokens are stored only as SHA-256 hashes. An existing accounts file is converted on first start and
+  logins survive; rolling back to an older relay signs everyone out.
+- Failed logins back off per account name and address (after 5 failures: 1 s, 2 s, 4 s … up to 15 minutes), and a
+  name that 20 logins fail on within an hour is locked for addresses that have never signed in to it. Each kind of
+  route has its own per-address rate limit.
+- A loud warning, and a `warnings` entry in `/ready`, when requests arrive through a proxy while
+  `RELAY_TRUST_PROXY` is off, which would turn every per-address limit into one shared limit. In that state a
+  login lock lasts at most a minute.
+- `GET /metrics` (Prometheus text format) behind `METRICS_TOKEN`, including billing counters, and `LOG_FORMAT=json`.
+- A Gemini API key can no longer reach a log line or a client in an error message.
+- The relay and its clients exchange a protocol version (`protocol` in `session.start` and `session.started`). A
+  mismatch is reported, never refused.
+- `location.update` accepts the phone's GPS speed (`speedKmh`), which the relay passes to the assistant and echoes
+  in `ride.context`.
+- Assistants for glasses and headsets no longer receive the helmet's riding rules, and an assistant with its own
+  persona, on any device, no longer receives Max's own Chinese-and-English rule. The stock helmet assistant's
+  instructions are unchanged.
+
+### Web SDK 0.2.0
+
+- New error codes: `usage_limit` (voice minutes used up, close code 4003) and `unauthorized` (credentials refused,
+  1008), on first connect and on reconnect. Both used to surface as `connection`; `error.closeCode` is set on every
+  close-driven failure. A refused microphone now reports `microphone`.
+- A refused session retries once with a fresh token instead of six times with the same one.
+- The widget speaks English and Simplified Chinese (from `language` or the page's `lang`), accepts a `strings`
+  override, has a Close button, moves focus sensibly, and its error text meets contrast requirements in dark mode.
+- Importing `max-voice-agent/widget` no longer throws during server rendering.
+- `useVoiceAgent` follows changes to `url`, `token`, `language`, `voice` and `backend`.
+- A `warning` event reports audio blocked by the browser (`resumeAudio()` fixes it from a click) and a relay on a
+  newer protocol. `SDK_VERSION` and `PROTOCOL_VERSION` are exported.
+- New [troubleshooting guide](docs/troubleshooting.md), a Vue/Svelte/Angular section, and a Next.js recipe.
+
+### Max Speech
+
+- A failed model load retries, then exits so a supervisor restarts it; `/healthz` answers 503 with the reason.
+- Live sessions are capped (`SPEECH_MAX_SESSIONS`; 2 on `cpu`, 4 on `mlx`, 8 on `cuda`) with a handshake timeout.
+  A full server refuses with close code 1013 and reason `busy`. A dead client's place is freed by the WebSocket
+  ping within about 40 seconds; the idle timeout is off by default, so a muted rider is not disconnected.
+- `ready` and `/.well-known/max-speech` state which languages live transcription supports, and a session that asks
+  for another gets a `warning` message. Keyword biasing is reported as unsupported instead of silently ignored.
+- Reply errors carry the reply `id`, so the relay reports a failing reply once.
+- JSON bodies are capped at 256 KB (the lexicon at its own larger limit), at most 4 transcriptions run at once (a
+  fifth gets 429 before its upload is read), and a partly downloaded model is detected instead of loaded.
+- On Apple silicon, transcription and custom-voice synthesis no longer run on the GPU at the same time, and live
+  speech goes first: a long transcription upload or a voice design gives way between its steps, and preset voices
+  never wait for the GPU at all. Measured on an M5 Max during a 15-minute upload, a live sentence's first audio
+  arrives in under half a second.
+- A reply in a cloned voice no longer fails when two sessions speak at once.
+- An upload must arrive within `SPEECH_UPLOAD_TIMEOUT_S` (300 seconds by default) or gets 408, a third
+  simultaneous voice-design request gets 429, and a transcription or design whose client has left is stopped.
+- Cloned voices record a hash of the audio, the caller's address and key fingerprint, and creations and deletions
+  are appended to `voice-audit.log`.
+- The local-voice compose file pins Ollama and waits for it to be healthy.
+
+### Helmet board (RDK)
+
+- The relay token is sent in the `Authorization` header, never in the URL. A plain `ws://` relay address on another
+  host logs a warning, and `MAX_REQUIRE_TLS=on` refuses it.
+- `rdk/deploy.sh` and `rdk/provision.sh` replace the hand-pasted rollout: staged, verified, with automatic rollback
+  and a `--dry-run`. Activation logs to the board and records its outcome there, so a dropped ssh connection
+  or a full disk cannot cancel a rollback, and a good release is kept (exit 3) when only the relay is unreachable.
+  Only one activation runs at a time, and a deploy refuses to start while one is still running.
+- `MAX_REQUIRE_TLS=on` refuses `MAX_RELAY_INSECURE_TLS=1`. The camera smoke tests are opt-in and never stop a
+  running `max-vision`.
+- Both services get systemd hardening drop-ins. The bench server (port 8081) listens on the board only unless
+  `MAX_VISION_LISTEN=all`.
+- An on-board smoke test (`pytest -m hardware`).
+
+### iOS and Android apps
+
+None of this has run on a physical phone yet; [docs/mobile-parity.md](docs/mobile-parity.md) lists the checks.
+
+- Crash detection, the SMS speed guard and the typing lock now use the phone's own GPS speed. Until now the only
+  speed came from the relay, and no real voice backend supplied one, so the speed gate never opened on a real ride
+  and texting was allowed while moving. A reading older than 5 seconds (2 for crash detection) or without a usable
+  speed counts as unknown, never as stopped. Crash detection never uses a relay speed, and remembers the last GPS
+  speed for 15 seconds so a tunnel does not close its speed gate. The apps also send their speed with
+  `location.update`, so the assistant's "moving fast" rule works.
+- A phone call or Siri pauses the microphone and Max's voice and both come back afterwards without a tap, also
+  when the system never reports that the interruption ended. On Android, Max holds audio focus for the session:
+  other apps' music plays ducked, a session started during a call waits for it to end, and an app that keeps
+  taking the audio never ends hands-free.
+- Connecting or switching off a headset moves the audio without reconnecting to the relay. On iOS, replies no
+  longer go silent after the audio engine stops for a route change.
+- Losing the network no longer uses up the reconnect attempts. The apps reconnect as soon as it returns, and keep a
+  connection that survives a change between Wi-Fi and mobile data.
+- A text field in the captions panel sends typed turns to backends that accept them, and a status line shows when
+  the assistant is looking something up.
+- When the phone overheats or enters a power-saving mode, video recording stops (the clip is kept), then photos
+  and other heavy work pause. The voice session and crash detection keep running, and Max says why once.
+- Android: a microphone that fails mid-ride (a helmet headset that dies) stops voice only. Hands-free and crash
+  detection stay on, Max says so once and keeps retrying the microphone. A phone call pauses Max even while
+  another app holds the audio.
+- iOS: an English and a Chinese app name and permission prompts; a "Relay not configured" card instead of a
+  connection that can never succeed; clearer VoiceOver labels on the crash alarm, mute and hazard banner.
+- Android: English is the default language with Chinese alongside; only the language and display choices are
+  included in system backups, never transcripts, tokens, emergency contacts or captures.
+- Both apps send the protocol version in `session.start`.
+- Both apps are version 1.0.0 with a build number set at build time (`MAX_BUILD_NUMBER`, `-PversionCode=`). iOS
+  contributors set `MAX_DEVELOPMENT_TEAM` in `ios/Config/Secrets.xcconfig`; Android release signing is configured
+  through `MAX_RELEASE_*` variables. A Release build for an iPhone fails without `MAX_RELAY_HOST`.
+- Synthetic crash scenarios are now tests on both platforms. They pin three known weaknesses without retuning:
+  two potholes in quick succession and a spinning phone dropped while parked each raise a check-in, and a
+  low-speed tip-over is not detected.
+
+### Project
+
+- `README.zh-CN.md` is now a Chinese version of the current README.
+- `deploy-lightsail.command` deploys from `origin` and reads the host and key from an untracked `deploy.local.env`.
+- CI runs once per pull request, tests the Python device client, and Dependabot proposes weekly updates. Pushing a
+  `v*` or `sdk-v*` tag prepares a draft release.
+
 ## 2026-11-20 — Max Speech, a local speech server
 
 - Max Speech (`speech-server/`, port 8790) serves OpenAI-compatible

@@ -7,6 +7,10 @@ Embedded client for the Max helmet assistant. See
 
 ## Provisioning
 
+`rdk/provision.sh` does the directory, watchdog and unit steps below (and writes
+`agent.env`); see "Deploying". The commands are kept here as the reference for
+what it runs. Node and apt packages stay manual.
+
 ```bash
 # Node 22 (Ubuntu 22.04 ships Node 12)
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
@@ -651,7 +655,7 @@ the board, and the gate is the one control that must not have exceptions.
 ### Bench access — `MAX_VISION_TOKEN`
 
 The sidecar's HTTP surface (port 8081) and the agent's HUD (port 8080) both
-bind `0.0.0.0`, and the sidecar runs as root. Before 2026-08-11 neither was
+used to bind `0.0.0.0`, and the sidecar runs as root. Before 2026-08-11 neither was
 authenticated: any peer on the network could stream the cameras, list and
 download every recorded clip, read the rider's live transcript and destination,
 and `POST /gallery/<id>/delete` to destroy a capture — the last of which a
@@ -659,7 +663,18 @@ plain cross-origin form POST from any page the rider happened to visit could
 trigger.
 
 Both ports now require a shared token from any peer that is not the board
-itself:
+itself. Port 8081 additionally **binds `127.0.0.1` unless told otherwise**: set
+`MAX_VISION_LISTEN=all` in `agent.env` to listen on every interface, which the
+LAN workflows below (`http://<board>:8081/...?t=<token>`, a laptop browser on the
+HUD page) need. The SSH forward in "On-hardware verification" works either way,
+because it connects to the board's loopback. Consequently, with the default
+settings a browser on the LAN that opens `http://<board>:8080/?t=<token>` gets
+the HUD but **dead camera and gallery panels** (its fetches to `<board>:8081`
+find nothing listening; the HUD says so in the captures line). Only set
+`MAX_VISION_LISTEN=all` on a trusted bench network: it exposes the cameras, the
+gallery and its delete endpoint to every peer that holds the token. The phone does not use 8081 (the
+companion talks through the relay); it does use 8080 for HUD casting, so that
+port stays on all interfaces and is protected by the token alone.
 
 ```bash
 MAX_VISION_TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '/+=')
@@ -685,11 +700,16 @@ caller speaks "我看不清。" rather than a fabricated description.
 
 ## Running
 
+`rdk/provision.sh` creates `/etc/max/agent.env` (mode `0600`, owner root, from
+prompted or environment values, secrets never echoed or put on a command line),
+the private state directories, the watchdog config and the unit files and
+hardening drop-ins. `rdk/deploy.sh` then ships the code. Both are described in
+"Deploying" below. The file they write looks like this (secrets elided):
+
 ```bash
-sudo mkdir -p /etc/max
-sudo tee /etc/max/agent.env >/dev/null <<'ENV'
-MAX_RELAY_URL=ws://<lan-ip>:8787/agent
+MAX_RELAY_URL=wss://relay.example.com/agent
 MAX_RELAY_TOKEN=                           # required once the relay has accounts
+MAX_REQUIRE_TLS=on                         # refuse to start on plain ws:// to a non-loopback host
 MAX_RELAY_INSECURE_TLS=0
 # Durable per-board identity; preserve across upgrades.
 MAX_DEVICE_ID_FILE=/var/lib/max/device-id
@@ -699,7 +719,8 @@ MAX_GALLERY_DIR=/var/lib/max/gallery
 MAX_GALLERY_MIN_FREE_MB=1024
 MAX_HUD_PORT=8080
 MAX_VISION_PREVIEW_PORT=8081
-MAX_VISION_TOKEN=                          # REQUIRED to reach 8080/8081 from anywhere but the board
+# MAX_VISION_LISTEN=all                    # bench server on every interface; default is 127.0.0.1
+MAX_VISION_TOKEN=                          # REQUIRED to reach the HUD (8080), and 8081 if MAX_VISION_LISTEN=all, from off the board
 MAX_VISION_SOCKET=/run/max/vision.sock
 RDK_CAMERA_FRONT=0                         # MIPI channel; CAM1 connector
 RDK_CAMERA_REAR=2                          # MIPI channel; the other connector
@@ -708,12 +729,6 @@ MAX_VISION_SHARE=0                         # 1 lets camera.look frames leave the
 MAX_CORPUS_DIR=/var/lib/max/corpus         # where ride segments are written
 MAX_VOICE_GATE_RMS=900
 MAX_VOICE_GATE_MS=400
-ENV
-
-sudo cp rdk/systemd/*.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now max-agent max-vision
-journalctl -u max-agent -f
 ```
 
 Both units run under `WatchdogSec=30`: the agent heartbeats while mic frames
@@ -724,19 +739,40 @@ of entering systemd's permanent `failed` state. Bench work is unaffected:
 stopping a service, or running the agent by hand outside systemd (no
 `NOTIFY_SOCKET`), trips nothing.
 
-**Unit files and heartbeat-emitting code must deploy together.** Install the new
-unit files and sync `/opt/max/rdk` in the same session, then `systemctl daemon-reload`
-and restart both services once both have landed. Unit files with `WatchdogSec=30`
-pointed at code that never sends `WATCHDOG=1` will restart healthy services every
-30 s.
+**Unit files and heartbeat-emitting code must deploy together.** `deploy.sh`
+installs the new unit files from the release it is activating and restarts both
+services once, in the same step. Unit files with `WatchdogSec=30` pointed at
+code that never sends `WATCHDOG=1` would restart healthy services every 30 s.
 
 Only the exact string `1` enables `MAX_RELAY_INSECURE_TLS`; anything else leaves
 certificate validation on.
 
+### Relay transport: use `wss://`
+
+The agent sends the relay token in an `Authorization: Bearer` header
+(`server/auth.ts` accepts it alongside `?token=`, see `docs/protocol.md`). It is
+never placed in the URL, because a query string lands in relay and proxy access
+logs; a `token` pasted into `MAX_RELAY_URL` is lifted out of the URL and sent as
+the header. A header does not make `ws://` private, though: over plain `ws://`
+the token and the rider's microphone audio still cross the network in clear
+text.
+
+- Production and anything a rider wears: `MAX_RELAY_URL=wss://...` with a relay
+  behind a trusted certificate. Leave `MAX_REQUIRE_TLS=on`: the agent then
+  refuses to start (and systemd retries visibly) if the URL is `ws://` to anything
+  but `localhost`, `127.0.0.0/8` or `::1`, instead of quietly streaming audio in
+  the clear.
+- Plain `ws://<lan-ip>:8787/agent` is acceptable only on a bench, on a LAN you
+  control, with a throwaway token. Set `MAX_REQUIRE_TLS=off` (or provision with
+  `--allow-cleartext`) knowingly; the agent still prints a `WARNING` at every start.
+- `MAX_REQUIRE_TLS` accepts exactly `on` or `off`; any other value stops the
+  agent, so a typo cannot leave it lax.
+
 **`MAX_RELAY_TOKEN` is required against any relay that has user accounts** — the
 relay refuses the `/agent` upgrade with 401 otherwise, and the client just
 reconnects in a loop with no explanation. Accepts the operator `RELAY_AUTH_TOKEN`
-or a `sess_…` login token. Keep `/etc/max/agent.env` at mode 600.
+or a `sess_…` login token. Keep `/etc/max/agent.env` at mode 600; `provision.sh`
+does, and `deploy.sh` refuses to activate a release if it is not `root:root:600`.
 
 Run it through systemd rather than by hand; `nohup`/`setsid` over SSH does not
 reliably survive the session:
@@ -745,201 +781,121 @@ reliably survive the session:
 systemctl restart max-agent && journalctl -u max-agent -f
 ```
 
-### Reviewed RDK rollout
+### Deploying
 
-Deploy only after the matching relay SHA is live/ready and the signed iOS build is installed. From
-the reviewed clean `main` checkout, set `RDK_HOST` to the board's SSH target (do not put credentials
-in the repository). The commands below require the local SHA to equal `origin/main`, then stream
-only that reviewed Git archive into a new root-owned stage. They never copy ignored/untracked
-checkout files or destructively mirror a live checkout onto `/opt/max`:
+Prerequisites on the board, once (these stay manual because they are
+distribution packages, see the appendix): Node 22, `alsa-utils`, a built
+`rdk/aec/max-aec` and the rendered ADAS alert clips in `/opt/max` (the first
+release is installed by hand; every later deploy carries them over and refuses
+to proceed without them).
 
 ```bash
-set -euo pipefail
-RDK_HOST=root@board.example.com
-git fetch origin main
-REVIEWED_SHA=$(git rev-parse HEAD)
-test "$REVIEWED_SHA" = "$(git rev-parse origin/main)"
-test -z "$(git status --porcelain --untracked-files=no)"
-case "$REVIEWED_SHA" in
-  (????????????????????????????????????????) ;;
-  (*) echo "expected a full reviewed Git SHA" >&2; exit 1 ;;
-esac
-REMOTE_STAGE="/opt/max.stage-$REVIEWED_SHA"
-
-ssh "$RDK_HOST" bash -s -- "$REMOTE_STAGE" <<'REMOTE'
-set -euo pipefail
-REMOTE_STAGE=$1
-test ! -e "$REMOTE_STAGE"
-install -d -o root -g root -m 0755 "$REMOTE_STAGE"
-REMOTE
-git archive "$REVIEWED_SHA" | ssh "$RDK_HOST" "tar -xf - -C '$REMOTE_STAGE'"
+export RDK_HOST=root@board.example.com     # an ssh target; no credentials in the repository
+MAX_RELAY_URL=wss://relay.example.com/agent rdk/provision.sh --dry-run
+rdk/provision.sh                           # prompts for anything not in the environment
+rdk/deploy.sh --dry-run                    # prints every command that would run on the board
+rdk/deploy.sh
 ```
 
-The native WebRTC AEC executable and rendered ADAS alert clips are armed board artifacts, not Git
-files. Preserve them explicitly from the current release, verify their contents, then install all
-dependencies and build from the exact staged tree. A missing/non-executable AEC binary or an empty
-alert set blocks activation:
+`provision.sh` is repeatable: an existing `agent.env` is kept (only its owner
+and mode are corrected) unless you pass `--force`. It refuses a `ws://` relay to
+a remote host unless `--allow-cleartext` is given, a relay URL carrying a query
+string, and any token containing characters that could break out of its line in
+the env file. It enables the units but does not start them: there is no code
+yet.
+
+`deploy.sh` does what the reviewed runbook did, as versioned code in
+`rdk/deploy.sh` and `rdk/remote/`:
+
+1. **Guard.** Deploys only the commit that is both `HEAD` and `origin/main`,
+   from a clean tracked tree, as a full 40-character SHA. Run it after the
+   matching relay SHA is live and the signed iOS build is installed.
+2. **Stage** (`remote/stage.sh`). Streams `git archive` of that SHA into a new
+   root-owned `/opt/max.stage-<sha>`; ignored and untracked files never travel and
+   the live checkout is never mirrored over. A stage left by a failed attempt is
+   removed first (the path is rebuilt from the SHA and compared exactly).
+3. **Verify and build** (`remote/build.sh`). Copies the native AEC executable
+   and the armed ADAS alert clips from the live release, checks them with
+   `cmp`/`diff -qr`, then `npm ci` and `npm run build` in the stage. A missing
+   AEC binary or an empty alert set blocks activation.
+4. **Swap, prove, roll back** (`remote/activate.sh`). Checks owners and modes
+   (`root:root:755` release, `700` identity directory, `600` identity file and
+   `agent.env`), moves `/opt/max` to `/opt/max.previous-<sha>-<timestamp>` and the
+   stage into place, installs the release's unit files and drop-ins, and restarts
+   once (vision, then agent). Success means: a new, nonempty `InvocationID`, that
+   invocation's own journal containing `[relay] session ready`, the agent still on
+   that invocation, `max-vision` still on its new invocation after a settle
+   window (45 s by default, which covers camera acquisition; `--vision-settle`),
+   and an unchanged device identity digest (never printed). If the relay session
+   never becomes ready but the agent is running and its own log shows it retrying
+   the relay (`[relay] socket error:`, `closed code=`, `reconnecting in` or `idle
+close`, and no `[agent] uncaught exception`/`unhandled rejection`), the release
+   **stays** and the script exits 3 with a warning: a good release is not rolled
+   back because the relay or the network is down.
+5. **Automatic rollback.** If anything after the swap fails, the failed release is
+   moved to `/opt/max.failed-<sha>-<timestamp>`, the previous release and its own
+   units and drop-ins are restored, and the same proof runs again. Exit status 1
+   means "rolled back and proven"; 2 means the rollback could not be proven and the
+   board needs the manual steps below. During a rollback, relay readiness is only a
+   warning. Once activation starts, all of its output goes to
+   `/opt/max.activate-<sha>.log` (0600) and its outcome is written last to
+   `/opt/max.activate-<sha>.status` (`activated`, `activated-relay-unreachable`,
+   `rolled-back`, `rollback-failed` or `refused`, then the SHA). The script ignores
+   `SIGHUP` and `SIGPIPE` and never writes to the ssh channel, so a dropped session
+   can neither strand a half-finished swap nor cancel the rollback; `deploy.sh`
+   reads the status and prints the log, reconnecting if it has to ("connection lost;
+   board says: ..."). `deploy.sh` exits 0, 1, 2 or 3 with the same meanings. Exit 3 with
+   `closed code=1008` in the log usually means the relay token on the board is wrong
+   or was rotated. Only one activation runs at a time: it holds the lock directory
+   `/opt/max.activate.lock` (PID and boot id; a holder that was killed is detected
+   and the lock reclaimed, so it cannot go stale), and `deploy.sh` refuses to start
+   or delete anything while it is held. A leftover `started` status with no live
+   holder is reported as "interrupted; the board is on release X". If the status
+   file cannot be written (full disk), `deploy.sh` falls back to the script's exit
+   status plus the active release. The five most recent log/status pairs are kept;
+   older ones are removed after a successful run.
+
+`deploy.sh --no-hardening` installs no drop-ins and removes any installed earlier.
+Re-running for the commit that is already active does nothing. Keep the previous
+release directory until acceptance is complete. Never print the device ID, pairing
+code, location payload, or `/etc/max/agent.env`.
+
+The restart differs from the old runbook in one respect: it restarts `max-vision`
+as well as `max-agent`. The old steps replaced `/opt/max` under a still-running
+sidecar, which kept executing the previous release's code (its working directory
+moves with the rename), and a drop-in only takes effect on restart.
+
+#### Appendix: manual steps
+
+Each board-side step is a plain script, so it can be run by hand when the
+automation itself is what is broken. Arguments are the same ones `--dry-run`
+prints.
 
 ```bash
-ssh "$RDK_HOST" bash -s -- "$REMOTE_STAGE" "$REVIEWED_SHA" <<'REMOTE'
-set -euo pipefail
-REMOTE_STAGE=$1
-REVIEWED_SHA=$2
-CURRENT_AEC=/opt/max/rdk/aec/max-aec
-CURRENT_ALERTS=/opt/max/rdk/audio/alerts
-STAGED_AEC="$REMOTE_STAGE/rdk/aec/max-aec"
-STAGED_ALERTS="$REMOTE_STAGE/rdk/audio/alerts"
-
-test -x "$CURRENT_AEC"
-find "$CURRENT_ALERTS" -maxdepth 1 -type f -name '*.wav' -print -quit | grep -q .
-install -d -o root -g root -m 0755 "$(dirname "$STAGED_AEC")" "$STAGED_ALERTS"
-install -o root -g root -m 0755 "$CURRENT_AEC" "$STAGED_AEC"
-cp -a "$CURRENT_ALERTS"/. "$STAGED_ALERTS"/
-test -x "$REMOTE_STAGE/rdk/aec/max-aec"
-cmp -s "$CURRENT_AEC" "$STAGED_AEC"
-diff -qr "$CURRENT_ALERTS" "$STAGED_ALERTS"
-find "$STAGED_ALERTS" -maxdepth 1 -type f -name '*.wav' -readable -print -quit | grep -q .
-
-cd "$REMOTE_STAGE"
-npm ci --no-audit --no-fund
-npm run build
-printf '%s\n' "$REVIEWED_SHA" > .rdk-release-sha
-chown -R root:root "$REMOTE_STAGE"
-chmod 0755 "$REMOTE_STAGE"
-test "$(stat -c '%U:%G:%a' "$REMOTE_STAGE")" = root:root:755
-test -x "$REMOTE_STAGE/rdk/aec/max-aec"
-find "$REMOTE_STAGE/rdk/audio/alerts" -maxdepth 1 -type f -name '*.wav' -readable -print -quit | grep -q .
-REMOTE
+ssh "$RDK_HOST" bash -s -- "/opt/max.stage-$SHA" "$SHA" < rdk/remote/stage.sh
+git archive "$SHA" | ssh "$RDK_HOST" "tar -xf - -C '/opt/max.stage-$SHA'"
+ssh "$RDK_HOST" bash -s -- "/opt/max.stage-$SHA" "$SHA" < rdk/remote/build.sh
 ```
 
-Activate the staged directory and perform **one** controlled restart. Set `RDK_DEVICE_ID_FILE` to
-the configured `MAX_DEVICE_ID_FILE` path when it differs from the default. The bounded readiness
-loop rejects an old marker: it requires a nonempty Invocation ID different from the pre-restart
-one, reads only that invocation's journal, and finally proves that invocation is still current.
-It also compares the private device identity around that same restart without printing it:
+Manual rollback, when `activate.sh` exits 2 or you must go back later. The
+previous directory is the entire former release, including the exact AEC
+executable and armed alert clips. Preserve `/var/lib/max/device-id` and `/etc/max`;
+never copy an identity from another board:
 
 ```bash
-RDK_DEVICE_ID_FILE=/var/lib/max/device-id
-PREVIOUS_ROOT="/opt/max.previous-$REVIEWED_SHA"
-ssh "$RDK_HOST" bash -s -- \
-  "$REMOTE_STAGE" "$PREVIOUS_ROOT" "$RDK_DEVICE_ID_FILE" <<'REMOTE'
-set -euo pipefail
-REMOTE_STAGE=$1
-PREVIOUS_ROOT=$2
-DEVICE_ID=$3
-DEVICE_ID_PARENT=$(dirname "$DEVICE_ID")
-
-test "$(stat -c '%U:%G:%a' /opt/max)" = root:root:755
-test "$(stat -c '%U:%G:%a' "$REMOTE_STAGE")" = root:root:755
-test "$(stat -c '%U:%G:%a' "$DEVICE_ID_PARENT")" = root:root:700
-test "$(stat -c '%U:%G:%a' "$DEVICE_ID")" = root:root:600
-test ! -e "$PREVIOUS_ROOT"
-before=$(sha256sum "$DEVICE_ID" | cut -d' ' -f1)
-old_invocation=$(systemctl show -p InvocationID --value max-agent)
-
-mv /opt/max "$PREVIOUS_ROOT"
-mv "$REMOTE_STAGE" /opt/max
-test "$(stat -c '%U:%G:%a' /opt/max)" = root:root:755
-test -x /opt/max/rdk/aec/max-aec
-find /opt/max/rdk/audio/alerts -maxdepth 1 -type f -name '*.wav' -readable -print -quit | grep -q .
-install -o root -g root -m 0644 /opt/max/rdk/systemd/*.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl restart max-agent
-
-invocation_id=
-for _ in $(seq 1 20); do
-  invocation_id=$(systemctl show -p InvocationID --value max-agent)
-  if test -n "$invocation_id" && test "$invocation_id" != "$old_invocation"; then
-    break
-  fi
-  sleep 1
-done
-test -n "$invocation_id"
-test "$invocation_id" != "$old_invocation"
-
-ready=0
-for _ in $(seq 1 60); do
-  if journalctl _SYSTEMD_INVOCATION_ID="$invocation_id" --no-pager -o cat | \
-      grep -F '[relay] session ready' >/dev/null; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-test "$ready" = 1
-systemctl is-active --quiet max-agent
-test "$(systemctl show -p InvocationID --value max-agent)" = "$invocation_id"
-after=$(sha256sum "$DEVICE_ID" | cut -d' ' -f1)
-test "$before" = "$after"
-test "$(stat -c '%U:%G:%a' "$DEVICE_ID_PARENT")" = root:root:700
-test "$(stat -c '%U:%G:%a' "$DEVICE_ID")" = root:root:600
-systemctl show max-agent -p InvocationID -p ActiveEnterTimestamp -p MainPID --no-pager
-echo 'device identity: stable'
-REMOTE
+PREVIOUS='/opt/max.previous-<sha>-<timestamp>'   # the one activate.sh printed
+mv /opt/max /opt/max.failed && mv "$PREVIOUS" /opt/max
+install -m 0644 /opt/max/rdk/systemd/*.service /etc/systemd/system/
+rm -f /etc/systemd/system/max-*.service.d/hardening.conf   # re-add from /opt/max if it ships them
+systemctl daemon-reload && systemctl restart max-vision max-agent
+journalctl -u max-agent -f      # expect: [relay] session ready
 ```
 
-Never print the device ID, pairing code, location payload, or `/etc/max/agent.env`. Keep the prior
-release directory until acceptance is complete.
-
-### Reviewed RDK rollback
-
-If archive staging, artifact preservation, dependency installation, or build fails, do not activate
-the stage. If activation or its invocation-scoped readiness check fails, move the failed release
-aside, restore `PREVIOUS_ROOT`, reinstall that release's units, and perform one rollback restart.
-Use the same bounded new-Invocation-ID readiness proof above. Preserve `/var/lib/max/device-id` and
-`/etc/max`; never copy an identity from another board. The previous directory is the entire former
-release, so it retains the exact AEC executable and armed alert clips that were active before the
-rollout:
+Packages the scripts do not install:
 
 ```bash
-FAILED_ROOT="/opt/max.failed-$REVIEWED_SHA"
-ssh "$RDK_HOST" bash -s -- \
-  "$PREVIOUS_ROOT" "$FAILED_ROOT" "$RDK_DEVICE_ID_FILE" <<'REMOTE'
-set -euo pipefail
-PREVIOUS_ROOT=$1
-FAILED_ROOT=$2
-DEVICE_ID=$3
-DEVICE_ID_PARENT=$(dirname "$DEVICE_ID")
-test -d "$PREVIOUS_ROOT"
-test ! -e "$FAILED_ROOT"
-before=$(sha256sum "$DEVICE_ID" | cut -d' ' -f1)
-old_invocation=$(systemctl show -p InvocationID --value max-agent)
-mv /opt/max "$FAILED_ROOT"
-mv "$PREVIOUS_ROOT" /opt/max
-test "$(stat -c '%U:%G:%a' /opt/max)" = root:root:755
-test -x /opt/max/rdk/aec/max-aec
-find /opt/max/rdk/audio/alerts -maxdepth 1 -type f -name '*.wav' -readable -print -quit | grep -q .
-install -o root -g root -m 0644 /opt/max/rdk/systemd/*.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl restart max-agent
-
-invocation_id=
-for _ in $(seq 1 20); do
-  invocation_id=$(systemctl show -p InvocationID --value max-agent)
-  if test -n "$invocation_id" && test "$invocation_id" != "$old_invocation"; then
-    break
-  fi
-  sleep 1
-done
-test -n "$invocation_id"
-test "$invocation_id" != "$old_invocation"
-ready=0
-for _ in $(seq 1 60); do
-  if journalctl _SYSTEMD_INVOCATION_ID="$invocation_id" --no-pager -o cat | \
-      grep -F '[relay] session ready' >/dev/null; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-test "$ready" = 1
-systemctl is-active --quiet max-agent
-test "$(systemctl show -p InvocationID --value max-agent)" = "$invocation_id"
-after=$(sha256sum "$DEVICE_ID" | cut -d' ' -f1)
-test "$before" = "$after"
-test "$(stat -c '%U:%G:%a' "$DEVICE_ID_PARENT")" = root:root:700
-test "$(stat -c '%U:%G:%a' "$DEVICE_ID")" = root:root:600
-REMOTE
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt-get install -y nodejs alsa-utils python3-pip
 ```
 
 Two footguns worth knowing when poking at the board over SSH:
@@ -981,6 +937,150 @@ they are the only honest channel, since the deterministic "好的，10秒后关�
 line is as inert as every other one. The relay dispatches `system.shutdown`
 to the embedded platform only — a phone never receives it. After the final
 tone, give the board ~15 s before cutting power.
+
+## Service hardening
+
+Both services run as root. A bug in the HUD (8080), the bench server (8081) or
+the vision code would otherwise be a root compromise of a device worn on a
+rider's head. `rdk/systemd/max-agent.service.d/hardening.conf` and
+`max-vision.service.d/hardening.conf` are systemd drop-ins that narrow that
+without touching the units' `Restart=`, watchdog and start-limit settings.
+`provision.sh` and `deploy.sh` install them (`--no-hardening` skips them).
+
+None of this could be tested on a board when it was written. The drop-ins
+therefore contain only directives justified by the inventory below, and the
+acceptance checklist after it is how you prove them on the hardware.
+
+### Service inventory
+
+Derived from the code, not measured on the board. "Unverified" means the
+repository cannot answer it and the board must.
+
+**`max-agent`** (`tsx rdk/agent/src/main.ts`, as root)
+
+| Need            | What the code does                                                                                                                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Writes          | `/var/lib/max` only: `device-id` and its lock/marker files, `hud-wifi-bond.json`, `hud-bluetooth-bond.json` (all `0600` under a `0700` directory). `/tmp` for tsx's cache. `MAX_AEC_DUMP` writes wherever it points, but is off by default. |
+| Reads           | `/etc/max/agent.env` (read by systemd), `/opt/max` (code, `node_modules`, `rdk/aec/max-aec`, `rdk/audio/alerts`), `/run/max/vision.sock`, `/proc/<pid>`, `/proc/sys/kernel/random/boot_id`.                                                 |
+| Devices         | ALSA via child processes: `arecord`, `aplay`, `amixer`, `max-aec` on `plughw:0,0` (`/dev/snd/*`, group `audio` for a non-root user).                                                                                                        |
+| Listens         | TCP `MAX_HUD_PORT` (8080) on all interfaces: the HUD and the phone's `/cast` upload. UDP 5353 multicast (mDNS `_maxhelmet._tcp`).                                                                                                           |
+| Connects        | TCP/TLS to the relay; HTTPS to the weather and map services from the HUD cast; the system D-Bus socket (`busctl` to `org.bluez` for phone music); `systemd-notify` for the watchdog.                                                        |
+| Other processes | `ps`, `busctl`, `systemd-notify`, and `/usr/sbin/shutdown -h now` for "Max，关机", which needs real privilege.                                                                                                                              |
+
+**`max-vision`** (`python3 service.py` under the TROS environment, as root)
+
+| Need            | What the code does                                                                                                                                                                                                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Writes          | `/var/lib/max/gallery` (captures, manifests), `/var/lib/max/corpus` (ride segments and shadow logs, ~3 MB/s), `/run/max` (`RuntimeDirectory=`: `vision.sock`, `roslog/`), `/tmp`. Anything the vendor ROS/DDS and camera libraries write is **unverified**.                                                         |
+| Reads           | `/opt/max/rdk/vision`, `/opt/tros/humble` (sourced in `ExecStart`), the BPU model under `/app/multimedia_samples/...`, `/sys/firmware/devicetree/base/soc/cam/vcon@N`, `/etc/max/agent.env` (by systemd).                                                                                                           |
+| Devices         | `/dev/vs-isp0_cap` (the ISP node `fuser` reaps orphans from), i2c buses 4 and 6 through `i2cdetect` (`/dev/i2c-*`), and the camera, VIO, ION and BPU nodes that `mipi_cam` and `hobot_dnn` open on its behalf: **their names are not in the repository**. DDS shared memory under `/dev/shm` is likely, unverified. |
+| Listens         | TCP `MAX_VISION_PREVIEW_PORT` (8081), `127.0.0.1` unless `MAX_VISION_LISTEN=all`; the unix socket `MAX_VISION_SOCKET`. ROS 2 DDS discovery (UDP, unverified).                                                                                                                                                       |
+| Other processes | `ros2 run mipi_cam` (own session), `fuser`, `i2cdetect`; `ffmpeg` only in the replay tools.                                                                                                                                                                                                                         |
+| Environment     | `HOME=/root` (ROS wants one), `ROS_LOG_DIR=/run/max/roslog`, `source /opt/tros/humble/setup.bash`.                                                                                                                                                                                                                  |
+
+### What the drop-ins do
+
+| Directive                             | Agent                                     | Vision      | Why it cannot cost the service anything it needs                                                                                                                                                                |
+| ------------------------------------- | ----------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NoNewPrivileges`                     | yes                                       | yes         | Neither service runs a setuid helper or `sudo`; both already are root.                                                                                                                                          |
+| `PrivateTmp`                          | yes                                       | yes         | Nothing in the code shares `/tmp` across the two services or with a person; the socket lives in `/run/max`. rclpy and `mipi_cam` are in the same service, so they share the private `/tmp`.                     |
+| `ProtectHome`                         | `true`                                    | `read-only` | Nothing in the agent touches `/root` or `/home`. The sidecar's unit sets `HOME=/root` for ROS, so `/root` stays readable there but not writable: the one vision directive that could bite, see the camera step. |
+| `ProtectSystem`                       | `strict` + `ReadWritePaths=-/var/lib/max` | `full`      | The agent writes only `/var/lib/max` (and `/tmp`). The sidecar's unverified vendor writes make `strict` unsafe to assume, so `/usr`, `/boot` and `/etc` go read-only and the rest stays as it was.              |
+| `ProtectKernelTunables`               | yes                                       | **no**      | No `/proc/sys` or `/sys` writes in the agent. Vendor camera/ISP libraries may write `/sys`, so the sidecar keeps it.                                                                                            |
+| `ProtectControlGroups`                | yes                                       | yes         | Nothing manages cgroups.                                                                                                                                                                                        |
+| `RestrictSUIDSGID`, `LockPersonality` | yes                                       | yes         | No setuid files are created; no `personality(2)` use in Node or Python.                                                                                                                                         |
+| `MemoryMax=75%`                       | yes                                       | yes         | A runaway ceiling, not a budget: no footprint has been measured. Each service may use three quarters of RAM, far above anything a voice agent or the sidecar plus 1080p buffers should reach.                   |
+
+Left out on purpose, because each could remove access the helmet needs and none
+can be proven without the board: `User=`, `DeviceAllow=`/`DevicePolicy=`,
+`CapabilityBoundingSet=`, `RestrictAddressFamilies=`, `MemoryDenyWriteExecute=`
+(V8 needs a JIT), `ProtectKernelTunables` for vision, `ProtectSystem=strict`
+for vision, and `PrivateDevices=` (hides `/dev/snd` and the camera nodes).
+
+### Next step: a non-root user and a device allow-list
+
+Do this only after the acceptance checklist below passes with the current
+drop-ins, one service at a time, on a bench board:
+
+1. List what the running service actually has open (cgroup v2):
+   ```bash
+   for p in $(cat /sys/fs/cgroup/system.slice/max-vision.service/cgroup.procs); do
+     ls -l /proc/$p/fd; done | grep -E ' /(dev|sys|proc)/' | awk '{print $NF}' | sort -u
+   ```
+   Run it during a photo, a recording and a shadow ride, for both services. That
+   list, not the guesses above, is the device allow-list.
+2. `stat -c '%U:%G %a %n' <each node>` to find the groups (`audio`, `video`,
+   `i2c`, vendor groups) a `max` user needs as `SupplementaryGroups=`.
+3. Add a trial drop-in `99-user.conf` with `User=max`, the groups, and
+   `StateDirectory=`/`RuntimeDirectory=` ownership, then rerun the whole
+   checklist. `shutdown` and `busctl` to bluez need polkit rules for that user.
+4. Only then add `DevicePolicy=closed` with one `DeviceAllow=<node> rw` per node
+   from step 1. A denied device is silent in the journal, so a camera that
+   will not open after this step means a node is missing from the list.
+5. Measure `systemctl show max-agent max-vision -p MemoryPeak` (or
+   `systemd-cgtop -n 1`) after a long ride and set `MemoryMax=` to a few times
+   the peak.
+
+### On-board acceptance checklist
+
+Run on the board after `deploy.sh` (or `provision.sh` plus a deploy), on the
+bench, with the headset on. Do not accept a release for riding until every step
+passes. Record `pass`/`fail` only; never paste tokens or `agent.env`.
+
+```bash
+# 1. The drop-ins are applied, and nothing is crash-looping.
+systemctl show max-agent max-vision -p NoNewPrivileges -p ProtectSystem -p ProtectHome -p PrivateTmp -p MemoryMax
+systemctl is-active max-agent max-vision
+systemctl show max-agent max-vision -p NRestarts          # expect NRestarts=0 for both
+journalctl -b -u max-agent -u max-vision --no-pager | grep -iE 'read-only file system|permission denied|EROFS|EACCES' || echo 'no sandbox denials'
+
+# 2. Ports: HUD on all interfaces, bench server on loopback unless MAX_VISION_LISTEN=all.
+ss -ltn | grep -E ':(8080|8081) '
+curl -s -o /dev/null -w 'hud %{http_code}\n' http://127.0.0.1:8080/
+curl -s -o /dev/null -w 'bench %{http_code}\n' http://127.0.0.1:8081/gallery   # expect 200
+```
+
+3. **Audio in and out.** Say "Max，现在天气怎么样" into the headset and hear a spoken
+   reply; interrupt mid-sentence and it stops. This exercises capture, `max-aec`,
+   playback and `amixer` under the sandbox. `journalctl -u max-agent | grep -E 'relay\] session ready|max-aec'`.
+4. **Camera.** `journalctl -b -u max-vision | grep -E '\[vision\] (front|rear):'`
+   shows a line per attached camera, and no `camera unavailable`. Say "拍照": a new
+   `pair-*` directory appears under `/var/lib/max/gallery`. If the camera will not
+   open only with the drop-in, suspect `ProtectHome=read-only` (a vendor library
+   writing under `/root`) first, then `ProtectSystem=full`.
+5. **ROS from outside.** `source /opt/tros/humble/setup.bash && ros2 topic list`
+   from an ssh session still lists the camera topics (the private `/tmp` must not
+   have hidden DDS state from other tools).
+6. **HUD.** Open `http://<board>:8080/?t=<token>` from a laptop: the page loads; the
+   same URL without `?t=` answers 401. With the default loopback bench server the
+   camera and gallery panels need the SSH forward in "On-hardware verification";
+   they work from the LAN only with `MAX_VISION_LISTEN=all`.
+7. **Watchdog.** Heartbeats still reach systemd under `NoNewPrivileges`:
+   ```bash
+   sleep 90; systemctl show max-agent max-vision -p NRestarts -p WatchdogTimestamp
+   ```
+   `NRestarts=0` after 90 s (the watchdog is 30 s) means both are heartbeating. Then,
+   on the bench only, prove a wedged process is still restarted:
+   ```bash
+   old=$(systemctl show -p InvocationID --value max-agent)
+   kill -STOP "$(systemctl show -p MainPID --value max-agent)"; sleep 45
+   test "$(systemctl show -p InvocationID --value max-agent)" != "$old" && echo 'watchdog restarted it'
+   ```
+8. **Shutdown.** Say "Max，关机" and let the countdown finish: the board powers off
+   cleanly (this is the `ProtectSystem=strict` path of `shutdown -h now`). Power it
+   back on and confirm steps 1 and 3 again after the reboot.
+
+**If any step fails, remove the drop-ins with one command and restart:**
+
+```bash
+sudo rm -f /etc/systemd/system/max-agent.service.d/hardening.conf /etc/systemd/system/max-vision.service.d/hardening.conf \
+  && sudo systemctl daemon-reload && sudo systemctl restart max-vision max-agent
+```
+
+That restores the pre-hardening behaviour exactly (the units themselves are
+unchanged). `rdk/deploy.sh --no-hardening` does the same on the next deploy. Then
+report which step failed and its journal lines; the likely culprit is named in
+the step.
 
 ## On-hardware verification
 
@@ -1112,8 +1212,33 @@ npm run test:rdk-vision
 ```
 
 Real camera and BPU validation stays separate because CI cannot emulate the
-hardware. Use the on-hardware checklist above and `tools/check_anchors.py`; a
-future pytest that opens either resource must use `@pytest.mark.hardware`.
+hardware. `tests/test_hardware_smoke.py` is the on-board smoke test: every test in
+it is marked `hardware`, so the command above deselects it (`pytest` reports
+`5 deselected`), and on a machine without the vendor stack it skips with the
+missing module's name instead of passing. Any other pytest that opens the camera,
+ROS/ISP or the BPU must use `@pytest.mark.hardware` too.
+
+On the board, with the TROS environment sourced:
+
+```bash
+source /opt/tros/humble/setup.bash
+cd /opt/max
+systemctl stop max-vision        # one process may hold a camera
+python3 -m pytest -c rdk/vision/pytest.ini -m hardware --strict-markers \
+  rdk/vision/tests/test_hardware_smoke.py -v -k 'not control_socket'
+systemctl start max-vision       # the socket test needs the running sidecar
+sleep 30
+python3 -m pytest -c rdk/vision/pytest.ini -m hardware --strict-markers \
+  rdk/vision/tests/test_hardware_smoke.py -v -k control_socket
+```
+
+It checks that a camera opens and yields a full-size NV12 frame and keeps
+yielding them, that the model loads with three detection heads, that one inference
+returns boxes inside the unit square, and that the control socket answers
+(an unknown op is answered `unsupported`; nothing is captured or changed).
+`MAX_VISION_MODEL` overrides the model path; a missing model skips rather than
+fails. These do not replace `tools/check_anchors.py`, which proves the box decode
+is correct against a known image.
 
 ## ADAS M1 — the measurement pipeline
 

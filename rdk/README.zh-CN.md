@@ -44,11 +44,12 @@ sudo systemctl daemon-reexec
 
 ## 运行服务
 
-将板卡私有配置写入 `/etc/max/agent.env`，权限设为 `0600`。下方为示例值，按本机设备号、接口和中继替换；**不要把真实令牌写入 Git、命令历史或验收材料**：
+推荐用 `rdk/provision.sh` 创建 `/etc/max/agent.env`（权限 `0600`，密钥从环境变量或静默提示读取，不会回显）。下方为示例值，按本机设备号、接口和中继替换；**不要把真实令牌写入 Git、命令历史或验收材料**：
 
 ```dotenv
-MAX_RELAY_URL=ws://<中继局域网IP>:8787/agent
+MAX_RELAY_URL=wss://relay.example.com/agent
 MAX_RELAY_TOKEN=
+MAX_REQUIRE_TLS=on
 MAX_RELAY_INSECURE_TLS=0
 MAX_DEVICE_ID_FILE=/var/lib/max/device-id
 RDK_ALSA_CAPTURE=plughw:0,0
@@ -57,6 +58,7 @@ MAX_GALLERY_DIR=/var/lib/max/gallery
 MAX_GALLERY_MIN_FREE_MB=1024
 MAX_HUD_PORT=8080
 MAX_VISION_PREVIEW_PORT=8081
+# MAX_VISION_LISTEN=all
 MAX_VISION_TOKEN=
 MAX_VISION_SOCKET=/run/max/vision.sock
 RDK_CAMERA_FRONT=0
@@ -68,25 +70,29 @@ MAX_VOICE_GATE_RMS=900
 MAX_VOICE_GATE_MS=400
 ```
 
-针对已启用账号的中继，`MAX_RELAY_TOKEN` 必需，否则 `/agent` 升级会被拒绝。`MAX_VISION_TOKEN` 用于板外访问 `8080`/`8081`；未配置时，非回环访问会返回 `401`。`MAX_VISION_SHARE=0` 默认拒绝摄像头帧离开板卡；设置为 `1` 后才允许语音视觉描述。仅精确值 `1` 会启用 `MAX_RELAY_INSECURE_TLS`，测试时才可考虑该选项。
+针对已启用账号的中继，`MAX_RELAY_TOKEN` 必需，否则 `/agent` 升级会被拒绝。`MAX_VISION_TOKEN` 用于板外访问 `8080`（以及启用 `MAX_VISION_LISTEN=all` 后的 `8081`）；未配置时，非回环访问会返回 `401`。`MAX_VISION_SHARE=0` 默认拒绝摄像头帧离开板卡；设置为 `1` 后才允许语音视觉描述。仅精确值 `1` 会启用 `MAX_RELAY_INSECURE_TLS`，测试时才可考虑该选项。
 
-安装并启动 systemd 服务：
+令牌通过 `Authorization: Bearer` 请求头发送，不再放在 URL 里。但请求头不能让 `ws://` 变得私密：明文 `ws://` 会让令牌和骑手的麦克风音频以明文经过网络，只应用于自己可控的台架局域网。`MAX_REQUIRE_TLS=on`（默认写入）会在 `ws://` 指向非回环主机时拒绝启动；`MAX_REQUIRE_TLS=off` 仅限台架。视觉侧车的 `8081` 端口默认只监听 `127.0.0.1`，因此默认情况下，局域网浏览器打开 `http://<board>:8080/?t=<token>` 只能看到 HUD，摄像头与图库面板不可用（HUD 会提示）。仅在可信的台架网络中才设置 `MAX_VISION_LISTEN=all` 以开放 `8081`（SSH 本地转发不受影响）。
+
+安装 systemd 服务（含加固 drop-in）并发布代码：
 
 ```bash
-sudo chmod 0600 /etc/max/agent.env
-sudo cp rdk/systemd/*.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now max-agent max-vision
+export RDK_HOST=root@board.example.com
+rdk/provision.sh --dry-run   # 先预览，不执行任何远程命令
+rdk/provision.sh
+rdk/deploy.sh --dry-run
+rdk/deploy.sh
 journalctl -u max-agent -f
 ```
 
+两个服务以 root 运行；`rdk/systemd/*.service.d/hardening.conf` 提供只含已论证指令的沙箱加固。服务清单、板上验收清单和一条命令移除加固的方法见[英文版 Service hardening](README.md#service-hardening)。
 两个服务使用 30 秒 watchdog；部署 unit 文件和会发送 heartbeat 的代码必须在同一次发布中完成，否则健康进程会每 30 秒被错误重启。Agent 不强制依赖视觉侧车：摄像头服务故障时，语音仍可运行，拍摄动作应报告真实失败。系统服务比 SSH 会话中的 `nohup` 更可靠。
 
 ## 受审发布与回滚
 
 发布顺序为：**匹配目标 SHA 且 `/health`、`/ready` 均正常的中继 → 签名 iOS App → RDK 板卡**。板卡应从干净、已评审的完整 Git SHA 创建新 staging 目录，而不是把开发工作树直接覆盖到 `/opt/max`。原生 AEC 可执行文件和渲染后的 ADAS 警告音频不在 Git 里，必须从当前发布显式复制、逐项验证。激活后只做一次受控重启，确认新的 systemd Invocation ID、`[relay] session ready`、服务仍在运行、设备身份摘要不变，再保留上一个版本供回滚。
 
-这套流程涉及 owner、mode、fsync、文件完整性和身份校验，请直接使用[英文版受审发布与回滚命令](README.md#reviewed-rdk-rollout)，不要从上述说明临时拼接部署脚本。回滚同样需要恢复已记录的上一个目录、unit 文件和服务，并复查设备身份与就绪状态。
+这套流程现在是受版本控制的脚本：`rdk/deploy.sh` 完成 staging、校验、切换、健康检查，并在失败时自动回滚到上一个版本（含其 unit 文件和 drop-in），退出码 2 表示回滚也未能证明，需要按[英文版附录](README.md#deploying)手动处理。`--dry-run` 会打印每条远程命令而不执行。请不要从上述说明临时拼接部署命令。
 
 ## 板卡验收
 
@@ -109,7 +115,7 @@ uv run --with-requirements rdk/vision/requirements-dev.txt python -m pytest \
   -c rdk/vision/pytest.ini -m 'not hardware' --strict-markers rdk/vision/tests
 ```
 
-也可按[英文版环境步骤](README.md#running-the-python-suite)创建 `.venv` 后运行 `npm run test:rdk-vision`。缺少 NumPy、OpenCV、FFmpeg 或 `ffprobe` 应被视为测试失败；只跳过明确标记 `hardware` 的用例。真实摄像头和 BPU 检查仍需板上执行。
+也可按[英文版环境步骤](README.md#running-the-python-suite)创建 `.venv` 后运行 `npm run test:rdk-vision`。缺少 NumPy、OpenCV、FFmpeg 或 `ffprobe` 应被视为测试失败；只跳过明确标记 `hardware` 的用例。真实摄像头和 BPU 检查仍需板上执行：`rdk/vision/tests/test_hardware_smoke.py` 的用例全部标记为 `hardware`（上面的命令会取消选择它们），板上运行方法见[英文版](README.md#running-the-python-suite)。
 
 ## ADAS 阶段与限制
 

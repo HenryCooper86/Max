@@ -1,21 +1,47 @@
 #!/bin/bash
-# Deploy to the AWS Lightsail test server (see README "Build & Deployment Pipeline").
+# Deploy the relay and web app to a Lightsail (or any Ubuntu + pm2) host, verify
+# /health and /ready report the new commit, and roll back if they do not.
 # Double-click in Finder or run: ./deploy-lightsail.command
+#
+# The host and SSH key are yours, so they are not in this file. Put them in
+# deploy.local.env next to this script (ignored by git), or export them:
+#
+#   LIGHTSAIL_KEY=/path/to/key.pem
+#   LIGHTSAIL_HOST=ubuntu@your-server
+#   LIGHTSAIL_HEALTH_URL=https://your-domain/health
+#   LIGHTSAIL_READY_URL=https://your-domain/ready
 set -euo pipefail
 cd "$(dirname "$0")"
 
-KEY="${LIGHTSAIL_KEY:-/Users/admin/Desktop/LightsailDefaultKey-ap-northeast-2.pem}"
-HOST="${LIGHTSAIL_HOST:-ubuntu@3.35.135.136}"
+if [[ -f deploy.local.env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./deploy.local.env
+  set +a
+fi
+
+KEY="${LIGHTSAIL_KEY:-}"
+HOST="${LIGHTSAIL_HOST:-}"
 REMOTE_APP_DIR="${LIGHTSAIL_APP_DIR:-/home/ubuntu/app}"
-HEALTH_URL="${LIGHTSAIL_HEALTH_URL:-https://max.bionicloud.net/health}"
-READY_URL="${LIGHTSAIL_READY_URL:-https://max.bionicloud.net/ready}"
+HEALTH_URL="${LIGHTSAIL_HEALTH_URL:-}"
+READY_URL="${LIGHTSAIL_READY_URL:-}"
 DEPLOY_BRANCH="${LIGHTSAIL_DEPLOY_BRANCH:-main}"
-DEPLOY_REMOTE="${LIGHTSAIL_DEPLOY_REMOTE:-gitlab}"
+DEPLOY_REMOTE="${LIGHTSAIL_DEPLOY_REMOTE:-origin}"
 ALLOW_NON_MAIN="${LIGHTSAIL_ALLOW_NON_MAIN:-off}"
 
+missing=()
+[[ -n "$KEY" ]] || missing+=("LIGHTSAIL_KEY")
+[[ -n "$HOST" ]] || missing+=("LIGHTSAIL_HOST")
+[[ -n "$HEALTH_URL" ]] || missing+=("LIGHTSAIL_HEALTH_URL")
+[[ -n "$READY_URL" ]] || missing+=("LIGHTSAIL_READY_URL")
+if (( ${#missing[@]} > 0 )); then
+  echo "Missing deploy settings: ${missing[*]}" >&2
+  echo "Set them in deploy.local.env next to this script, or export them." >&2
+  exit 1
+fi
 if [[ ! -f "$KEY" ]]; then
   echo "SSH key not found: $KEY" >&2
-  echo "Fix the KEY path at the top of this script." >&2
+  echo "Fix LIGHTSAIL_KEY in deploy.local.env." >&2
   exit 1
 fi
 if [[ ! "$REMOTE_APP_DIR" =~ ^/home/ubuntu/[A-Za-z0-9._/-]+$ ]] ||
@@ -24,9 +50,9 @@ if [[ ! "$REMOTE_APP_DIR" =~ ^/home/ubuntu/[A-Za-z0-9._/-]+$ ]] ||
   exit 1
 fi
 
-# Production deploys must be reproducible from the reviewed GitLab branch.
-# This catches the two easiest operator mistakes: archiving uncommitted work,
-# or deploying a local commit that has not passed through the main-branch MR.
+# Production deploys must be reproducible from the reviewed branch on the deploy
+# remote. This catches the two easiest operator mistakes: archiving uncommitted
+# work, or deploying a local commit that has not been merged through a pull request.
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "Refusing to deploy a dirty working tree. Commit or stash every change first." >&2
   exit 1
@@ -49,7 +75,7 @@ fi
 # Deploy from a clean snapshot so local build caches, IDE state, and other
 # ignored files can never be copied to the server. The temporary directory is
 # validated by mktemp before it is registered for recursive cleanup.
-DEPLOY_STAGE="$(mktemp -d /tmp/doubao-deploy.XXXXXX)"
+DEPLOY_STAGE="$(mktemp -d /tmp/max-deploy.XXXXXX)"
 DEPLOY_ACTIVATED="off"
 REMOTE_NEXT_DIR=""
 REMOTE_PREVIOUS_DIR="${REMOTE_APP_DIR}.previous"
@@ -62,7 +88,7 @@ cleanup() {
       "set -e; rm -rf '$REMOTE_FAILED_DIR'; mv '$REMOTE_APP_DIR' '$REMOTE_FAILED_DIR'; mv '$REMOTE_PREVIOUS_DIR' '$REMOTE_APP_DIR'; pm2 restart max --update-env; rm -rf '$REMOTE_FAILED_DIR'" \
       || echo "Automatic rollback failed; inspect $HOST immediately." >&2
   fi
-  [[ "$DEPLOY_STAGE" == /tmp/doubao-deploy.* ]] && rm -rf "$DEPLOY_STAGE"
+  [[ "$DEPLOY_STAGE" == /tmp/max-deploy.* ]] && rm -rf "$DEPLOY_STAGE"
   trap - EXIT
   exit "$exit_status"
 }

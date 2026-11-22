@@ -24,8 +24,9 @@ final class PcmPlayer {
 
     /// Shared with MicStreamer so the agent voice renders through the same engine
     /// that performs echo cancellation — see prepare() and MicStreamer.start().
-    private let engine: AVAudioEngine
-    private let playerNode = AVAudioPlayerNode()
+    /// Replaced only by rebind(to:) after a media-services reset.
+    private var engine: AVAudioEngine
+    private var playerNode = AVAudioPlayerNode()
     private let inputFormat: AVAudioFormat   // 24 kHz PCM16 mono (the wire format)
     private let mixFormat: AVAudioFormat     // 24 kHz float32 mono (engine-friendly)
     private var converter: AVAudioConverter?
@@ -122,7 +123,10 @@ final class PcmPlayer {
 
     /// Must run on `queue` with the engine running.
     private func schedule(_ pcm: Data) {
-        if !playing {
+        // An interruption or route change stops the engine, and the node with
+        // it, while `playing` still says armed; re-arm whenever the node is
+        // not actually playing, or the next utterance is queued into silence.
+        if !playing || !playerNode.isPlaying {
             playerNode.play()   // arm the node now that the engine runs
             playing = true
         }
@@ -162,6 +166,13 @@ final class PcmPlayer {
             pendingChunks.removeAll()   // buffered audio belongs to the cut utterance
             guard playing else { return }
             playerNode.stop()
+            // An interruption or a route change leaves the engine stopped, and
+            // a node must not be started on a stopped engine; schedule()
+            // re-arms it once the engine runs again.
+            guard attached, engine.isRunning else {
+                playing = false
+                return
+            }
             playerNode.play()   // re-arm for the next utterance
         }
     }
@@ -172,6 +183,24 @@ final class PcmPlayer {
             pendingChunks.removeAll()
             guard playing else { return }
             playerNode.stop()   // MicStreamer.stop() stops the shared engine
+            playing = false
+        }
+    }
+
+    /// Moves playback onto a new engine after a media-services reset, when the
+    /// old engine and every node attached to it are dead. A node can belong to
+    /// one engine only, so a fresh one is created; the caller then runs
+    /// prepare() and starts the engine as on a first start.
+    func rebind(to newEngine: AVAudioEngine) {
+        queue.sync {
+            generation += 1
+            pendingChunks.removeAll()
+            #if DEBUG
+            qaPendingBytes = 0
+            #endif
+            engine = newEngine
+            playerNode = AVAudioPlayerNode()
+            attached = false
             playing = false
         }
     }

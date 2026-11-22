@@ -1,6 +1,10 @@
 // Code tools: they run inside the relay, so they can use any npm package and
 // any secret in the relay's environment. Named by "toolsModule" in
 // assistant.config.json.
+//
+// This file sits two folders below the relay checkout, hence "../../server/...".
+// In your own project, put it in the checkout root beside assistant.config.json and
+// import "./server/tools/index" instead (the helpers only add type checking).
 import { defineTool, defineTools } from "../../server/tools/index";
 
 const INVENTORY: Record<string, { price: number; inStock: number }> = {

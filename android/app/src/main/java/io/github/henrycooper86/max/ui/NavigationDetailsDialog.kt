@@ -28,7 +28,13 @@ import java.util.Date
 import kotlin.math.ceil
 
 @Composable
-fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, hudCast: io.github.henrycooper86.max.navigation.HudCastClient? = null, onDismiss: () -> Unit) {
+fun NavigationDetailsDialog(
+    guidance: NavGuidanceState,
+    music: MusicController,
+    hudCast: io.github.henrycooper86.max.navigation.HudCastClient? = null,
+    mapPaused: Boolean = false,
+    onDismiss: () -> Unit
+) {
     var following by remember { mutableStateOf(true) }
     var showSteps by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -51,7 +57,7 @@ fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, 
                     }
                     if (maxWidth > maxHeight * 1.2f) {
                         Row(horizontalArrangement = Arrangement.spacedBy(VisorSpace.x3)) {
-                            RidingMap(guidance, following, { following = !following }, Modifier.weight(1f).fillMaxHeight())
+                            RidingMap(guidance, following, { following = !following }, Modifier.weight(1f).fillMaxHeight(), mapPaused)
                             Column(Modifier.width(railWidth).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                     RidingManeuver(guidance)
@@ -63,7 +69,7 @@ fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, 
                     } else {
                         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             RidingManeuver(guidance)
-                            RidingMap(guidance, following, { following = !following }, Modifier.height(300.dp).fillMaxWidth())
+                            RidingMap(guidance, following, { following = !following }, Modifier.height(300.dp).fillMaxWidth(), mapPaused)
                             controls()
                         }
                     }
@@ -74,9 +80,9 @@ fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, 
 }
 
 @Composable
-private fun RidingMap(guidance: NavGuidanceState, following: Boolean, onToggle: () -> Unit, modifier: Modifier) {
+private fun RidingMap(guidance: NavGuidanceState, following: Boolean, onToggle: () -> Unit, modifier: Modifier, mapPaused: Boolean) {
     Box(modifier.clip(VisorShapes.card).background(Visor.colors.surface1)) {
-        GuidanceRouteMap(guidance, detailed = true, followsRider = following, viewportModifier = Modifier.fillMaxSize())
+        GuidanceRouteMap(guidance, detailed = true, followsRider = following, viewportModifier = Modifier.fillMaxSize(), paused = mapPaused)
         VisorButton(
             if (following) tr(Str.FULL_ROUTE) else tr(Str.FOLLOW_ME), onToggle,
             modifier = Modifier.align(Alignment.TopEnd).padding(VisorSpace.x3)

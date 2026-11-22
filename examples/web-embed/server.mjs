@@ -24,6 +24,21 @@ async function readBody(req) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+/**
+ * DEMO ONLY. Replace this before you copy the file.
+ *
+ * The token route below hands out a voice session to whoever asks. That is fine
+ * on localhost and a disaster on the internet: anyone could spend your voice
+ * minutes. Put your own authentication here (read your session cookie or an
+ * Authorization header, look the user up) and return that user's real id. Return
+ * null to refuse; the route then answers 401. The id becomes the token's userId,
+ * which is what tools and usage limits see.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- the stub ignores the request; yours will read it
+function requireSession(_req) {
+  return { userId: "demo-shopper", name: "Sam", tier: "gold" };
+}
+
 function json(res, status, body) {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
@@ -52,7 +67,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && req.url === "/api/voice-token") {
-      // In a real app: check the user's own session here, and pass their id.
+      const session = requireSession(req);
+      if (!session) return json(res, 401, { error: "sign in first" });
       const response = await fetch(`${RELAY_URL}/v1/session-tokens`, {
         method: "POST",
         headers: {
@@ -61,8 +77,8 @@ const server = http.createServer(async (req, res) => {
         },
         body: JSON.stringify({
           ttlSeconds: 600,
-          userId: "demo-shopper",
-          context: "Signed-in shopper: Sam (loyalty tier: gold)."
+          userId: session.userId,
+          context: `Signed-in shopper: ${session.name} (loyalty tier: ${session.tier}).`
         })
       });
       json(res, response.status, await response.json());

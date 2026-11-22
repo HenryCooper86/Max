@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup on Android 11 and older (android:fullBackupContent).
+
+     Allow-list, not deny-list: only max_ui.xml (interface language, visor
+     template and voice-display style) is backed up. Everything else stays on
+     this device, including files added later, because rider data lives in:
+       max_helmet.xml  ride transcripts, account identity, relay address and
+                       Keystore-encrypted tokens (the key never leaves the
+                       device, so a restored ciphertext is useless anyway)
+       max_crash.xml   emergency contact number and crash-alert opt-in
+       max_captures.xml and files/captures/  photos, videos and their metadata
+       hud_bond.xml    HUD pairing secret
+       max_map.xml     map privacy consent, which must be given on each device
+     Keep data_extraction_rules.xml (Android 12+) in step with this file. -->
+<full-backup-content>
+    <include domain="sharedpref" path="max_ui.xml" />
+</full-backup-content>

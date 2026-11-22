@@ -46,6 +46,10 @@
             "context": {
               "type": "string",
               "maxLength": 2000
+            },
+            "protocol": {
+              "type": "integer",
+              "minimum": 1
             }
           },
           "required": ["type", "sampleRate", "channels"]
@@ -95,6 +99,11 @@
             },
             "lon": {
               "type": "number"
+            },
+            "speedKmh": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 400
             }
           },
           "required": ["type", "lat", "lon"]
@@ -410,6 +419,10 @@
             },
             "capabilities": {
               "type": "object"
+            },
+            "protocol": {
+              "type": "integer",
+              "minimum": 1
             }
           },
           "required": ["type", "provider", "mode", "capabilities"]

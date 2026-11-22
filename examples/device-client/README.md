@@ -83,10 +83,13 @@ It is a reference, not a product.
 ## Tests
 
 ```bash
-python3 -m unittest -v test_max_device
+python3 -m pip install 'websockets>=10'   # sounddevice is not needed
+python3 -m unittest discover -s examples/device-client -p 'test_*.py' -v   # from the repository root
+# or, from this directory:  python3 -m unittest -v test_max_device
 ```
 
-The session tests run the client against a small scripted relay on
+They take about 10 seconds (the reconnect test waits out one backoff) and use only localhost.
+CI runs them in the `device-client` job. The session tests run the client against a small scripted relay on
 localhost, so they cover the real connection code: capture, playback,
 interruption with and without confirmation, voice gating, and reconnecting
 after a dropped link. They use WAV files, so they need no sound card.

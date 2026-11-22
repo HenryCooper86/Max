@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import {
   IDLE_CLOSE_CODE,
+  PROTOCOL_VERSION,
   type AgentEvent,
   type SessionMemorySnapshot,
   type SessionStartEvent
@@ -25,22 +26,33 @@ export function nextBackoffMs(attempt: number): number {
 }
 
 /**
- * Adds the operator relay token as `?token=…`, the form `server/auth.ts` reads
- * and the web client already uses. Without it an authenticated relay rejects the
- * upgrade with 401 before a session ever starts.
+ * Splits the relay URL from its credential. The token goes in an
+ * `Authorization: Bearer` header, which `server/auth.ts` accepts alongside the
+ * query form, because a query string lands in relay and proxy access logs and
+ * in shell history. A `token` already pasted into MAX_RELAY_URL is lifted out
+ * for the same reason (MAX_RELAY_TOKEN wins if both are set).
  *
  * A malformed URL is returned untouched: a bad MAX_RELAY_URL should surface as a
  * connection failure, not a parse crash before the first attempt.
  */
-export function authorizedRelayUrl(relayUrl: string, token: string): string {
-  if (!token) return relayUrl;
+export function relayEndpoint(config: Pick<RdkConfig, "relayUrl" | "relayToken">): {
+  url: string;
+  headers: Record<string, string>;
+} {
+  let url = config.relayUrl;
+  let token = config.relayToken;
   try {
-    const url = new URL(relayUrl);
-    url.searchParams.set("token", token);
-    return url.toString();
+    const parsed = new URL(config.relayUrl);
+    const inUrl = parsed.searchParams.get("token");
+    if (inUrl !== null) {
+      parsed.searchParams.delete("token");
+      url = parsed.toString();
+      if (!token) token = inUrl;
+    }
   } catch {
-    return relayUrl;
+    // fall through with the URL as given
   }
+  return { url, headers: token ? { Authorization: `Bearer ${token}` } : {} };
 }
 
 export function buildSessionStart(
@@ -53,6 +65,7 @@ export function buildSessionStart(
     sampleRate: UPLINK_RATE,
     channels: 1,
     platform: "embedded",
+    protocol: PROTOCOL_VERSION,
     deviceId,
     deviceLabel: "RDK X5",
     networkType: "wifi"
@@ -93,7 +106,14 @@ export type SocketLike = {
 };
 
 export type RelayClientOptions = {
-  wsFactory?: (url: string, options: { rejectUnauthorized: boolean; handshakeTimeout?: number }) => SocketLike;
+  wsFactory?: (
+    url: string,
+    options: {
+      rejectUnauthorized: boolean;
+      handshakeTimeout?: number;
+      headers?: Record<string, string>;
+    }
+  ) => SocketLike;
   pingIntervalMs?: number;
   setInterval?: typeof globalThis.setInterval;
   clearInterval?: typeof globalThis.clearInterval;
@@ -106,10 +126,15 @@ const SOCKET_OPEN = 1;
 /** Options the default (non-injected) `wsFactory` gives the real `ws`
  *  constructor. Exported so a unit test can pin the handshake timeout without
  *  standing up a live socket. */
-export function defaultSocketOptions(config: RdkConfig): { rejectUnauthorized: boolean; handshakeTimeout: number } {
+export function defaultSocketOptions(config: RdkConfig): {
+  rejectUnauthorized: boolean;
+  handshakeTimeout: number;
+  headers: Record<string, string>;
+} {
   return {
     rejectUnauthorized: !config.insecureTls,
-    handshakeTimeout: HANDSHAKE_TIMEOUT_MS
+    handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
+    headers: relayEndpoint(config).headers
   };
 }
 
@@ -137,7 +162,7 @@ export function createRelayClient(
     }
     ready = false;
     intentional = false;
-    const current = wsFactory(authorizedRelayUrl(config.relayUrl, config.relayToken), defaultSocketOptions(config));
+    const current = wsFactory(relayEndpoint(config).url, defaultSocketOptions(config));
     socket = current;
     current.binaryType = "nodebuffer";
 

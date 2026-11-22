@@ -8,8 +8,12 @@
  */
 
 import { VoiceAgent } from "./client.js";
-import type { ClientTool, VoiceAgentOptions, VoiceAgentStatus } from "./client.js";
+import type { ClientTool, VoiceAgentError, VoiceAgentOptions } from "./client.js";
 import type { TranscriptItem, VoiceGender } from "./protocol.js";
+import { resolveLocale, resolveStrings } from "./widget-strings.js";
+import type { WidgetStringOverrides, WidgetStrings } from "./widget-strings.js";
+
+export type { WidgetStringOverrides, WidgetStrings } from "./widget-strings.js";
 
 const OBSERVED = [
   "relay",
@@ -25,6 +29,8 @@ const OBSERVED = [
   "position",
   "text-input"
 ] as const;
+/** `lang` only picks the widget's text language; it never reaches the relay. */
+const WATCHED = [...OBSERVED, "lang"];
 /** Attributes that only matter when a session is created. */
 const CONNECTION_ATTRS: ReadonlySet<string> = new Set([
   "relay",
@@ -37,25 +43,14 @@ const CONNECTION_ATTRS: ReadonlySet<string> = new Set([
   "context"
 ]);
 
-const STATUS_LABELS: Record<VoiceAgentStatus, string> = {
-  idle: "Idle",
-  connecting: "Connecting",
-  ready: "Ready",
-  listening: "Listening",
-  hearing: "Hearing you",
-  thinking: "Thinking",
-  speaking: "Speaking",
-  error: "Something went wrong",
-  closed: "Session ended"
-};
-
-const ERROR_MESSAGES: Record<string, string> = {
-  microphone: "Microphone access was blocked. Allow it in your browser and try again.",
-  token: "Could not start a session. Please try again later.",
-  connection: "Could not reach the assistant. Please try again.",
-  relay: "The assistant reported a problem.",
-  audio: "Audio playback failed."
-};
+/**
+ * Server rendering imports this module too (a Next.js client component is
+ * still rendered on the server) and `HTMLElement` does not exist there. A
+ * stand-in keeps the import from throwing; the element is never constructed or
+ * registered outside a browser.
+ */
+const ElementBase: typeof HTMLElement =
+  typeof HTMLElement === "undefined" ? (class {} as unknown as typeof HTMLElement) : HTMLElement;
 
 const TEMPLATE = `
 <style>
@@ -66,6 +61,7 @@ const TEMPLATE = `
     --va-muted: #5b6270;
     --va-line: #e3e6ec;
     --va-user: #eef1f7;
+    --va-error: #b3261e; /* 6.5:1 on --va-bg */
     --va-on-accent: #ffffff;
     all: initial;
     display: block;
@@ -79,6 +75,7 @@ const TEMPLATE = `
       --va-muted: #9aa3b2;
       --va-line: #2f343d;
       --va-user: #2a2f38;
+      --va-error: #ff8a80; /* 7.3:1 on --va-bg */
     }
   }
   :host([position="inline"]) { display: inline-block; position: relative; }
@@ -94,14 +91,14 @@ const TEMPLATE = `
     box-shadow: 0 8px 32px rgb(0 0 0 / 0.18); overflow: hidden;
   }
   .panel[hidden] { display: none; }
-  header { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--va-line); }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--va-line); }
   .state { color: var(--va-muted); font-size: 12px; }
   .lines { list-style: none; margin: 0; padding: 12px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 64px; }
   .lines li { max-width: 88%; padding: 8px 10px; border-radius: 12px; background: var(--va-user); overflow-wrap: anywhere; }
   .lines li[data-role="agent"] { align-self: flex-start; border: 1px solid var(--va-line); background: transparent; }
   .lines li[data-role="user"] { align-self: flex-end; }
   .lines li[data-final="false"] { opacity: 0.65; }
-  .note { margin: 0; padding: 8px 12px; color: #b3261e; font-size: 13px; }
+  .note { margin: 0; padding: 8px 12px; color: var(--va-error); font-size: 13px; }
   .note:empty { display: none; }
   form { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--va-line); }
   form[hidden] { display: none; }
@@ -112,6 +109,10 @@ const TEMPLATE = `
   button { font: inherit; color: inherit; cursor: pointer; }
   .small { background: transparent; border: 1px solid var(--va-line); border-radius: 10px; padding: 6px 10px; }
   .small[aria-pressed="true"] { background: var(--va-user); }
+  .small[hidden] { display: none; }
+  .actions { display: flex; gap: 8px; }
+  .sound { margin: 0 12px 8px; align-self: flex-start; }
+  .panel:focus-visible { outline: 3px solid var(--va-accent); outline-offset: -3px; }
   .fab {
     position: relative; width: 56px; height: 56px; border-radius: 50%; border: 0; padding: 0;
     background: var(--va-accent); color: var(--va-on-accent);
@@ -138,16 +139,20 @@ const TEMPLATE = `
   }
 </style>
 <div class="root" part="root">
-  <section class="panel" part="panel" hidden aria-label="Conversation">
-    <header>
-      <span class="state"></span>
-      <button class="small mute" type="button" aria-pressed="false">Mute</button>
+  <section class="panel" part="panel" role="dialog" aria-modal="false" tabindex="-1" hidden>
+    <header part="header">
+      <span class="state" part="status"></span>
+      <span class="actions">
+        <button class="small mute" part="mute" type="button" aria-pressed="false"></button>
+        <button class="small close" part="close" type="button"></button>
+      </span>
     </header>
-    <ul class="lines" role="log" aria-live="polite" aria-relevant="additions text"></ul>
-    <p class="note" role="alert"></p>
+    <ul class="lines" part="lines" role="log" aria-live="polite" aria-relevant="additions text"></ul>
+    <button class="small sound" part="sound" type="button" hidden></button>
+    <p class="note" part="note" role="alert"></p>
     <form hidden>
-      <input type="text" maxlength="2000" autocomplete="off" aria-label="Type a message" placeholder="Type a message" />
-      <button class="small" type="submit">Send</button>
+      <input type="text" part="input" maxlength="2000" autocomplete="off" />
+      <button class="small" part="send" type="submit"></button>
     </form>
   </section>
   <button class="fab" part="button" type="button" aria-pressed="false">
@@ -182,17 +187,22 @@ async function fetchToken(url: string): Promise<string> {
  * Attributes: `relay`, `project` (a Max Cloud public agent id: no backend needed), `token`, `token-url`, `language`, `voice`, `backend`,
  * `context` (facts about the page, for the assistant), `label`, `accent`, `position` (`bottom-right` by default,
  * `bottom-left`, or `inline` to place it in the flow), `text-input`.
- * Set the `tools` property to give the agent client tools. Dispatches
- * `voice-agent:status`, `:transcript`, `:toolcall` and `:error` events.
+ * Set the `tools` property to give the agent client tools, and `strings` to override any of its text (built-in English and
+ * Simplified Chinese, chosen from `language`, then `lang`). Dispatches `voice-agent:status`, `:transcript`, `:toolcall`,
+ * `:error` and `:warning` events.
  */
-export class VoiceAgentElement extends HTMLElement {
-  static readonly observedAttributes = OBSERVED;
+export class VoiceAgentElement extends ElementBase {
+  static readonly observedAttributes = WATCHED;
 
   #agent: VoiceAgent | undefined;
   #dirty = false;
   #tools: ClientTool[] = [];
   #off: Array<() => void> = [];
   #lines = new Map<string, HTMLLIElement>();
+  #strings: WidgetStringOverrides = {};
+  #error: VoiceAgentError | undefined;
+  /** The user closed the panel; it stays closed until the next session starts. */
+  #dismissed = false;
   readonly #root: ShadowRoot;
   #ui!: {
     wrap: HTMLElement;
@@ -204,6 +214,9 @@ export class VoiceAgentElement extends HTMLElement {
     input: HTMLInputElement;
     fab: HTMLButtonElement;
     mute: HTMLButtonElement;
+    close: HTMLButtonElement;
+    sound: HTMLButtonElement;
+    send: HTMLButtonElement;
     live: HTMLElement;
   };
 
@@ -219,6 +232,18 @@ export class VoiceAgentElement extends HTMLElement {
   set tools(value: ClientTool[]) {
     this.#tools = value;
     this.#dirty = true;
+  }
+
+  /**
+   * Overrides for any of the widget's text, laid over the built-in English or
+   * Chinese. Takes effect immediately. See {@link WidgetStrings} for the keys.
+   */
+  get strings(): WidgetStringOverrides {
+    return this.#strings;
+  }
+  set strings(value: WidgetStringOverrides) {
+    this.#strings = value ?? {};
+    if (this.#ui) this.#renderAll();
   }
 
   /** The underlying client, once a session has been started. */
@@ -240,6 +265,9 @@ export class VoiceAgentElement extends HTMLElement {
       input: select(root, "input"),
       fab: select(root, ".fab"),
       mute: select(root, ".mute"),
+      close: select(root, ".close"),
+      sound: select(root, ".sound"),
+      send: select(root, 'button[type="submit"]'),
       live: select(root, ".sr")
     };
     const ui = this.#ui;
@@ -251,18 +279,20 @@ export class VoiceAgentElement extends HTMLElement {
       else agent.mute();
       this.#renderStatus();
     });
+    ui.close.addEventListener("click", () => this.#dismiss());
+    ui.sound.addEventListener("click", () => {
+      void this.#agent?.resumeAudio().then(() => this.#renderStatus());
+    });
     ui.form.addEventListener("submit", (event) => {
       event.preventDefault();
       if (this.#agent?.sendText(ui.input.value)) ui.input.value = "";
     });
     this.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && this.#active()) {
-        this.stop();
-        ui.fab.focus();
+      if (event.key === "Escape" && !ui.panel.hidden) {
+        this.#dismiss();
       }
     });
-    this.#applyAttributes();
-    this.#renderStatus();
+    this.#renderAll();
   }
 
   disconnectedCallback(): void {
@@ -275,11 +305,12 @@ export class VoiceAgentElement extends HTMLElement {
   attributeChangedCallback(name: string): void {
     if (!this.#ui) return;
     if (CONNECTION_ATTRS.has(name)) this.#dirty = true;
-    this.#applyAttributes();
+    this.#renderAll();
   }
 
   /** Starts a conversation. Call from a user gesture. */
   async start(): Promise<void> {
+    this.#dismissed = false;
     const agent = this.#ensureAgent();
     try {
       await agent.start();
@@ -300,13 +331,61 @@ export class VoiceAgentElement extends HTMLElement {
 
   async #toggle(): Promise<void> {
     if (this.#active()) this.stop();
-    else await this.start();
+    else {
+      await this.start();
+      // Keyboard and screen-reader users clicked the button; take them to what it opened.
+      if (this.#active() && !this.#ui.panel.hidden) this.#ui.panel.focus();
+    }
+  }
+
+  /** Closes the panel (and the conversation with it) and gives focus back to the button. */
+  #dismiss(): void {
+    const hadFocus = this.#root.activeElement !== null && this.#root.activeElement !== this.#ui.fab;
+    this.#dismissed = true;
+    this.stop();
+    this.#renderStatus();
+    if (hadFocus) this.#ui.fab.focus();
+  }
+
+  #t(): WidgetStrings {
+    const locale = resolveLocale(
+      this.getAttribute("language"),
+      this.closest("[lang]")?.getAttribute("lang"),
+      typeof document === "undefined" ? undefined : document.documentElement.lang
+    );
+    return resolveStrings(locale, this.#strings);
+  }
+
+  /** Re-applies attributes and every piece of localised text. */
+  #renderAll(): void {
+    this.#applyAttributes();
+    this.#renderNote();
+    this.#renderStatus();
+  }
+
+  #renderNote(): void {
+    const error = this.#error;
+    if (!error) {
+      this.#ui.note.textContent = "";
+      return;
+    }
+    const known = (this.#t().errors as Record<string, string | undefined>)[error.code];
+    // An unknown code still tells the user something specific before the generic text.
+    this.#ui.note.textContent = known ?? (error.message || this.#t().errors.connection);
   }
 
   #applyAttributes(): void {
     const ui = this.#ui;
-    const label = this.getAttribute("label") || "Talk to the assistant";
+    const t = this.#t();
+    const label = this.getAttribute("label") || t.label;
     ui.fab.setAttribute("aria-label", label);
+    ui.panel.setAttribute("aria-label", t.conversation);
+    ui.close.textContent = t.close;
+    ui.close.setAttribute("aria-label", t.close);
+    ui.sound.textContent = t.enableSound;
+    ui.send.textContent = t.send;
+    ui.input.setAttribute("aria-label", t.typeMessage);
+    ui.input.setAttribute("placeholder", t.typeMessage);
     const accent = this.getAttribute("accent");
     if (accent) this.style.setProperty("--va-accent", accent);
     else this.style.removeProperty("--va-accent");
@@ -320,6 +399,7 @@ export class VoiceAgentElement extends HTMLElement {
     this.#dirty = false;
     this.#lines.clear();
     this.#ui.list.replaceChildren();
+    this.#error = undefined;
 
     const relay = this.getAttribute("relay");
     const tokenUrl = this.getAttribute("token-url");
@@ -349,13 +429,19 @@ export class VoiceAgentElement extends HTMLElement {
       }),
       agent.on("toolcall", (call) => emit("toolcall", call)),
       agent.on("error", (error) => {
-        this.#ui.note.textContent = ERROR_MESSAGES[error.code] ?? error.message;
+        this.#error = error;
+        this.#renderNote();
         emit("error", { error });
       }),
+      agent.on("warning", (warning) => {
+        this.#renderStatus();
+        emit("warning", { warning });
+      }),
+      agent.on("audioresume", () => this.#renderStatus()),
       agent.on("level", ({ mic, output }) => this.#ui.fab.style.setProperty("--level", String(Math.max(mic, output))))
     ];
     this.#agent = agent;
-    this.#ui.note.textContent = "";
+    this.#renderNote();
     return agent;
   }
 
@@ -365,13 +451,15 @@ export class VoiceAgentElement extends HTMLElement {
     const active = this.#active();
     ui.wrap.dataset.status = status;
     ui.fab.setAttribute("aria-pressed", String(active));
-    ui.panel.hidden = !active && status !== "error" && this.#lines.size === 0;
-    ui.state.textContent = STATUS_LABELS[status];
-    ui.live.textContent = STATUS_LABELS[status];
+    const t = this.#t();
+    ui.panel.hidden = this.#dismissed || (!active && status !== "error" && this.#lines.size === 0);
+    ui.state.textContent = t.status[status];
+    ui.live.textContent = t.status[status];
     const muted = this.#agent?.muted ?? false;
     ui.mute.setAttribute("aria-pressed", String(muted));
-    ui.mute.textContent = muted ? "Unmute" : "Mute";
+    ui.mute.textContent = muted ? t.unmute : t.mute;
     ui.mute.hidden = !active;
+    ui.sound.hidden = !(this.#agent?.audioBlocked ?? false);
     if (!active) ui.fab.style.setProperty("--level", "0");
   }
 

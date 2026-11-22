@@ -19,7 +19,7 @@ struct CrashCheckInBanner: View {
             Button(action: onCancel) {
                 HStack(spacing: Visor.Space.s3) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 20, weight: .bold))
+                        .hudIcon(20, .bold, relativeTo: .headline)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(L("crash.banner.title", ("n", String(remaining))))
                             .visorFont(.subhead, .bold)
@@ -34,6 +34,7 @@ struct CrashCheckInBanner: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(L("crash.banner.a11y", ("n", String(remaining))))
+            .accessibilityHint(crashCheckInAccessibilityHint())
         }
     }
 }
@@ -60,12 +61,13 @@ struct CrashAlarmView: View {
                 Visor.danger.ignoresSafeArea()
                 VStack(spacing: Visor.Space.s6) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 48, weight: .black))
+                        .hudIcon(48, .black, relativeTo: .largeTitle, maximum: 64)
                         .accessibilityHidden(true)
                     Text(L("crash.alarm.title"))
                         .visorFont(.alarm, .black)
                         .minimumScaleFactor(0.6)
                         .multilineTextAlignment(.center)
+                        .accessibilityAddTraits(crashAlarmAccessibilityContract.titleIsHeader ? .isHeader : [])
                     Text(statusLine)
                         .visorFont(.body, .semibold)
                         .multilineTextAlignment(.center)
@@ -97,6 +99,8 @@ struct CrashAlarmView: View {
                             .background(Visor.bg, in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
                             .foregroundStyle(Visor.text)
                     }
+                    .accessibilityLabel(crashAlarmCancelAccessibilityLabel())
+                    .accessibilityHint(crashAlarmCancelAccessibilityHint())
                     Button {
                         if let url = URL(string: "tel://\(callNumber)") {
                             Task { _ = await SystemURLOpener().open(url) }
@@ -111,10 +115,13 @@ struct CrashAlarmView: View {
                             )
                             .foregroundStyle(Visor.onDanger)
                     }
+                    .accessibilityHint(crashAlarmCallAccessibilityHint(number: callNumber))
                 }
                 .padding(Visor.Space.s6)
                 .foregroundStyle(Visor.onDanger)
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityAddTraits(crashAlarmAccessibilityContract.isModal ? .isModal : [])
         }
     }
 }

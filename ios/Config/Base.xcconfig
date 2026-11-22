@@ -1,0 +1,19 @@
+// Tracked defaults shared by Debug.xcconfig and Release.xcconfig. Each of
+// them includes this file before the optional, untracked Secrets.xcconfig, so a
+// value set there (or on the xcodebuild command line) wins over these.
+
+// The version riders and App Store Connect see.
+MARKETING_VERSION = 1.0.0
+
+// CI and release scripts pass the build number on the command line, as they
+// already do for MAX_GIT_COMMIT:
+//   xcodebuild ... MAX_BUILD_NUMBER=42
+// so nobody has to edit the project file to bump it.
+MAX_BUILD_NUMBER = 1
+CURRENT_PROJECT_VERSION = $(MAX_BUILD_NUMBER)
+
+// Signing team for device builds. Empty here so a fresh clone (and every
+// Simulator build) works without anyone's Apple account; set
+// MAX_DEVELOPMENT_TEAM in Secrets.xcconfig to sign for a device.
+MAX_DEVELOPMENT_TEAM =
+DEVELOPMENT_TEAM = $(MAX_DEVELOPMENT_TEAM)

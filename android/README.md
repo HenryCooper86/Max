@@ -46,6 +46,30 @@ MAX_GIT_COMMIT=$(git -C .. rev-parse --short=12 HEAD) \
 The APK lands at `app/build/outputs/apk/debug/app-debug.apk`. Or open `android/` in
 Android Studio and press Run.
 
+### Version and release signing
+
+`versionName` is `1.0.0`, matching iOS. `versionCode` comes from a Gradle property and defaults
+to 1; CI should pass a build number that only ever increases:
+
+```bash
+./gradlew assembleRelease -PversionCode=42
+```
+
+Release signing is optional. With none of the values below set, `assembleRelease` still produces
+an unsigned APK. To sign, set all four, either as Gradle properties (`-P...` or
+`~/.gradle/gradle.properties`, never a file in this repository) or as environment variables.
+Setting only some of them fails the build.
+
+| Gradle property           | Environment variable         | Value                       |
+| ------------------------- | ---------------------------- | --------------------------- |
+| `maxReleaseStoreFile`     | `MAX_RELEASE_STORE_FILE`     | Path to the keystore file   |
+| `maxReleaseStorePassword` | `MAX_RELEASE_STORE_PASSWORD` | Keystore password           |
+| `maxReleaseKeyAlias`      | `MAX_RELEASE_KEY_ALIAS`      | Alias of the release key    |
+| `maxReleaseKeyPassword`   | `MAX_RELEASE_KEY_PASSWORD`   | Password of the release key |
+
+Release builds run without R8 minification for now; `app/proguard-rules.pro` lists what must be
+checked before it is turned on.
+
 Useful Gradle checks:
 
 ```bash
@@ -92,6 +116,7 @@ The manifest requests only the permissions needed for the prototype:
 | `MODIFY_AUDIO_SETTINGS`         | Start/stop headset routing and speaker/mic mode adjustments.        |
 | `CAMERA`                        | Requested only for photo/video or torch commands.                   |
 | `READ_CONTACTS`                 | Requested only when resolving a spoken contact name.                |
+| `ACCESS_NETWORK_STATE`          | Notice network loss and Wi-Fi/mobile handover to reconnect at once. |
 
 Location is optional. If the rider denies it, the relay can still use server-side fallback
 weather coordinates.
@@ -128,14 +153,44 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 - ADAS hazard alerts: reacts to the server `hazard.alert` event by interrupting playback, speaking
   the warning, and showing a pulsing directional banner; an `ADAS` demo scenario showcases them
 - Device-TTS fallback when the provider sends text without audio (mock provider, Doubao text-only replies)
-- Auto-reconnect with exponential backoff (6 attempts, mirrors the web client)
+- Auto-reconnect with exponential backoff (6 attempts, mirrors the web client). Only drops while
+  the phone has a network count: in a tunnel the session waits, and when the network returns or
+  changes (Wi-Fi to mobile) the budget is refilled. With no socket it reconnects at once; an open
+  socket is kept rather than cutting the current turn. If the change killed it, the platform
+  usually closes it at once. Mid-reply, a socket that stays silent for 5 s after the change is
+  replaced. When idle, OkHttp's 20-second ping is the bound (20-40 s): the relay has no message a
+  client can send to get an answer.
+- A microphone that stops working (a helmet headset that dies, a dead mic) switches voice off
+  only: hands-free, the foreground service and crash detection stay on. Max says so once and
+  retries the microphone on every audio-device change and every 15 s until it works. Phone calls
+  are also detected from the audio mode, so a call pauses Max even when another app holds audio
+  focus, and the call ending resumes listening and re-applies the headset route.
 - Foreground service so the session keeps running with the screen off
-- Bluetooth headset (SCO) routing for in-helmet headsets, with phone mic/speaker fallback
+- Bluetooth headset (SCO) routing for in-helmet headsets, with phone mic/speaker fallback. A headset
+  that connects or drops mid-session is picked up within half a second: routing is re-applied and
+  the microphone restarted on the new device without reconnecting to the relay. Nothing is
+  re-routed while a phone call has the audio (that could move the call to the loudspeaker on
+  Android 8-11); the route is re-applied when the call ends.
+- Audio focus for the whole hands-free session (see _Audio notes_): a phone call pauses listening
+  and Max's voice, and hanging up resumes both.
+- Typed turns: when the backend reports `capabilities.textInput`, the captions panel shows a text
+  field that sends `text.input`. It is locked at 5 km/h and above (phone GPS speed), and usable
+  when speed is unknown.
+- Tool activity: `tool.activity` events show as a short status line ("Using get weather…"). The
+  app declares no client tools, so an unexpected `tool.call` is answered at once with an
+  `unknown tool` error, as the protocol requires.
+- Heat and battery saver (the same tiers as iOS): at severe phone temperature video recording
+  stops, and new recordings and gallery uploads are refused; at critical temperature photos, the
+  torch, music, HUD casting and the map pause too. Battery saver only refuses new recordings; one
+  already running continues. Heat that arrives while a recording is starting stops it straight
+  after the start (the short clip is kept). Max speaks a heat warning once per hot spell, never the same warning
+  twice within 5 minutes, and shows when it has cooled down. The voice session, crash detection and
+  voice navigation always keep running.
 - Acoustic echo cancellation: mic capture uses the `VOICE_COMMUNICATION` source plus
   `AcousticEchoCanceler` / `NoiseSuppressor`, so the agent's voice is not fed back into the
   mic (the Android analogue of the web's `getUserMedia({ echoCancellation })`). See _Audio
   notes_ below for a known built-in-speaker limitation.
-- `wss://` support with a debug-only "信任自签名证书" toggle for the Lightsail test server;
+- `wss://` support with a debug-only "信任自签名证书" toggle for a self-signed test relay;
   release builds require trusted TLS and block cleartext
 - Keystore-backed AES-GCM storage for relay/login tokens, including migration from older preferences
 - Release-run/test-case/assignment attribution with explicit Android platform and stamped git commit
@@ -196,10 +251,12 @@ When changing shared web/server behavior, update Android at the same time:
 | `service/VoiceAgentService.kt` | Microphone foreground service                                                                                     | — (browser tabs can't do this)                                                                      |
 | `ui/AgentScreen.kt`            | Compose HUD: ring, ride pulse, telemetry, transcript, controls                                                    | `src/components/` + HUD layout in `src/hooks/useHelmetAgent.ts`                                     |
 
-## Connecting to the Lightsail test server
+## Connecting to your own TLS relay
 
-In a **Debug** build, set the relay address to `wss://3.35.135.136/agent` and switch on
-信任自签名证书. Release builds intentionally omit this option and require a trusted certificate.
+Run the relay on a host you control and enter its address, for example
+`wss://relay.example.com/agent`. If that host uses a self-signed certificate (a test server), use
+a **Debug** build and switch on 信任自签名证书 (Trust self-signed certificate). Release builds
+intentionally omit this option and require a trusted certificate.
 
 ## Troubleshooting
 
@@ -208,7 +265,8 @@ In a **Debug** build, set the relay address to `wss://3.35.135.136/agent` and sw
 | App stays offline in emulator        | Use `ws://10.0.2.2:8787/agent`, not `localhost`; `localhost` means the emulator itself.        |
 | Physical phone cannot connect        | Put phone and Mac on the same LAN, use the Mac LAN IP, and allow firewall access.              |
 | USB device cannot connect            | Run `adb reverse tcp:8787 tcp:8787`, then use `ws://127.0.0.1:8787/agent`.                     |
-| Mic does not start                   | Grant microphone permission and confirm no other app is holding exclusive audio focus.         |
+| Mic does not start                   | Grant microphone permission. A phone call pauses hands-free until it ends (the HUD says so).   |
+| "Another app is playing audio"       | An app kept taking audio focus back. Max still listens and lowers that app only to speak.      |
 | Bluetooth headset is ignored         | Grant Bluetooth permission on Android 12+ and confirm the headset supports HFP/SCO.            |
 | Test server TLS fails                | Use a Debug build and enable its self-signed certificate toggle. Release requires trusted TLS. |
 | Build fails with Java version errors | Use Android Studio's JBR as `JAVA_HOME`; do not build with Homebrew Java 25+.                  |
@@ -222,11 +280,29 @@ In a **Debug** build, set the relay address to `wss://3.35.135.136/agent` and sw
   `AVAudioEngine` — Android's `VOICE_COMMUNICATION` AEC references the actual speaker output at
   the HAL level, so capture and playback do **not** have to share one graph.
 - **Speaker and headset routing.** A live voice session now uses `MODE_IN_COMMUNICATION` and `USAGE_VOICE_COMMUNICATION` on the phone speaker as well as Bluetooth. It prefers a connected headset, otherwise the speaker, and restores the prior mode on teardown. Music uses its own media path; it does not mute the mic. Speaker echo cancellation, helmet HFP/SCO behavior, and audible voice/music balance still require physical-device checks.
+- **Audio focus.** Hands-free holds `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK` focus (voice communication,
+  speech) for the whole session, so the rider's music keeps playing, ducked under Max, and returns
+  to full volume when hands-free ends. In-app music plays under that focus, ducked the same way.
+  A transient loss (a phone call) pauses capture and Max's voice and tells the rider; focus coming
+  back re-routes and restarts the microphone. A navigation prompt (a may-duck request) does not
+  pause listening, and is not ducked under Max either: it plays over Max's voice. A permanent loss
+  usually means the rider started music (by voice or the helmet's play button), so Max takes focus
+  back and the music plays ducked. Speech apps such as podcasts are not auto-ducked; they pause
+  and take focus back when the rider presses play. After three reclaims in a minute (or a refused
+  one) Max stops competing: hands-free keeps running without focus (the microphone does not need
+  it, and crash detection stays armed), the rider is told once, and Max asks for focus again only
+  to speak (handing it back afterwards) or when the other app stops playing. Audio focus never
+  ends hands-free. Safety warnings still play during a call.
 
 ## Release caveats
 
 - Release builds hide and compile-gate the self-signed trust path and reject cleartext traffic.
-- The debug APK is unsigned for distribution. Configure a release signing key before shipping.
+- The debug APK is unsigned for distribution. Configure release signing (see _Version and release signing_) before shipping.
+- Backups are limited by `res/xml/backup_rules.xml` and `res/xml/data_extraction_rules.xml` to
+  interface preferences (language, visor template, voice display). Transcripts, account data,
+  tokens, the emergency contact, crash settings, captures and their metadata never leave the phone.
+- The launcher and system labels default to English (`res/values/`), with Chinese in
+  `res/values-zh/`, matching the in-app language rule (Chinese only for Chinese system locales).
 - The app targets API 36 and compiles against Android 16 QPR2 (36.1), matching the 2026 Play gate.
 - Keep the foreground-service notification clear and user-visible for Android policy compliance.
 
@@ -241,7 +317,7 @@ In a **Debug** build, set the relay address to `wss://3.35.135.136/agent` and sw
 
 Settings now includes RDK code/nearby pairing and explicit helmet ride start/stop. Sign in with an account first; the manually pasted relay token does not authorize companion sharing. Starting a ride requires precise location and keeps a visible foreground notification with a stop action. Phone hands-free and helmet ride modes are mutually exclusive. Logout and unpair stop sharing; rides do not resume automatically after process death.
 
-Phone hands-free arms the iOS-equivalent crash detector when linear acceleration and gyroscope sensors are available. An incident progresses through a 15-second check-in and 30-second alarm. “我没事”/“取消”, the crash screen or notification cancels it. Ending hands-free preserves an active alarm; logging out disables its network delivery but retains the local alarm and dialer. Emergency contact notification is opt-in, and relay failures are shown explicitly. The default manual call target is 120; settings can select the configured contact instead. No call is placed automatically.
+Phone hands-free arms the iOS-equivalent crash detector when linear acceleration and gyroscope sensors are available. Its speed comes from the phone's own GPS (the session's existing location stream), so detection does not depend on the relay. For the crash detector's stillness check a GPS speed counts for 2 s, so a pre-impact speed cannot block the check that confirms a crash; a GPS fix without a usable speed makes the speed unknown at once. The 10 km/h speed gate also accepts the last usable GPS speed for up to 15 s, so a crash in a tunnel or under poor GPS still starts an incident. Crash detection never uses the relay's speed. Other uses accept a fix up to 5 s old. A live relay's `ride.context` speed is only the phone's own speed echoed back and is ignored; a mock relay's scenario speed (mode exactly "mock") is used for SMS, typing and the HUD when there is no fresh GPS, and is forgotten whenever the socket closes or reconnects. Otherwise speed is unknown, never zero, and a crash then needs an impact together with a tumble to raise a check-in. The same speed drives the SMS rule (refused at 5 km/h and above, and while speed is unknown, for example indoors without GPS; dialling is unaffected) and the typing field (locked at 5 km/h and above, usable when speed is unknown). `location.update` carries the fresh GPS speed as optional `speedKmh` for the relay's own fast-moving rule. An incident progresses through a 15-second check-in and 30-second alarm. “我没事”/“取消”, the crash screen or notification cancels it. Ending hands-free preserves an active alarm; logging out disables its network delivery but retains the local alarm and dialer. Emergency contact notification is opt-in, and relay failures are shown explicitly. The default manual call target is 120; settings can select the configured contact instead. No call is placed automatically.
 
 In a debug build, developer settings expose a local-only crash drill. It cannot notify an emergency contact. Hardware sensor validation, real RDK discovery, Bluetooth audio, live AMap authorization and actual notification-provider delivery remain device/release acceptance gates; see [the parity audit](../docs/mobile-parity.md).
 

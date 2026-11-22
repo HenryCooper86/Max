@@ -413,15 +413,22 @@ async def test_second_pass_error_keeps_stream_text():
     assert (await finalize_turn(finish_cmd(), finish=finish, second_pass=second)).text == "stream text"
 
 
-async def test_second_pass_deadline_falls_back_and_is_tracked():
+async def test_a_second_pass_that_misses_its_deadline_is_cancelled_and_tracked_until_it_stops():
+    """Its text would be thrown away, so it is not left running (as live work, holding the STT lock): it is cancelled,
+    which abandons it at the GPU gate, and kept in `background` until it has really stopped."""
     release = asyncio.Event()
-    finished = []
+    finished, cancelled = [], []
 
     async def finish():
         return "stream text"
 
     async def second(audio):
-        await release.wait()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelled.append(1)
+            await asyncio.sleep(0.05)  # like run_serialized, it waits for its thread before it stops
+            raise
         finished.append(1)
         return "late text"
 
@@ -430,11 +437,13 @@ async def test_second_pass_deadline_falls_back_and_is_tracked():
         finish_cmd(), finish=finish, second_pass=second, deadline_ms=50, background=background
     )
     assert end.text == "stream text"
-    assert len(background) == 1
-    release.set()
-    await asyncio.gather(*background)
+    assert len(background) == 1  # tracked while it winds down
+    try:
+        await asyncio.wait_for(asyncio.gather(*background, return_exceptions=True), 1)
+    finally:
+        release.set()
     await asyncio.sleep(0)
-    assert finished == [1] and not background
+    assert cancelled == [1] and finished == [] and not background
 
 
 async def test_second_pass_deadline_counts_from_the_decision():

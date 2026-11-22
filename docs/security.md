@@ -115,14 +115,51 @@ remains the control for them. Never treat the origin as authentication.
 | Setting                    | Default | What it limits                                                                                   |
 | -------------------------- | ------- | ------------------------------------------------------------------------------------------------ |
 | `RELAY_CONN_PER_MINUTE`    | 30      | `/agent` upgrade attempts per client IP, in a sliding 60 s window. 429 beyond. `0` turns it off. |
-| `AUTH_ATTEMPTS_PER_MINUTE` | 10      | Login and registration attempts per client IP.                                                   |
+| `AUTH_ATTEMPTS_PER_MINUTE` | 10      | Attempts per client IP per minute, counted separately for each route class (see below).          |
 | `RELAY_IDLE_TIMEOUT_MS`    | 600000  | Closes sessions with no client traffic (code 4001).                                              |
 | `RELAY_HEARTBEAT_MS`       | 30000   | Drops dead connections.                                                                          |
 | `RELAY_MAX_PAYLOAD_BYTES`  | 393216  | Largest single WebSocket message.                                                                |
 
+`AUTH_ATTEMPTS_PER_MINUTE` applies to each of these on its own, so using up one does not lock a visitor out of another:
+relay login and registration, relay password change, Max Cloud login and sign-up, anonymous token minting on an open
+relay, and Max Cloud tool tests.
+
 Behind a reverse proxy, set `RELAY_TRUST_PROXY=on` and `RELAY_TRUSTED_PROXY_HOPS` to the number of proxies. Otherwise every
 client shares the proxy's address and the per-IP limit becomes a global one. Set it only when a proxy you control
-overwrites `X-Forwarded-For`: with the setting on and no proxy, a client can forge its own address.
+overwrites `X-Forwarded-For`: with the setting on and no proxy, a client can forge its own address. The relay warns at
+startup when a live backend or Max Cloud runs with the setting off, and logs one loud warning (and adds
+`proxy-headers-untrusted` to `warnings` on `/ready`) the first time a request arrives with `X-Forwarded-For` or
+`Forwarded` while it is off.
+
+### Login backoff
+
+The per-IP limit does not stop a guesser who spreads attempts over many addresses, and a lock on the account name alone
+would let anyone who knows a name keep its owner out. Failed logins are therefore counted in two ways, for relay logins
+and Max Cloud logins separately:
+
+- **Per name and address.** The first 5 failures from an address cost nothing. After that the address is locked out of
+  that name for 1 second, then 2, 4, 8 and so on, up to 15 minutes. A successful login clears it, and a count with no
+  failure for 24 hours starts afresh. An address can only lock itself out. An IPv6 address counts as its /64 network,
+  which is what one subscriber controls; people who share one IPv4 address (an office, a mobile carrier) share its
+  count.
+- **Per name, across addresses.** Once 20 logins to one name have failed within an hour, the name is locked for every
+  address until the hour moves on. Each address adds at most 5 failures to this count, so it takes at least four
+  addresses to fill. Addresses that have logged in to the account before are exempt: the owner, on a connection they
+  have used since the relay started, still gets in during an attack on their account. From a new address they wait.
+
+A locked attempt gets `429` with a `Retry-After` header, the right password included. An attempt is counted as failed
+before its password is checked and uncounted if it succeeds, so of a burst sent in parallel only the 5 free ones are
+checked.
+
+Behind a reverse proxy with `RELAY_TRUST_PROXY` off, every client appears to come from the proxy, and a lock on that
+address would lock the name for everybody. While the relay sees that state (the `proxy-headers-untrusted` warning) a
+lock lasts at most one minute and no address is exempt. Set `RELAY_TRUST_PROXY=on` to get the full protection.
+
+Counts are kept for the name as typed (case and Unicode width folded), whether or not such an account exists, and a
+locked name gets the same answer either way, so the backoff does not reveal which accounts exist. At most 10,000 names
+and 50,000 name-and-address pairs are tracked; a full table drops its least recently failed entry that is not locked,
+and never drops a lock to make room. The counts live in the relay process: a restart clears them, and the relay token
+still works for the operator throughout.
 
 The relay has no limit on the number of concurrent sessions or on spend. Set spending limits with your model vendor.
 
@@ -132,6 +169,13 @@ The relay has its own optional user accounts for its web app and QA tooling. The
 admin, and from then on authentication is on. Set `AUTH_REGISTRATION=off` once your team has signed up so strangers
 cannot register. Login sessions last `AUTH_SESSION_DAYS` (default 30). The `/testing` and `/auth/admin` routes need the
 relay token or a login, and clearing data needs an admin. Accounts are stored in `accounts.json` in the data directory.
+
+Passwords are stored as scrypt hashes. Login session tokens are stored as SHA-256 hashes: the token itself is sent to the
+client once, in the login or registration response, and never written to disk, so someone who reads `accounts.json` or a
+backup of it cannot sign in with what they find. A file written by an older relay, which held the tokens themselves, is
+rewritten with hashes the first time the relay reads it, and those logins keep working. Old backups made before that
+still hold live tokens until they expire: delete them, or sign everyone out by removing the `sessions` list from the file
+while the relay is stopped. Max Cloud stores its console sessions the same way.
 
 If you only embed the SDK, you do not need accounts: use the relay token and session tokens.
 
@@ -290,6 +334,13 @@ user. Use them for things only the client can do (navigating, filling a form), n
 - Per-message WebSocket compression is off.
 - A custom logo is served under a policy that lets an SVG draw and nothing else.
 - Logs do not contain speech recognition text. Debug logging records lengths and wake decisions only.
+- A Gemini API key travels in the WebSocket URL, as Google's Live API expects. The relay removes it from every error and
+  close reason before logging it or showing it to the client.
+- `GET /metrics` exists only when `METRICS_TOKEN` is set, and then answers only `Authorization: Bearer <METRICS_TOKEN>`.
+  It is a separate secret from the relay token: a monitoring system holding it can read counters and nothing else. The
+  token is not rate-limited, so make it long and random (`openssl rand -hex 32`); the relay warns at startup when it is
+  shorter than 24 characters. The counters contain no user data, but they do show traffic levels, so do not expose the
+  endpoint without the token.
 
 The relay does store session transcripts and per-user memory for QA and continuity in its data directory (see
 [deployment](deployment.md#data-directory)). Tell your users, and set retention to match your policy.

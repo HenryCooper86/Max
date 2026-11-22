@@ -5,7 +5,7 @@ import { localizeOutgoing } from "./relay-speech";
 import { normalizeEqualizer } from "./audio-eq";
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
-import type { AudioPlan, NavPromptEvent } from "../shared/agent";
+import { PROTOCOL_VERSION, type AudioPlan, type NavPromptEvent } from "../shared/agent";
 import { SilenceFiller, normalizeDeviceAudio, planAudio } from "./audio-contract";
 import { CLIENT_EVENT_TYPES } from "../shared/generated/agent-protocol";
 import { TESTING_PLATFORMS as CANONICAL_TESTING_PLATFORMS } from "../shared/testing";
@@ -214,7 +214,13 @@ export function parseClientEvent(data: RawData): ClientEvent {
   if (value.type === "location.update") {
     assertCoordinate(value.lat, -90, 90, "lat");
     assertCoordinate(value.lon, -180, 180, "lon");
-    return { type: "location.update", lat: value.lat as number, lon: value.lon as number };
+    if (value.speedKmh !== undefined) assertCoordinate(value.speedKmh, 0, 400, "speedKmh");
+    return {
+      type: "location.update",
+      lat: value.lat as number,
+      lon: value.lon as number,
+      ...(value.speedKmh === undefined ? {} : { speedKmh: value.speedKmh as number })
+    };
   }
 
   if (value.type === "turn.feedback") {
@@ -601,6 +607,9 @@ export function parseClientEvent(data: RawData): ClientEvent {
   assertOptionalMetadataString(value.testingTestCaseId, "testingTestCaseId", 80);
   assertOptionalMetadataString(value.testingRunId, "testingRunId", 80);
   assertOptionalMetadataString(value.testingAssignmentId, "testingAssignmentId", 80);
+  if (value.protocol !== undefined && !(Number.isInteger(value.protocol) && (value.protocol as number) >= 1)) {
+    throw new Error("protocol must be a positive integer");
+  }
   assertOptionalMetadataString(value.appVersion, "appVersion", 40);
   assertOptionalMetadataString(value.gitCommit, "gitCommit", 80);
   assertOptionalMetadataString(value.deviceLabel, "deviceLabel", 120);
@@ -626,20 +635,24 @@ const SESSION_STARTED_PREFIX = '{"type":"session.started"';
 
 /**
  * The socket a voice backend writes to. Each backend announces the session
- * itself, and the audio plan is the relay's own decision, so it is added to
- * that one announcement here, once, for every backend.
+ * itself. The protocol version and the audio plan are the relay's own facts,
+ * so they are added to that one announcement here, once, for every backend.
  */
-function announcingAudioPlan(client: WebSocket, plan: () => AudioPlan | undefined): WebSocket {
+function announcingRelayFacts(client: WebSocket, plan: () => AudioPlan | undefined): WebSocket {
   return new Proxy(client, {
     get(target, property) {
       const value: unknown = Reflect.get(target, property, target);
       if (typeof value !== "function") return value;
       if (property !== "send") return (value as (...args: unknown[]) => unknown).bind(target);
       return (data: unknown, ...rest: unknown[]) => {
-        const audio = plan();
-        if (audio && typeof data === "string" && data.startsWith(SESSION_STARTED_PREFIX)) {
+        if (typeof data === "string" && data.startsWith(SESSION_STARTED_PREFIX)) {
+          const audio = plan();
           try {
-            data = JSON.stringify({ ...(JSON.parse(data) as object), audio });
+            data = JSON.stringify({
+              ...(JSON.parse(data) as object),
+              protocol: PROTOCOL_VERSION,
+              ...(audio ? { audio } : {})
+            });
           } catch {
             /* send it as the backend wrote it */
           }
@@ -677,7 +690,7 @@ export class AgentSessionController {
     private readonly hooks?: AgentSessionHooks
   ) {
     this.provider = providerFactory(
-      announcingAudioPlan(client, () => this.audioPlan),
+      announcingRelayFacts(client, () => this.audioPlan),
       {
         serverEvent: (payload, bytes) => {
           metrics.serverEvent(bytes);
@@ -757,6 +770,15 @@ export class AgentSessionController {
       if (event.type === "session.start") {
         if (this.sessionStartReceived) throw new Error("session.start has already been received");
         this.sessionStartReceived = true;
+        if (event.protocol !== undefined && event.protocol > PROTOCOL_VERSION) {
+          // The session still runs: newer clients keep to what an older relay
+          // understands. The operator should know the relay is behind.
+          this.log?.warn("client speaks a newer protocol than this relay", {
+            client: event.protocol,
+            relay: PROTOCOL_VERSION,
+            appVersion: event.appVersion
+          });
+        }
       } else if (!this.sessionStartReceived) {
         throw new Error("session.start is required before control events");
       } else if (!this.providerStarted) {
@@ -895,7 +917,9 @@ export class AgentSessionController {
       // owner's QA audit log.
       if (this.hooks?.privateSession && PRIVATE_SESSION_REFUSED.has(event.type)) return;
       if (event.type === "demo.guided") await this.provider.setGuidedDemo?.(event.enabled);
-      if (event.type === "location.update") await this.provider.updateLocation?.(event.lat, event.lon);
+      if (event.type === "location.update") {
+        await this.provider.updateLocation?.(event.lat, event.lon, event.speedKmh);
+      }
       if (event.type === "turn.feedback") recordTesterTurnFeedback(this.relaySessionId, event);
       if (event.type === "testing.metric") recordTesterAudioQuality(this.relaySessionId, event);
       if (event.type === "device.result") await this.provider.deviceResult?.(event);

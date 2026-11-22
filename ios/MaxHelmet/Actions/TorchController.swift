@@ -15,7 +15,7 @@ struct SystemTorchDevice: TorchCapableDevice {
     var hasTorch: Bool { device?.hasTorch ?? false }
 
     func setTorch(on: Bool) throws {
-        guard let device else { return }
+        guard let device, device.torchMode != (on ? .on : .off) else { return }
         try device.lockForConfiguration()
         defer { device.unlockForConfiguration() }
         device.torchMode = on ? .on : .off

@@ -48,7 +48,7 @@ class ReplySpeaker:
     """Synthesizes replies through the shared TTS engine and hands audio to `emit`.
 
     A chunk is synthesized by a `SynthJob` (the same producer-queue the HTTP endpoint uses): it takes the engine's
-    lock for one sentence, in the threadpool, and never blocks on whoever consumes the audio. A reply keeps at most
+    lock for one sentence, on that lock's own thread, and never blocks on whoever consumes the audio. A reply keeps at most
     `MAX_IN_FLIGHT` jobs queued or running and creates the next one when one finishes producing, so the next
     sentence is synthesized while the previous plays and other sessions (and HTTP requests) take their turn on the
     FIFO engine lock between them. Only the active reply has jobs; replies behind it keep their text until their
@@ -56,10 +56,18 @@ class ReplySpeaker:
     """
 
     def __init__(
-        self, tts, lock: asyncio.Lock, emit: Emit, *, voice: str, language: str | None = None
+        self,
+        tts,
+        lock: asyncio.Lock | Callable[[str], asyncio.Lock],
+        emit: Emit,
+        *,
+        voice: str,
+        language: str | None = None,
     ) -> None:
+        """`lock` is the engine lock, or a function from a voice to the lock of the engine that speaks it (preset and
+        custom voices are different engines with different locks)."""
         self.tts = tts
-        self.lock = lock
+        self.lock_for = lock if callable(lock) else (lambda _voice: lock)
         self.emit = emit
         self.voice = voice
         self.language = language
@@ -73,12 +81,14 @@ class ReplySpeaker:
         size = len(text.encode())
         if size > MAX_SPEAK_BYTES:
             self._error(
-                "speak_too_long", f"speak text is over {MAX_SPEAK_BYTES // 1024} KB; send smaller deltas"
+                "speak_too_long",
+                f"speak text is over {MAX_SPEAK_BYTES // 1024} KB; send smaller deltas",
+                reply_id,
             )
             return
         if reply_id in self._finished:
             if not self._finished[reply_id]:
-                self._error("bad_speak", f"reply '{reply_id}' has already ended")
+                self._error("bad_speak", f"reply '{reply_id}' has already ended", reply_id)
             return  # text trailing a cancelled reply is dropped
         reply = self._replies.get(reply_id)
         if reply is None:
@@ -89,12 +99,14 @@ class ReplySpeaker:
         if reply.cancelled:
             return
         if reply.final:
-            self._error("bad_speak", f"reply '{reply_id}' is already final")
+            self._error("bad_speak", f"reply '{reply_id}' is already final", reply_id)
             return
         reply.size += size
         if reply.size > MAX_REPLY_BYTES:
             self._error(
-                "reply_too_long", f"reply '{reply_id}' is over {MAX_REPLY_BYTES // 1024} KB; it was cancelled"
+                "reply_too_long",
+                f"reply '{reply_id}' is over {MAX_REPLY_BYTES // 1024} KB; it was cancelled",
+                reply_id,
             )
             self.cancel(reply_id)
             return
@@ -143,12 +155,15 @@ class ReplySpeaker:
         """Start jobs for waiting chunks while fewer than MAX_IN_FLIGHT of the reply's jobs are still producing."""
         while reply.todo and not reply.cancelled and sum(not j.finished for j in reply.jobs) < MAX_IN_FLIGHT:
             chunk = reply.todo.popleft()
-            job = SynthJob(self.lock, _pcm_chunks(self.tts, chunk, reply.voice, self.language))
+            job = SynthJob(
+                self.lock_for(reply.voice), _pcm_chunks(self.tts, chunk, reply.voice, self.language)
+            )
             job.on_finished(lambda r=reply: self._pump(r))
             reply.jobs.append(job)
 
-    def _error(self, code: str, message: str) -> None:
-        self.emit({"type": "error", "code": code, "message": message})
+    def _error(self, code: str, message: str, reply_id: str) -> None:
+        # The id lets a client report one failing reply once instead of once per message it sent.
+        self.emit({"type": "error", "code": code, "message": message, "id": reply_id})
 
     def _finish(self, reply: _Reply, *, cancelled: bool) -> None:
         if reply.done:
@@ -169,7 +184,7 @@ class ReplySpeaker:
                 raise
             except Exception:  # one bad reply must not stop the ones behind it
                 log.exception("speaking reply %s failed", reply.id)
-                self._error("speak_failed", f"could not speak reply '{reply.id}'")
+                self._error("speak_failed", f"could not speak reply '{reply.id}'", reply.id)
                 self._abandon(reply)
                 self._finish(reply, cancelled=False)
 
@@ -203,13 +218,13 @@ class ReplySpeaker:
                         self.emit({"type": "audio.start", "id": reply.id, "sampleRate": OUTPUT_RATE})
                     self.emit(pcm)
             except UnknownVoiceError:
-                self._error("unknown_voice", f"voice '{reply.voice}' not found")
+                self._error("unknown_voice", f"voice '{reply.voice}' not found", reply.id)
                 self._abandon(reply)
                 self._finish(reply, cancelled=False)
                 return
             except Exception:  # the engine failed on this sentence
                 log.warning("synthesis for reply %s failed", reply.id, exc_info=True)
-                self._error("tts_failed", "speech synthesis failed")
+                self._error("tts_failed", "speech synthesis failed", reply.id)
                 self._abandon(reply)
                 self._finish(reply, cancelled=False)
                 return

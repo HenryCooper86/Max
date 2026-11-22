@@ -77,6 +77,8 @@ describe("relay-spoken lines in English", () => {
       "torch.unavailable",
       "permission.camera",
       "storage.full",
+      "device.hot",
+      "device.powerSave",
       "navigation.notActive",
       "permission.location",
       "gallery.empty",

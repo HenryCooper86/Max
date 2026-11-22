@@ -84,7 +84,7 @@ final class MainViewModel: ObservableObject {
     static func deviceRelayURL(infoDictionary: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> String {
         let host = (infoDictionary["MaxRelayHost"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // An unset build setting reaches the plist as "" or as the literal "$(MAX_RELAY_HOST)".
-        guard !host.isEmpty, !host.contains("$(") else { return "wss://relay.example.com/agent" }
+        guard !host.isEmpty, !host.contains("$(") else { return "wss://\(placeholderRelayHost)/agent" }
         return "wss://\(host)/agent"
     }
 
@@ -223,7 +223,10 @@ final class MainViewModel: ObservableObject {
     )
 
     @Published var relayURL: String {
-        didSet { defaults.set(relayURL, forKey: Keys.relayURL) }
+        didSet {
+            defaults.set(relayURL, forKey: Keys.relayURL)
+            if relaySetupRequired, relaySetupProblem(relayURL: relayURL) == nil { relaySetupRequired = false }
+        }
     }
 
     /// Optional shared auth token for the relay; appended to the /agent URL as
@@ -423,6 +426,11 @@ final class MainViewModel: ObservableObject {
 
     /// Rider preferences panel (voice / tone / ride mode), toggled by the gear.
     @Published var showPreferences = false
+
+    /// The rider tried to start with no relay configured (the build had no
+    /// MAX_RELAY_HOST and nobody typed an address). The HUD explains the fix
+    /// instead of showing a generic connection failure.
+    @Published var relaySetupRequired = false
 
     /// Captions overlay under the orb. Off by default for the clean voice-mode
     /// look; toggled by the 字幕 button (like ChatGPT's optional captions).
@@ -1530,6 +1538,11 @@ final class MainViewModel: ObservableObject {
             session.stop()
         } else {
             pendingHandsFreeRetry = false
+            if relaySetupProblem(relayURL: relayURL) == .notConfigured {
+                relaySetupRequired = true
+                return
+            }
+            relaySetupRequired = false
             refreshRelayHealth()
             session.start(url: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
                           authToken: effectiveToken,

@@ -307,3 +307,6 @@ final class HUDCastClient: ObservableObject {
         return String(data: data, encoding: .utf8)
     }
 }
+
+
+extension HUDCastClient: HUDCastStopping {}

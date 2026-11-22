@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
+import json
+import logging
 import shutil
 import tarfile
 from collections.abc import Callable
@@ -13,6 +16,8 @@ import httpx
 from huggingface_hub import snapshot_download
 
 from max_speech.licenses import ModelEntry, RemoteFile
+
+log = logging.getLogger(__name__)
 
 Progress = Callable[[str, int, int | None], None]
 
@@ -86,6 +91,60 @@ def extracted_root(model_dir: Path, marker: str | None = None) -> Path:
     return dirs[0]
 
 
+_TREE = Path(".cache") / "huggingface" / "trees"
+
+
+def _hf_problems(entry: ModelEntry, target: Path) -> str:
+    """What is wrong with the files of an hf model on disk, or "" when they look complete.
+
+    The listing huggingface_hub caches for the pinned revision says which files should exist and how big they are;
+    an interrupted download leaves `.incomplete` files and misses the rest. Without the listing (an older
+    download) only the wanted patterns can be checked."""
+    if not target.is_dir() or not any(p for p in target.iterdir() if p.name != ".cache"):
+        return "no files"
+    problems: list[str] = []
+    partial = sorted(p.name for p in (target / ".cache" / "huggingface" / "download").glob("*.incomplete"))
+    if partial:
+        problems.append("unfinished downloads: " + ", ".join(partial[:3]))
+
+    def wanted(name: str) -> bool:
+        return not entry.allow_patterns or any(fnmatch.fnmatch(name, pat) for pat in entry.allow_patterns)
+
+    listing_path = target / _TREE / f"{entry.revision}.json"
+    try:
+        listing = json.loads(listing_path.read_text())["files"]
+    except (OSError, ValueError, KeyError, TypeError):
+        listing = None
+    if listing is None:
+        present = [p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file()]
+        for pattern in entry.allow_patterns:
+            if not any(fnmatch.fnmatch(name, pattern) for name in present):
+                problems.append(f"missing {pattern}")
+        return "; ".join(problems)
+    missing, short = [], []
+    for name, info in listing.items():
+        if not wanted(name):
+            continue
+        path = target / name
+        if not path.is_file():
+            missing.append(name)
+        elif (
+            isinstance(info, dict)
+            and isinstance(info.get("size"), int)
+            and path.stat().st_size != info["size"]
+        ):
+            short.append(name)
+    if missing:
+        problems.append(
+            "missing "
+            + ", ".join(missing[:3])
+            + (f" and {len(missing) - 3} more" if len(missing) > 3 else "")
+        )
+    if short:
+        problems.append("wrong size: " + ", ".join(short[:3]))
+    return "; ".join(problems)
+
+
 def ensure_model(
     entry: ModelEntry,
     models_dir: Path,
@@ -98,14 +157,24 @@ def ensure_model(
         patterns = {"allow_patterns": list(entry.allow_patterns)} if entry.allow_patterns else {}
         try:
             snapshot_download(entry.repo, revision=entry.revision, local_dir=target, **patterns)
-        except Exception as exc:  # noqa: BLE001 - any network or hub failure falls back to the local copy
-            # A server that has its models must still start without a network.
-            try:
-                snapshot_download(
-                    entry.repo, revision=entry.revision, local_dir=target, local_files_only=True, **patterns
-                )
-            except Exception:  # noqa: BLE001
-                raise ModelDownloadError(f"downloading {entry.repo}@{entry.revision} failed: {exc}") from exc
+        except Exception as exc:
+            # A server that has its models must still start without a network, but only with all of them:
+            # huggingface_hub hands back an existing local_dir without looking at what is in it.
+            log.warning(
+                "downloading %s@%s failed (%s: %s); trying the local copy",
+                entry.repo,
+                entry.revision,
+                type(exc).__name__,
+                exc,
+            )
+            problems = _hf_problems(entry, target)
+            if problems:
+                raise ModelDownloadError(
+                    f"downloading {entry.repo}@{entry.revision} failed: {exc}. The copy in {target} is "
+                    f"incomplete ({problems}), probably from an interrupted first download. Start the server "
+                    f"again with network access, or run `max-speech download`, to resume; the partial files "
+                    f"are kept and continued."
+                ) from exc
         return target
 
     if entry.archive:

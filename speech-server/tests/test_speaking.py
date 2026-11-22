@@ -161,7 +161,7 @@ async def test_cancel_mid_reply():
     assert rec.done("r1") == [{"type": "audio.done", "id": "r1", "cancelled": True}]
     assert "audio" not in rec.types()  # audio produced after the cancel is dropped
     assert tts.texts == ["One."]  # stopped between chunks: the rest was never synthesized
-    assert sp.lock.locked() is False
+    assert sp.lock_for("alpha").locked() is False
     await sp.close()
 
 
@@ -218,6 +218,7 @@ async def test_speaking_into_a_finished_reply_is_an_error():
     await settle(lambda: rec.done("r1"))
     sp.speak("r1", "more", False)
     assert rec.dicts("error")[0]["code"] == "bad_speak"
+    assert rec.dicts("error")[0]["id"] == "r1"
     await sp.close()
 
 
@@ -237,6 +238,7 @@ async def test_unknown_voice_is_an_error_and_the_reply_still_ends_once():
     sp.speak("r1", "Hi there. And more.", True)
     await settle(lambda: rec.done("r1"))
     assert rec.dicts("error")[0]["code"] == "unknown_voice"
+    assert rec.dicts("error")[0]["id"] == "r1"
     assert len(rec.done("r1")) == 1
     sp.voice = "alpha"
     sp.speak("r2", "Fine now.", True)
@@ -257,6 +259,7 @@ async def test_engine_failure_reports_and_continues_with_the_next_reply():
     sp.speak("b", "Fine.", True)
     await settle(lambda: rec.done("a") and rec.done("b"))
     assert rec.dicts("error")[0]["code"] == "tts_failed"
+    assert rec.dicts("error")[0]["id"] == "a"
     assert rec.done("a")[0]["cancelled"] is False
     assert any(isinstance(i, bytes) for i in rec.items)
     await sp.close()
@@ -274,7 +277,7 @@ async def test_close_stops_work_sends_nothing_and_frees_the_lock():
     assert not closing.done()  # waits for the thread that is inside the engine
     tts.gate.set()
     await asyncio.wait_for(closing, 3)
-    assert sp.lock.locked() is False
+    assert sp.lock_for("alpha").locked() is False
     assert tts.active == 0
     assert tts.texts == ["One."]
     assert rec.dicts("audio.done") == []
@@ -304,3 +307,65 @@ async def test_exactly_one_done_per_id_under_mixed_cancels(n):
         assert len(rec.done(rid)) == 1, rid
     assert rec.done("r1")[0]["cancelled"] and rec.done("r3")[0]["cancelled"]
     await sp.close()
+
+
+async def test_every_per_reply_error_carries_the_reply_id():
+    from max_speech.session import speaking
+
+    sp, rec, _ = make()
+    sp.speak("big", "x" * (speaking.MAX_SPEAK_BYTES + 1), False)
+    assert rec.dicts("error")[0]["code"] == "speak_too_long" and rec.dicts("error")[0]["id"] == "big"
+    rec.items.clear()
+    for i in range(speaking.MAX_REPLY_BYTES // 4000 + 2):
+        sp.speak("long", "y" * 4000, False)
+    longs = [e for e in rec.dicts("error") if e["code"] == "reply_too_long"]
+    assert len(longs) == 1 and longs[0]["id"] == "long"
+    await sp.close()
+
+
+async def test_speak_failed_carries_the_reply_id(monkeypatch):
+    sp, rec, _ = make()
+
+    async def broken(reply):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(sp, "_play", broken)
+    sp.speak("r9", "Hi.", True)
+    await settle(lambda: rec.dicts("error"))
+    err = rec.dicts("error")[0]
+    assert err["code"] == "speak_failed" and err["id"] == "r9"
+    await sp.close()
+
+
+async def test_a_synthesis_job_advances_its_generator_on_one_thread():
+    """MLX keeps its GPU streams per thread: a streamed synthesis started on one thread fails ("There is no Stream(gpu,
+    N) in current thread") if its next chunk is computed on another. So every chunk of a job, and its close, runs on
+    the same thread, however busy the shared threadpool is."""
+    from starlette.concurrency import run_in_threadpool
+
+    from max_speech.api.openai_routes import SynthJob
+
+    threads = []
+
+    def gen():
+        try:
+            for _ in range(12):
+                threads.append(threading.get_ident())
+                time.sleep(0.005)
+                yield b"x"
+        finally:
+            threads.append(threading.get_ident())
+
+    stop = False
+
+    async def noise():  # keeps other threadpool workers busy and coming back, as other sessions do
+        while not stop:
+            await run_in_threadpool(time.sleep, 0.002)
+
+    busy = [asyncio.create_task(noise()) for _ in range(6)]
+    job = SynthJob(asyncio.Lock(), gen())
+    got = [c async for c in job.chunks()]
+    stop = True
+    await asyncio.gather(*busy)
+    await job.wait()
+    assert len(got) == 12 and len(set(threads)) == 1, f"{len(set(threads))} threads"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -341,6 +342,18 @@ def _wav_bytes(audio: np.ndarray, rate: int) -> bytes:
     return buf.getvalue()
 
 
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+# What the server knows about a caller; anything else in the mapping is dropped, so a route cannot leak a secret here.
+_PROVENANCE_KEYS = ("client", "auth", "key_id")
+
+
+def _provenance(raw: Mapping | None) -> dict[str, str]:
+    return {k: str(raw[k])[:128] for k in _PROVENANCE_KEYS if raw and raw.get(k)}
+
+
 def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -348,8 +361,10 @@ def _now() -> str:
 class VoiceStore:
     """Index of custom voices, loaded once at startup. Nothing touches disk until the first voice is created."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, audit_log: Path | None = None) -> None:
         self.root = Path(root)
+        self._audit_path = Path(audit_log) if audit_log is not None else None
+        self._audit_lock = threading.Lock()
         self._lock = threading.Lock()
         self._voices: dict[str, CustomVoice] = {}
         # the record each cached reference was built from: a cache entry is valid only while that very object is current
@@ -451,6 +466,7 @@ class VoiceStore:
         consent_speaker: object = None,
         created_by: object = None,
         transcript_source: str = "given",
+        provenance: Mapping | None = None,
     ) -> CustomVoice:
         statement, speaker = check_consent(consent, consent_statement, consent_speaker)
         clean_name = _name(name)
@@ -472,7 +488,16 @@ class VoiceStore:
             transcript_source=transcript_source if transcript_source in ("given", "stt") else "given",
             created_by=who or "unknown",
             origin="recorded",
-            consent_fields=lambda now: {"statement": statement, "speaker": speaker, "recorded_at": now},
+            consent_fields=lambda now, stored_sha: {
+                "statement": statement,
+                "speaker": speaker,
+                "recorded_at": now,
+                # Ties the statement to one recording: the file in the voice's folder, and the bytes as uploaded.
+                "audio_sha256": stored_sha,
+                **({"upload_sha256": _sha256(audio)} if isinstance(audio, bytes) else {}),
+                **_provenance(provenance),
+            },
+            provenance=provenance,
         )
 
     def create_designed(
@@ -487,6 +512,7 @@ class VoiceStore:
         languages: object = None,
         gender: object = "neutral",
         created_by: object = None,
+        provenance: Mapping | None = None,
     ) -> CustomVoice:
         """Save a voice made from a text description: no real person is cloned, so there is no consent record.
 
@@ -517,6 +543,7 @@ class VoiceStore:
             created_by=who or "unknown",
             origin="designed",
             design={"description": desc, "seed": seed, "model": _text(model, "model", 128), "text": text},
+            provenance=provenance,
         )
 
     def _persist(
@@ -532,8 +559,10 @@ class VoiceStore:
         origin: str,
         consent_fields=None,
         design: dict | None = None,
+        provenance: Mapping | None = None,
     ) -> CustomVoice:
         now = _now()
+        wav = _wav_bytes(ref.audio, ref.rate)
         with self._lock:
             voice_id = next(
                 i for i in (f"v_{secrets.token_hex(5)}" for _ in range(100)) if i not in self._voices
@@ -548,7 +577,7 @@ class VoiceStore:
                 duration_s=ref.duration_s,
                 created_at=now,
                 created_by=created_by,
-                consent=consent_fields(now) if consent_fields else {},
+                consent=consent_fields(now, _sha256(wav)) if consent_fields else {},
                 origin=origin,
                 design=design or {},
             )
@@ -557,12 +586,19 @@ class VoiceStore:
                 self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
                 os.chmod(self.root, 0o700)
                 directory.mkdir(mode=0o700)
-                _atomic_write(directory / "reference.wav", _wav_bytes(ref.audio, ref.rate))
+                _atomic_write(directory / "reference.wav", wav)
                 _atomic_write(directory / "voice.json", self._json(voice))
             except BaseException:
                 shutil.rmtree(directory, ignore_errors=True)
                 raise
             self._voices[voice_id] = voice  # visible only once voice.json is safely on disk
+        self._audit(
+            "create",
+            voice,
+            provenance,
+            audio_sha256=_sha256(wav),
+            **({"speaker": voice.consent.get("speaker")} if origin == "recorded" else {}),
+        )
         return voice
 
     @staticmethod
@@ -609,11 +645,12 @@ class VoiceStore:
             self._cache.pop(voice_id, None)  # engines re-analyse the voice with the new transcript
         return updated
 
-    def delete(self, voice_id: str) -> None:
+    def delete(self, voice_id: str, provenance: Mapping | None = None) -> None:
         self._check_id(voice_id)
         with self._lock:
             if voice_id not in self._voices:
                 raise UnknownVoiceError(f"voice '{voice_id}' not found")
+            gone = self._voices[voice_id]
             directory = self.root / voice_id
             trash = self.root / f"{TRASH_PREFIX}{voice_id}-{secrets.token_hex(4)}"
             try:
@@ -627,3 +664,31 @@ class VoiceStore:
             self._cache.pop(voice_id, None)
             if trash is not None:
                 self._remove(trash)  # a failure leaves a .trash- directory that the next start cleans up
+        self._audit("delete", gone, provenance, audio_sha256=gone.consent.get("audio_sha256"))
+
+    def _audit(self, event: str, voice: CustomVoice, provenance: Mapping | None, **extra) -> None:
+        """Append one JSON line to the audit log (0600). A failure is logged, not raised: the voice change it
+        describes has already happened and must not be reported as failed."""
+        if self._audit_path is None:
+            return
+        record = {
+            "time": _now(),
+            "event": event,
+            "voice_id": voice.id,
+            "name": voice.name,
+            "origin": voice.origin,
+            **{k: v for k, v in extra.items() if v},
+            **_provenance(provenance),
+        }
+        line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+        try:
+            with self._audit_lock:
+                self._audit_path.parent.mkdir(parents=True, exist_ok=True)
+                fd = os.open(self._audit_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+                try:
+                    os.fchmod(fd, 0o600)  # an older or hand-made file may be looser
+                    os.write(fd, line)
+                finally:
+                    os.close(fd)
+        except OSError:
+            log.exception("could not write the voice audit log %s (%s a voice)", self._audit_path, event)

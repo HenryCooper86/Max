@@ -55,13 +55,14 @@ Requests to any path other than `/agent` and `/companion` are dropped without a 
 
 ### Close codes
 
-| Code | Who    | Meaning                                                                                                                                                                                        |
-| ---- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1000 | either | Normal close.                                                                                                                                                                                  |
-| 1001 | relay  | The relay is shutting down. Reconnect with backoff.                                                                                                                                            |
-| 1008 | relay  | Policy: a logged-in user signed out, their session expired or the account was deleted, or a client sent a device registration without the relay token. Do not retry with the same credentials. |
-| 1011 | relay  | The voice backend failed to start. An `error` event comes first. Reconnect with backoff.                                                                                                       |
-| 4001 | relay  | Idle: no client traffic for `RELAY_IDLE_TIMEOUT_MS` (default 10 minutes). Do not reconnect automatically.                                                                                      |
+| Code | Who    | Meaning                                                                                                                                                                                                                                                                        |
+| ---- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1000 | either | Normal close.                                                                                                                                                                                                                                                                  |
+| 1001 | relay  | The relay is shutting down. Reconnect with backoff.                                                                                                                                                                                                                            |
+| 1008 | relay  | Policy: a logged-in user signed out, their session expired or the account was deleted, or a client sent a device registration without the relay token. Do not retry with the same credentials; fetch a new token first, and retry at most once. The web SDK does exactly that. |
+| 1011 | relay  | The voice backend failed to start. An `error` event comes first. Reconnect with backoff.                                                                                                                                                                                       |
+| 4001 | relay  | Idle: no client traffic for `RELAY_IDLE_TIMEOUT_MS` (default 10 minutes). Do not reconnect automatically.                                                                                                                                                                      |
+| 4003 | relay  | Voice minutes used up: the account's monthly allowance is spent (see [usage and billing](usage-and-billing.md)). New connections are refused the same way until the month ends. Do not reconnect.                                                                              |
 
 The relay pings every `RELAY_HEARTBEAT_MS` (default 30 s) and drops a client that does not answer. Any WebSocket library
 answers pings on its own. A client that sends nothing at all (no events, no audio) is idle in the sense above, so a
@@ -167,6 +168,7 @@ First message. The fields that matter for an app or a website:
 | `tools`            | array             | Up to 32 client tools. See [Tools](#tools).                                                    |
 | `context`          | string            | Up to 2000 characters of facts from your app. See [Context](#context).                         |
 | `memory`           | object            | The last `session.memory` event, echoed back when you restart a session.                       |
+| `protocol`         | integer           | The protocol version your client speaks. See [Versions](#versions).                            |
 
 Fields for QA and telemetry, all optional strings of at most 40 to 160 bytes without control characters: `testerId`,
 `testerRegion`, `testingCampaignId`, `testingTestCaseId`, `testingRunId`, `testingAssignmentId`, `appVersion`,
@@ -175,6 +177,19 @@ Fields for QA and telemetry, all optional strings of at most 40 to 160 bytes wit
 Fields that only apply to wearables are covered under [Wearable extensions](#wearable-extensions).
 
 The relay ignores fields it does not know, so a client written for a newer relay still connects to an older one.
+
+### Versions
+
+The protocol has a version number, currently `1`. It goes up only for a change that is not backwards compatible. New
+optional fields and new event types do not change it, because both sides ignore what they do not know.
+
+- Send your version as `protocol` in `session.start`. It is optional; a client that omits it is treated as version 1.
+- The relay answers with its own version as `protocol` in `session.started`. Relays older than this handshake omit it.
+- Nothing is refused on a mismatch. When the client is ahead, the relay logs a warning for its operator. When the relay
+  is ahead, the client should tell its developer; the web SDK fires a `warning` event with code `protocol_mismatch`.
+
+Put your client's own name and version in `appVersion` (the web SDK sends `max-voice-agent@<version>`) so the relay's
+logs say who connected.
 
 ### audio.start and audio.stop
 
@@ -226,17 +241,17 @@ The answer to a `tool.call`. Send exactly one per call, within 15 seconds.
 
 ## Events from relay to client
 
-| Event             | Meaning                                                                     |
-| ----------------- | --------------------------------------------------------------------------- |
-| `connection`      | Link state: `{ state, detail }`. `state` is `relay` right after connecting. |
-| `session.started` | The backend is ready: `{ provider, mode, capabilities, audio? }`.           |
-| `status`          | `{ state, detail }`. See [Status values](#status-values).                   |
-| `transcript`      | What the user said or the assistant says. See [Transcripts](#transcripts).  |
-| `tool.call`       | Run one of your client tools. See [Tools](#tools).                          |
-| `tool.activity`   | Progress of any tool call, for a UI.                                        |
-| `metric`          | `{ latencyMs, droppedFrames?, outgoingFps? }`.                              |
-| `telemetry`       | `{ asrMs, thinkMs, firstAudioMs, totalMs }` timings for the last turn.      |
-| `error`           | `{ message }`. The session usually continues.                               |
+| Event             | Meaning                                                                      |
+| ----------------- | ---------------------------------------------------------------------------- |
+| `connection`      | Link state: `{ state, detail }`. `state` is `relay` right after connecting.  |
+| `session.started` | The backend is ready: `{ provider, mode, capabilities, protocol?, audio? }`. |
+| `status`          | `{ state, detail }`. See [Status values](#status-values).                    |
+| `transcript`      | What the user said or the assistant says. See [Transcripts](#transcripts).   |
+| `tool.call`       | Run one of your client tools. See [Tools](#tools).                           |
+| `tool.activity`   | Progress of any tool call, for a UI.                                         |
+| `metric`          | `{ latencyMs, droppedFrames?, outgoingFps? }`.                               |
+| `telemetry`       | `{ asrMs, thinkMs, firstAudioMs, totalMs }` timings for the last turn.       |
+| `error`           | `{ message }`. The session usually continues.                                |
 
 `session.started` fields:
 
@@ -363,15 +378,15 @@ backend through a session token's `userId` and `context`. See [security](securit
 The kit began as a motorcycle-helmet assistant. These events serve wearable devices and are only meaningful when the
 relay is configured for one. A website or app can leave them out and ignore them when received.
 
-| Group      | Client to relay                                                                         | Relay to client                                                                       |
-| ---------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Ride       | `location.update` (`lat`, `lon`); `session.start`: `rideMode`, `scenario`, `lat`, `lon` | `ride.context`, `weather`, `session.memory`                                           |
-| Hazard     | `hazard.report` (a hazard the board already announced; never echoed back)               | `hazard.alert` (`interrupt: true` means stop speech at once)                          |
-| Crash      | `crash.alert`, `crash.cancel`                                                           | `crash.ack`, `crash.simulate` (mock only)                                             |
-| Navigation | `nav.request`, `nav.prompt`                                                             | `nav.route`, `nav.error`                                                              |
-| Vision     | `camera.frame`, `vision.frames` (base64 JPEG, at most 200,000 characters each)          | none; the camera is driven by `device.command`                                        |
-| Device     | `device.result` (`commandId`, `status`: `ok`, `failed`, `denied`, `unsupported`)        | `device.command` (`commandId`, `action`, `args`, `tier`)                              |
-| Companion  | none on `/agent`                                                                        | `companion.pairing`, `companion.discovery`, `phone.location`, `phone.location.status` |
+| Group      | Client to relay                                                                                      | Relay to client                                                                       |
+| ---------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Ride       | `location.update` (`lat`, `lon`, `speedKmh`?); `session.start`: `rideMode`, `scenario`, `lat`, `lon` | `ride.context`, `weather`, `session.memory`                                           |
+| Hazard     | `hazard.report` (a hazard the board already announced; never echoed back)                            | `hazard.alert` (`interrupt: true` means stop speech at once)                          |
+| Crash      | `crash.alert`, `crash.cancel`                                                                        | `crash.ack`, `crash.simulate` (mock only)                                             |
+| Navigation | `nav.request`, `nav.prompt`                                                                          | `nav.route`, `nav.error`                                                              |
+| Vision     | `camera.frame`, `vision.frames` (base64 JPEG, at most 200,000 characters each)                       | none; the camera is driven by `device.command`                                        |
+| Device     | `device.result` (`commandId`, `status`: `ok`, `failed`, `denied`, `unsupported`)                     | `device.command` (`commandId`, `action`, `args`, `tier`)                              |
+| Companion  | none on `/agent`                                                                                     | `companion.pairing`, `companion.discovery`, `phone.location`, `phone.location.status` |
 
 Notes:
 

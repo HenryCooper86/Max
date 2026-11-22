@@ -14,6 +14,8 @@ import {
   buildLanguageInteractionPrompt,
   buildSessionLanguagePrompt,
   buildToolGroundingPrompt,
+  buildWearerWeatherPrompt,
+  promptAudience,
   sessionLanguage
 } from "../prompts";
 import { createEqualizer, type Equalizer } from "../audio-eq";
@@ -44,6 +46,7 @@ import { createVisionGovernor } from "../vision-governor";
 import { fetchRiderWeather } from "../weather";
 import {
   approxDistanceKm,
+  buildDeviceContextSummary,
   buildRideContextSummary,
   combineHazardLevels,
   describeRideMode,
@@ -55,6 +58,7 @@ import {
 import {
   buildIntentGuidancePrompt,
   buildPersonalityPrompt,
+  buildPhoneSpeedPrompt,
   buildSafetyPrompt,
   buildSessionMemoryPrompt,
   createSessionMemory,
@@ -540,6 +544,8 @@ export function createDoubaoProvider(
   let upstream: WebSocket | undefined;
   let started = false;
   let sessionId = randomUUID();
+  /** The phone's GPS speed from its latest location.update; undefined when it sent none. */
+  let phoneSpeedKmh: number | undefined;
   let sessionReady = false;
   let providerDialogId: string | undefined;
   // Upstream self-healing: when the Doubao socket drops mid-session, the relay
@@ -936,7 +942,11 @@ export function createDoubaoProvider(
     const config = connectConfig;
     if (!config || !sessionReady) return;
     const full = buildDoubaoSessionConfig(
-      currentDoubaoConfig(config, config.baseSystemRole + currentWeatherRole + riderLocation.role(), false)
+      currentDoubaoConfig(
+        config,
+        config.baseSystemRole + currentWeatherRole + riderLocation.role() + buildPhoneSpeedPrompt(phoneSpeedKmh),
+        false
+      )
     );
     sendUpstreamControl(EventSend.UpdateConfig, { dialog: full.dialog, tts: full.tts });
   }
@@ -1602,8 +1612,10 @@ export function createDoubaoProvider(
         riskLevel: weather.riskLevel
       });
       currentWeatherRole =
-        `\n\n[实时骑行情报] 骑手当前位置${weather.summary}` +
-        `${weather.riderAdvice}当骑手询问天气或风力时，只基于这条实时数据简短回答。`;
+        promptAudience(assistant()) === "rider"
+          ? `\n\n[实时骑行情报] 骑手当前位置${weather.summary}` +
+            `${weather.riderAdvice}当骑手询问天气或风力时，只基于这条实时数据简短回答。`
+          : buildWearerWeatherPrompt("rider", weather.summary);
       updateProviderConfig();
     } catch {
       if (!closedByProvider && epoch === weatherRequestEpoch) {
@@ -2303,18 +2315,35 @@ export function createDoubaoProvider(
       );
       const dialogContext = buildDoubaoDialogContext(context?.previousConversation?.turns ?? []);
       const speakingStyle = buildPersonalityPrompt(event.voicePersonality ?? "concise");
-      systemRole +=
-        `\n\n${buildIdentityPrompt()}` +
-        `\n\n${buildToolGroundingPrompt()}` +
-        `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +
-        `\n${buildVoiceSettingPrompt(event.voiceGender ?? "female")}` +
-        `\n${buildLanguageInteractionPrompt()}` +
-        sessionLanguageRule +
-        `你必须根据模式调整回答长度和安全策略；紧急模式优先生命安全，导航模式只给下一步。\n${buildSafetyPrompt(
-          rideContext,
-          memory
-        )}\n${buildIntentGuidancePrompt(memory.lastIntent)}\n${speakingStyle}\n[短期记忆] ${buildSessionMemoryPrompt(memory)}。` +
-        (previousConversationPrompt ? `\n\n${previousConversationPrompt}` : "");
+      if (promptAudience(assistant()) === "rider") {
+        systemRole +=
+          `\n\n${buildIdentityPrompt()}` +
+          `\n\n${buildToolGroundingPrompt()}` +
+          `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +
+          `\n${buildVoiceSettingPrompt(event.voiceGender ?? "female")}` +
+          `\n${buildLanguageInteractionPrompt()}` +
+          sessionLanguageRule +
+          `你必须根据模式调整回答长度和安全策略；紧急模式优先生命安全，导航模式只给下一步。\n${buildSafetyPrompt(
+            rideContext,
+            memory
+          )}\n${buildIntentGuidancePrompt(memory.lastIntent)}\n${speakingStyle}\n[短期记忆] ${buildSessionMemoryPrompt(memory)}。` +
+          (previousConversationPrompt ? `\n\n${previousConversationPrompt}` : "");
+      } else {
+        // Glasses and headsets: the same actions and honesty rules, with no
+        // riding context and none of Max's own Chinese-and-English rule.
+        const deviceContext = buildDeviceContextSummary(rideContext);
+        const intentGuidance = buildIntentGuidancePrompt(memory.lastIntent, { audience: "wearer" });
+        systemRole +=
+          `\n\n${buildIdentityPrompt()}` +
+          `\n\n${buildToolGroundingPrompt("wearer")}` +
+          (deviceContext ? `\n\n[设备上下文] ${deviceContext}。` : "\n") +
+          `\n${buildVoiceSettingPrompt(event.voiceGender ?? "female")}` +
+          sessionLanguageRule +
+          `\n${buildSafetyPrompt(rideContext, memory, "wearer")}` +
+          (intentGuidance ? `\n${intentGuidance}` : "") +
+          `\n${speakingStyle}\n[短期记忆] ${buildSessionMemoryPrompt(memory, { languagePreference: false })}。` +
+          (previousConversationPrompt ? `\n\n${previousConversationPrompt}` : "");
+      }
       emitRideContext();
       emitMemory();
 
@@ -2365,8 +2394,10 @@ export function createDoubaoProvider(
             detail: `已接入${initialLocation.source === "rider" ? "实时" : locationLabel}天气：${weather.description} ${weather.temperatureC}°C`
           });
           currentWeatherRole =
-            `\n\n[实时骑行情报] ${locationLabel}${weather.summary}` +
-            `${weather.riderAdvice}当骑手询问天气或风力时，只基于这条真实数据简短回答。`;
+            promptAudience(assistant()) === "rider"
+              ? `\n\n[实时骑行情报] ${locationLabel}${weather.summary}` +
+                `${weather.riderAdvice}当骑手询问天气或风力时，只基于这条真实数据简短回答。`
+              : buildWearerWeatherPrompt(initialLocation.source, weather.summary);
           return currentWeatherRole;
         } catch {
           if (closedByProvider || initialWeatherEpoch !== weatherRequestEpoch) return currentWeatherRole;
@@ -2431,7 +2462,17 @@ export function createDoubaoProvider(
       queuePendingAudio(chunk);
       if (sessionReady && socket?.readyState === WebSocket.OPEN) startPendingAudioFlush();
     },
-    async updateLocation(lat: number, lon: number) {
+    async updateLocation(lat: number, lon: number, speedKmh?: number) {
+      // The phone's GPS is the only source of real speed. A fix without one
+      // means the speed is unknown now, not that the last value still holds.
+      const speed = speedKmh === undefined ? undefined : Math.round(speedKmh);
+      // The system role was built at connect, before any speed was known: the
+      // model learns it from the addition updateProviderConfig appends.
+      phoneSpeedKmh = speed;
+      if (speed !== rideContext.speedKmh) {
+        rideContext = { ...rideContext, speedKmh: speed };
+        emitRideContext();
+      }
       const locationUpdate = riderLocation.update(lat, lon);
       updateProviderConfig();
       void locationUpdate.then(() => {
@@ -2538,6 +2579,7 @@ export function createDoubaoProvider(
       }
       galleryFrameAssembler.accept(event);
     },
+    upstreamUsable: () => sessionReady,
     async stopAudio() {
       clearReplyTurnTimer();
       audioActive = false;

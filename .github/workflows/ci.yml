@@ -1,8 +1,12 @@
 name: Cross-platform CI
 
+# Pull requests run once (not once for the push and again for the pull request).
+# To run the checks on a branch that has no pull request, start the workflow by hand.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -88,6 +92,18 @@ jobs:
           echo "exit code: $code"
           test "$code" -eq 64
 
+  # The Python reference client in examples/device-client, against a scripted relay.
+  device-client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install 'websockets>=10'
+      - run: python -m unittest discover -s examples/device-client -p 'test_*.py' -v
+
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -104,6 +120,8 @@ jobs:
           packages: "platform-tools platforms;android-36.1 build-tools;36.0.0"
       - run: chmod +x android/gradlew
       - run: android/gradlew -p android test lint
+      # Unsigned: proves the release variant still builds and packages.
+      - run: android/gradlew -p android assembleRelease -PversionCode=${{ github.run_number }}
 
   ios:
     runs-on: macos-15
@@ -135,4 +153,5 @@ jobs:
             -scheme MaxHelmet \
             -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}' \
             MAX_GIT_COMMIT="${GITHUB_SHA::12}" \
+            MAX_BUILD_NUMBER="${{ github.run_number }}" \
             test

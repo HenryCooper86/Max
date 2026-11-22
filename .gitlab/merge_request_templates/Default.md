@@ -21,4 +21,4 @@ Describe the user-visible outcome and the concrete problem being solved.
 
 - [ ] Source branch is up to date with `main`
 - [ ] Required review is complete
-- [ ] Merge to `main` before deploying; `deploy-lightsail.command` verifies local `HEAD` matches `gitlab/main`
+- [ ] Merge to `main` before deploying; `deploy-lightsail.command` verifies local `HEAD` matches `origin/main`

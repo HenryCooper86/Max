@@ -81,5 +81,7 @@ or "Show me the jacket." The model now chooses the tools itself. Other backends 
 - Change the persona, greeting and tools in `assistant.config.json`. The reference is in [tools](../../docs/tools.md).
 - Replace `ORDERS` in `server.mjs` with a call to your own API. Authorise by the `userId` the token carries
   (`demo-shopper` here): see [security](../../docs/security.md).
+- Replace `requireSession()` in `server.mjs` with a real session check. The stub lets everyone in, so the demo runs with
+  no setup, but a token route copied as it is would hand out voice minutes to anyone.
 - For a framework app, use the React hook or the `VoiceAgent` class from the [SDK](../../sdk/README.md) instead of the
   widget.

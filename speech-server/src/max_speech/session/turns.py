@@ -215,7 +215,8 @@ class TurnTaker:
 
 # ---- the end of a turn ----------------------------------------------------------------------------------------
 def _adopt(task: asyncio.Task, background: set[asyncio.Task] | None) -> None:
-    """Let a second pass that missed its deadline finish on its own, tracked so shutdown can cancel it."""
+    """Track a second pass that is being stopped until it really has (it waits out its thread), so shutdown can await
+    it, and log a failure instead of letting asyncio report it as never retrieved."""
 
     def done(t: asyncio.Task) -> None:
         if background is not None:
@@ -241,7 +242,8 @@ async def finalize_turn(
 
     `finish()` flushes the streaming STT. When `second_pass` is given (a batch engine), it starts alongside and its
     text replaces the streaming text if it is non-empty and arrives within `deadline_ms` of the decision; otherwise
-    it is left to finish in `background` and its result is dropped.
+    nothing would use its text, so it is cancelled (abandoning its wait for the GPU, see `run_serialized`) and tracked
+    in `background` until its thread has stopped.
     """
     if cmd.empty:
         return TurnEnded("", {"turn": cmd.turn_ms, "stt": 0})
@@ -258,7 +260,12 @@ async def finalize_turn(
         raise
     if task is not None:
         remaining = max(0.0, deadline_ms / 1000 - (loop.time() - t0))
-        done, _ = await asyncio.wait({task}, timeout=remaining)
+        try:
+            done, _ = await asyncio.wait({task}, timeout=remaining)
+        except BaseException:  # cancelled while waiting (the session is closing): stop the second pass too
+            _adopt(task, background)
+            task.cancel()
+            raise
         if task in done:
             try:
                 better = (task.result() or "").strip()
@@ -269,4 +276,5 @@ async def finalize_turn(
                 text = better
         else:
             _adopt(task, background)
+            task.cancel()
     return TurnEnded(text, {"turn": cmd.turn_ms, "stt": max(0, round(clock() - started))})

@@ -6,7 +6,7 @@
 // framework behaves exactly like before (open internal mode) — registering is
 // what switches authentication on.
 
-import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
@@ -33,8 +33,12 @@ type StoredUser = PublicUser & {
   salt: string;
 };
 
+// Only the SHA-256 of a session token is kept, in memory and on disk: the
+// token unlocks /agent, /testing and the admin API, so anyone able to read the
+// accounts file or one of its backups could otherwise take over live logins.
+// The raw token exists only in the login/registration response.
 type StoredSession = {
-  token: string;
+  tokenHash: string;
   userId: string;
   createdAt: number;
   expiresAt: number;
@@ -64,6 +68,7 @@ const MAX_PASSWORD_LENGTH = 128;
 const MAX_DISPLAY_NAME_LENGTH = 60;
 const SCRYPT_KEY_LENGTH = 64;
 const ACCOUNT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const TOKEN_HASH_PATTERN = /^[0-9a-f]{64}$/;
 
 const ACCOUNTS_PATH = resolveAccountsPath();
 const log = createLogger("accounts");
@@ -71,7 +76,7 @@ const log = createLogger("accounts");
 const INVITE_LIFETIME_MS = 7 * 86_400_000;
 
 const users = new Map<string, StoredUser>(); // keyed by normalized username
-const sessions = new Map<string, StoredSession>(); // keyed by token
+const sessions = new Map<string, StoredSession>(); // keyed by tokenHash
 const invites = new Map<string, InviteInfo>(); // keyed by code
 let accountsLoaded = ACCOUNTS_PATH === null;
 let accountsLoadFailed = false;
@@ -166,14 +171,30 @@ function loadStoredInvite(value: unknown): InviteInfo | null {
   };
 }
 
-function loadStoredSession(value: unknown): StoredSession | null {
+function hashSessionToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+/** Reads one stored session. Stores written before tokens were hashed carry
+ * the raw `token`; it is hashed here so those logins survive the upgrade, and
+ * `legacy` tells the loader to rewrite the file without it. */
+function loadStoredSession(value: unknown): { session: StoredSession; legacy: boolean } | null {
   if (!isRecord(value)) return null;
-  if (typeof value.token !== "string" || !value.token) return null;
+  let tokenHash: string;
+  let legacy = false;
+  if (typeof value.tokenHash === "string" && TOKEN_HASH_PATTERN.test(value.tokenHash)) {
+    tokenHash = value.tokenHash;
+  } else if (typeof value.token === "string" && value.token) {
+    tokenHash = hashSessionToken(value.token);
+    legacy = true;
+  } else {
+    return null;
+  }
   if (typeof value.userId !== "string" || !value.userId) return null;
   const createdAt = typeof value.createdAt === "number" && Number.isFinite(value.createdAt) ? value.createdAt : 0;
   const expiresAt = typeof value.expiresAt === "number" && Number.isFinite(value.expiresAt) ? value.expiresAt : 0;
   if (!createdAt || !expiresAt) return null;
-  return { token: value.token, userId: value.userId, createdAt, expiresAt };
+  return { session: { tokenHash, userId: value.userId, createdAt, expiresAt }, legacy };
 }
 
 function ensureAccountsLoaded() {
@@ -196,11 +217,13 @@ function ensureAccountsLoaded() {
       }
       users.set(user.username, user);
     }
+    let needsSessionMigration = false;
     if (Array.isArray(raw.sessions)) {
       const userIds = new Set([...users.values()].map((user) => user.id));
       for (const entry of raw.sessions) {
-        const session = loadStoredSession(entry);
-        if (session && userIds.has(session.userId)) sessions.set(session.token, session);
+        const loaded = loadStoredSession(entry);
+        if (loaded?.legacy) needsSessionMigration = true;
+        if (loaded && userIds.has(loaded.session.userId)) sessions.set(loaded.session.tokenHash, loaded.session);
       }
     }
     if (Array.isArray(raw.invites)) {
@@ -213,7 +236,9 @@ function ensureAccountsLoaded() {
     // persist immediately so per-user memory and device caches keep a stable
     // identity across subsequent restarts. Legacy sessions are intentionally
     // dropped because they reference the replaced id and cannot be trusted.
-    if (needsIdMigration) persistAccounts();
+    // Raw tokens from an older store are rewritten as hashes straight away
+    // rather than at the next login, so they do not linger on disk.
+    if (needsIdMigration || needsSessionMigration) persistAccounts();
   } catch (error) {
     // Never retain a partially parsed store. One malformed record after valid
     // entries must not leave an incomplete account/session view in memory.
@@ -244,7 +269,7 @@ function persistAccounts() {
   );
   persistQueue = persistQueue
     .then(async () => {
-      // The accounts file holds password hashes and session tokens; create its
+      // The accounts file holds password and session-token hashes; create its
       // directory 0o700 (private) via the shared helper instead of a bare mkdir,
       // which inherits a possibly world-listable umask (0o755) on multi-user hosts.
       await ensureTestingStorageDirectory(filePath);
@@ -267,9 +292,9 @@ function persistAccounts() {
 
 function pruneExpiredSessions(now: number) {
   let removed = false;
-  for (const [token, session] of sessions) {
+  for (const [tokenHash, session] of sessions) {
     if (session.expiresAt <= now) {
-      sessions.delete(token);
+      sessions.delete(tokenHash);
       removed = true;
     }
   }
@@ -278,23 +303,25 @@ function pruneExpiredSessions(now: number) {
 
 const MAX_SESSIONS_PER_USER = 20;
 
-function createSession(user: StoredUser, now: number): StoredSession {
+/** Stores a new session and returns the only copy of its raw token. */
+function createSession(user: StoredUser, now: number): string {
+  const token = `sess_${randomBytes(32).toString("hex")}`;
   const session: StoredSession = {
-    token: `sess_${randomBytes(32).toString("hex")}`,
+    tokenHash: hashSessionToken(token),
     userId: user.id,
     createdAt: now,
     expiresAt: now + config.authSessionDays * 86_400_000
   };
-  sessions.set(session.token, session);
+  sessions.set(session.tokenHash, session);
   // Cap live sessions per user (oldest first) so a login loop can't grow the
   // accounts file with a month-long tail of tokens.
   const mine = [...sessions.values()]
     .filter((candidate) => candidate.userId === user.id)
     .sort((a, b) => a.createdAt - b.createdAt);
   while (mine.length > MAX_SESSIONS_PER_USER) {
-    sessions.delete(mine.shift()!.token);
+    sessions.delete(mine.shift()!.tokenHash);
   }
-  return session;
+  return token;
 }
 
 /** True once at least one user is registered — this is what turns auth on.
@@ -325,7 +352,7 @@ export function userCount(): number {
 export function sessionUser(token: unknown, now = Date.now()): PublicUser | null {
   if (typeof token !== "string" || !token.startsWith("sess_")) return null;
   ensureAccountsLoaded();
-  const session = sessions.get(token);
+  const session = sessions.get(hashSessionToken(token));
   if (!session) return null;
   if (session.expiresAt <= now) {
     pruneExpiredSessions(now);
@@ -405,10 +432,10 @@ export async function registerUser(
   users.set(username, user);
   // Invites are single-use: consumed by the registration they admitted.
   if (inviteAfterHash) invites.delete(inviteAfterHash.code);
-  const session = createSession(user, now);
+  const token = createSession(user, now);
   pruneExpiredSessions(now);
   persistAccounts();
-  return { ok: true, token: session.token, user: publicUser(user) };
+  return { ok: true, token, user: publicUser(user) };
 }
 
 // --- admin: user + invite management ------------------------------------------
@@ -469,8 +496,8 @@ export function deleteUser(usernameInput: unknown): { ok: true; user: PublicUser
   if (user.role === "admin") return { ok: false, error: "不能删除管理员账号。" };
   const deletedUser = publicUser(user);
   users.delete(username);
-  for (const [token, session] of sessions) {
-    if (session.userId === user.id) sessions.delete(token);
+  for (const [tokenHash, session] of sessions) {
+    if (session.userId === user.id) sessions.delete(tokenHash);
   }
   persistAccounts();
   return { ok: true, user: deletedUser };
@@ -517,10 +544,10 @@ export async function loginUser(usernameInput: unknown, passwordInput: unknown, 
     return { ok: false, error: "用户名或密码不正确。" };
   }
   user.lastLoginAt = now;
-  const session = createSession(user, now);
+  const token = createSession(user, now);
   pruneExpiredSessions(now);
   persistAccounts();
-  return { ok: true, token: session.token, user: publicUser(user) };
+  return { ok: true, token, user: publicUser(user) };
 }
 
 /**
@@ -536,7 +563,8 @@ export async function changePassword(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   ensureAccountsLoaded();
   if (typeof token !== "string" || !token.startsWith("sess_")) return { ok: false, error: "未登录或会话已过期。" };
-  const session = sessions.get(token);
+  const tokenHash = hashSessionToken(token);
+  const session = sessions.get(tokenHash);
   if (!session || session.expiresAt <= now) return { ok: false, error: "未登录或会话已过期。" };
   const user = [...users.values()].find((candidate) => candidate.id === session.userId);
   if (!user) return { ok: false, error: "未登录或会话已过期。" };
@@ -558,7 +586,7 @@ export async function changePassword(
   const passwordHash = await hashPassword(newPassword, salt);
   // Both awaits can overlap logout, another password change, or deletion.
   // Commit only while the same session and verified credentials still exist.
-  if (users.get(user.username) !== user || sessions.get(token) !== session) {
+  if (users.get(user.username) !== user || sessions.get(tokenHash) !== session) {
     return { ok: false, error: "未登录或会话已过期。" };
   }
   if (user.salt !== previousSalt || user.passwordHash !== previousHash) {
@@ -566,8 +594,8 @@ export async function changePassword(
   }
   user.salt = salt;
   user.passwordHash = passwordHash;
-  for (const [candidateToken, candidate] of sessions) {
-    if (candidate.userId === user.id && candidateToken !== token) sessions.delete(candidateToken);
+  for (const [candidateHash, candidate] of sessions) {
+    if (candidate.userId === user.id && candidateHash !== tokenHash) sessions.delete(candidateHash);
   }
   persistAccounts();
   return { ok: true };
@@ -576,8 +604,8 @@ export async function changePassword(
 /** Invalidates one session token. Idempotent. */
 export function logoutSession(token: unknown): boolean {
   ensureAccountsLoaded();
-  if (typeof token !== "string") return false;
-  const removed = sessions.delete(token);
+  if (typeof token !== "string" || !token) return false;
+  const removed = sessions.delete(hashSessionToken(token));
   if (removed) persistAccounts();
   return removed;
 }

@@ -27,16 +27,36 @@ import kotlinx.coroutines.isActive
 
 /** Routes to the selected source; QQ controls are restricted to its media session. */
 class MusicController(private val context: Context, private val scope: CoroutineScope) {
+    private companion object {
+        const val DUCKED_VOLUME = 0.2f
+    }
+
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var currentMediaPlayer: MediaPlayer? = null
+
+    /**
+     * Set while hands-free holds the voice session's audio focus. A separate
+     * request from this player would take focus away from the session (the
+     * session would see a permanent loss), so in-app music plays under the
+     * session's focus instead, ducked like other apps' music.
+     */
+    @Volatile
+    var underVoiceFocus = false
+        set(value) {
+            field = value
+            runCatching { currentMediaPlayer?.setVolume(if (value) DUCKED_VOLUME else 1f, if (value) DUCKED_VOLUME else 1f) }
+        }
     private val focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
         .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
         .setOnAudioFocusChangeListener({ change ->
             when (change) {
                 AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> playback.stop()
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> runCatching { currentMediaPlayer?.setVolume(0.2f, 0.2f) }
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> runCatching { currentMediaPlayer?.setVolume(DUCKED_VOLUME, DUCKED_VOLUME) }
                 // A focus gain must never restart a cancelled or backgrounded song.
-                AudioManager.AUDIOFOCUS_GAIN -> runCatching { currentMediaPlayer?.setVolume(1f, 1f) }
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    val volume = if (underVoiceFocus) DUCKED_VOLUME else 1f
+                    runCatching { currentMediaPlayer?.setVolume(volume, volume) }
+                }
             }
         }, Handler(Looper.getMainLooper())).build()
     private val playback = AppMusicPlayback(scope) { AndroidMusicDriver() }
@@ -128,6 +148,8 @@ class MusicController(private val context: Context, private val scope: Coroutine
             else if (state.value.playing) scope.launch { qq.execute("pause") }
         }
     }
+    /** Pauses only the app's own queue; QQ Music handles a phone call itself and resumes after it. */
+    fun stopOwnPlayback() { if (!useQQ) playback.stop() }
     fun beginSelection(): Int? = playback.beginSelection()
     fun completeSelection(ticket: Int, uris: List<Uri>) = playback.completeSelection(ticket, uris.map(Uri::toString))
     suspend fun execute(action: String, app: String? = null): DeviceResult {
@@ -141,6 +163,7 @@ class MusicController(private val context: Context, private val scope: Coroutine
     private inner class AndroidMusicDriver : AppMusicDriver {
         private val player = MediaPlayer().also { currentMediaPlayer = it }
         private var released = false
+        private var holdsFocus = false
         override fun prepare(track: String, prepared: (String) -> Unit, completed: () -> Unit, failed: () -> Unit) {
             val uri = Uri.parse(track)
             player.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
@@ -160,12 +183,22 @@ class MusicController(private val context: Context, private val scope: Coroutine
             player.prepareAsync()
         }
         override fun play(): Boolean {
-            if (released || audio.requestAudioFocus(focus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) return false
+            if (released) return false
+            if (underVoiceFocus) {
+                player.setVolume(DUCKED_VOLUME, DUCKED_VOLUME)
+            } else {
+                if (audio.requestAudioFocus(focus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) return false
+                holdsFocus = true
+            }
             player.start()
             return player.isPlaying
         }
         override fun pause() {
-            if (!released) { player.pause(); audio.abandonAudioFocusRequest(focus) }
+            if (!released) { player.pause(); releaseFocus() }
+        }
+        private fun releaseFocus() {
+            if (holdsFocus) audio.abandonAudioFocusRequest(focus)
+            holdsFocus = false
         }
         override fun release() {
             if (released) return
@@ -173,7 +206,7 @@ class MusicController(private val context: Context, private val scope: Coroutine
             player.setOnPreparedListener(null); player.setOnCompletionListener(null); player.setOnErrorListener(null)
             player.release()
             if (currentMediaPlayer === player) currentMediaPlayer = null
-            audio.abandonAudioFocusRequest(focus)
+            releaseFocus()
         }
     }
 }

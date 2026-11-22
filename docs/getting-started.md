@@ -94,7 +94,11 @@ To build your own interface instead of the widget, use `VoiceAgent` or the React
 
 ## 6. Give it a tool
 
-Tools let the agent read your data and act. Create `agent-tools.ts` next to your config:
+Tools let the agent read your data and act. Create `agent-tools.ts` in the root of this checkout, next to your config.
+The relay loads it from the path in `toolsModule` (resolved against the config file), and `defineTool` comes from
+`server/tools/index.ts` in the checkout, so the import below is relative to the file's own location. If you keep the file
+elsewhere, adjust that path. The helpers only add type checking: a module that default-exports a plain array of tools
+needs no import at all.
 
 ```ts
 import { defineTool, defineTools } from "./server/tools/index";

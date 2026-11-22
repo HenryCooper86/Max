@@ -354,6 +354,13 @@ describe("client event validation", () => {
   it("accepts a valid location.update and rejects malformed coordinates", () => {
     const event = parseClientEvent(Buffer.from(JSON.stringify({ type: "location.update", lat: 35.1, lon: 129.07 })));
     expect(event).toEqual({ type: "location.update", lat: 35.1, lon: 129.07 });
+    const moving = { type: "location.update", lat: 35.1, lon: 129.07, speedKmh: 48.5 };
+    expect(parseClientEvent(Buffer.from(JSON.stringify(moving)))).toEqual(moving);
+    for (const speedKmh of [-1, 401, "48", null]) {
+      expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...moving, speedKmh }))), String(speedKmh)).toThrow(
+        /speedKmh/
+      );
+    }
 
     expect(() => parseClientEvent(Buffer.from(JSON.stringify({ type: "location.update", lat: 91, lon: 0 })))).toThrow(
       "Invalid lat"

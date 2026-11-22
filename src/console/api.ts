@@ -24,6 +24,8 @@ export type Project = {
   /** Public agent id for embedding without a backend. */
   publicId: string;
   hasWebhookSecret: boolean;
+  /** The owner's limit on this project's minutes per month; null (or absent, from an older relay) for none. */
+  monthlyMinutesCap?: number | null;
   createdAt: number;
 };
 export type ProjectPatch = Partial<{
@@ -34,6 +36,7 @@ export type ProjectPatch = Partial<{
   instructions: string;
   greeting: string;
   studio: ProjectStudio;
+  monthlyMinutesCap: number | null;
 }>;
 /** What a new project starts with (from a template). */
 export type ProjectStart = { name: string } & Partial<{

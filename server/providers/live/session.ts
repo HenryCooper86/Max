@@ -2,6 +2,7 @@ import type { WebSocket } from "ws";
 import type { ProviderCapabilities } from "../../../shared/agent";
 import { type AdasSeverity } from "../../../shared/adas";
 import {
+  buildDeviceContextSummary,
   buildRideContextSummary,
   combineHazardLevels,
   describeRideMode,
@@ -18,6 +19,7 @@ import {
   createSessionMemory,
   restoreSessionMemory,
   updateSessionMemory,
+  type PromptAudience,
   type SessionMemory
 } from "../../../shared/session";
 import { containsWakePhrase, WAKE_FOLLOWUP_MAX_CHAIN_MS, WAKE_FOLLOWUP_WINDOW_MS } from "../../../shared/wake";
@@ -50,6 +52,8 @@ import {
   buildLanguageInteractionPrompt,
   buildSessionLanguagePrompt,
   buildToolGroundingPrompt,
+  buildWearerWeatherPrompt,
+  promptAudience,
   sessionLanguage
 } from "../../prompts";
 import { asksCurrentLocation, RiderLocationContext } from "../../rider-location";
@@ -140,6 +144,7 @@ export function buildLiveInstructions(input: {
 }): string {
   const profile = input.profile ?? assistant();
   if (profile.preset.general) return buildGeneralInstructions({ ...input, profile });
+  if (promptAudience(profile) === "wearer") return buildWearableInstructions({ ...input, profile });
   const inChinese = promptsInChinese(profile);
   const voiceLabel = (input.event.voiceGender ?? "female") === "male" ? "男声" : "女声";
   const sessionRule = buildSessionLanguagePrompt(input.event.language, profile.languages);
@@ -166,9 +171,66 @@ export function buildLiveInstructions(input: {
     (sessionRule ? `\n${sessionRule}` : "") +
     `\n你必须根据模式调整回答长度和安全策略；紧急模式优先生命安全，导航模式只给下一步。` +
     `\n${buildSafetyPrompt(input.rideContext, input.memory)}` +
-    `\n${buildIntentGuidancePrompt(input.memory.lastIntent)}` +
+    line(buildIntentGuidancePrompt(input.memory.lastIntent, { stockLanguageRule: profile.isDefault })) +
     `\n${buildPersonalityPrompt(input.event.voicePersonality ?? "concise")}` +
-    `\n[短期记忆] ${buildSessionMemoryPrompt(input.memory)}。` +
+    `\n[短期记忆] ${buildSessionMemoryPrompt(input.memory, { languagePreference: profile.isDefault })}。` +
+    wakeNote +
+    (profile.instructions ? `\n\n${profile.instructions}` : "") +
+    (previous ? `\n\n${previous}` : "") +
+    input.weatherRole +
+    input.locationRole +
+    appContextPrompt(input.event.context, input.trustedContext, inChinese)
+  );
+}
+
+/** A prompt line, or nothing when the builder had nothing to say. */
+function line(text: string): string {
+  return text ? `\n${text}` : "";
+}
+
+/**
+ * Instructions for a wearable that is not a helmet (glasses, a headset): the
+ * same device actions and honesty rules as the helmet, worded for someone who
+ * is not riding, and without the ride mode, HUD and Max's own language rule.
+ */
+function buildWearableInstructions(input: {
+  event: SessionStartEvent;
+  rideContext: RideContext;
+  memory: SessionMemory;
+  previousConversation?: ProviderSessionContext["previousConversation"];
+  weatherRole: string;
+  locationRole: string;
+  wakeWord: boolean;
+  trustedContext?: string;
+  profile: ReturnType<typeof assistant>;
+}): string {
+  const { profile } = input;
+  const inChinese = promptsInChinese(profile);
+  const voiceLabel = (input.event.voiceGender ?? "female") === "male" ? "男声" : "女声";
+  const sessionRule = buildSessionLanguagePrompt(input.event.language, profile.languages);
+  const previous = buildPreviousConversationPrompt(
+    input.previousConversation?.turns ?? [],
+    input.previousConversation?.facts ?? []
+  );
+  const rulesNote = inChinese
+    ? ""
+    : "\n\nThe operating rules below are written in Chinese. Follow them exactly, but always answer in the language your persona specifies.";
+  const wakeNote = input.wakeWord
+    ? `\n[唤醒规则] 系统只会把叫了你名字“${profile.wake.label}”的话转给你回答；不要要求对方重复名字，直接回答问题。`
+    : "";
+  const deviceContext = buildDeviceContextSummary(input.rideContext);
+  return (
+    basePersonaPrompt(profile) +
+    `\n\n${identityPrompt(profile)}` +
+    rulesNote +
+    `\n\n${buildToolGroundingPrompt("wearer")}` +
+    (deviceContext ? `\n\n[设备上下文] ${deviceContext}。` : "\n") +
+    `\n[声音设置] 当前会话使用${voiceLabel}音色；音色只影响声音，不改变身份、能力或人格。` +
+    (sessionRule ? `\n${sessionRule}` : "") +
+    `\n${buildSafetyPrompt(input.rideContext, input.memory, "wearer")}` +
+    line(buildIntentGuidancePrompt(input.memory.lastIntent, { audience: "wearer" })) +
+    `\n${buildPersonalityPrompt(input.event.voicePersonality ?? "concise")}` +
+    `\n[短期记忆] ${buildSessionMemoryPrompt(input.memory, { languagePreference: false })}。` +
     wakeNote +
     (profile.instructions ? `\n\n${profile.instructions}` : "") +
     (previous ? `\n\n${previous}` : "") +
@@ -397,6 +459,10 @@ export function createLiveProvider(
     send({ type: "session.memory", ...memory });
   }
 
+  function audience(): PromptAudience {
+    return promptAudience(options.profile ?? assistant());
+  }
+
   function instructions(): string {
     return buildLiveInstructions({
       event: startEvent ?? { type: "session.start", sampleRate: 16000, channels: 1 },
@@ -404,7 +470,7 @@ export function createLiveProvider(
       memory,
       previousConversation,
       weatherRole,
-      locationRole: riderLocation.isFresh() ? riderLocation.role() : "",
+      locationRole: riderLocation.isFresh() ? riderLocation.role(audience()) : "",
       wakeWord: wakeWordEnabled,
       trustedContext,
       profile: options.profile,
@@ -648,6 +714,7 @@ export function createLiveProvider(
     try {
       const weather = await fetchWeather(location.lat, location.lon);
       if (closed || epoch !== weatherEpoch) return;
+      const riding = audience() === "rider";
       const label =
         location.source === "rider" ? "骑手当前位置" : location.source === "configured" ? "默认位置" : "演示位置";
       send({
@@ -659,9 +726,10 @@ export function createLiveProvider(
         riskLevel: weather.riskLevel,
         riderAdvice: weather.riderAdvice
       });
-      weatherRole =
-        `\n\n[实时骑行情报] ${label}${weather.summary}` +
-        `${weather.riderAdvice}当对方询问天气或风力时，只基于这条真实数据简短回答。`;
+      weatherRole = riding
+        ? `\n\n[实时骑行情报] ${label}${weather.summary}` +
+          `${weather.riderAdvice}当对方询问天气或风力时，只基于这条真实数据简短回答。`
+        : buildWearerWeatherPrompt(location.source, weather.summary);
       if (announce) {
         status(
           "ready",
@@ -1081,6 +1149,7 @@ export function createLiveProvider(
       if (!audioActive || !engineReady) return;
       engine?.sendAudio(chunk);
     },
+    upstreamUsable: () => engineReady && !closed,
     async stopAudio() {
       if (audioActive && engineReady) engine?.endInput?.();
       audioActive = false;
@@ -1113,10 +1182,17 @@ export function createLiveProvider(
       engine?.close();
       engine = undefined;
     },
-    async updateLocation(lat: number, lon: number) {
+    async updateLocation(lat: number, lon: number, speedKmh?: number) {
       // A software assistant has no use for the wearer's position (and its
       // lookup would spend the relay owner's Amap quota).
       if (general) return;
+      // The phone's GPS is the only source of real speed. A fix without one
+      // means the speed is unknown now, not that the last value still holds.
+      const speed = speedKmh === undefined ? undefined : Math.round(speedKmh);
+      if (speed !== rideContext.speedKmh) {
+        rideContext = { ...rideContext, speedKmh: speed };
+        emitRideContext();
+      }
       weatherLocation = { lat, lon, source: "rider" };
       await riderLocation.update(lat, lon);
       refreshInstructions();

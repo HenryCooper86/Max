@@ -203,11 +203,13 @@ All of these are off until set. See [after the conversation](conversations.md#af
 
 See [turning on embeddings](tools.md#turning-on-embeddings). Off until `KNOWLEDGE_EMBEDDINGS_MODEL` is set.
 
-| Variable                        | Default                     | What it does                                                                                  |
-| ------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------- |
-| `KNOWLEDGE_EMBEDDINGS_MODEL`    | off                         | An embeddings model. Turns on hybrid (keyword and meaning) search of the knowledge base.      |
-| `KNOWLEDGE_EMBEDDINGS_BASE_URL` | `https://api.openai.com/v1` | An OpenAI-compatible `/embeddings` endpoint. HTTPS, or plain HTTP to a local or private host. |
-| `KNOWLEDGE_EMBEDDINGS_API_KEY`  | `OPENAI_API_KEY`            | The key. `OPENAI_API_KEY` is used only with the default OpenAI URL.                           |
+| Variable                        | Default                             | What it does                                                                                  |
+| ------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------- |
+| `KNOWLEDGE_EMBEDDINGS_MODEL`    | off                                 | An embeddings model. Turns on hybrid (keyword and meaning) search of the knowledge base.      |
+| `KNOWLEDGE_EMBEDDINGS_BASE_URL` | `https://api.openai.com/v1`         | An OpenAI-compatible `/embeddings` endpoint. HTTPS, or plain HTTP to a local or private host. |
+| `KNOWLEDGE_EMBEDDINGS_API_KEY`  | `OPENAI_API_KEY`                    | The key. `OPENAI_API_KEY` is used only with the default OpenAI URL.                           |
+| `KNOWLEDGE_EMBEDDINGS_CACHE`    | `<studio dir>/knowledge-embeddings` | A directory where vectors are cached across restarts, or `off`.                               |
+| `KNOWLEDGE_MAX_PASSAGES`        | `100000`                            | The most passages that get embeddings. Above it the whole knowledge base stays on keywords.   |
 
 ### Tracing
 
@@ -237,6 +239,33 @@ Set `TWILIO_AUTH_TOKEN` to turn phone calls on. See [phone calls](telephony.md).
 | `TELEPHONY_TRANSFER_NUMBERS` | none    | Where the assistant may transfer a call: `support=+14155550100,sales=sip:sales@example.com`. |
 | `TELEPHONY_MAX_CALLS`        | `20`    | Simultaneous calls, 1 to 1000.                                                               |
 
+### Noise suppression
+
+A browser cleans up its own microphone. A phone call from a street, or a device with a bare microphone, does not, and
+a fan or traffic can make a model think the user is speaking. With `NOISE_SUPPRESSION=phone` or `on`, the relay runs
+[RNNoise](https://jmvalin.ca/demo/rnnoise/), a small neural noise suppressor, over the microphone audio before any
+backend hears it. It works the same for every backend.
+
+- It costs about 0.2 ms of CPU for each 10 ms of audio, and adds 20 ms of delay.
+- Steady noise (fans, hum, hiss, road noise) is removed almost entirely. A second person talking is not noise to it.
+- Web clients already have the browser's own suppression, so `phone` is the usual choice. Use `on` for devices.
+- OpenAI Realtime has its own setting as well, `OPENAI_NOISE_REDUCTION`: see [voice backends](backends.md#openai).
+
+In the relay's tests it is run on a recorded voice in fan noise: the voice comes through within 3 dB of its level and
+the noise between words drops by more than 20 dB.
+
+### WebRTC
+
+Set `WEBRTC=on` to let web clients send audio over WebRTC instead of the WebSocket. See [WebRTC transport](webrtc.md).
+
+| Variable              | Default | What it does                                                                                      |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `WEBRTC`              | off     | `on` turns the transport on.                                                                      |
+| `WEBRTC_PUBLIC_IP`    | none    | The relay's public IP addresses, comma-separated. Needed behind NAT.                              |
+| `WEBRTC_UDP_PORTS`    | any     | The UDP port range to use, such as `50000-50100`. Open it in the firewall.                        |
+| `WEBRTC_ICE_SERVERS`  | none    | STUN and TURN servers for the relay, as a JSON list. The relay contacts none unless you set this. |
+| `WEBRTC_MAX_SESSIONS` | `100`   | Simultaneous WebRTC sessions, 1 to 5000, and never more than the port range holds.                |
+
 ### Behaviour
 
 | Variable                                    | Default        | What it does                                                                              |
@@ -244,6 +273,7 @@ Set `TWILIO_AUTH_TOKEN` to turn phone calls on. See [phone calls](telephony.md).
 | `ASSISTANT_CONFIG`                          | none           | Path of the config file, or `off`.                                                        |
 | `STUDIO_DIR`                                | `~/.max-relay` | Where the Studio keeps its config, logo and saved backend keys.                           |
 | `AGENT_WAKE_WORD`                           | `on`           | `off` turns the wake word off for every assistant.                                        |
+| `NOISE_SUPPRESSION`                         | `off`          | `phone` cleans the audio of phone calls, `on` of every session. See below.                |
 | `VOICE_EQUALIZER_ADJUSTABLE`                | `on`           | `off` stops users changing the voice equaliser.                                           |
 | `RELAY_IDLE_TIMEOUT_MS`                     | `600000`       | Closes a session with no client traffic after this long (close code 4001).                |
 | `RELAY_HEARTBEAT_MS`                        | `30000`        | How often the relay pings clients to find dead connections.                               |

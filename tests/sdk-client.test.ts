@@ -9,6 +9,7 @@ import {
   type WebSocketLike
 } from "../sdk/src/client";
 import { PROTOCOL_VERSION, SDK_VERSION } from "../sdk/src/version";
+import type { WebRtcSocketOptions } from "../sdk/src/webrtc";
 
 class FakeSocket implements WebSocketLike {
   static instances: FakeSocket[] = [];
@@ -809,5 +810,267 @@ describe("conversations the relay carries on or ends", () => {
     expect(agents).toEqual(["billing"]);
     agent.stop();
     expect(agent.agent).toBeUndefined();
+  });
+});
+
+describe("webrtc transport", () => {
+  class FakeRtcSocket {
+    static instances: FakeRtcSocket[] = [];
+    readyState = 0;
+    bufferedAmount = 0;
+    binaryType = "blob";
+    sent: Array<string | ArrayBuffer> = [];
+    closed: { code?: number } | undefined;
+    setMicrophone = vi.fn<(track: MediaStreamTrack | undefined) => void>();
+    private handlers: { [K in keyof SocketEventMap]?: Array<(event: SocketEventMap[K]) => void> } = {};
+
+    constructor(readonly options: WebRtcSocketOptions) {
+      FakeRtcSocket.instances.push(this);
+    }
+    addEventListener<K extends keyof SocketEventMap>(type: K, listener: (event: SocketEventMap[K]) => void): void {
+      (this.handlers[type] ??= []).push(listener);
+    }
+    send(data: string | ArrayBuffer): void {
+      this.sent.push(data);
+    }
+    close(code?: number): void {
+      this.readyState = 3;
+      this.closed = code === undefined ? {} : { code };
+    }
+    private fire<K extends keyof SocketEventMap>(type: K, event: SocketEventMap[K]) {
+      for (const handler of this.handlers[type] ?? []) handler(event);
+    }
+    open() {
+      this.readyState = 1;
+      this.fire("open", {});
+    }
+    serverSends(message: object) {
+      this.fire("message", { data: JSON.stringify(message) });
+    }
+    serverCloses(code: number, reason = "") {
+      this.readyState = 3;
+      this.fire("close", { code, reason });
+    }
+    json(): Array<Record<string, unknown>> {
+      return this.sent
+        .filter((m): m is string => typeof m === "string")
+        .map((m) => JSON.parse(m) as Record<string, unknown>);
+    }
+    ofType(type: string) {
+      return this.json().filter((m) => m.type === type);
+    }
+  }
+
+  const MIC_TRACK = { kind: "audio", id: "mic" } as unknown as MediaStreamTrack;
+  const RESUMABLE = { ...STARTED, resume: "rsm_abcdefghijklmnopqrstuvwxyz012345" };
+  const rtc = () => FakeRtcSocket.instances.at(-1)!;
+
+  /** The fake audio, plus the stream methods and a microphone track that exists once startMic ran. */
+  function rtcAudio() {
+    const a = fakeAudio();
+    const playStream = vi.fn();
+    const stopStream = vi.fn();
+    const clear = vi.fn();
+    const audio = (onPlaying: (p: boolean) => void, onBlocked: (b: boolean) => void) => {
+      const io = a.audio(onPlaying, onBlocked);
+      io.playStream = playStream;
+      io.stopStream = stopStream;
+      io.micTrack = () => (a.calls.includes("startMic") ? MIC_TRACK : undefined);
+      const clearPlayback = io.clearPlayback.bind(io);
+      io.clearPlayback = () => {
+        clear();
+        clearPlayback();
+      };
+      return io;
+    };
+    return { ...a, audio, playStream, stopStream, clear };
+  }
+
+  function make(options: Partial<VoiceAgentOptions> = {}, webrtc = true) {
+    const a = rtcAudio();
+    const factory = vi.fn((o: WebRtcSocketOptions) => new FakeRtcSocket(o));
+    const agent = new VoiceAgent({
+      url: "https://relay.example.com/prefix",
+      transport: "webrtc",
+      ...options,
+      internals: {
+        WebSocket: FakeSocket,
+        audio: a.audio,
+        ...(webrtc ? { webrtc: factory } : {}),
+        ...options.internals
+      }
+    });
+    return { agent, factory, ...a };
+  }
+
+  async function startedRtc(options: Partial<VoiceAgentOptions> = {}, startOptions?: { microphone?: boolean }) {
+    const made = make(options);
+    const promise = made.agent.start(startOptions);
+    await vi.advanceTimersByTimeAsync(0);
+    const socket = rtc();
+    socket.open();
+    socket.serverSends(STARTED);
+    await promise;
+    return { ...made, socket };
+  }
+
+  beforeEach(() => {
+    FakeRtcSocket.instances = [];
+  });
+
+  it("opens the WebRTC transport at the relay's /agent/webrtc URL with the resolved token", async () => {
+    const { agent, factory } = make({ token: () => "tok_fn" });
+    expect(agent.transport).toBeUndefined();
+    const promise = agent.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(factory.mock.calls[0]![0]).toMatchObject({
+      url: "https://relay.example.com/prefix/agent/webrtc",
+      token: "tok_fn"
+    });
+    expect(FakeSocket.instances).toHaveLength(0);
+    rtc().open();
+    rtc().serverSends(STARTED);
+    await promise;
+    expect(agent.transport).toBe("webrtc");
+    expect(rtc().ofType("session.start")).toHaveLength(1);
+    agent.stop();
+    expect(agent.transport).toBeUndefined();
+  });
+
+  it("passes the ICE servers to the transport", async () => {
+    const iceServers = [{ urls: "stun:stun.example.com" }];
+    const { factory } = await startedRtc({ iceServers });
+    expect(factory.mock.calls[0]![0].iceServers).toEqual(iceServers);
+  });
+
+  it("uses the WebSocket and never the WebRTC factory when no transport is asked for", async () => {
+    const factory = vi.fn();
+    const { agent } = await started({ internals: { webrtc: factory } });
+    expect(factory).not.toHaveBeenCalled();
+    expect(agent.transport).toBe("websocket");
+  });
+
+  it("falls back to the WebSocket with a warning when WebRTC reports it is unavailable", async () => {
+    const tokens = vi.fn(() => "tok");
+    const { agent, factory } = make({ token: tokens });
+    const warnings: Array<{ code: string }> = [];
+    agent.on("warning", (w) => warnings.push(w));
+    const promise = agent.start();
+    await vi.advanceTimersByTimeAsync(0);
+    rtc().serverCloses(4990, "webrtc connect timeout");
+    expect(warnings.map((w) => w.code)).toEqual(["webrtc_unavailable"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(tokens).toHaveBeenCalledTimes(2);
+    const socket = FakeSocket.instances[0]!;
+    expect(socket.url).toBe("wss://relay.example.com/prefix/agent?token=tok");
+    socket.open();
+    socket.serverSends(STARTED);
+    await promise;
+    expect(agent.transport).toBe("websocket");
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays on the WebSocket for reconnects after a fallback, and tries WebRTC again on the next start()", async () => {
+    const { agent, factory } = make();
+    const promise = agent.start();
+    await vi.advanceTimersByTimeAsync(0);
+    rtc().serverCloses(4990);
+    await vi.advanceTimersByTimeAsync(0);
+    const first = FakeSocket.instances[0]!;
+    first.open();
+    first.serverSends(STARTED);
+    await promise;
+
+    first.serverCloses(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(factory).toHaveBeenCalledTimes(1);
+    FakeSocket.instances[1]!.open();
+    FakeSocket.instances[1]!.serverSends(STARTED);
+
+    agent.stop();
+    const again = agent.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(FakeSocket.instances).toHaveLength(2);
+    rtc().open();
+    rtc().serverSends(STARTED);
+    await again;
+    expect(agent.transport).toBe("webrtc");
+  });
+
+  it("reconnects over WebRTC after a drop, resuming the conversation", async () => {
+    const { agent, factory, socket } = await startedRtc();
+    socket.serverSends(RESUMABLE);
+    socket.serverCloses(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(factory).toHaveBeenCalledTimes(2);
+    const second = rtc();
+    expect(second).not.toBe(socket);
+    second.open();
+    expect(second.ofType("session.start")[0]).toMatchObject({ resume: RESUMABLE.resume });
+    second.serverSends(RESUMABLE);
+    expect(agent.transport).toBe("webrtc");
+    expect(FakeSocket.instances).toHaveLength(0);
+  });
+
+  it("rejects with unauthorized, without a fallback or warning, when WebRTC signalling is refused (1008)", async () => {
+    const { agent } = make({ token: "vst_static" });
+    const warnings: unknown[] = [];
+    agent.on("warning", (w) => warnings.push(w));
+    const rejection = agent.start().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    rtc().serverCloses(1008);
+    const error = (await rejection) as VoiceAgentError;
+    expect(error).toBeInstanceOf(VoiceAgentError);
+    expect(error.code).toBe("unauthorized");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.instances).toHaveLength(0);
+    expect(FakeRtcSocket.instances).toHaveLength(1);
+    expect(warnings).toEqual([]);
+  });
+
+  it("interrupt() silences playback and asks the relay to drop what it holds, over WebRTC only", async () => {
+    const over = await startedRtc();
+    over.agent.interrupt();
+    expect(over.clear).toHaveBeenCalledTimes(1);
+    expect(over.socket.ofType("transport.clear")).toHaveLength(1);
+
+    const plain = await started();
+    plain.calls.length = 0;
+    plain.agent.interrupt();
+    expect(plain.calls).toContain("clear");
+    expect(plain.socket.ofType("transport.clear")).toEqual([]);
+    expect(plain.socket.json().some((m) => String(m.type).startsWith("transport."))).toBe(false);
+  });
+
+  it("hands the open microphone's track to the socket", async () => {
+    const { socket } = await startedRtc();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.setMicrophone).toHaveBeenCalledWith(MIC_TRACK);
+  });
+
+  it("hands no track to the socket when the microphone is off", async () => {
+    const { socket } = await startedRtc({}, { microphone: false });
+    await vi.advanceTimersByTimeAsync(0);
+    for (const [track] of socket.setMicrophone.mock.calls) expect(track).toBeUndefined();
+  });
+
+  it("plays the agent's voice stream through the audio layer and stops it when the stream ends", async () => {
+    const { factory, playStream, stopStream } = await startedRtc();
+    const stream = {} as MediaStream;
+    const { onStream, onStreamEnd } = factory.mock.calls[0]![0];
+    onStream(stream);
+    expect(playStream).toHaveBeenCalledWith(stream);
+    onStreamEnd(stream);
+    expect(stopStream).toHaveBeenCalledWith(stream);
+  });
+
+  it("offers microphone PCM frames to a WebRTC socket without trouble", async () => {
+    const { socket, frame } = await startedRtc();
+    expect(() => frame(new Int16Array(160).buffer)).not.toThrow();
+    expect(socket.sent.filter((m) => m instanceof ArrayBuffer)).toHaveLength(1);
   });
 });

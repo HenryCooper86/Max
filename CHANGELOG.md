@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-11-22 — WebRTC transport, noise suppression, background tools and a larger knowledge base
+
+- Web clients can send audio over WebRTC instead of the WebSocket: `WEBRTC=on` on the relay, `transport: "webrtc"`
+  in the SDK (`transport="webrtc"` on the widget). Audio travels over UDP as Opus, so a lost packet is concealed
+  instead of stalling the agent's voice, which is what a WebSocket does on a poor mobile network. The session is the
+  same `/agent` session: tokens, limits, tools, handoff, resume and every voice backend work unchanged.
+- A page that asks for WebRTC falls back to the WebSocket by itself where it cannot be used (the relay has it off, or
+  the network blocks UDP) and emits a `webrtc_unavailable` warning. `agent.transport` says which one a session got.
+- The relay needs a UDP port range open (`WEBRTC_UDP_PORTS`) and, behind NAT, its public address (`WEBRTC_PUBLIC_IP`).
+  It contacts no STUN or TURN server unless you name one. See [WebRTC transport](docs/webrtc.md).
+- Two new optional dependencies, `werift` and `opusscript` (JavaScript and WebAssembly, nothing to compile). A relay
+  with WebRTC off never loads them.
+- Tested with Chrome through the built SDK and with real peer connections in the test suite. Not yet tested: Firefox,
+  Safari, a lossy mobile network, TURN. The native iOS and Android clients keep the WebSocket.
+
+### Noise and turn-taking
+
+- `NOISE_SUPPRESSION=phone` (or `on`) makes the relay remove steady background noise from microphone audio before any
+  backend hears it, with RNNoise. It is meant for phone calls and devices, where no browser cleans the audio first.
+  One new optional dependency, `@jitsi/rnnoise-wasm`. See [configuration](docs/configuration.md#noise-suppression).
+- OpenAI Realtime: `OPENAI_TURN_EAGERNESS` for semantic turn detection, `OPENAI_VAD_THRESHOLD`,
+  `OPENAI_VAD_SILENCE_MS` and `OPENAI_VAD_PREFIX_MS` for server VAD, and `OPENAI_NOISE_REDUCTION`. Gemini Live:
+  `GEMINI_START_SENSITIVITY`, `GEMINI_END_SENSITIVITY`, `GEMINI_VAD_SILENCE_MS` and `GEMINI_VAD_PREFIX_MS`. A value
+  the relay cannot use is reported at startup. These were checked against the vendors' documentation, not their
+  servers. See [voice backends](docs/backends.md).
+
+### Tools and knowledge
+
+- Background tools. A webhook or code tool marked `"background": true` does not hold the conversation up: the
+  assistant says the work has started, carries on, and reports the result when it comes. Up to four at once in a
+  conversation, and a background webhook may take up to 10 minutes. See [tools](docs/tools.md#background-tools).
+- The knowledge base takes up to 100,000 passages with embeddings (it was 5,000), set with `KNOWLEDGE_MAX_PASSAGES`.
+  Embeddings are cached on disk (`KNOWLEDGE_EMBEDDINGS_CACHE`), so a restart embeds nothing again and an edited file
+  embeds only its changed passages. Embedding retries after a rate limit or a server error, and an interrupted start
+  resumes. The cache holds vectors and hashes, never the text. Search results are the same as before.
+
 ## 2026-11-22 — Phone calls, MCP, knowledge, multiple agents and conversation records
 
 We compared Max with the leading voice-agent platforms and built what was missing.

@@ -54,6 +54,8 @@ function connectionKey(options: VoiceAgentOptions): string {
     options.language ?? null,
     options.voice ?? null,
     options.backend ?? null,
+    options.transport ?? null,
+    options.iceServers ?? null,
     options.autoReconnect ?? null,
     options.speakFallback ?? null,
     (options.tools ?? []).map(({ name, description, parameters }) => [name, description, parameters ?? null])
@@ -65,7 +67,7 @@ function connectionKey(options: VoiceAgentOptions): string {
  *
  * The client is created when the component mounts and again whenever a
  * connection option changes (`url`, `token`, `project`, `language`, `voice`,
- * `backend`, `autoReconnect`, `speakFallback`, or the tools' names,
+ * `backend`, `transport`, `iceServers`, `autoReconnect`, `speakFallback`, or the tools' names,
  * descriptions and parameters); the old one is destroyed, which ends any
  * running conversation. A token function, tool handlers and `context` are read
  * live, so inline closures are safe and never restart the client. `audioContext`

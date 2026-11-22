@@ -141,6 +141,13 @@ describe("options from attributes", () => {
     });
   });
 
+  it("passes transport=webrtc to the client, and ignores any other value", async () => {
+    await open(mount({ relay: "https://r.example.com", transport: "webrtc" }));
+    expect(lastAgent().options.transport).toBe("webrtc");
+    await open(mount({ relay: "https://r.example.com", transport: "udp" }));
+    expect(lastAgent().options).not.toHaveProperty("transport");
+  });
+
   it("ignores a voice that is not female or male", async () => {
     await open(mount({ relay: "https://r.example.com", voice: "robot" }));
     expect(lastAgent().options).not.toHaveProperty("voice");

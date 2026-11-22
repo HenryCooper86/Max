@@ -155,7 +155,12 @@ describe("buildServerTools: knowledge", () => {
 });
 
 describe("buildServerTools: knowledge embeddings", () => {
-  const env = { KNOWLEDGE_EMBEDDINGS_MODEL: "small", KNOWLEDGE_EMBEDDINGS_API_KEY: "k" };
+  const env = {
+    KNOWLEDGE_EMBEDDINGS_MODEL: "small",
+    KNOWLEDGE_EMBEDDINGS_API_KEY: "k",
+    KNOWLEDGE_EMBEDDINGS_CACHE: "off"
+  };
+  const fast = { backoffMs: 1, attempts: 2 };
   const text =
     "# Reimbursement\n\nCustomers are reimbursed within 14 days.\n\n# Delivery\n\nOur courier delivers in 3 days.";
   const concept = (value: string) => [
@@ -200,8 +205,8 @@ describe("buildServerTools: knowledge embeddings", () => {
 
   it("keeps BM25 when the endpoint fails, and adds no problem", async () => {
     const request = vi.fn(async () => new Response("no", { status: 500 })) as unknown as typeof fetch;
-    const built = await buildServerTools({ knowledge: { text } }, { env, request });
-    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    const built = await buildServerTools({ knowledge: { text } }, { env, request, embedJob: fast });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     await new Promise((done) => setTimeout(done, 20));
     expect(built.problems).toEqual([]);
     expect(await ask(built.tools[0]!, "courier")).toEqual(["Delivery"]);

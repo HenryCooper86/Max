@@ -45,6 +45,21 @@ const clientSpec = (name = "cli"): ToolSpec => ({
   parameters: { type: "object", properties: {} }
 });
 
+describe("background tools", () => {
+  it("knows which tools the conversation does not wait for: server tools marked so, and no others", () => {
+    const { broker } = setup({
+      serverTools: [serverTool({ name: "slow", background: true }), serverTool({ name: "quick" })],
+      clientTools: [clientSpec("cli")]
+    });
+    expect(broker.runsInBackground("slow")).toBe(true);
+    expect(broker.runsInBackground("quick")).toBe(false);
+    expect(broker.runsInBackground("cli")).toBe(false);
+    expect(broker.runsInBackground("nothing")).toBe(false);
+    // The mark is the relay's business: the model's view of the tool does not carry it.
+    expect(Object.keys(broker.specs()[0]!).sort()).toEqual(["description", "name", "parameters"]);
+  });
+});
+
 describe("specs", () => {
   it("merges server and client tools; server wins on a name clash", () => {
     const { broker } = setup({

@@ -31,6 +31,7 @@ import { redactText } from "./redact";
 import type { HelmetPeer } from "./companion-registry";
 import { isResumeId, resumeStore } from "./session-resume";
 import type { ToolDefinition } from "./tools";
+import { createNoiseSuppressor, type NoiseSuppressor } from "./noise-suppression";
 
 export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) => AgentProvider;
 
@@ -57,6 +58,8 @@ export type AgentSessionHooks = {
   /** Facts the channel itself vouches for (the caller's number), added to the
    *  token's trusted context. */
   trustedContext?: string;
+  /** Clean the microphone audio before any backend hears it (server/noise-suppression.ts). */
+  noiseSuppression?: boolean;
 };
 
 const MAX_TEXT_INPUT_CHARS = 2_000;
@@ -706,6 +709,7 @@ export class AgentSessionController {
   /** Where this session's turns are remembered, for a user named by a session token. */
   private tokenUserMemoryKey?: string;
   private silenceFiller?: SilenceFiller;
+  private noiseSuppressor?: NoiseSuppressor;
   private sessionStartReceived = false;
   private providerStarted = false;
   private audioActive = false;
@@ -797,7 +801,10 @@ export class AgentSessionController {
         if (chunk.byteLength > MAX_CLIENT_AUDIO_BYTES) throw new Error("Audio frame is too large");
         metrics.clientAudio(chunk.byteLength);
         recordTesterClientAudio(this.relaySessionId, chunk.byteLength);
-        await this.provider.sendAudio(chunk);
+        // Until the model has loaded, audio passes through as it came.
+        if (this.hooks?.noiseSuppression) this.noiseSuppressor ??= createNoiseSuppressor();
+        const audio = this.noiseSuppressor ? this.noiseSuppressor.process(chunk) : chunk;
+        if (audio.byteLength > 0) await this.provider.sendAudio(audio);
         this.silenceFiller?.frame();
         return;
       }
@@ -1042,6 +1049,8 @@ export class AgentSessionController {
           await pendingMessages;
           await this.provider.close();
         } finally {
+          this.noiseSuppressor?.close();
+          this.noiseSuppressor = undefined;
           const detachHelmet = this.detachHelmet;
           this.detachHelmet = undefined;
           try {

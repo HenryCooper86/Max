@@ -1,6 +1,7 @@
 import WebSocket, { type RawData } from "ws";
 import type { VoiceGender } from "../../../shared/agent";
 import type { Logger } from "../../logger";
+import { openAiInputSettings } from "./turn-settings";
 import {
   CLIENT_INPUT_RATE,
   CLIENT_OUTPUT_RATE,
@@ -84,11 +85,8 @@ export function openAiDialect(apiKey?: string, voiceName?: string): RealtimeDial
             model: env("OPENAI_TRANSCRIBE_MODEL") ?? "gpt-4o-mini-transcribe",
             ...(config.keyterms.length ? { prompt: config.keyterms.join(", ") } : {})
           },
-          turn_detection: {
-            type: env("OPENAI_TURN_DETECTION") ?? "server_vad",
-            create_response: !config.manualResponse,
-            interrupt_response: true
-          }
+          // Turn detection, and noise reduction when one is asked for.
+          ...openAiInputSettings(config.manualResponse).settings
         },
         output: { format: { type: "audio/pcm", rate: CLIENT_OUTPUT_RATE }, voice }
       },

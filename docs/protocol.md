@@ -26,6 +26,10 @@ wss://relay.example.com/agent?token=<token>
 
 Use `wss://` in production (see [deployment](deployment.md)).
 
+A relay with `WEBRTC=on` also accepts the same session over a WebRTC peer connection: the events on a data channel,
+the audio as Opus tracks. Everything on this page applies unchanged, except that audio is not sent as binary frames.
+[WebRTC transport](webrtc.md#for-client-authors) describes the handshake.
+
 ### Authentication
 
 A relay with no `RELAY_AUTH_TOKEN` and no user accounts is open. Otherwise the connection must carry a token, in the

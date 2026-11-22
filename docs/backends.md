@@ -87,8 +87,21 @@ OPENAI_API_KEY=sk-...
 | `OPENAI_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe`           |
 | `OPENAI_VOICE`            | `marin` (female)                   |
 | `OPENAI_VOICE_MALE`       | `cedar`                            |
-| `OPENAI_TURN_DETECTION`   | `server_vad`                       |
 | `OPENAI_REALTIME_URL`     | `wss://api.openai.com/v1/realtime` |
+
+How the model decides that the user has finished speaking, and what it does about background noise:
+
+| Setting                  | Default      | What it does                                                                                                                        |
+| ------------------------ | ------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENAI_TURN_DETECTION`  | `server_vad` | `server_vad` ends a turn after a silence. `semantic_vad` also listens to the words, and waits when the user is plainly mid-thought. |
+| `OPENAI_TURN_EAGERNESS`  | OpenAI's     | With `semantic_vad`: `low` gives the user time, `high` answers as soon as it can, `medium`, `auto`.                                 |
+| `OPENAI_VAD_THRESHOLD`   | OpenAI's     | With `server_vad`: 0 to 1. Higher needs louder speech, which helps in a noisy room.                                                 |
+| `OPENAI_VAD_SILENCE_MS`  | OpenAI's     | With `server_vad`: the silence that ends a turn, 100 to 5000 ms. Shorter answers sooner and interrupts more.                        |
+| `OPENAI_VAD_PREFIX_MS`   | OpenAI's     | With `server_vad`: audio kept from before speech was detected, 0 to 2000 ms.                                                        |
+| `OPENAI_NOISE_REDUCTION` | OpenAI's     | `near_field` for a headset or a phone at the ear, `far_field` for a laptop or a room, `off` for none.                               |
+
+A value the relay cannot use is reported in the log at startup and left out. These settings were checked against
+OpenAI's documentation and the relay's tests cover what is sent; they were not run against OpenAI's servers.
 
 ### grok
 
@@ -120,6 +133,17 @@ GEMINI_API_KEY=...
 | `GEMINI_VOICE_MALE` | `Puck`            |
 
 `GOOGLE_API_KEY` is accepted in place of `GEMINI_API_KEY`.
+
+Gemini detects the user's speech itself. To tune it:
+
+| Setting                    | Default  | What it does                                                                            |
+| -------------------------- | -------- | --------------------------------------------------------------------------------------- |
+| `GEMINI_START_SENSITIVITY` | Gemini's | `high` or `low`: how readily a sound counts as the start of speech.                     |
+| `GEMINI_END_SENSITIVITY`   | Gemini's | `high` or `low`: how readily a pause ends the turn. `low` suits slow, careful speakers. |
+| `GEMINI_VAD_SILENCE_MS`    | Gemini's | The silence that ends a turn, 50 to 5000 ms.                                            |
+| `GEMINI_VAD_PREFIX_MS`     | Gemini's | The speech needed before a turn starts, 0 to 2000 ms.                                   |
+
+As with OpenAI, these were checked against Google's documentation and the relay's tests, not against Google's servers.
 
 ### pipeline
 

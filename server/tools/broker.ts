@@ -50,6 +50,8 @@ export type ToolBroker = {
   allSpecs(): ToolSpec[];
   /** Runs one call to completion. Never rejects. */
   run(call: ToolCall): Promise<ToolOutcome>;
+  /** Whether a tool is one the conversation does not wait for (`background: true`). */
+  runsInBackground(name: string): boolean;
   /** A client's answer to a `tool.call`. Unknown or late answers are ignored. */
   clientResult(event: ToolResultEvent): void;
   /** Ends every call in flight with an error result. */
@@ -147,6 +149,8 @@ export function createToolBroker(options: ToolBrokerOptions): ToolBroker {
     },
 
     allSpecs: everySpec,
+
+    runsInBackground: (name) => serverTool(name)?.background === true,
 
     async run(call) {
       if (closed) return { ok: false, output: toolErrorText("the session ended") };

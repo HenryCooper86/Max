@@ -12,6 +12,7 @@ import {
   pcm16ToFloat32,
   reconnectDelayMs,
   relayUrl,
+  relayWebRtcUrl,
   serializeTools,
   shouldReconnect,
   type TranscriptItem
@@ -38,6 +39,33 @@ describe("relayUrl", () => {
   it("rejects unusable bases", () => {
     expect(() => relayUrl("ftp://r.example.com")).toThrow(TypeError);
     expect(() => relayUrl("not a url")).toThrow(TypeError);
+  });
+});
+
+describe("relayWebRtcUrl", () => {
+  it("gives the https /agent/webrtc URL for http(s) bases", () => {
+    expect(relayWebRtcUrl("https://relay.example.com")).toBe("https://relay.example.com/agent/webrtc");
+    expect(relayWebRtcUrl("http://localhost:8787/")).toBe("http://localhost:8787/agent/webrtc");
+  });
+
+  it("maps ws(s) bases to http(s), with or without /agent, and keeps a path prefix", () => {
+    expect(relayWebRtcUrl("wss://relay.example.com/agent")).toBe("https://relay.example.com/agent/webrtc");
+    expect(relayWebRtcUrl("ws://host/prefix")).toBe("http://host/prefix/agent/webrtc");
+    expect(relayWebRtcUrl("wss://host/prefix/agent/")).toBe("https://host/prefix/agent/webrtc");
+  });
+
+  it("drops the query and hash, so a token in the URL is not sent along", () => {
+    expect(relayWebRtcUrl("wss://r.example.com/agent?token=abc#x")).toBe("https://r.example.com/agent/webrtc");
+  });
+
+  it("resolves a relative path against the page", () => {
+    const before = (globalThis as { location?: unknown }).location;
+    (globalThis as { location?: unknown }).location = { href: "https://site.example.com/app/page" };
+    try {
+      expect(relayWebRtcUrl("/relay")).toBe("https://site.example.com/relay/agent/webrtc");
+    } finally {
+      (globalThis as { location?: unknown }).location = before;
+    }
   });
 });
 

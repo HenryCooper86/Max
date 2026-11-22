@@ -11,6 +11,8 @@
 import { createBrowserAudio } from "./audio.js";
 import type { AudioIO } from "./audio.js";
 import { PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
+import { WEBRTC_UNAVAILABLE_CODE, createWebRtcSocket, webRtcSupported } from "./webrtc.js";
+import type { WebRtcSocket, WebRtcSocketOptions } from "./webrtc.js";
 import {
   MAX_TEXT_CHARS,
   TOOL_NAME_PATTERN,
@@ -20,6 +22,7 @@ import {
   reconnectDelayMs,
   fetchPublicAgentToken,
   relayUrl,
+  relayWebRtcUrl,
   shouldReconnect,
   IDLE_CLOSE_CODE,
   USAGE_LIMIT_CLOSE_CODE,
@@ -90,8 +93,9 @@ export type VoiceAgentWarning = {
   /**
    * `audio_blocked`: the browser left the audio context suspended, so the agent cannot be heard until {@link VoiceAgent.resumeAudio} runs inside a user gesture.
    * `protocol_mismatch`: the relay speaks a newer protocol than this SDK; the session runs, but update the SDK.
+   * `webrtc_unavailable`: `transport: "webrtc"` was asked for and could not be used; the session runs over the WebSocket.
    */
-  code: "audio_blocked" | "protocol_mismatch";
+  code: "audio_blocked" | "protocol_mismatch" | "webrtc_unavailable";
   message: string;
 };
 
@@ -177,6 +181,17 @@ export interface VoiceAgentOptions {
   context?: string;
   /** Tools the agent can call in this page. At most 32. */
   tools?: ClientTool[];
+  /**
+   * How audio travels. `"websocket"` (the default) works everywhere.
+   * `"webrtc"` sends audio over UDP with the browser's own loss concealment
+   * and jitter buffer, which holds up better on poor networks; the relay must
+   * have it turned on (`WEBRTC=on`). Where it cannot be used (the relay does
+   * not offer it, or the network blocks it) the session runs over the
+   * WebSocket instead and a `webrtc_unavailable` warning is emitted.
+   */
+  transport?: "websocket" | "webrtc";
+  /** STUN and TURN servers for `transport: "webrtc"`. Needed only on networks that block direct UDP. */
+  iceServers?: RTCIceServer[];
   /** Reconnect with exponential backoff after an unexpected drop. Default true. */
   autoReconnect?: boolean;
   /** Speak replies with the browser's `speechSynthesis` when the relay asks for it. Default true. */
@@ -211,6 +226,8 @@ export type WebSocketConstructor = new (url: string) => WebSocketLike;
 /** @internal */
 interface VoiceAgentInternals {
   WebSocket?: WebSocketConstructor;
+  /** Opens the WebRTC transport; setting it also skips the browser-support check. */
+  webrtc?: (options: WebRtcSocketOptions) => WebRtcSocket;
   /** Builds the audio layer; receives the callback to report playback start/stop. */
   audio?: (onPlayingChange: (playing: boolean) => void, onBlockedChange: (blocked: boolean) => void) => AudioIO;
   toolTimeoutMs?: number;
@@ -288,6 +305,12 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private lastStatus: VoiceAgentStatus = "idle";
 
   private socket: WebSocketLike | undefined;
+  /** The current socket when it is a peer connection. */
+  private rtcSocket: WebRtcSocket | undefined;
+  /** WebRTC was asked for and could not be used: the WebSocket serves until the next start(). */
+  private rtcUnavailable = false;
+  /** Settles when the microphone is open, or could not be opened. */
+  private micReady: Promise<void> = Promise.resolve();
   private socketReady = false;
   private generation = 0;
   private sessionSeq = 0;
@@ -356,6 +379,12 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     return this.provider;
   }
 
+  /** What carries the current session's audio. Undefined when there is no connection. */
+  get transport(): "websocket" | "webrtc" | undefined {
+    if (!this.socket) return undefined;
+    return this.rtcSocket === this.socket ? "webrtc" : "websocket";
+  }
+
   /** The agent the conversation is with, once the assistant has handed it
    *  over; undefined while it is with the one every conversation starts with. */
   get agent(): string | undefined {
@@ -383,6 +412,7 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     const generation = this.generation;
     this.attempts = 0;
     this.authRetried = false;
+    this.rtcUnavailable = false;
     this.isMuted = false;
     this.wantMic = options.microphone !== false;
     this.setLifecycle("connecting");
@@ -401,6 +431,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
                 });
           })
       : Promise.resolve();
+    this.micReady = mic.then(
+      () => undefined,
+      () => undefined
+    );
     this.startLevelTimer();
 
     const pending = new Promise<never>((_, reject) => {
@@ -483,6 +517,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   /** Silences the agent immediately, as if the user had talked over it. */
   interrupt(): void {
     this.audio?.clearPlayback();
+    // Over WebRTC the relay holds the speech still to come: it drops it.
+    if (this.rtcSocket && this.rtcSocket === this.socket && this.socketReady) {
+      this.rtcSocket.send(JSON.stringify({ type: "transport.clear" }));
+    }
   }
 
   /** Stops the conversation, removes all listeners, and makes the instance unusable. */
@@ -607,6 +645,7 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private cancelSocket(): void {
     const socket = this.socket;
     this.socket = undefined;
+    this.rtcSocket = undefined;
     this.socketReady = false;
     this.serverState = undefined;
     if (socket && socket.readyState <= SOCKET_OPEN) {
@@ -678,9 +717,11 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private async connect(generation: number, initial: boolean): Promise<void> {
     const token = await this.resolveToken();
     if (generation !== this.generation) return;
-    const socket = new this.SocketCtor(relayUrl(this.options.url, token));
+    const rtc = this.wantsWebRtc() ? this.openWebRtc(token) : undefined;
+    const socket = rtc ?? new this.SocketCtor(relayUrl(this.options.url, token));
     socket.binaryType = "arraybuffer";
     this.socket = socket;
+    this.rtcSocket = rtc;
     this.socketReady = false;
     this.sessionSeq += 1;
     const session = this.sessionSeq;
@@ -732,8 +773,22 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
       socket.addEventListener("close", (event) => {
         if (this.socket !== socket) return;
         this.socket = undefined;
+        this.rtcSocket = undefined;
         this.socketReady = false;
         this.serverState = undefined;
+        if (event.code === WEBRTC_UNAVAILABLE_CODE) {
+          // Nothing was lost: no session had started. Carry on over the WebSocket.
+          this.rtcUnavailable = true;
+          this.emit("warning", {
+            code: "webrtc_unavailable",
+            message: `WebRTC could not be used (${event.reason || "unavailable"}); using the WebSocket.`
+          });
+          this.connect(generation, initial).then(
+            () => settle(),
+            (error: unknown) => settle(error as VoiceAgentError)
+          );
+          return;
+        }
         // A goodbye the relay just sent must be heard out, not cut off.
         if (!this.endedByRelay) this.audio?.clearPlayback();
         const wasReady = this.lifecycle === "active";
@@ -754,6 +809,26 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
         settle();
       });
     });
+  }
+
+  private wantsWebRtc(): boolean {
+    if (this.options.transport !== "webrtc" || this.rtcUnavailable) return false;
+    return Boolean(this.options.internals?.webrtc) || webRtcSupported();
+  }
+
+  private openWebRtc(token: string | undefined): WebRtcSocket {
+    const socket = (this.options.internals?.webrtc ?? createWebRtcSocket)({
+      url: relayWebRtcUrl(this.options.url),
+      ...(token ? { token } : {}),
+      ...(this.options.iceServers ? { iceServers: this.options.iceServers } : {}),
+      onStream: (stream) => this.audio?.playStream?.(stream),
+      onStreamEnd: (stream) => this.audio?.stopStream?.(stream)
+    });
+    // The microphone may still be opening; a reconnect finds it open already.
+    void this.micReady.then(() => {
+      if (this.rtcSocket === socket) socket.setMicrophone(this.audio?.micTrack?.());
+    });
+    return socket;
   }
 
   /**

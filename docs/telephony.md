@@ -182,6 +182,10 @@ resampled to the 16 kHz PCM that the relay's [protocol](protocol.md#audio) takes
 is resampled to 8 kHz and encoded in 20 ms μ-law frames. Only the caller's own track is used. Phone audio is
 narrow-band, so the assistant sounds different than on a web page: test with real calls.
 
+Callers phone from streets, cars and kitchens. Set `NOISE_SUPPRESSION=phone` to have the relay take steady background
+noise out of the caller's audio before the model hears it, which stops a fan or traffic from being taken for speech.
+See [noise suppression](configuration.md#noise-suppression).
+
 ## Usage, records and traces
 
 - **Usage.** A call counts like any session in [usage and billing](usage-and-billing.md): its minutes and tool calls

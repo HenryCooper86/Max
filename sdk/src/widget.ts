@@ -23,6 +23,7 @@ const OBSERVED = [
   "language",
   "voice",
   "backend",
+  "transport",
   "context",
   "label",
   "accent",
@@ -40,6 +41,7 @@ const CONNECTION_ATTRS: ReadonlySet<string> = new Set([
   "language",
   "voice",
   "backend",
+  "transport",
   "context"
 ]);
 
@@ -185,6 +187,7 @@ async function fetchToken(url: string): Promise<string> {
  * `<voice-agent>`: a voice assistant button for any page.
  *
  * Attributes: `relay`, `project` (a Max Cloud public agent id: no backend needed), `token`, `token-url`, `language`, `voice`, `backend`,
+ * `transport` (`webrtc` to send audio over WebRTC where the relay offers it),
  * `context` (facts about the page, for the assistant), `label`, `accent`, `position` (`bottom-right` by default,
  * `bottom-left`, or `inline` to place it in the flow), `text-input`.
  * Set the `tools` property to give the agent client tools, and `strings` to override any of its text (built-in English and
@@ -412,6 +415,7 @@ export class VoiceAgentElement extends ElementBase {
       ...(this.getAttribute("language") ? { language: this.getAttribute("language")! } : {}),
       ...(voice === "female" || voice === "male" ? { voice: voice as VoiceGender } : {}),
       ...(this.getAttribute("backend") ? { backend: this.getAttribute("backend")! } : {}),
+      ...(this.getAttribute("transport") === "webrtc" ? { transport: "webrtc" as const } : {}),
       ...(this.getAttribute("context") ? { context: this.getAttribute("context")! } : {}),
       ...(this.#tools.length ? { tools: this.#tools } : {})
     };
@@ -488,7 +492,7 @@ export function defineVoiceAgentElement(): void {
 /**
  * Appends a `<voice-agent>` configured from a script tag's `data-*` attributes
  * (`data-relay`, `data-project`, `data-token`, `data-token-url`, `data-language`, `data-voice`,
- * `data-backend`, `data-context`, `data-label`, `data-accent`, `data-position`,
+ * `data-backend`, `data-transport`, `data-context`, `data-label`, `data-accent`, `data-position`,
  * `data-text-input`). Does nothing without `data-relay`.
  *
  * @returns the created element, if any.

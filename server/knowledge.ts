@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { matrixFromVectors, topSelector, topSimilar, type VectorMatrix } from "./knowledge-vectors";
 import type { ToolDefinition } from "./tools";
 
 /**
@@ -440,7 +441,9 @@ export function buildKnowledgeIndex(
   const sources: string[] = [];
   for (const document of documents) {
     if (!sources.includes(document.source)) sources.push(document.source);
-    passages.push(...passagesFrom(document.source, document.text, document.format ?? "markdown", target));
+    // A loop, not push(...list): a long list would overflow the argument limit.
+    for (const passage of passagesFrom(document.source, document.text, document.format ?? "markdown", target))
+      passages.push(passage);
   }
 
   const postings = new Map<string, Posting>();
@@ -460,24 +463,40 @@ export function buildKnowledgeIndex(
   });
   const averageLength = passages.length ? lengths.reduce((sum, length) => sum + length, 0) / passages.length : 1;
 
+  // One score slot per passage, reused by every query: a query touches only the slots it sets and clears them.
+  const scoreSlots = new Float64Array(passages.length);
+  const touched = new Int32Array(passages.length);
+
   function rank(query: string, limit = Number.POSITIVE_INFINITY): { id: number; score: number }[] {
     const terms = [...new Set(tokenize(query, true))].slice(0, MAX_QUERY_TERMS);
-    const scores = new Map<number, number>();
+    let count = 0;
     for (const term of terms) {
       const posting = postings.get(term);
       if (!posting) continue;
       const idf = Math.log(1 + (passages.length - posting.docs.length + 0.5) / (posting.docs.length + 0.5));
       for (let i = 0; i < posting.docs.length; i++) {
         const id = posting.docs[i] as number;
-        const count = posting.counts[i] as number;
-        const norm = count + BM25_K1 * (1 - BM25_B + (BM25_B * (lengths[id] as number)) / averageLength);
-        scores.set(id, (scores.get(id) ?? 0) + (idf * count * (BM25_K1 + 1)) / norm);
+        const tf = posting.counts[i] as number;
+        const norm = tf + BM25_K1 * (1 - BM25_B + (BM25_B * (lengths[id] as number)) / averageLength);
+        // Every term adds a positive amount, so a slot at zero is one this query has not reached yet.
+        if (scoreSlots[id] === 0) touched[count++] = id;
+        scoreSlots[id] = (scoreSlots[id] as number) + (idf * tf * (BM25_K1 + 1)) / norm;
       }
     }
-    return [...scores]
-      .sort((a, b) => b[1] - a[1] || a[0] - b[0])
-      .slice(0, limit)
-      .map(([id, score]) => ({ id, score }));
+    let ranked: { id: number; score: number }[];
+    if (limit >= 1 && limit < count) {
+      const top = topSelector(limit);
+      for (let i = 0; i < count; i++) top.offer(touched[i] as number, scoreSlots[touched[i] as number] as number);
+      ranked = top.result();
+    } else {
+      ranked = Array.from({ length: count }, (_, i) => ({
+        id: touched[i] as number,
+        score: scoreSlots[touched[i] as number] as number
+      })).sort((a, b) => b.score - a.score || a.id - b.id);
+      ranked = ranked.slice(0, limit);
+    }
+    for (let i = 0; i < count; i++) scoreSlots[touched[i] as number] = 0;
+    return ranked;
   }
 
   function resolve(ranked: { id: number; score: number }[], limit = DEFAULT_MAX_RESULTS): KnowledgePassage[] {
@@ -502,7 +521,14 @@ export function buildKnowledgeIndex(
     return results;
   }
 
-  const search = (query: string, limit = DEFAULT_MAX_RESULTS) => resolve(rank(query), limit);
+  // Ranks a bounded head first. Only when duplicates leave it short of the wanted count is every match ranked,
+  // so the answer is the same as ranking them all, without sorting 100,000 matches for a common word.
+  const search = (query: string, limit = DEFAULT_MAX_RESULTS) => {
+    const wanted = Math.min(50, Math.max(1, Math.floor(limit) || DEFAULT_MAX_RESULTS));
+    const head = rank(query, wanted * 8);
+    const found = resolve(head, limit);
+    return found.length >= wanted || head.length < wanted * 8 ? found : resolve(rank(query), limit);
+  };
   const passageTexts = () => passages.map((passage) => (passage.heading ? `${passage.heading}\n` : "") + passage.text);
 
   return { size: passages.length, sources, search, passageTexts, rank, resolve };
@@ -518,14 +544,15 @@ const QUERY_EMBED_TIMEOUT_MS = 2000;
 const LOG_EVERY_MS = 60_000;
 
 /** BM25 plus vector similarity, fused by reciprocal rank. `vectors` must be L2-normalised and in
- *  `index.passageTexts()` order. When the query cannot be embedded in time, that query is answered
+ *  `index.passageTexts()` order, as one matrix or as a list of vectors. When the query cannot be embedded in time, that query is answered
  *  by BM25 alone. */
 export function createHybridSearch(
   index: KnowledgeIndex,
-  vectors: Float32Array[],
+  vectors: VectorMatrix | Float32Array[],
   embedQuery: (text: string) => Promise<Float32Array>,
   options: { candidates?: number; log?: (message: string) => void } = {}
 ): (query: string, limit?: number) => Promise<KnowledgePassage[]> {
+  const matrix = Array.isArray(vectors) ? matrixFromVectors(vectors) : vectors;
   const candidates = Math.max(1, Math.floor(options.candidates ?? 20));
   let lastLog = Number.NEGATIVE_INFINITY;
   const note = (message: string) => {
@@ -553,7 +580,7 @@ export function createHybridSearch(
     let queryVector: Float32Array;
     try {
       queryVector = await embedInTime(query);
-      if (vectors.length !== index.size || (vectors[0] && queryVector.length !== vectors[0].length))
+      if (!matrix || matrix.count !== index.size || (matrix.count > 0 && queryVector.length !== matrix.dimensions))
         throw new Error("vector sizes do not match");
     } catch (error) {
       note(
@@ -566,14 +593,10 @@ export function createHybridSearch(
     length = Math.sqrt(length);
     if (!(length > 0)) return index.search(query, limit);
 
-    const semantic: { id: number; score: number }[] = [];
-    vectors.forEach((vector, id) => {
-      let dot = 0;
-      for (let i = 0; i < vector.length; i++) dot += (vector[i] as number) * (queryVector[i] as number);
-      const similarity = dot / length;
-      if (similarity >= SEMANTIC_FLOOR) semantic.push({ id, score: similarity });
-    });
-    semantic.sort((a, b) => b.score - a.score || a.id - b.id);
+    // The query is scaled to unit length once, so each passage costs one dot product and nothing else.
+    const unit = new Float32Array(queryVector.length);
+    for (let i = 0; i < unit.length; i++) unit[i] = (queryVector[i] as number) / length;
+    const semantic = topSimilar(matrix as VectorMatrix, unit, candidates, SEMANTIC_FLOOR);
 
     const fused = new Map<number, number>();
     const add = (list: { id: number }[]) =>

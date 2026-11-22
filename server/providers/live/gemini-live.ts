@@ -1,5 +1,6 @@
 import WebSocket, { type RawData } from "ws";
 import type { Logger } from "../../logger";
+import { geminiRealtimeInput } from "./turn-settings";
 import { CLIENT_INPUT_RATE, env, type EngineConfig, type EngineEvents, type VoiceEngine } from "./engine";
 
 /**
@@ -212,6 +213,7 @@ export function createGeminiLiveEngine(
       (config.voiceGender === "male"
         ? (env("GEMINI_VOICE_MALE") ?? "Puck")
         : (env("GEMINI_VOICE", "GEMINI_VOICE_FEMALE") ?? "Aoede"));
+    const realtimeInput = geminiRealtimeInput().config;
     return {
       setup: {
         model: model.startsWith("models/") ? model : `models/${model}`,
@@ -222,6 +224,7 @@ export function createGeminiLiveEngine(
         systemInstruction: { parts: [{ text: config.instructions }] },
         inputAudioTranscription: {},
         outputAudioTranscription: {},
+        ...(realtimeInput ? { realtimeInputConfig: realtimeInput } : {}),
         ...(config.tools.length
           ? {
               tools: [

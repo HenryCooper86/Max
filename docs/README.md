@@ -10,6 +10,7 @@
 | [Tools](tools.md)                             | The agent should read your data or take actions                                |
 | [Running a conversation](conversations.md)    | You want check-ins, handoff between agents, resume, memory, analysis or traces |
 | [Phone calls](telephony.md)                   | You want people to phone the assistant, or the assistant to phone them         |
+| [WebRTC transport](webrtc.md)                 | Your users are on mobile or poor networks and the agent's voice stalls         |
 | [Testing your agent](testing-agents.md)       | You want scripted or simulated conversations to check prompts, tools and flows |
 | [Configuration](configuration.md)             | You are shaping the assistant or setting environment variables                 |
 | [Voice backends](backends.md)                 | You are choosing a model, or adding your own backend                           |

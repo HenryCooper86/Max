@@ -188,6 +188,48 @@ def verify(raw_body: bytes, headers, secret: str) -> bool:
 
 [`examples/web-embed/server.mjs`](../examples/web-embed/server.mjs) is a complete webhook server with no dependencies.
 
+## Background tools
+
+Some work takes longer than anyone should wait in silence: building a report, placing a booking, searching a slow
+system. Mark such a tool with `"background": true` and the conversation does not wait for it:
+
+```json
+{
+  "name": "make_sales_report",
+  "description": "Builds the sales report for a quarter. It takes a while.",
+  "parameters": { "type": "object", "properties": { "quarter": { "type": "string" } }, "required": ["quarter"] },
+  "background": true,
+  "webhook": { "url": "https://api.example.com/reports", "timeoutMs": 300000 }
+}
+```
+
+In a code tool it is the same field: `defineTool({ name, description, background: true, timeoutMs: 300_000, handler })`.
+
+What happens:
+
+1. The assistant calls the tool. The relay answers the model at once that the work has started, and the assistant
+   tells the user so.
+2. The conversation carries on. The user can ask other things, and what they say does not cancel the work.
+3. When your webhook or handler returns, the relay gives the model the result, and the assistant tells the user at the
+   next quiet moment: not over the user, and not in the middle of another answer.
+
+A failure is reported the same way. Things to know:
+
+- A background webhook may take up to 10 minutes (`timeoutMs`, default 2 minutes). A code tool keeps the default of 15
+  seconds unless you set `timeoutMs`.
+- One conversation can have four background tools running at once. A fifth call is refused, and the model is told why.
+- The work ends when the conversation does. The handler's `signal` is aborted, and a webhook request is cancelled. If
+  the work must finish whatever happens, have your webhook start it and return, and deliver the outcome another way.
+- While a background tool runs, the assistant does not ask the user whether they are still there.
+- The page sees the usual [`tool.activity`](#showing-progress) events: `started` at once, `succeeded` or `failed` when
+  the work ends.
+- Client tools and tools from MCP servers cannot be background tools yet.
+
+Tried with a local model (`qwen3:8b` through Ollama) and a webhook that takes six seconds: the assistant said the
+report had started after 1.5 seconds, answered another question in the meantime, and read the result out when the
+webhook returned. Not tried against OpenAI Realtime or Gemini Live servers, where the same relay code runs but the
+model decides how it words things.
+
 ## Client tools
 
 Client tools run where the user is: in the page or the app. The SDK declares them in `session.start`, and runs them
@@ -324,6 +366,8 @@ including its sub-folders down to four levels, skipping names that start with a 
 At most 500 files, 2 MiB each and 20 MiB together. A file that is too large, unreadable or of another type is skipped with
 a line in the relay's startup log, and the rest load. The index is built in memory when the relay starts, so restart it
 after changing a file. If nothing could be indexed, the assistant has no `search_knowledge` tool and the relay says so.
+The 20 MiB limit decides how many passages you can reach: at the default `chunkChars` of 900 it is about 22,000 passages,
+and at 200 it is about 100,000. A CSV file gives one passage per row, so it can give more.
 
 **How it is split.** Markdown and HTML are cut at headings, and each passage remembers its heading trail
 (`Returns > Refunds`). Paragraphs are packed up to `chunkChars`, and a very long paragraph is split at sentence ends.
@@ -357,11 +401,13 @@ as `A-1042` is still found by its characters. A semantic match needs a cosine si
 removes the plainly unrelated passages, but a question your knowledge base does not cover can still bring back a weakly
 related passage where keyword search would find nothing, so keep the instruction to answer only from what is found.
 
-| Variable                        | Default                     | What it does                                                                               |
-| ------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------ |
-| `KNOWLEDGE_EMBEDDINGS_MODEL`    | off                         | The embeddings model, for example `text-embedding-3-small`. Embeddings are off without it. |
-| `KNOWLEDGE_EMBEDDINGS_BASE_URL` | `https://api.openai.com/v1` | An OpenAI-compatible endpoint. HTTPS, or plain HTTP to a local or private host.            |
-| `KNOWLEDGE_EMBEDDINGS_API_KEY`  | `OPENAI_API_KEY`            | The key. `OPENAI_API_KEY` is used only for the default OpenAI URL, never for another host. |
+| Variable                        | Default                             | What it does                                                                                         |
+| ------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `KNOWLEDGE_EMBEDDINGS_MODEL`    | off                                 | The embeddings model, for example `text-embedding-3-small`. Embeddings are off without it.           |
+| `KNOWLEDGE_EMBEDDINGS_BASE_URL` | `https://api.openai.com/v1`         | An OpenAI-compatible endpoint. HTTPS, or plain HTTP to a local or private host.                      |
+| `KNOWLEDGE_EMBEDDINGS_API_KEY`  | `OPENAI_API_KEY`                    | The key. `OPENAI_API_KEY` is used only for the default OpenAI URL, never for another host.           |
+| `KNOWLEDGE_EMBEDDINGS_CACHE`    | `<studio dir>/knowledge-embeddings` | A directory for the embeddings cache, or `off`. The studio dir is `STUDIO_DIR`, else `~/.max-relay`. |
+| `KNOWLEDGE_MAX_PASSAGES`        | `100000`                            | The most passages that get embeddings. Above it, the whole knowledge base stays on keyword search.   |
 
 Any server that answers `POST {base URL}/embeddings` in the OpenAI format works: a hosted API, or a local server such as
 Ollama (`http://localhost:11434/v1`), which needs no key.
@@ -370,12 +416,71 @@ Ollama (`http://localhost:11434/v1`), which needs no key.
 
 - The relay embeds the passages in the background after it starts, so startup does not wait. Until the vectors are
   ready, and if embedding fails, search stays on keywords. A failure is a warning in the log, not an error.
-- At most 5,000 passages are embedded. A larger knowledge base logs a warning and stays on keyword search.
-- The vectors are held in memory and computed again at every start. A hosted embeddings API is billed for the whole
-  knowledge base each time the relay starts.
+- Passages go to the endpoint in batches of 64, two requests at a time. A batch that fails with a timeout, a network
+  error, a 429 or a 5xx, a reply that is not JSON, or a reply with the wrong number of vectors is tried again after 1, 2
+  and 4 seconds. If a 429 or 503 carries a `Retry-After` of a number of seconds, the relay waits that long instead, at most
+  30 seconds. After four tries the relay gives up and logs a warning that keyword search stays on. With the cache on and
+  saving working, what was already embedded is kept, and the next start resumes. Without the cache, it is lost. Any other
+  error, such as a 401, is not retried.
+  The log shows a line at the start, one for each tenth, and one at the end.
+- At most `KNOWLEDGE_MAX_PASSAGES` passages are embedded, 100,000 by default. A larger knowledge base logs a warning
+  and nothing is embedded: the whole knowledge base stays on keyword search, not just the passages over the limit.
 - Each question adds one embeddings request. If it fails or takes longer than 2 seconds, that question is answered by
-  keyword search.
+  keyword search. Questions are not cached.
 - A bad URL or a missing key is listed with the other knowledge problems, and search stays on keywords.
+
+### The embeddings cache
+
+The relay keeps the vectors on disk, so a restart does not embed again what has not changed. Each entry is a hash of the
+endpoint URL, the model name and the passage text, with its vector. Change the model or the URL and nothing matches, so
+everything is embedded again. Edit one file and only its changed or new passages are embedded.
+
+- The cache is one file, `vectors.bin`, in `KNOWLEDGE_EMBEDDINGS_CACHE` (default `knowledge-embeddings` in the studio
+  directory). Set the variable to `off` to keep nothing on disk. The relay creates the directory with mode 0700 if
+  it is missing (an existing directory keeps its mode), and writes the files with mode 0600.
+- It holds hashes and vectors, not passage text, the URL, the model name or the key. A vector is still derived from
+  your text, so treat the file as private.
+- The vectors are stored as 32-bit floats: about 148 MiB for 100,000 passages at 384 dimensions, and about 587 MiB at 1536. Sizes below are in MiB (1 MiB is 1,048,576 bytes).
+- While embedding runs, the relay saves what it has done in extra `part-*.bin` files, so a start that is stopped
+  resumes where it was. When embedding finishes, it writes one `vectors.bin` with exactly the current passages and
+  removes the parts. Entries for passages that no longer exist are dropped then.
+- Files are written to a temporary name and renamed into place. A cache file that is missing, truncated, damaged or
+  of an unexpected size is ignored with a line in the log, and the passages are embedded again. A cache that cannot be
+  written is logged once and the relay carries on without it.
+- If the model returns vectors of a different size than the cached ones, the relay embeds everything again and replaces
+  the cache. When every passage was found in the cache, it notices this at the first question, which that question
+  answers by keyword search.
+- Give each relay its own cache directory. When a relay finishes embedding it removes the part files it read or wrote
+  and rewrites `vectors.bin` with only its own passages. Two relays with different knowledge bases that share one
+  directory will each drop the other's entries, and embed them again at the next start. A cache file that is not a
+  regular file (a link, a FIFO), is over 2 GiB, or is the 1,001st or later part file is ignored with a line in the log.
+- It does not check that a vector in a well-formed file is right. To start over, delete the directory.
+
+### Size and speed
+
+Search keeps the vectors in one block of memory and compares each question with all of them. It does not build a vector
+index, so the cost grows in step with the number of passages and the vector size. These were measured on an Apple M5 Max
+laptop, with Node.js, 100,000 synthetic passages of about 80 words and random vectors, in one process, with a local
+cache directory:
+
+| Measurement                                                | 384 dimensions | 1536 dimensions |
+| ---------------------------------------------------------- | -------------- | --------------- |
+| Hybrid question, median / 95th percentile of 100 questions | 21 / 23 ms     | 75 / 90 ms      |
+| Cache file                                                 | 148 MiB        | 587 MiB         |
+| Writing the cache                                          | 71 ms          | 206 ms          |
+| Reading the cache, restart with nothing to embed           | 48 ms          | 93 ms           |
+| Whole start with nothing to embed (read and assemble)      | about 190 ms   | about 260 ms    |
+| Memory, index and vectors loaded                           | about 790 MiB  | about 1,220 MiB |
+
+Building the keyword index took 2.6 seconds, and a keyword question took 0.03 ms at the median and under 0.4 ms at the
+95th percentile. The hybrid times do not include the question's own embeddings request, which depends on the endpoint.
+The keyword index alone takes about 640 MiB of memory at this size. Loading a cache of 1536-dimension vectors briefly
+holds the file and the vectors in memory together.
+
+Not measured: embedding 100,000 passages through a real endpoint (so the time of a first start and its cost at a
+hosted API are unknown), real documents instead of synthetic text, other machines or Linux, many questions at once, and
+passage counts above 100,000. The relay was not run for these numbers. They came from the search and cache code
+called directly.
 
 ## Showing progress
 

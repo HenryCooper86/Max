@@ -7,7 +7,9 @@ import {
   loadKnowledge,
   type KnowledgeIndex
 } from "../knowledge";
-import { embeddingModelFromEnv, embedTexts, type EmbeddingModel } from "../knowledge-embeddings";
+import { cacheDirFromEnv } from "../knowledge-cache";
+import { embedKnowledgePassages, type EmbedJobOptions } from "../knowledge-embed-job";
+import { embeddingModelFromEnv, embedTexts, maxPassagesFromEnv, type EmbeddingModel } from "../knowledge-embeddings";
 import { createLogger } from "../logger";
 import type { ToolDefinition } from "./index";
 import { loadMcpTools, mcpServerFrom, type McpServerConfig } from "./mcp";
@@ -31,30 +33,64 @@ let retryTimer: NodeJS.Timeout | undefined;
 
 const MAX_MCP_SERVERS = 8;
 const MCP_RETRY_MS = [15_000, 60_000, 300_000];
-/** More passages than this stay on keyword search: the vectors live in memory and are paid for at every start. */
-const MAX_EMBEDDED_PASSAGES = 5000;
+type EmbedJobTuning = Partial<
+  Pick<EmbedJobOptions, "concurrency" | "batchSize" | "attempts" | "backoffMs" | "saveEvery">
+>;
 
 /** Embeds the passages after the build has returned, then swaps the tool's searcher. The swap
- *  happens in the caller's closure, so a job from a replaced build only touches its own tool. */
+ *  happens in the caller's closure, so a job from a replaced build only touches its own tool.
+ *  Above `limit` passages nothing is embedded and the whole index stays on keyword search. */
 async function embedInBackground(
   index: KnowledgeIndex,
   model: EmbeddingModel,
-  request: typeof fetch | undefined,
-  limit: number,
+  settings: { request?: typeof fetch; limit: number; cacheDir?: string; job?: EmbedJobTuning },
   swap: (search: (query: string, limit: number) => Promise<ReturnType<KnowledgeIndex["search"]>>) => void
 ): Promise<void> {
+  const { request, limit, cacheDir, job } = settings;
   try {
     if (index.size > limit) {
-      log.warn(`knowledge has ${index.size} passages; embeddings are limited to ${limit}, so keyword search is used`);
+      log.warn(
+        `knowledge has ${index.size} passages; embeddings are limited to ${limit} (KNOWLEDGE_MAX_PASSAGES), so keyword search is used`
+      );
       return;
     }
-    const vectors = await embedTexts(model, index.passageTexts(), { request });
-    const embedQuery = async (text: string) => (await embedTexts(model, [text], { request, timeoutMs: 2000 }))[0]!;
-    const hybrid = createHybridSearch(index, vectors, embedQuery, {
-      log: (message) => log.warn(message)
-    });
-    swap((query, max) => hybrid(query, max));
-    log.info("knowledge embeddings ready", { passages: index.size, dimensions: vectors[0]?.length ?? 0 });
+    const texts = index.passageTexts();
+    const embed = (ignoreCache: boolean) =>
+      embedKnowledgePassages({
+        model,
+        texts,
+        request,
+        cacheDir,
+        ignoreCache,
+        ...job,
+        log: { info: (message) => log.info(message), warn: (message) => log.warn(message) }
+      });
+    const matrix = await embed(false);
+    if (!matrix) return;
+    let rebuilt = false;
+    const embedQuery = async (text: string) => {
+      const vector = (await embedTexts(model, [text], { request, timeoutMs: 2000 }))[0]!;
+      // Vectors read from the cache that do not fit the model: embed everything again once, and replace the cache.
+      if (vector.length !== matrix.dimensions && !rebuilt) {
+        rebuilt = true;
+        log.warn("knowledge embedding cache: cached vectors do not fit the model, embedding everything again");
+        void embed(true)
+          .then((again) => {
+            if (again) swap(searchWith(again));
+          })
+          .catch((error: unknown) => {
+            log.warn(
+              `knowledge embeddings failed, keyword search is used: ${error instanceof Error ? error.message : String(error)}`
+            );
+          });
+      }
+      return vector;
+    };
+    const searchWith = (vectors: typeof matrix) => {
+      const hybrid = createHybridSearch(index, vectors, embedQuery, { log: (message) => log.warn(message) });
+      return (query: string, max: number) => hybrid(query, max);
+    };
+    swap(searchWith(matrix));
   } catch (error) {
     log.warn(
       `knowledge embeddings failed, keyword search is used: ${error instanceof Error ? error.message : String(error)}`
@@ -128,7 +164,13 @@ export async function loadToolsModule(modulePath: string): Promise<{ tools: Tool
  *  reason; one broken tool must not take the others (or the relay) down. */
 export async function buildServerTools(
   source: ServerToolSource,
-  options: { request?: typeof fetch; env?: NodeJS.ProcessEnv; maxEmbeddedPassages?: number } = {}
+  options: {
+    request?: typeof fetch;
+    env?: NodeJS.ProcessEnv;
+    maxEmbeddedPassages?: number;
+    cacheDir?: string;
+    embedJob?: EmbedJobTuning;
+  } = {}
 ): Promise<BuiltTools> {
   const tools: ToolDefinition[] = [];
   const unreachable: McpServerConfig[] = [];
@@ -172,12 +214,19 @@ export async function buildServerTools(
       add(knowledgeTool(() => searcher, knowledge.config.maxResults));
       const embeddings = embeddingModelFromEnv(options.env ?? process.env);
       if (embeddings.problem) found.push(`knowledge: ${embeddings.problem}`);
+      const env = options.env ?? process.env;
+      const limit = maxPassagesFromEnv(env);
+      if (limit.problem && embeddings.model) found.push(`knowledge: ${limit.problem}`);
       if (embeddings.model)
         void embedInBackground(
           loaded.index,
           embeddings.model,
-          options.request,
-          options.maxEmbeddedPassages ?? MAX_EMBEDDED_PASSAGES,
+          {
+            request: options.request,
+            limit: options.maxEmbeddedPassages ?? limit.value,
+            cacheDir: options.cacheDir ?? cacheDirFromEnv(env),
+            job: options.embedJob
+          },
           (search) => {
             searcher = { search };
           }

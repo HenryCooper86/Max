@@ -22,6 +22,8 @@ import {
 } from "./accounts";
 import {
   authorizeUpgrade,
+  reauthorizeUpgrade,
+  upgradeIdentity,
   checkAuthRateLimit,
   clientAddress,
   clientRegionHint,
@@ -41,6 +43,10 @@ import { cloudSessionTokens, sessionTokens } from "./session-tokens";
 import { installServerTools } from "./tools/registry";
 import { createConversationLifecycle } from "./conversation-lifecycle";
 import { createTelephony, telephonySettingsFromEnv, type Telephony } from "./telephony/twilio-calls";
+import type { IncomingMessage } from "node:http";
+import { createWebRtcGateway, webRtcSettingsFromEnv, type WebRtcGateway } from "./webrtc/gateway";
+import { turnSettingProblems } from "./providers/live/turn-settings";
+import { loadNoiseSuppression, noiseSuppressionFromEnv } from "./noise-suppression";
 import { createUsageMeter, monthOf, usageSettingsFromEnv } from "./usage";
 import {
   cloudEnabled,
@@ -166,6 +172,13 @@ const pendingStreams = new Map<string, number>();
 let pendingStreamTotal = 0;
 const MAX_PENDING_STREAMS_PER_ADDRESS = 8;
 const MAX_PENDING_STREAMS = 64;
+// Noise suppression on microphone audio (server/noise-suppression.ts): off unless NOISE_SUPPRESSION is set.
+const noiseSuppression = noiseSuppressionFromEnv();
+// WebRTC transport for /agent (server/webrtc): off unless WEBRTC=on.
+const webRtcConfig = webRtcSettingsFromEnv();
+const webRtc: WebRtcGateway | undefined = webRtcConfig.settings
+  ? createWebRtcGateway(webRtcConfig.settings, { log: createLogger("webrtc") })
+  : undefined;
 const usageMeter = createUsageMeter(usageSettingsFromEnv());
 /** A public-embed session ends after this long, so nobody can hold one open for hours. */
 const CLOUD_EMBED_SESSION_MS = 15 * 60_000;
@@ -398,6 +411,71 @@ app.post("/telephony/twilio/voice", express.urlencoded({ extended: false, limit:
   res.status(answer.status).type("text/xml").send(answer.body);
 });
 
+// WebRTC signalling for /agent: the client's offer in, the relay's answer out.
+// The same checks as the WebSocket upgrade apply, and the session that follows
+// is the same session: only its transport differs (server/webrtc/gateway.ts).
+// Pages on other sites call this with fetch, so it answers their preflight;
+// the origin allowlist is enforced on the request itself, below.
+const webRtcCors = (_req: express.Request, res: express.Response, next: express.NextFunction) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "authorization, content-type");
+  res.setHeader("Access-Control-Max-Age", "600");
+  next();
+};
+app.options("/agent/webrtc", webRtcCors, (_req, res) => {
+  res.status(204).end();
+});
+app.post("/agent/webrtc", webRtcCors, express.json({ limit: "64kb" }), async (req, res) => {
+  if (!webRtc) {
+    res.status(404).json({ ok: false, error: "WebRTC is not turned on for this relay. Use the WebSocket." });
+    return;
+  }
+  if (shuttingDown) {
+    res.status(503).json({ ok: false, error: "The relay is shutting down." });
+    return;
+  }
+  const decision = authorizeUpgrade(req);
+  if (!decision.ok) {
+    metrics.rejectedUpgrade();
+    log.warn("rejected /agent/webrtc offer", {
+      address: clientAddress(req),
+      code: decision.code,
+      reason: decision.reason
+    });
+    res.status(decision.code).json({ ok: false, error: decision.reason });
+    return;
+  }
+  // The session starts when the peer connects, after this request is over:
+  // keep what it will need to know about who asked.
+  const asked = {
+    url: req.originalUrl,
+    headers: req.headers,
+    socket: { remoteAddress: req.socket.remoteAddress }
+  } as unknown as IncomingMessage;
+  const identity = upgradeIdentity(asked);
+  const body = (req.body ?? {}) as { sdp?: unknown };
+  const answer = await webRtc.accept(
+    body.sdp,
+    (socket) => {
+      // Seconds may have passed since the checks above: the token must still stand.
+      const still = shuttingDown
+        ? ({ ok: false, code: 1001, reason: "server shutdown" } as const)
+        : reauthorizeUpgrade(asked, identity);
+      if (!still.ok) {
+        log.warn("rejected a webrtc session at connect", { address: clientAddress(asked), reason: still.reason });
+        socket.send(JSON.stringify({ type: "error", message: still.reason }));
+        socket.close(still.code === 1001 ? 1001 : 1008, still.reason);
+        return;
+      }
+      wss.emit("connection", socket as unknown as WebSocket, asked);
+    },
+    clientAddress(asked)
+  );
+  if (answer.ok) res.status(201).json({ ok: true, sdp: answer.sdp });
+  else res.status(answer.status).json({ ok: false, error: answer.error });
+});
+
 // Places a phone call for the assistant to hold. Owner-only, and never open:
 // a relay without a token must not let strangers dial numbers on its account.
 app.post("/v1/calls", async (req, res) => {
@@ -471,7 +549,7 @@ app.get("/ready", (_req, res) => {
 // Prometheus scrape endpoint (server/prometheus.ts). Off unless METRICS_TOKEN
 // is set, and then only for that token.
 registerMetricsSource(() => ({
-  relay_agent_sockets_open: wss.clients.size,
+  relay_agent_sockets_open: wss.clients.size + (webRtc ? [...webRtc.sockets()].length : 0),
   relay_companion_sockets_open: [...companionSockets.clients()].length
 }));
 // Billing counters (bookings, failed bookings, top-ups); all zero while Max Cloud is off.
@@ -1265,8 +1343,25 @@ const conversations = createConversationLifecycle({
   ...(assistant().analysis ? { analysis: assistant().analysis } : {}),
   redact: assistant().redact
 });
-for (const problem of [...assistant().configProblems, ...conversations.problems()]) log.warn(problem);
+for (const problem of [...assistant().configProblems, ...conversations.problems(), ...turnSettingProblems()]) {
+  log.warn(problem);
+}
 
+for (const problem of noiseSuppression.problems) log.warn(problem);
+if (noiseSuppression.mode !== "off") {
+  void loadNoiseSuppression(log).then((loaded) => {
+    if (loaded)
+      log.info("noise suppression ready", { sessions: noiseSuppression.mode === "on" ? "all" : "phone calls" });
+  });
+}
+for (const problem of webRtcConfig.problems) log.warn(problem);
+if (webRtcConfig.settings) {
+  log.info("webrtc ready", {
+    publicAddresses: webRtcConfig.settings.publicAddresses,
+    ports: webRtcConfig.settings.portRange ?? "any",
+    maxSessions: webRtcConfig.settings.maxSessions
+  });
+}
 for (const problem of telephonyConfig.problems) log.warn(problem);
 if (telephonyConfig.settings) {
   telephony = createTelephony(telephonyConfig.settings, {
@@ -1308,6 +1403,7 @@ if (telephonyConfig.settings) {
           privateSession: true,
           resumeScope: "phone",
           channel: "phone",
+          noiseSuppression: noiseSuppression.mode !== "off",
           sessionTools: extras.sessionTools,
           trustedContext: extras.trustedContext,
           ...(call.userId ? { tokenGrant: { userId: call.userId } } : {}),
@@ -1478,6 +1574,7 @@ wss.on("connection", (client, request) => {
       deviceRegistrationAuthorized:
         !cloudProject && (relayTokenPresented(request) || (!config.relayAuthToken && !authActive())),
       privateSession: Boolean(cloudProject),
+      noiseSuppression: noiseSuppression.mode === "on",
       ...(cloudProject ? { resumeScope: `cloud:${cloudProject.projectId}` } : {}),
       ...(tokenGrant ? { tokenGrant: { userId: tokenGrant.userId, context: tokenGrant.context } } : {}),
       onServerEvent: (payload) => {
@@ -1568,7 +1665,8 @@ const stopMetricsHistory = startMetricsHistory();
 // Liveness + idle watchdog: terminates half-open links and closes forgotten
 // sessions so their Doubao upstream slots are released. See server/watchdog.ts.
 const stopWatchdog = startWatchdog({
-  clients: () => wss.clients,
+  // Peers on the WebRTC transport are sessions like any other.
+  clients: () => (webRtc ? [...wss.clients, ...(webRtc.sockets() as unknown as Iterable<WebSocket>)] : wss.clients),
   heartbeatMs: config.heartbeatMs,
   idleTimeoutMs: config.idleTimeoutMs,
   log
@@ -1655,6 +1753,7 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
 
     const forceTimer = setTimeout(() => {
       for (const client of wss.clients) client.terminate();
+      for (const client of webRtc?.sockets() ?? []) client.terminate();
       for (const client of companionSockets.clients()) client.terminate();
       server.closeAllConnections?.();
     }, 5_000);
@@ -1662,6 +1761,7 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
 
     for (const client of wss.clients) client.close(1001, "server shutdown");
     for (const client of telephonySockets.clients) client.close(1001, "server shutdown");
+    webRtc?.close();
     await companionSockets.close();
     await companionRegistry.close();
     await companionStore.flush();

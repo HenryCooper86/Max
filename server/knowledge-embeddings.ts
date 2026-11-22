@@ -14,7 +14,22 @@ export type EmbeddingModel = { baseUrl: string; model: string; apiKey?: string }
 const OPENAI_URL = "https://api.openai.com/v1";
 const MAX_TEXT_CHARS = 8000;
 const DEFAULT_BATCH = 64;
+const MAX_RETRY_AFTER_MS = 30_000;
+const DEFAULT_MAX_PASSAGES = 100_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Reads `KNOWLEDGE_MAX_PASSAGES`: the most passages that get embeddings. Larger knowledge bases stay on keyword search. */
+export function maxPassagesFromEnv(env: NodeJS.ProcessEnv = process.env): { value: number; problem?: string } {
+  const raw = env.KNOWLEDGE_MAX_PASSAGES?.trim();
+  if (!raw) return { value: DEFAULT_MAX_PASSAGES };
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1)
+    return {
+      value: DEFAULT_MAX_PASSAGES,
+      problem: `KNOWLEDGE_MAX_PASSAGES must be a whole number of at least 1; ${DEFAULT_MAX_PASSAGES} is used`
+    };
+  return { value };
+}
 
 /** Reads `KNOWLEDGE_EMBEDDINGS_MODEL`, `_BASE_URL` and `_API_KEY`. `OPENAI_API_KEY` is used only
  *  when the endpoint is OpenAI's own, so that key never goes to another host. */
@@ -46,8 +61,21 @@ export function embeddingModelFromEnv(env: NodeJS.ProcessEnv = process.env): {
   return { model: { baseUrl, model, ...(apiKey ? { apiKey } : {}) } };
 }
 
-function failure(message: string): never {
-  throw new Error(`embeddings: ${message}`);
+/** `retryable` is true for a failure that may pass by itself: a timeout, a network error, a 429 or a 5xx, a body
+ *  that is not JSON, a wrong count of vectors. `retryAfterMs` is the server's `Retry-After`, at most 30 s. */
+export class EmbeddingError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+    readonly retryAfterMs?: number
+  ) {
+    super(`embeddings: ${message}`);
+    this.name = "EmbeddingError";
+  }
+}
+
+function failure(message: string, retryable = false, retryAfterMs?: number): never {
+  throw new EmbeddingError(message, retryable, retryAfterMs);
 }
 
 function normalise(values: number[]): Float32Array {
@@ -75,18 +103,30 @@ async function embedBatch(model: EmbeddingModel, texts: string[], request: typeo
     });
   } catch (error) {
     const name = error instanceof Error ? error.name : "";
-    failure(name === "TimeoutError" || name === "AbortError" ? "the request timed out" : "the request failed");
+    failure(name === "TimeoutError" || name === "AbortError" ? "the request timed out" : "the request failed", true);
   }
-  if (!response.ok) failure(`the endpoint answered with status ${response.status}`);
+  if (!response.ok) {
+    const after = response.headers.get("retry-after")?.trim() ?? "";
+    // Only a number of seconds is honoured (not a date), and never for longer than 30 s.
+    const retryAfterMs =
+      (response.status === 429 || response.status === 503) && /^\d+(\.\d+)?$/.test(after)
+        ? Math.min(MAX_RETRY_AFTER_MS, Number(after) * 1000)
+        : undefined;
+    failure(
+      `the endpoint answered with status ${response.status}`,
+      response.status === 429 || response.status >= 500,
+      retryAfterMs
+    );
+  }
   let body: unknown;
   try {
     body = await response.json();
   } catch {
-    failure("the response is not JSON");
+    failure("the response is not JSON", true);
   }
   const data = (body as { data?: unknown } | null)?.data;
   if (!Array.isArray(data)) failure("the response has no data list");
-  if (data.length !== texts.length) failure(`expected ${texts.length} vectors, got ${data.length}`);
+  if (data.length !== texts.length) failure(`expected ${texts.length} vectors, got ${data.length}`, true);
   const sorted = data.map((item, position) => {
     const entry = item as { index?: unknown; embedding?: unknown } | null;
     const index = typeof entry?.index === "number" ? entry.index : position;

@@ -147,6 +147,8 @@ describe("useVoiceAgent", () => {
     ["language", { language: "zh" }],
     ["voice", { voice: "male" }],
     ["backend", { backend: "doubao" }],
+    ["transport", { transport: "webrtc" }],
+    ["iceServers", { iceServers: [{ urls: "stun:stun.example.com" }] }],
     ["tools", { tools: [{ name: "b", description: "B", handler: () => 0 }] }]
   ] as Array<[string, Partial<VoiceAgentOptions>]>) {
     it(`recreates the client when ${name} changes`, async () => {

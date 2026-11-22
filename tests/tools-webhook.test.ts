@@ -59,6 +59,29 @@ describe("webhookToolFrom", () => {
     );
   });
 
+  it("gives a background tool longer, and says when the flag is not a yes or no", () => {
+    const background = { ...spec, background: true };
+    const built = webhookToolFrom({ ...background, webhook: { url: "https://a.b/x" } });
+    expect(built.tool).toMatchObject({ background: true, timeoutMs: 120_000 });
+    expect(
+      webhookToolFrom({ ...background, webhook: { url: "https://a.b/x", timeoutMs: 300_000 } }).tool?.timeoutMs
+    ).toBe(300_000);
+    expect(
+      webhookToolFrom({ ...background, webhook: { url: "https://a.b/x", timeoutMs: 9_999_999 } }).tool?.timeoutMs
+    ).toBe(600_000);
+    // An ordinary tool is not marked, and keeps the short limits.
+    const plain = webhookToolFrom({
+      ...spec,
+      background: false,
+      webhook: { url: "https://a.b/x", timeoutMs: 300_000 }
+    });
+    expect(plain.tool?.background).toBeUndefined();
+    expect(plain.tool?.timeoutMs).toBe(60_000);
+    expect(webhookToolFrom({ ...spec, background: "yes", webhook: { url: "https://a.b/x" } }).problem).toBe(
+      "tool get_order: background must be true or false"
+    );
+  });
+
   it("accepts a bare url, a secret, headers and env placeholders", () => {
     expect(webhookToolFrom({ ...spec, url: "https://a.b/x" }).webhook?.url).toBe("https://a.b/x");
     const { webhook } = webhookToolFrom({

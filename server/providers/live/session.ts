@@ -67,6 +67,7 @@ import { createFrameAssembler } from "../../vision-frames";
 import { createVisionGovernor } from "../../vision-governor";
 import { fetchRiderWeather } from "../../weather";
 import { createToolBroker, type ToolBroker } from "../../tools/broker";
+import { toolErrorText } from "../../tools/schema";
 import type { ToolDefinition } from "../../tools";
 import { serverTools as installedServerTools } from "../../tools/registry";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent } from "../types";
@@ -118,6 +119,17 @@ const END_GRACE_MS = 8_000;
 const FAREWELL_WAIT_MS = 1_500;
 /** A line the upstream was asked to say starts within this, or never does. */
 const FORCED_REPLY_WINDOW_MS = 15_000;
+/** Background tools one session may have running at the same time. */
+const MAX_BACKGROUND_TOOLS = 4;
+/** How often a finished background tool's result looks for a quiet moment to be reported in. */
+const BACKGROUND_REPORT_RETRY_MS = 400;
+/** How long a background result waits for the reply a tool's result should bring. */
+const TOOL_REPLY_WAIT_MS = 8_000;
+/** What the model is told at once when it calls a background tool. */
+const BACKGROUND_STARTED = JSON.stringify({
+  status: "started",
+  note: "This takes a while and runs in the background. Tell the user it has started and carry on with the conversation. Do not call it again for the same request. You will be given the result when it is ready."
+});
 const END_SESSION_TOOL = "end_session";
 const TRANSFER_AGENT_TOOL = "transfer_to_agent";
 const CANNOT_SEE = "我看不清。";
@@ -428,6 +440,12 @@ export function createLiveProvider(
   /** The next reply continues tool calls of an addressed turn: it is audible
    *  whatever the wearer said since, unless they addressed the assistant again. */
   let toolFollowUp = false;
+  // Background tools (`background: true`): the conversation does not wait for
+  // them. Their results are reported at the next quiet moment.
+  let backgroundRunning = 0;
+  let backgroundResults: { name: string; ok: boolean; output: string }[] = [];
+  let backgroundTimer: NodeJS.Timeout | undefined;
+  let toolFollowUpAt = 0;
   let greeted = false;
 
   // ---- The conversation as a whole ---------------------------------------------
@@ -657,6 +675,10 @@ export function createLiveProvider(
         // Not silence: someone is talking, the assistant is working, or a goodbye is under way.
         if (closed || ending || pendingEnd || pendingFarewell) return;
         if (!audioActive || responseActive || !riderFinal || toolsRunning > 0) return;
+        // The user is waiting for something the assistant said it is working
+        // on: asking whether they are still there would be odd. The report
+        // of the result starts the silence clock again.
+        if (backgroundRunning > 0 || backgroundResults.length > 0) return;
         const settings = me().conversation;
         if (idleCount >= settings.maxIdleReminders) {
           log.info("ending the session: the user stayed silent", { reminders: idleCount });
@@ -941,6 +963,68 @@ export function createLiveProvider(
   function abandonTools(): void {
     toolEpoch += 1;
     toolFollowUp = false;
+  }
+
+  function scheduleBackgroundReport(delayMs: number): void {
+    if (backgroundTimer || closed) return;
+    backgroundTimer = setTimeout(() => {
+      backgroundTimer = undefined;
+      reportBackground();
+    }, delayMs);
+    backgroundTimer.unref?.();
+  }
+
+  /**
+   * Gives the model the results of background tools that have finished, and
+   * has it tell the user. Only in a quiet moment: not over the user, not in
+   * the middle of a reply, not while a goodbye is under way.
+   */
+  function reportBackground(): void {
+    if (closed || backgroundResults.length === 0) return;
+    if (ending || pendingEnd || pendingFarewell) {
+      backgroundResults = [];
+      return;
+    }
+    // A backend that answers a tool's result in a new reply is about to start
+    // one. If it never does, the report must not wait for it for ever.
+    const replyToToolDue =
+      toolFollowUp && Boolean(engine?.answersToolsInNewReply) && now() - toolFollowUpAt < TOOL_REPLY_WAIT_MS;
+    const busy =
+      !engineReady ||
+      responseActive ||
+      !riderFinal ||
+      toolsRunning > 0 ||
+      replyToToolDue ||
+      replyGate === "held" ||
+      remainingPlaybackMs() > 0;
+    if (busy) {
+      scheduleBackgroundReport(Math.max(BACKGROUND_REPORT_RETRY_MS, remainingPlaybackMs()));
+      return;
+    }
+    const results = backgroundResults;
+    backgroundResults = [];
+    const note =
+      "[A note from the system. The user did not say this and cannot see it.] " +
+      results
+        .map((result) =>
+          result.ok
+            ? `The background task "${result.name}" that you started earlier has finished. Its result: ${result.output}`
+            : `The background task "${result.name}" that you started earlier did not succeed. What went wrong: ${result.output}`
+        )
+        .join(" ") +
+      " Tell the user now, briefly, in the language of the conversation.";
+    if (!engine?.sendText) {
+      // This backend cannot be made to speak up. The model at least knows, for when it is asked.
+      engine?.addContext?.(note);
+      if (!responseActive && toolsRunning === 0) armIdle();
+      return;
+    }
+    // The reply that follows is the assistant's own business, like the answer
+    // to a tool's result: it is not held back for a wake word.
+    toolFollowUp = true;
+    clearIdle();
+    status("thinking", t(`${me().name} 有新的结果`, `${me().name} has a result for you`));
+    engine.sendText(note);
   }
 
   /** Cuts the reply in progress so a correction is not talked over. */
@@ -1373,13 +1457,36 @@ export function createLiveProvider(
       clearIdle();
       status("thinking", t(`${me().name} 正在使用工具：${call.name}`, `${me().name} is using ${call.name}`));
       const current = engine;
-      void tools.run(call).then((outcome) => {
+      // A background tool answers the model at once with "started" and does
+      // its work on the side. What the user says next does not cancel it.
+      let answer: ReturnType<ToolBroker["run"]>;
+      if (!tools.runsInBackground(call.name)) answer = tools.run(call);
+      else if (backgroundRunning >= MAX_BACKGROUND_TOOLS) {
+        answer = Promise.resolve({
+          ok: false,
+          output: toolErrorText("too many background tasks are still running; wait until one has finished")
+        });
+      } else {
+        backgroundRunning += 1;
+        const name = call.name;
+        void tools.run(call).then((outcome) => {
+          backgroundRunning = Math.max(0, backgroundRunning - 1);
+          if (closed) return;
+          backgroundResults.push({ name, ok: outcome.ok, output: outcome.output });
+          scheduleBackgroundReport(0);
+        });
+        answer = Promise.resolve({ ok: true, output: BACKGROUND_STARTED });
+      }
+      void answer.then((outcome) => {
         toolsRunning = Math.max(0, toolsRunning - 1);
         if (closed || engine !== current) return;
         const stale = epoch !== toolEpoch;
         // A stale result still reaches the model as context; engines do not
         // resume a reply that was cancelled (see each engine's cancel()).
-        if (!stale) toolFollowUp = true;
+        if (!stale) {
+          toolFollowUp = true;
+          toolFollowUpAt = now();
+        }
         current?.sendToolResult?.(call.callId, outcome.output);
         if (stale && toolsRunning === 0 && !responseActive) idleStatus();
       });
@@ -1608,6 +1715,8 @@ export function createLiveProvider(
       if (durationTimer) clearTimeout(durationTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (weatherTimer) clearInterval(weatherTimer);
+      if (backgroundTimer) clearTimeout(backgroundTimer);
+      backgroundResults = [];
       hazardInjector.stop();
       tools?.close();
       engine?.close();

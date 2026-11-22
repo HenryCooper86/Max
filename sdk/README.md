@@ -93,6 +93,8 @@ stopButton.onclick = () => agent.stop();
 | `backend`       | `string`                          | Voice backend id; honoured only if the relay allows switching.                            |
 | `context`       | `string`                          | Facts about your app. Max 2000 characters. Untrusted by the relay.                        |
 | `tools`         | `ClientTool[]`                    | Up to 32. See below.                                                                      |
+| `transport`     | `"websocket" \| "webrtc"`         | `"webrtc"` sends audio over UDP where the relay offers it. See [WebRTC](#webrtc).         |
+| `iceServers`    | `RTCIceServer[]`                  | STUN and TURN servers for `transport: "webrtc"`. Rarely needed.                           |
 | `autoReconnect` | `boolean` (true)                  | Exponential backoff, 6 attempts. See [Errors and reconnecting](#errors-and-reconnecting). |
 | `speakFallback` | `boolean` (true)                  | Speak with `speechSynthesis` when the relay sends text for that.                          |
 | `audioContext`  | `AudioContext`                    | Reuse your own context for capture and playback.                                          |
@@ -110,6 +112,7 @@ stopButton.onclick = () => agent.stop();
 - `status`: `idle | connecting | ready | listening | hearing | thinking | speaking | error | closed`. `speaking` comes from what is actually playing, not only from the relay.
 - `transcript`: `{ id, role: "user" | "agent", text, final, at }[]`, a new array on every change.
 - `capabilities`, `backend`: what the relay reported for the current session.
+- `transport`: `"websocket"` or `"webrtc"`, whichever carries the current session; `undefined` when there is none.
 - `agent`: the id of the agent the conversation is with, once the assistant has handed it over; `undefined` while it is with the agent every conversation starts with, and when the assistant has no [agents](../docs/conversations.md#several-agents-and-handing-over).
 
 ### Events
@@ -124,13 +127,31 @@ Subscribe with `agent.on(name, listener)`; it returns an unsubscribe function. `
 | `toolcall`     | `{ callId, name, arguments }` for client tools                                                      |
 | `toolactivity` | relay progress for any tool, server or client                                                       |
 | `error`        | `VoiceAgentError`; its `code` is listed under [Errors and reconnecting](#errors-and-reconnecting)   |
-| `warning`      | `{ code, message }`: `audio_blocked` (see `resumeAudio()`) or `protocol_mismatch` (see Versions)    |
+| `warning`      | `{ code, message }`: `audio_blocked`, `protocol_mismatch` or `webrtc_unavailable` (see below)       |
 | `audioresume`  | blocked audio can play now                                                                          |
 | `level`        | `{ mic, output }`, 0..1, up to ~30 Hz, for visualizers                                              |
 | `open`         | a session is established (again after each reconnect)                                               |
 | `ended`        | `{ reason }`: the relay ended the conversation (`agent`, `idle` or `max_duration`); `close` follows |
 | `agentchange`  | `{ agent }`: the conversation moved to another of the assistant's agents                            |
 | `close`        | `{ code, reason, willReconnect }`                                                                   |
+
+The warning codes: `audio_blocked` (the browser is holding audio back; call `resumeAudio()` from a click),
+`protocol_mismatch` (the relay is newer than this SDK; see [Versions](#versions)) and `webrtc_unavailable`
+(`transport: "webrtc"` could not be used and the session runs over the WebSocket).
+
+## WebRTC
+
+By default audio travels over the WebSocket. On a poor mobile network a lost packet then stalls the agent's voice.
+With `transport: "webrtc"` audio travels over UDP as Opus, and the browser conceals lost packets.
+
+```ts
+const agent = new VoiceAgent({ url: "https://relay.example.com", token, transport: "webrtc" });
+```
+
+The relay must have it turned on (`WEBRTC=on`, see [WebRTC transport](../docs/webrtc.md)). Where it cannot be used
+(the relay does not offer it, or the network blocks UDP) the SDK connects over the WebSocket instead and emits a
+`webrtc_unavailable` warning, so it is safe to ask for it everywhere. `agent.transport` tells you which one a session
+got. Everything else in this README applies to both.
 
 ## Errors and reconnecting
 
@@ -376,6 +397,7 @@ the element yourself:
 | `token`                           | A fixed token (development only).                                                                                           |
 | `token-url`                       | Your endpoint. It is called with POST (GET if POST gets 404/405) before every connect and must return `{ "token": "..." }`. |
 | `language`, `voice`, `backend`    | As in the options above. `language` also picks the widget's own text language.                                              |
+| `transport`                       | `webrtc` to send audio over WebRTC where the relay offers it. See [WebRTC](#webrtc).                                        |
 | `context`                         | Facts about the page for the assistant, such as "The visitor is on the pricing page". Read at the next connect.             |
 | `label`                           | Accessible name of the button. Default "Talk to the assistant" (localised, see below).                                      |
 | `accent`                          | Brand colour, any CSS colour.                                                                                               |
@@ -475,7 +497,8 @@ Problems? [Troubleshooting](../docs/troubleshooting.md) covers HTTPS, microphone
 endpoints, close codes and iOS Safari.
 
 Needs `WebSocket`, `getUserMedia`, and `AudioContext`, in a secure context
-(HTTPS or localhost). Capture uses an AudioWorklet loaded from a Blob URL and
+(HTTPS or localhost). `transport: "webrtc"` also needs `RTCPeerConnection`; a
+browser without it uses the WebSocket. Capture uses an AudioWorklet loaded from a Blob URL and
 falls back to `ScriptProcessorNode` where worklets are missing. If your Content
 Security Policy restricts `script-src`, allow `blob:`. Current Chrome, Edge,
 Firefox and Safari (iOS 14.5+) are supported. Browser speech fallback needs

@@ -13,6 +13,8 @@ services:
     env_file: .env
     ports:
       - "8787:8787"
+      # With WEBRTC=on: the UDP range from WEBRTC_UDP_PORTS (docs/webrtc.md).
+      # - "50000-50100:50000-50100/udp"
     volumes:
       # Accounts, testing history and Studio settings (HOME=/data in the image).
       - relay-data:/data

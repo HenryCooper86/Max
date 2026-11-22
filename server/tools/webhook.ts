@@ -44,6 +44,9 @@ export type WebhookConfig = {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 60_000;
+/** A background tool is not holding the conversation up, so it may take longer. */
+const DEFAULT_BACKGROUND_TIMEOUT_MS = 120_000;
+const MAX_BACKGROUND_TIMEOUT_MS = 600_000;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 
@@ -129,13 +132,22 @@ export function webhookToolFrom(raw: unknown): { tool?: ToolDefinition; webhook?
       headers[name] = value;
     }
   }
+  if (record.background !== undefined && typeof record.background !== "boolean")
+    return { problem: `tool ${spec.name}: background must be true or false` };
+  const background = record.background === true;
   const timeout = Number(hook.timeoutMs);
+  const longest = background ? MAX_BACKGROUND_TIMEOUT_MS : MAX_TIMEOUT_MS;
   const webhook: WebhookConfig = {
     url: rawUrl,
     method: "POST",
     headers,
     ...(typeof hook.secret === "string" && hook.secret.trim() ? { secret: hook.secret.trim() } : {}),
-    timeoutMs: Number.isFinite(timeout) && timeout > 0 ? Math.min(timeout, MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS
+    timeoutMs:
+      Number.isFinite(timeout) && timeout > 0
+        ? Math.min(timeout, longest)
+        : background
+          ? DEFAULT_BACKGROUND_TIMEOUT_MS
+          : DEFAULT_TIMEOUT_MS
   };
   return {
     webhook,
@@ -144,6 +156,7 @@ export function webhookToolFrom(raw: unknown): { tool?: ToolDefinition; webhook?
       description: spec.description,
       parameters: spec.parameters as ToolParameters,
       timeoutMs: webhook.timeoutMs,
+      ...(background ? { background: true } : {}),
       handler: (args, context) => callWebhook(spec.name, webhook, args, context)
     }
   };

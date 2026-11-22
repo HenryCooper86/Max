@@ -67,6 +67,9 @@ Notes:
   A `toolsModule` or `logo` path in that file is resolved relative to the config file, so mount those files beside it
   inside the container too.
 
+- With `WEBRTC=on`, also publish the UDP range and set `WEBRTC_PUBLIC_IP`: see
+  [WebRTC transport](webrtc.md#what-the-network-needs). The audio goes to those ports directly, not through your
+  reverse proxy.
 - The image has a `HEALTHCHECK` on `/health`.
 - To reach model servers on your host from the container (Ollama, for example), use `host.docker.internal` or a
   Compose network, not `localhost`.

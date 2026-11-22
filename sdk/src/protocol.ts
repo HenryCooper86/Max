@@ -241,6 +241,11 @@ function relayHttpBase(base: string): string {
   return `${url.origin}${path}`;
 }
 
+/** Where the WebRTC transport sends its offer: `https://relay.example.com/agent/webrtc`. */
+export function relayWebRtcUrl(base: string): string {
+  return `${relayHttpBase(base)}/agent/webrtc`;
+}
+
 /**
  * A session token for a Max Cloud agent embedded without a backend. Works only
  * on a website the agent's owner listed in the console.

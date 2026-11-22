@@ -579,7 +579,41 @@ export function authorizeUpgrade(request: IncomingMessage, now = Date.now()): Up
   if (!checkRateLimit(clientAddress(request), now)) {
     return { ok: false, code: 429, reason: "Too many connection attempts" };
   }
+  return credentialDecision(request);
+}
 
+/** What a request's credentials stood for when it was let in. */
+export type UpgradeIdentity = { grant: boolean; login: boolean };
+
+export function upgradeIdentity(request: IncomingMessage): UpgradeIdentity {
+  return {
+    grant: presentedTokens(request).some((token) =>
+      Boolean(sessionTokens.grant(token) ?? cloudSessionTokens.grant(token))
+    ),
+    login: Boolean(requestSession(request))
+  };
+}
+
+/**
+ * Checks a request again some time after it was let in. A WebRTC session
+ * starts when the peer connects, seconds after its signalling request passed
+ * {@link authorizeUpgrade}. A token that expired or was revoked in between
+ * must not start a session, and must not start one as somebody else: without
+ * its grant, a session would run as the relay's own, outside the limits and
+ * the billing the token stood for.
+ */
+export function reauthorizeUpgrade(request: IncomingMessage, before: UpgradeIdentity): UpgradeDecision {
+  const decision = credentialDecision(request);
+  if (!decision.ok) return decision;
+  const identity = upgradeIdentity(request);
+  if ((before.grant && !identity.grant) || (before.login && !identity.login)) {
+    return { ok: false, code: 401, reason: "The session's credentials expired while it was connecting" };
+  }
+  return decision;
+}
+
+/** Origin and credentials: everything {@link authorizeUpgrade} checks but the rate limit. */
+function credentialDecision(request: IncomingMessage): UpgradeDecision {
   // The grant the session will run with: the same choice the connection handler makes.
   const cloudProject = presentedTokens(request)
     .map((provided) => sessionTokens.grant(provided) ?? cloudSessionTokens.grant(provided))

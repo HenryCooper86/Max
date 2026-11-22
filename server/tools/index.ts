@@ -82,6 +82,14 @@ export type ToolDefinition<Args extends Record<string, unknown> = Record<string,
   parameters?: ToolParameters;
   /** Overrides the default 15 s time limit. */
   timeoutMs?: number;
+  /**
+   * For work that takes longer than anyone should wait in silence: a report,
+   * a booking, a search of a slow system. The assistant is told at once that
+   * the work has started and carries on talking; when the handler finishes,
+   * the assistant is given the result and tells the user at the next quiet
+   * moment. Give such a tool a generous `timeoutMs`.
+   */
+  background?: boolean;
   /** Returns anything JSON-serialisable (or a string). Throw to fail. */
   handler(args: Args, context: ToolContext): unknown;
 };

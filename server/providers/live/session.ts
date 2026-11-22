@@ -146,6 +146,8 @@ const MAX_CLIENT_BUFFERED_BYTES = 512 * 1024;
 // A reply held while the wake decision is pending: ~20 s of audio at most.
 const MAX_HELD_AUDIO_BYTES = 960 * 1000;
 const MAX_UPSTREAM_RETRIES = 3;
+/** A connection to the upstream that lasted this long was a good one: the tries start again. */
+const UPSTREAM_STABLE_MS = 2_000;
 // 24 kHz mono PCM16: how many bytes of reply audio the client plays per millisecond.
 const REPLY_BYTES_PER_MS = 48;
 // The conversation the relay can restore after a dropped connection.
@@ -485,6 +487,10 @@ export function createLiveProvider(
   let riderFinalAt = 0;
   /** When the engine said the turn was over, where it says so: often before the turn's words are final. */
   let speechEndedAt = 0;
+  /** The wait for an answer to the user's turn has been told: a second reply to it (after a tool) tells none. */
+  let turnTimed = false;
+  /** When the upstream connection now in use came up. */
+  let engineUpAt = 0;
 
   // ---- The assistant's current reply ---------------------------------------
   let responseActive = false;
@@ -1407,7 +1413,8 @@ export function createLiveProvider(
       const turnOver =
         speechEndedAt && riderFinalAt ? Math.min(speechEndedAt, riderFinalAt) : speechEndedAt || riderFinalAt;
       const reference = turnOver || speechStartedAt;
-      if (reference && !replyForced) {
+      if (reference && !replyForced && !turnTimed) {
+        turnTimed = true;
         const latencyMs = Math.max(0, now() - reference);
         send({ type: "metric", latencyMs });
         send({
@@ -1658,6 +1665,8 @@ export function createLiveProvider(
     const replacing = responseActive && replyGate === "open" && !replyForced && !replyInterrupted;
     const delivery = replacing ? agentDelivery : createTranscriptDelivery();
     abandonTools();
+    // What the user said is not answered, also not when its answer was waiting behind the reply cut here.
+    if (speaker === "user") engine?.forgetTurn?.();
     if (responseActive && !replyForced) {
       replyInterrupted = true;
       clearGateTimer();
@@ -2097,6 +2106,7 @@ export function createLiveProvider(
     speechStartedAt = at;
     riderFinalAt = at;
     speechEndedAt = 0;
+    turnTimed = false;
     riderDelivery = createTranscriptDelivery();
     if (wakeWordEnabled) {
       // Typing to the assistant is addressing it: a spoken follow-up may skip the name.
@@ -2253,6 +2263,7 @@ export function createLiveProvider(
       speechStartedAt = now();
       riderFinalAt = 0;
       speechEndedAt = 0;
+      turnTimed = false;
       clearIdle();
       if (responseActive && !replyInterrupted && (replyAudioBytes > 0 || replyGate === "held")) {
         // Barge-in: stop talking, and stop the client's buffered playback.
@@ -2279,6 +2290,7 @@ export function createLiveProvider(
         riderDelivery = createTranscriptDelivery();
         speechStartedAt = speechStartedAt || now();
         speechEndedAt = 0;
+        turnTimed = false;
       }
       riderText = text;
       if (final) finalizeRiderTurn();
@@ -2549,13 +2561,17 @@ export function createLiveProvider(
       return;
     }
     engineReady = true;
-    upstreamRetries = 0;
+    engineUpAt = now();
   }
 
   /** The upstream dropped mid-session: reconnect in place a few times before
    *  handing recovery to the client's own reconnect. */
   function scheduleReconnect(reason: string): void {
     if (closed || reconnectTimer) return;
+    // A connection that held is forgotten as a try. One that came up and went at once is not: counted
+    // anew each time, an upstream (or a turn detector) that does this would be reconnected to for ever.
+    if (engineUpAt && now() - engineUpAt >= UPSTREAM_STABLE_MS) upstreamRetries = 0;
+    engineUpAt = 0;
     if (upstreamRetries >= MAX_UPSTREAM_RETRIES) {
       send({
         type: "error",

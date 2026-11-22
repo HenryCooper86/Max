@@ -914,12 +914,13 @@ describe("OpenAI Realtime and Grok with the relay's turn detector", () => {
   async function realtime(
     dialect: ReturnType<typeof openAiDialect>,
     hand: ReturnType<typeof handWatcher>,
-    config: EngineConfig = CONFIG
+    config: EngineConfig = CONFIG,
+    more: Partial<EngineEvents> = {}
   ) {
     const socket = new FakeSocket();
     const { seen, handlers } = engineEvents();
     const engine = createRealtimeEngine(dialect, log, () => socket as never, withDetector(hand).factory);
-    const connected = engine.connect(config, handlers);
+    const connected = engine.connect(config, { ...handlers, ...more });
     if (hand.state.connects.length || dialect.manualTurns) {
       await vi.waitFor(() => expect(hand.state.connects).toHaveLength(1));
       await Promise.resolve();
@@ -1085,6 +1086,52 @@ describe("OpenAI Realtime and Grok with the relay's turn detector", () => {
     engine.cancel();
     socket.receive({ type: "response.done", response: { status: "cancelled" } });
     expect(socket.ofType("response.create")).toHaveLength(2);
+  });
+
+  it("answers a waiting turn at once when only the reply's tools were still being waited for", async () => {
+    process.env.OPENAI_API_KEY = "k";
+    const hand = handWatcher();
+    // The session takes the tool call and will answer it later.
+    const { socket, engine } = await realtime(openAiDialect(), hand, CONFIG, { onToolCall: () => undefined });
+    hand.start();
+    hand.end();
+    socket.receive({ type: "response.created" });
+    // The reply calls a tool; the user's next turn ends behind it; the reply ends, its tool still running.
+    socket.receive({
+      type: "response.output_item.done",
+      item: { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" }
+    });
+    hand.start();
+    hand.end();
+    socket.receive({ type: "response.done", response: { status: "completed" } });
+    expect(socket.ofType("response.create")).toHaveLength(1);
+    // The session gives the tool up for the new turn: nothing is under way any more, so the turn is answered now.
+    engine.cancel();
+    expect(socket.ofType("response.create")).toHaveLength(2);
+    socket.receive({ type: "response.created" });
+    socket.receive({ type: "response.done", response: { status: "completed" } });
+    // And once only: nothing is left waiting to be answered again after a later reply.
+    hand.start();
+    hand.end();
+    socket.receive({ type: "response.created" });
+    socket.receive({ type: "response.done", response: { status: "completed" } });
+    expect(socket.ofType("response.create")).toHaveLength(3);
+  });
+
+  it("does not answer a waiting turn that a guardrail refused", async () => {
+    process.env.OPENAI_API_KEY = "k";
+    const hand = handWatcher();
+    const { socket, engine } = await realtime(openAiDialect(), hand);
+    hand.start();
+    hand.end();
+    socket.receive({ type: "response.created" });
+    hand.start();
+    hand.end();
+    // The turn that waits is the one refused: its answer goes with the reply that is cut.
+    engine.forgetTurn!();
+    engine.cancel();
+    socket.receive({ type: "response.done", response: { status: "cancelled" } });
+    expect(socket.ofType("response.create")).toHaveLength(1);
   });
 
   it("gives the detector back when the upstream drops the connection", async () => {

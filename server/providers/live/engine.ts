@@ -104,6 +104,11 @@ export type VoiceEngine = {
   respond(): void;
   /** Stop the reply in progress, if the upstream allows it. */
   cancel(): void;
+  /**
+   * The user's turn that has just ended is not to be answered (a guardrail refused it). Only an
+   * engine that keeps a turn's answer waiting behind the reply under way has anything to forget.
+   */
+  forgetTurn?(): void;
   /** Speak this exact line (relay-composed confirmations and navigation). */
   say?(text: string): void;
   /** Replace the system instructions mid-session (fresh weather, location). */

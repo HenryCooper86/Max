@@ -2120,6 +2120,7 @@ wss.on("connection", (client, request) => {
     }
   );
   activeSessions.set(client, session);
+  if (cloudProject && recorder) cloudConversationsOpen.add(client);
 
   client.on("message", async (data, isBinary) => {
     markClientActivity(client);
@@ -2154,6 +2155,7 @@ wss.on("connection", (client, request) => {
         keep: Boolean(runtime?.studio.keepConversations),
         recorder
       });
+      cloudConversationsOpen.delete(client);
     }
     if (cloudProject && billedSeconds !== undefined) {
       try {
@@ -2318,6 +2320,20 @@ server.listen(config.port, () => {
 
 let shutdownPromise: Promise<void> | null = null;
 
+/** The sockets of Max Cloud conversations that have not ended yet. */
+const cloudConversationsOpen = new Set<WebSocket>();
+
+/** Waits until every Max Cloud conversation has ended; after `graceMs` the sockets still open are cut. */
+async function cloudConversationsEnded(graceMs: number): Promise<void> {
+  const wait = async (ms: number) => {
+    const until = Date.now() + ms;
+    while (cloudConversationsOpen.size > 0 && Date.now() < until) await new Promise((done) => setTimeout(done, 20));
+  };
+  await wait(graceMs);
+  for (const client of cloudConversationsOpen) client.terminate();
+  await wait(300);
+}
+
 function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (shutdownPromise) return shutdownPromise;
   shutdownPromise = (async () => {
@@ -2355,6 +2371,10 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     // No session is left to call a tool: the MCP servers the relay runs itself are stopped with it.
     closeServerTools();
     usageMeter.flush();
+    // A project's conversation is saved, analysed and sent when its socket has closed, and a client can be
+    // slow to answer the close: a short wait for it, then the socket is cut, so that none ends after the
+    // wait below and is left out of it.
+    await cloudConversationsEnded(700);
     // A project's conversation that is being analysed is sent when that is done: two seconds for it, then
     // it goes without.
     await settleConversationAnalyses(2_000);

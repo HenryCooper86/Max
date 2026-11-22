@@ -300,6 +300,8 @@ export function createRealtimeEngine(
   function createResponse(): void {
     createPending = true;
     turnWaiting = false;
+    // A reply that is asked for answers whatever was waiting for one.
+    respondWhenIdle = false;
     sendEvent({ type: "response.create" });
   }
 
@@ -623,9 +625,16 @@ export function createRealtimeEngine(
       // results must not make the model resume it.
       continueAfterTools = false;
       awaitingCalls.clear();
-      // A turn of the user's that ended behind this reply is still owed its own.
-      respondWhenIdle = turnWaiting;
+      // A turn of the user's that ended behind this reply is still owed its own: when the reply
+      // has let go, or now, when only its tools were still being waited for. (Left waiting then,
+      // nothing would ever come to answer it, and it would be answered after some later reply.)
+      if (turnWaiting && !responseActive && !createPending) createResponse();
+      else respondWhenIdle = turnWaiting;
       cancelResponse();
+    },
+    forgetTurn() {
+      turnWaiting = false;
+      respondWhenIdle = false;
     },
     sendToolResult(callId, output) {
       if (!ready || !announcedCalls.has(callId)) return;

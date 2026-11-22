@@ -160,7 +160,11 @@ export function AnalysisSetting({ project, draft, updateStudio }: StudioTabProps
   // Checked whether it is on or off: the server refuses what it cannot use either way, and a field left
   // half-written behind a switch that is off would stop every other setting from being saved.
   const problem = analysisProblem(analysis);
-  const shown = analysis.enabled || Boolean(problem);
+  // Opened by a problem behind the switch, the form stays open while it is being put right: gone with
+  // the first key that made it valid, it would take the rest of what is being typed with it.
+  const [heldOpen, setHeldOpen] = useState(false);
+  if (!analysis.enabled && problem && !heldOpen) setHeldOpen(true);
+  const shown = analysis.enabled || Boolean(problem) || heldOpen;
   const vendor = VENDOR[draft.backend];
   const set = (patch: Partial<StudioAnalysis>) => updateStudio({ analysis: { ...analysis, ...patch } });
   const nowhere =
@@ -172,7 +176,10 @@ export function AnalysisSetting({ project, draft, updateStudio }: StudioTabProps
         <input
           type="checkbox"
           checked={analysis.enabled}
-          onChange={(event) => set({ enabled: event.target.checked })}
+          onChange={(event) => {
+            setHeldOpen(false);
+            set({ enabled: event.target.checked });
+          }}
         />
         <span>{say("对话结束时分析每段对话", "Analyse each conversation when it ends")}</span>
       </label>

@@ -89,8 +89,12 @@ export function conversationRecorder(clock: () => number = now) {
   // Speech arrives as growing partial lines per turn; keep the latest final text of each.
   const spoken = new Map<string, number>();
   const startedAt = clock();
-  /** How long the answer now being spoken took to begin: it belongs to the agent's next line. */
+  /** How long the answer now being spoken took to begin: it belongs to that answer's line. */
   let waited: number | undefined;
+  /** Which of the agent's turns that answer is, once it is known: a line the relay speaks in between is not it. */
+  let waitedTurn: string | undefined;
+  /** The agent's turn whose words are coming in. */
+  let agentOpen: string | undefined;
 
   return {
     startedAt,
@@ -99,23 +103,41 @@ export function conversationRecorder(clock: () => number = now) {
       if (payload.type === "metric") {
         // Sent with the first sound of an answer: the time from the user's last word to it.
         const ms = payload.latencyMs;
-        if (typeof ms === "number" && Number.isFinite(ms) && ms >= 0) waited = Math.min(Math.round(ms), 600_000);
+        if (typeof ms === "number" && Number.isFinite(ms) && ms >= 0) {
+          waited = Math.min(Math.round(ms), 600_000);
+          waitedTurn = agentOpen;
+        }
+        return;
+      }
+      if (payload.type === "transcript" && payload.final !== true && payload.speaker !== "rider") {
+        // The words of an answer under way say which turn its first sound belonged to.
+        if (typeof payload.turnId !== "string") return;
+        agentOpen = payload.turnId;
+        if (waited !== undefined) waitedTurn ??= payload.turnId;
         return;
       }
       if (payload.type === "transcript" && payload.final === true && typeof payload.text === "string") {
         const text = payload.text.trim().slice(0, MAX_TEXT);
         if (!text) return;
         const speaker = payload.speaker === "rider" ? "user" : "agent";
-        const key = `${speaker}:${typeof payload.turnId === "string" ? payload.turnId : turns.length}`;
+        const turnId = typeof payload.turnId === "string" ? payload.turnId : undefined;
+        if (speaker === "agent" && turnId === agentOpen) agentOpen = undefined;
+        const key = `${speaker}:${turnId ?? turns.length}`;
         const index = spoken.get(key);
         if (index !== undefined) {
           turns[index] = { ...turns[index]!, text };
           return;
         }
         spoken.set(key, turns.length);
+        // A line of the relay's own, spoken while the answer is under way, does not take the answer's time.
+        const mine = speaker === "agent" && (waitedTurn === undefined || waitedTurn === turnId);
+        const answerMs = mine ? waited : undefined;
         // An answer that was cut off before it had words leaves its time with nobody.
-        const answerMs = speaker === "agent" ? waited : undefined;
-        waited = undefined;
+        if (mine || speaker === "user") {
+          waited = undefined;
+          waitedTurn = undefined;
+        }
+        if (speaker === "user") agentOpen = undefined;
         turns.push({ at: clock(), speaker, text, ...(answerMs !== undefined ? { answerMs } : {}) });
         return;
       }

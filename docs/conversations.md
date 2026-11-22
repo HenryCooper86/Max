@@ -706,7 +706,8 @@ The URL must be HTTPS, or plain HTTP to a local or private host (the same rule a
   words were final, whichever came first; a backend that does not say when a turn ended (Gemini Live with its own
   detection) is counted from the words alone, which reads shorter than the wait was. The silence a detector waits
   out before it calls a turn over is not in it. It is the `latencyMs` of the [`metric` event](protocol.md) the
-  client is sent. A greeting, a line the relay itself speaks and an answer with no audio have none.
+  client is sent. A greeting, a line the relay itself speaks and an answer with no audio have none, and a turn has
+  one time: a second reply to it, after a tool call, tells no wait of its own.
 - `id` is unique per conversation and the same across retries, so you can use it to ignore a repeat.
 - `analysis` appears only when `analysis` is configured and succeeded; `analysisError` replaces it when it failed.
 - `recording`, as in `"recording": { "file": "4b1e….wav", "durationMs": 88400 }`, appears only when the relay

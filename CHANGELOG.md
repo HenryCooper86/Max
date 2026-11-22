@@ -125,6 +125,18 @@
   ended, where the backend or the relay's turn detector says so, and no longer only from when their words were
   final. On OpenAI Realtime and Grok the words often arrive after the answer is ready, and the number used to read
   close to zero; it is now the wait the user had. Expect it to be larger than before on those backends.
+- The latency is told once for a turn of the user's. A second reply to the same turn, which follows a tool call,
+  used to send a `metric` of its own that counted the tool's time as waiting.
+- An upstream connection that comes up and is lost again within two seconds counts as a failed try. The relay used
+  to start counting anew after every connection that was made, so a backend (or a turn detector) that dropped
+  every connection at once was reconnected to for as long as the client stayed.
+- Relay turn detector on OpenAI Realtime and Grok: a turn that ended while the reply before it was waiting for a
+  tool is answered when the session gives that tool up, and no longer a turn late; a turn a guardrail refused is not
+  answered after the reply it cut.
+- Max Cloud: a relay that is stopped waits for its projects' conversations to end (and cuts a socket that does not
+  close) before it settles their analyses, so a client slow to close no longer loses its conversation's webhook.
+  In the conversation history an answer's time stays with the answer when the relay speaks a line of its own while
+  it is under way. The analysis form in the console stays open while a field behind the switch is put right.
 - Max Cloud: conversation analysis for projects. A project can have each conversation analysed when it ends: a
   summary, how the visitor felt, a pass or fail against the owner's own rule, and fields to find in what was said.
   The result is shown with the conversation in the console and sent with it to the project's server. It runs on the

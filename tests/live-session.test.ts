@@ -226,6 +226,13 @@ describe("live voice session", () => {
     expect(client.of("telemetry").at(-1)).toMatchObject({ asrMs: 2_900, totalMs: 2_900 });
     engine().events.onResponseDone({ cancelled: false });
 
+    // A second reply to the same turn (it follows a tool call) tells no wait of its own.
+    await vi.advanceTimersByTimeAsync(4_000);
+    engine().events.onResponseStarted();
+    engine().events.onAgentAudio(Buffer.alloc(1920, 1));
+    expect(client.of("metric")).toHaveLength(1);
+    engine().events.onResponseDone({ cancelled: false });
+
     // An engine that does not say when the turn ended: the words are all there is to go by.
     engine().events.onSpeechStarted();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -381,6 +388,8 @@ describe("live voice session", () => {
     // (a place on the turn detector's server); the one that took over is not.
     expect(engines.map((made) => made.closedCount)).toEqual([1, 0]);
 
+    // The new connection held, so its loss is the first of a new run of tries.
+    await vi.advanceTimersByTimeAsync(2_000);
     // From here on the upstream stays down: three attempts, then the client is told.
     outage.down = true;
     engine().events.onClosed("closed (1006)");
@@ -388,6 +397,25 @@ describe("live voice session", () => {
     expect(engines).toHaveLength(5);
     // Each closed once: the one that dropped when it was replaced, the ones that never connected at once.
     expect(engines.map((made) => made.closedCount)).toEqual([1, 1, 1, 1, 1]);
+    expect(client.of("error")).toHaveLength(1);
+    expect(client.closed?.code).toBe(1011);
+  });
+
+  it("gives up on an upstream that comes up and goes at once, time after time", async () => {
+    const { client, engines, engine } = await open("auto");
+    // Up, and gone within the moment: a turn detector that is lost as soon as it is there does this.
+    engine().events.onClosed("closed (1006)");
+    await vi.advanceTimersByTimeAsync(400);
+    engine().events.onClosed("closed (1006)");
+    await vi.advanceTimersByTimeAsync(800);
+    engine().events.onClosed("closed (1006)");
+    await vi.advanceTimersByTimeAsync(1_600);
+    expect(engines).toHaveLength(4);
+    expect(client.closed).toBeUndefined();
+    // The fourth loss in a row with no connection that held: no fifth connection is made.
+    engine().events.onClosed("closed (1006)");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(engines).toHaveLength(4);
     expect(client.of("error")).toHaveLength(1);
     expect(client.closed?.code).toBe(1011);
   });

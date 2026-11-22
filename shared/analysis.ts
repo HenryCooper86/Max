@@ -55,7 +55,7 @@ function fieldFrom(raw: unknown, index: number): { field?: AnalysisField; proble
   // `__proto__` is no key of an object: a field of that name would vanish from every result.
   if (typeof name !== "string" || !FIELD_NAME.test(name) || name === "__proto__")
     return {
-      problem: `${label}.name must be letters, digits and underscores, starting with a letter, at most 48 characters`
+      problem: `${label}.name must be letters, digits and underscores, not starting with a digit, at most 48 characters`
     };
   if (typeof type !== "string" || !FIELD_TYPES.includes(type as (typeof FIELD_TYPES)[number]))
     return { problem: `analysis field ${name}: type must be string, number, boolean or enum` };

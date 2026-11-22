@@ -504,6 +504,41 @@ describe("projects with Studio settings", () => {
     ).toMatchObject({ ok: false, status: 400 });
   });
 
+  it("leaves an answer's time with the answer when the relay speaks a line of its own meanwhile", () => {
+    const recorder = conversationRecorder(() => clock);
+    const say = (speaker: "rider" | "agent", text: string, turnId: string, final = true) =>
+      recorder.event({ type: "transcript", turnId, speaker, text, final });
+    say("rider", "Where is my order?", "t1");
+    // The answer's words begin, then its sound; a line of the relay's own is finished before the answer is.
+    say("agent", "Let me", "t2", false);
+    recorder.event({ type: "metric", latencyMs: 900 });
+    say("agent", "Checking…", "line1");
+    say("agent", "Let me look. It ships today.", "t2");
+    // Sound before words: the first words after it say whose it was.
+    say("rider", "And the other one?", "t3");
+    recorder.event({ type: "metric", latencyMs: 700 });
+    say("agent", "One", "t4", false);
+    say("agent", "Still looking…", "line2");
+    say("agent", "One moment. Friday.", "t4");
+    // An answer whose words never became final is not the next answer.
+    say("rider", "Thanks.", "t5");
+    say("agent", "You", "t6", false);
+    say("rider", "Wait.", "t7");
+    recorder.event({ type: "metric", latencyMs: 500 });
+    say("agent", "Yes?", "t8");
+    expect(recorder.turns().map((turn) => [turn.text, turn.answerMs])).toEqual([
+      ["Where is my order?", undefined],
+      ["Checking…", undefined],
+      ["Let me look. It ships today.", 900],
+      ["And the other one?", undefined],
+      ["Still looking…", undefined],
+      ["One moment. Friday.", 700],
+      ["Thanks.", undefined],
+      ["Wait.", undefined],
+      ["Yes?", 500]
+    ]);
+  });
+
   it("keeps how long each answer took to begin, and the conversation's median", async () => {
     const owner = await customer();
     const created = project(owner);

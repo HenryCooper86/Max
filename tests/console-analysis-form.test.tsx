@@ -117,9 +117,15 @@ describe("a field left unfinished behind the switch", () => {
     expect(page.analysis().enabled).toBe(false);
     expect(page.text()).toContain("现在还不能保存");
     expect(page.value("cxsAnalysisField0-desc")).toBe("");
-    // Finished, there is nothing to say and nothing to show.
-    await page.change("cxsAnalysisField0-desc", "The order number.");
+    // Put right, there is nothing more to say, and the form stays for the rest of what is being typed.
+    await page.change("cxsAnalysisField0-desc", "T");
     expect(page.text()).not.toContain("现在还不能保存");
+    expect(page.value("cxsAnalysisField0-desc")).toBe("T");
+    await page.change("cxsAnalysisField0-desc", "The order number.");
+    expect(page.value("cxsAnalysisField0-desc")).toBe("The order number.");
+    // Switched on and off again with nothing wrong, it is put away as before.
+    await act(async () => box().props.onChange({ target: { checked: true } }));
+    await act(async () => box().props.onChange({ target: { checked: false } }));
     expect(page.value("cxsAnalysisField0-desc")).toBeUndefined();
   });
 });

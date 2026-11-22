@@ -7,6 +7,7 @@ import { devicePreset, type DevicePreset } from "./device-presets";
 import { configureWakePhrase, DEFAULT_WAKE_NAMES, type WakeNames } from "../shared/wake";
 import type { ServerToolSource } from "./tools/registry";
 import { analysisConfigFrom, type AnalysisConfig } from "./conversation-analysis";
+import { guardrailsConfigFrom, type GuardrailsConfig } from "./guardrails";
 import { redactionKindsFrom, type RedactionKind } from "./redact";
 import { knowledgeConfigFrom } from "./knowledge";
 
@@ -14,7 +15,15 @@ import { knowledgeConfigFrom } from "./knowledge";
  * Config keys that are wired up by whoever deploys the relay and never typed
  * into the Studio: they name servers, files on disk and where records go.
  */
-export const DEPLOYER_KEYS = ["conversation", "agents", "analysis", "privacy", "knowledge", "mcpServers"] as const;
+export const DEPLOYER_KEYS = [
+  "conversation",
+  "agents",
+  "analysis",
+  "privacy",
+  "guardrails",
+  "knowledge",
+  "mcpServers"
+] as const;
 import {
   agentStagesFrom,
   conversationSettingsFrom,
@@ -93,6 +102,8 @@ export type AssistantProfile = {
   analysis?: AnalysisConfig;
   /** Kinds of personal data removed from records that leave the relay (server/redact.ts). */
   redact: RedactionKind[];
+  /** What the assistant must not say and users must not do (server/guardrails.ts). */
+  guardrails?: GuardrailsConfig;
   /** What was wrong with the conversation keys of the config file, for /health and startup. */
   configProblems: string[];
   /** The config keys only whoever deploys the relay sets (see {@link DEPLOYER_KEYS}), as written, so
@@ -327,6 +338,7 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
   const conversation = conversationSettingsFrom(raw.conversation);
   const agents = agentStagesFrom(raw.agents);
   const analysis = analysisConfigFrom(raw.analysis);
+  const guardrails = guardrailsConfigFrom(raw.guardrails);
   const privacy = raw.privacy;
   const redact = redactionKindsFrom(
     privacy && typeof privacy === "object" && !Array.isArray(privacy)
@@ -377,12 +389,14 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     agents: agents.agents,
     ...(analysis.config ? { analysis: analysis.config } : {}),
     redact: redact.kinds,
+    ...(guardrails.config ? { guardrails: guardrails.config } : {}),
     deployerConfig,
     configProblems: [
       ...conversation.problems,
       ...agents.problems,
       ...(analysis.problem ? [analysis.problem] : []),
-      ...(redact.problem ? [redact.problem] : [])
+      ...(redact.problem ? [redact.problem] : []),
+      ...(guardrails.problem ? [guardrails.problem] : [])
     ],
     // Changing only the look, the logo or the sound leaves the assistant who
     // it was: it keeps the original Max prompts word for word.

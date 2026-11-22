@@ -66,6 +66,15 @@ import {
 } from "../../prompts";
 import { asksCurrentLocation, RiderLocationContext } from "../../rider-location";
 import { createTranscriptDelivery, transcriptEvent, type TranscriptDelivery } from "../../transcript-events";
+import type { AnalysisModel } from "../../conversation-analysis";
+import {
+  blockedTermsFrom,
+  createGuardrailJudge,
+  guardrailModelFromEnv,
+  type BlockedTerms,
+  type GuardrailJudge,
+  type GuardrailsConfig
+} from "../../guardrails";
 import { buildPreviousConversationPrompt } from "../../user-memory";
 import { buildChatCompletionsEndpoint, selectVisionProvider } from "../../vision";
 import { createFrameAssembler } from "../../vision-frames";
@@ -103,6 +112,9 @@ export type LiveSessionOptions = {
   /** The assistant this session speaks as, instead of the relay's own
    *  (a Max Cloud project's persona). */
   profile?: AssistantProfile;
+  /** The model that judges guardrail rules, and how it is reached. */
+  guardrailModel?: AnalysisModel;
+  guardrailRequest?: typeof fetch;
 };
 
 // 20 ms of 24 kHz mono PCM16. The embedded board paces playback per WebSocket
@@ -122,6 +134,11 @@ const MAX_HISTORY_TURN_CHARS = 600;
 const END_GRACE_MS = 8_000;
 /** How long a goodbye waits for the reply it cut short to stop. */
 const FAREWELL_WAIT_MS = 1_500;
+/** How long a reply to what a guardrail refused is kept from the user, unless they speak again first. */
+const GUARD_SILENCE_MS = 15_000;
+/** The judge of guardrail rules reads a reply sentence by sentence, and not a few words at a time. */
+const GUARD_MIN_CHARS = 40;
+const SENTENCE_END = /[.!?。！？…]["'”’)\]]*\s*$/u;
 /** A line the upstream was asked to say starts within this, or never does. */
 const FORCED_REPLY_WINDOW_MS = 15_000;
 /** Background tools one session may have running at the same time. */
@@ -433,6 +450,23 @@ export function createLiveProvider(
   let downstreamAbandoned = false;
   let audioCarry: Buffer | undefined;
   let sentThinking = false;
+
+  // ---- Guardrails (server/guardrails.ts) --------------------------------------
+  /** The config the checks below were built from: rebuilt when it changes. */
+  let guardFor: GuardrailsConfig | undefined;
+  let guardTerms: BlockedTerms | undefined;
+  let guardJudge: GuardrailJudge | undefined;
+  /** The end of the reply that may be the beginning of a blocked term: not shown until that is settled. */
+  let guardTail = "";
+  /** The judge is reading a reply, and how much of the current reply it has passed. */
+  let guardJudging = false;
+  let guardJudgedChars = 0;
+  /** The line that takes the place of what was stopped, waiting for the reply that was cut to stop. */
+  let guardLine: { text: string; delivery: TranscriptDelivery; end: boolean } | undefined;
+  let guardLineTimer: NodeJS.Timeout | undefined;
+  /** After a user broke a rule: until when a reply to what they said is not let through. */
+  let guardSilenceUntil = 0;
+  const guardProblems = new Set<string>();
 
   // ---- Tools ------------------------------------------------------------------
   let tools: ToolBroker | undefined;
@@ -1064,6 +1098,143 @@ export function createLiveProvider(
     status("hearing", t(`${me().name} 正在播报操作结果`, `${me().name} is reporting the result`));
   }
 
+  // ---- Guardrails -----------------------------------------------------------
+
+  /** The guardrails of the assistant this session speaks as, with their checks built. */
+  function guard(): GuardrailsConfig | undefined {
+    const config = me().guardrails;
+    if (config === guardFor) return config;
+    guardFor = config;
+    guardTerms = config ? blockedTermsFrom(config.blockedTerms) : undefined;
+    guardJudge = undefined;
+    if (config && config.rules.length + config.userRules.length > 0) {
+      const model = options.guardrailModel ?? guardrailModelFromEnv();
+      if (model) {
+        guardJudge = createGuardrailJudge(config, model, {
+          request: options.guardrailRequest,
+          onProblem(problem) {
+            // Once for each kind of problem: a judge that is down fails every check.
+            if (guardProblems.has(problem)) return;
+            guardProblems.add(problem);
+            log.warn("guardrail rules were not checked", { problem });
+          }
+        });
+      }
+    }
+    return config;
+  }
+
+  /** Says the line that stands in for what was stopped, and ends the conversation if that is asked. */
+  function voiceGuardLine(): void {
+    const waiting = guardLine;
+    guardLine = undefined;
+    if (guardLineTimer) clearTimeout(guardLineTimer);
+    guardLineTimer = undefined;
+    if (!waiting || closed || ending) return;
+    const voiced = sayLine(waiting.text, waiting.delivery);
+    if (!waiting.end) return;
+    // A line the client speaks itself reports nothing back: allow it its length.
+    endAfterReply("guardrail", voiced ? END_GRACE_MS : Math.min(END_GRACE_MS, 800 + waiting.text.length * 70));
+  }
+
+  /**
+   * A guardrail found something. `heard` says the words were all heard
+   * before it did: then nothing can be taken back, and only a conversation
+   * that is to end is still acted on.
+   */
+  function guardStopped(speaker: "assistant" | "user", kind: "term" | "rule", rule: string, heard = false): void {
+    const config = guard();
+    if (!config || closed) return;
+    const act = !ending && !guardLine && pendingEnd !== "guardrail" && (!heard || config.endConversation);
+    log.warn("guardrail", { speaker, kind, acted: act });
+    telemetry?.relayEvent?.({ type: "guardrail", speaker, kind, rule, at: now(), stopped: act && !heard });
+    if (!act) return;
+    const text = config.say ?? t("抱歉，这个我帮不了你。", "I'm sorry, I can't help with that.");
+    // The reply being shown is replaced by the line; anything else gets a caption of its own.
+    const replacing = responseActive && replyGate === "open" && !replyForced && !replyInterrupted;
+    const delivery = replacing ? agentDelivery : createTranscriptDelivery();
+    abandonTools();
+    if (responseActive && !replyForced) {
+      replyInterrupted = true;
+      clearGateTimer();
+      dropHeld();
+      engine?.cancel();
+    }
+    if (speaker === "user") guardSilenceUntil = now() + GUARD_SILENCE_MS;
+    // A line of the relay's own that is being said is let finish.
+    if (!heard && !(responseActive && replyForced)) {
+      // "hearing" is the client's cue to drop the speech it has not played yet.
+      status("hearing", t("回答已停止", "The answer was stopped"));
+      if (replacing && replyText) send(transcriptEvent(delivery, "agent", text));
+    }
+    engine?.addContext?.(
+      speaker === "assistant"
+        ? `Your last answer broke a rule of this service and was stopped. The user was told instead: "${text}" Do not repeat what was stopped.`
+        : `What the user just said broke a rule of this service. They were told: "${text}" Do not answer that request.`
+    );
+    guardLine = { text, delivery, end: config.endConversation };
+    if (!responseActive) {
+      voiceGuardLine();
+      return;
+    }
+    // Once the upstream has let go of the reply that was cut: asked sooner, it would refuse the line.
+    clearIdle();
+    guardLineTimer = setTimeout(() => {
+      guardLineTimer = undefined;
+      voiceGuardLine();
+    }, FAREWELL_WAIT_MS);
+  }
+
+  /** Looks for a blocked term in the reply. True when one was found: the reply is stopped. */
+  function blockedTermIn(text: string, complete: boolean): boolean {
+    guard();
+    const term = guardTerms?.find(text, complete);
+    if (term === undefined) return false;
+    guardStopped("assistant", "term", term);
+    return true;
+  }
+
+  /**
+   * Has the judge read the reply as far as it has come. One check at a time:
+   * while the reply is coming, at the end of a sentence; when it is done, all
+   * that is left.
+   */
+  function judgeReply(): void {
+    const config = guard();
+    if (!guardJudge || !config?.rules.length || guardJudging || replyForced || closed) return;
+    if (replyInterrupted || replyGate === "closed") return;
+    const text = replyText + heldText + guardTail;
+    const fresh = text.length - guardJudgedChars;
+    if (fresh <= 0) return;
+    if (responseActive && !(fresh >= GUARD_MIN_CHARS && SENTENCE_END.test(text))) return;
+    guardJudging = true;
+    const reply = replyCount;
+    const covered = text.length;
+    void guardJudge.check({ speaker: "assistant", text, before: riderText }).then((verdict) => {
+      guardJudging = false;
+      if (closed) return;
+      const same = reply === replyCount;
+      if (verdict.broken) {
+        // Too late to stop when another reply has begun, or the last of this one has been played.
+        const heard = !same || replyInterrupted || (!responseActive && remainingPlaybackMs() === 0);
+        guardStopped("assistant", "rule", verdict.rule, heard);
+        return;
+      }
+      if (same) guardJudgedChars = Math.max(guardJudgedChars, covered);
+      // More has been said meanwhile.
+      judgeReply();
+    });
+  }
+
+  /** Has the judge read what the user said. The reply is not held for it. */
+  function judgeUser(text: string): void {
+    const config = guard();
+    if (!guardJudge || !config?.userRules.length || !text.trim()) return;
+    void guardJudge.check({ speaker: "user", text }).then((verdict) => {
+      if (!closed && verdict.broken) guardStopped("user", "rule", verdict.rule);
+    });
+  }
+
   // ---- Device actions -------------------------------------------------------
 
   function dispatchDeviceCommand(text: string): void {
@@ -1200,6 +1371,8 @@ export function createLiveProvider(
     clearGateTimer();
     clearIdle();
     replyFirstAudioAt = 0;
+    guardJudgedChars = 0;
+    guardTail = "";
     if (pendingEnd && !ending) {
       // The goodbye is being spoken: give it the full grace period again.
       if (endTimer) clearTimeout(endTimer);
@@ -1216,6 +1389,12 @@ export function createLiveProvider(
     if (replyForced) {
       forcedReplies -= 1;
       replyGate = "open";
+      return;
+    }
+    if (now() < guardSilenceUntil) {
+      // An answer to what a guardrail has just refused.
+      replyGate = "closed";
+      engine?.cancel();
       return;
     }
     if (toolFollowUp) {
@@ -1265,6 +1444,8 @@ export function createLiveProvider(
     memory = updateSessionMemory(memory, text, rideContext.mode);
     emitMemory();
     userEngaged(text);
+    guardSilenceUntil = 0;
+    judgeUser(text);
     if (!general) dispatchDeviceCommand(text);
     if (replyGate === "held") {
       resolveGate(true);
@@ -1318,6 +1499,8 @@ export function createLiveProvider(
     emitMemory();
     clearIdle();
     userEngaged(image ? `${pictureNote()} ${text}` : text);
+    guardSilenceUntil = 0;
+    judgeUser(text);
     if (!general) dispatchDeviceCommand(text);
     status("thinking", t(`${me().name} 正在思考`, `${me().name} is thinking`));
     if (image) engine?.sendImage?.(image, text);
@@ -1344,19 +1527,19 @@ export function createLiveProvider(
   /** Says a line of the relay's own in the assistant's voice: the greeting, a
    *  check-in, a goodbye. Returns whether the upstream voices it; when it
    *  cannot, the client speaks the line itself and nothing reports its end. */
-  function sayLine(line: string): boolean {
+  function sayLine(line: string, delivery: TranscriptDelivery = createTranscriptDelivery()): boolean {
     remember("agent", line);
     // A reply already under way would make the upstream refuse the line, and
     // the forced-reply count would then mislabel the next real reply.
     if (sessionPlatform === "embedded" || !engineReady || !engine?.say || responseActive) {
-      speakLine(line);
+      speakLine(line, delivery);
       armIdle();
       return false;
     }
     // Voiced by the engine so it sounds like the assistant, not the browser.
     forcedReplies += 1;
     lastForcedAt = now();
-    send(transcriptEvent(createTranscriptDelivery(), "agent", line, { final: true }));
+    send(transcriptEvent(delivery, "agent", line, { final: true }));
     engine.say(line);
     return true;
   }
@@ -1366,7 +1549,7 @@ export function createLiveProvider(
   function userEngaged(text: string): void {
     idleCount = 0;
     remember("user", text);
-    if (pendingEnd && pendingEnd !== "max_duration" && !ending) {
+    if (pendingEnd && pendingEnd !== "max_duration" && pendingEnd !== "guardrail" && !ending) {
       pendingEnd = undefined;
       if (endTimer) clearTimeout(endTimer);
       endTimer = undefined;
@@ -1423,8 +1606,21 @@ export function createLiveProvider(
       if (closed || !delta) return;
       if (!responseActive) beginReply();
       if (replyInterrupted || replyGate === "closed") return;
-      if (replyGate === "held") heldText += delta;
-      else emitAgentText(delta);
+      let words = delta;
+      if (!replyForced && guard() && guardTerms) {
+        // Before the words are shown: a blocked term never reaches a caption,
+        // and neither does the beginning of one.
+        const reply = replyText + heldText + guardTail + delta;
+        if (blockedTermIn(reply, false)) return;
+        const fresh = guardTail + delta;
+        guardTail = fresh.slice(Math.max(0, fresh.length - guardTerms.undecided(reply)));
+        words = fresh.slice(0, fresh.length - guardTail.length);
+      }
+      if (words) {
+        if (replyGate === "held") heldText += words;
+        else emitAgentText(words);
+      }
+      judgeReply();
     },
     onAgentAudio(pcm) {
       if (closed || pcm.length === 0) return;
@@ -1443,6 +1639,11 @@ export function createLiveProvider(
       if (closed || !responseActive) return;
       if (replyGate === "held") finalizeRiderTurn();
       if (replyGate === "held") resolveGate(riderTurnAddressed);
+      // The last word of the reply is complete now, and may be the last word of a blocked term.
+      if (replyGate === "open" && !replyInterrupted && !replyForced && !blockedTermIn(replyText + guardTail, true)) {
+        if (guardTail) emitAgentText(guardTail);
+      }
+      guardTail = "";
       const audible = replyGate === "open" && !replyInterrupted;
       const text = replyText.trim();
       responseActive = false;
@@ -1451,6 +1652,12 @@ export function createLiveProvider(
         sayFarewell(pendingFarewell);
         return;
       }
+      if (guardLine) {
+        // And so can the line that stands in for what a guardrail stopped.
+        voiceGuardLine();
+        return;
+      }
+      if (audible && text && !replyForced) judgeReply();
       if (audible && text && !replyForced) {
         // No audio arrived for a reply that has text: let the client speak it
         // rather than leaving the wearer in silence.
@@ -1798,6 +2005,7 @@ export function createLiveProvider(
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (weatherTimer) clearInterval(weatherTimer);
       if (backgroundTimer) clearTimeout(backgroundTimer);
+      if (guardLineTimer) clearTimeout(guardLineTimer);
       backgroundResults = [];
       hazardInjector.stop();
       tools?.close();

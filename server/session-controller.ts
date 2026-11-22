@@ -832,6 +832,7 @@ export class AgentSessionController {
             this.hooks?.onRiderUtterance?.(this.registeredDeviceId, payload.text);
           }
         },
+        relayEvent: (payload) => this.hooks?.onServerEvent?.(payload),
         serverAudio: (bytes) => {
           metrics.serverAudio(bytes);
           recordTesterServerAudio(this.relaySessionId, bytes);

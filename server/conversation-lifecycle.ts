@@ -13,7 +13,8 @@ import {
   conversationWebhookFromEnv,
   deliverConversation,
   type ConversationEndedPayload,
-  type ConversationWebhook
+  type ConversationWebhook,
+  type GuardrailFinding
 } from "./conversation-webhook";
 import { createLogger } from "./logger";
 import { redactText, redactTurns, type RedactionKind } from "./redact";
@@ -97,6 +98,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/** A conversation that trips a guardrail a hundred times has made its point. */
+const MAX_GUARDRAIL_FINDINGS = 100;
+
+function guardrailFindingFrom(payload: Record<string, unknown>): GuardrailFinding | undefined {
+  const { speaker, kind, rule, at, stopped } = payload;
+  if (speaker !== "assistant" && speaker !== "user") return undefined;
+  if (kind !== "term" && kind !== "rule") return undefined;
+  if (typeof rule !== "string" || typeof at !== "number") return undefined;
+  return { speaker, kind, rule, at, stopped: stopped === true };
+}
+
 /** A call's details with the numbers taken out: redacting phone numbers
  *  from what was said while keeping the caller's own would be no redaction. */
 function withoutNumbers(phone: NonNullable<ConversationSessionInfo["phone"]>): typeof phone {
@@ -167,7 +179,8 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
     recorder: ReturnType<typeof conversationRecorder>,
     backend: string,
     endReason: string | undefined,
-    ending: ConversationEnding | undefined
+    ending: ConversationEnding | undefined,
+    guardrails: readonly GuardrailFinding[]
   ): Promise<void> {
     const transcript = redactTurns(recorder.turns(), kinds);
     // A session nobody spoke in is not a conversation.
@@ -217,6 +230,8 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
       },
       transcript,
       ...(recording ? { recording } : {}),
+      // The rule is the owner's own text; a blocked term is not what anyone said.
+      ...(guardrails.length ? { guardrails: [...guardrails] } : {}),
       ...(result ? { analysis: result } : {}),
       ...(analysisError ? { analysisError } : {})
     };
@@ -256,6 +271,7 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
       let backend = "";
       let endReason: string | undefined;
       let ended = false;
+      const guardrails: GuardrailFinding[] = [];
       const tracer = exporter
         ? createSessionTracer(
             exporter,
@@ -274,6 +290,12 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
           if (isRecord(payload)) {
             if (payload.type === "session.started" && typeof payload.provider === "string") backend = payload.provider;
             if (payload.type === "session.ended" && typeof payload.reason === "string") endReason = payload.reason;
+            if (payload.type === "guardrail") {
+              // The relay's own note of what a guardrail found: not an event a client gets.
+              const finding = guardrailFindingFrom(payload);
+              if (finding && guardrails.length < MAX_GUARDRAIL_FINDINGS) guardrails.push(finding);
+              return;
+            }
           }
           recorder?.event(payload);
           tracer?.event(captureContent ? redactedEvent(payload, kinds) : payload);
@@ -289,7 +311,7 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
             log.warn("conversation dropped: too many are waiting to be delivered", { sessionId: info.sessionId });
             return;
           }
-          const work = finish(info, recorder, backend || "unknown", why, ending)
+          const work = finish(info, recorder, backend || "unknown", why, ending, guardrails)
             .catch((error: unknown) => {
               log.warn("conversation follow-up failed", {
                 sessionId: info.sessionId,

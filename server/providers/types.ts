@@ -20,6 +20,8 @@ type HazardReportEvent = Extract<ClientEvent, { type: "hazard.report" }>;
 
 export type ProviderTelemetry = {
   serverEvent(payload: unknown, bytes: number): void;
+  /** Something the relay did that the client is not told, for the conversation's record. */
+  relayEvent?(payload: unknown): void;
   serverAudio(bytes: number): void;
   ttsFallback(): void;
 };

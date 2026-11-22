@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-11-22 — WebRTC transport, noise suppression, pictures, Telnyx, recording, background tools and a larger knowledge base
+## 2026-11-22 — WebRTC transport, noise suppression, pictures, Telnyx, recording, guardrails, background tools and a larger knowledge base
 
 - Web clients can send audio over WebRTC instead of the WebSocket: `WEBRTC=on` on the relay, `transport: "webrtc"`
   in the SDK (`transport="webrtc"` on the widget). Audio travels over UDP as Opus, so a lost packet is concealed
@@ -57,6 +57,15 @@
   are put back in order.
 - Written to Telnyx's documentation and tested against a stand-in that speaks the documented messages. Not yet run on
   a real Telnyx call.
+
+### Guardrails
+
+- `guardrails` in the assistant config: `blockedTerms` the assistant never says, `rules` for the assistant and
+  `userRules` for users, judged by a chat model (`GUARDRAILS_LLM_*`, or the analysis model). The relay stops the
+  assistant, says your `say` line instead, and ends the conversation if `endConversation` is set.
+- A blocked term never reaches a caption or the record, and on the cascaded backends its sentence is not spoken. Rules
+  are judged while the assistant speaks, so they cut an answer short rather than prevent it. The conversation record
+  lists what was found. See [guardrails](docs/conversations.md#guardrails).
 
 ### Recording
 

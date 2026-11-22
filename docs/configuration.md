@@ -71,12 +71,13 @@ to Max Cloud projects. Each is explained in [running a conversation](conversatio
 | `agents`         | array (≤ 12)             | Specialist agents the conversation can be handed to, each with `id`, `description`, `instructions` and an optional `tools` list. See [several agents](conversations.md#several-agents-and-handing-over).                                                                                                                                                        |
 | `analysis`       | `true` or object         | Summary, sentiment, success criteria and extracted `fields` for each finished conversation. Runs only when `CONVERSATION_WEBHOOK_URL` or `CONVERSATION_LOG_FILE` is set. See [analysis](conversations.md#analysis).                                                                                                                                             |
 | `privacy.redact` | `true`, `"all"` or array | Removes personal data from records that leave the relay. Kinds: `email`, `card`, `ssn`, `ip`, `phone`. See [redacting](conversations.md#redacting-personal-data).                                                                                                                                                                                               |
+| `guardrails`     | object                   | What the assistant must not say and users must not do, checked by the relay: `blockedTerms`, `rules`, `userRules`, `say`, `endConversation`. See [guardrails](conversations.md#guardrails).                                                                                                                                                                     |
 
 A bad entry in any of these is skipped or ignored with a line in the relay's startup log, and the rest of the file still
 applies.
 
 Admin → Studio edits only the identity, look and sound keys. When it saves, it copies `tools`, `toolsModule`,
-`conversation`, `agents`, `analysis`, `privacy`, `knowledge` and `mcpServers` into its own file from the config the
+`conversation`, `agents`, `analysis`, `privacy`, `guardrails`, `knowledge` and `mcpServers` into its own file from the config the
 relay is running (relative `knowledge` paths become absolute), so a save never drops them. The Studio's file then wins
 over `./assistant.config.json`: change these keys there afterwards, or keep your config in a file named by
 `ASSISTANT_CONFIG`, which wins over the Studio's.
@@ -192,17 +193,20 @@ in `_total` is exposed as a counter, anything else as a gauge.
 
 All of these are off until set. See [after the conversation](conversations.md#after-the-conversation).
 
-| Variable                           | Default  | What it does                                                                                                                                   |
-| ---------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CONVERSATION_WEBHOOK_URL`         | off      | POSTed a signed `conversation.ended` record when each conversation ends. HTTPS, or plain HTTP to a local or private host.                      |
-| `CONVERSATION_WEBHOOK_SECRET`      | none     | Signs those requests, exactly like [tool webhooks](tools.md#verifying-the-signature).                                                          |
-| `CONVERSATION_LOG_FILE`            | off      | A file the same record is appended to, one JSON object per line.                                                                               |
-| `CONVERSATION_RECORDING`           | off      | `phone` records the audio of phone calls, `on` of every conversation. See [recording the audio](conversations.md#recording-the-audio).         |
-| `CONVERSATION_RECORDING_DIR`       | none     | Where the recordings go, one WAV file for each conversation. Required for recording.                                                           |
-| `CONVERSATION_RECORDING_KEEP_DAYS` | for ever | Delete recordings older than this many days (1 to 3650).                                                                                       |
-| `ANALYSIS_LLM_BASE_URL`            | none     | An OpenAI-compatible endpoint for the `analysis` key. Without it, the pipeline's chat model or a local one is used.                            |
-| `ANALYSIS_LLM_API_KEY`             | none     | That endpoint's key.                                                                                                                           |
-| `ANALYSIS_LLM_MODEL`               | none     | The model for the analysis. Falls back to `PIPELINE_LLM_MODEL`, then `gpt-4o-mini` (or `LOCAL_LLM_MODEL`, then `qwen3:8b`, for a local model). |
+| Variable                           | Default  | What it does                                                                                                                                                       |
+| ---------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CONVERSATION_WEBHOOK_URL`         | off      | POSTed a signed `conversation.ended` record when each conversation ends. HTTPS, or plain HTTP to a local or private host.                                          |
+| `CONVERSATION_WEBHOOK_SECRET`      | none     | Signs those requests, exactly like [tool webhooks](tools.md#verifying-the-signature).                                                                              |
+| `CONVERSATION_LOG_FILE`            | off      | A file the same record is appended to, one JSON object per line.                                                                                                   |
+| `CONVERSATION_RECORDING`           | off      | `phone` records the audio of phone calls, `on` of every conversation. See [recording the audio](conversations.md#recording-the-audio).                             |
+| `CONVERSATION_RECORDING_DIR`       | none     | Where the recordings go, one WAV file for each conversation. Required for recording.                                                                               |
+| `CONVERSATION_RECORDING_KEEP_DAYS` | for ever | Delete recordings older than this many days (1 to 3650).                                                                                                           |
+| `ANALYSIS_LLM_BASE_URL`            | none     | An OpenAI-compatible endpoint for the `analysis` key. Without it, the pipeline's chat model or a local one is used.                                                |
+| `ANALYSIS_LLM_API_KEY`             | none     | That endpoint's key.                                                                                                                                               |
+| `ANALYSIS_LLM_MODEL`               | none     | The model for the analysis. Falls back to `PIPELINE_LLM_MODEL`, then `gpt-4o-mini` (or `LOCAL_LLM_MODEL`, then `qwen3:8b`, for a local model).                     |
+| `GUARDRAILS_LLM_BASE_URL`          | none     | An OpenAI-compatible endpoint that judges `guardrails.rules` and `userRules`. Without it, the analysis model above. See [guardrails](conversations.md#guardrails). |
+| `GUARDRAILS_LLM_API_KEY`           | none     | That endpoint's key.                                                                                                                                               |
+| `GUARDRAILS_LLM_MODEL`             | none     | The model that judges. Alone, it changes only the model name.                                                                                                      |
 
 ### Knowledge base
 

@@ -43,6 +43,7 @@ import { cloudSessionTokens, sessionTokens } from "./session-tokens";
 import { installServerTools } from "./tools/registry";
 import { createConversationLifecycle } from "./conversation-lifecycle";
 import { createRecordings, recordingSettingsFromEnv } from "./recording";
+import { guardrailModelFromEnv, guardrailProblems } from "./guardrails";
 import {
   telnyxCarrier,
   telnyxSettingsFromEnv,
@@ -1475,8 +1476,23 @@ const conversations = createConversationLifecycle({
   ...(assistant().analysis ? { analysis: assistant().analysis } : {}),
   redact: assistant().redact
 });
-for (const problem of [...assistant().configProblems, ...conversations.problems(), ...turnSettingProblems()]) {
+for (const problem of [
+  ...assistant().configProblems,
+  ...conversations.problems(),
+  ...turnSettingProblems(),
+  ...guardrailProblems(assistant().guardrails)
+]) {
   log.warn(problem);
+}
+if (assistant().guardrails) {
+  const { blockedTerms, rules, userRules, endConversation } = assistant().guardrails!;
+  log.info("guardrails on", {
+    blockedTerms: blockedTerms.length,
+    rules: rules.length,
+    userRules: userRules.length,
+    ...(rules.length + userRules.length > 0 ? { model: guardrailModelFromEnv()?.model ?? "none" } : {}),
+    then: endConversation ? "end the conversation" : "carry on"
+  });
 }
 
 for (const problem of noiseSuppression.problems) log.warn(problem);

@@ -29,9 +29,21 @@ export type ConversationEndedPayload = {
   transcript: ConversationTurn[];
   /** The audio, when the relay records conversations: fetch it with GET /v1/recordings/<file>. */
   recording?: { file: string; durationMs: number };
+  /** What the guardrails found, in order. `stopped` says whether the words were cut before they were all heard. */
+  guardrails?: GuardrailFinding[];
   analysis?: AnalysisResult;
   /** Why there is no analysis, when one was configured. */
   analysisError?: string;
+};
+
+export type GuardrailFinding = {
+  speaker: "assistant" | "user";
+  /** A blocked term, or a rule a model judged broken. */
+  kind: "term" | "rule";
+  /** The term or the rule, as the config has it. */
+  rule: string;
+  at: number;
+  stopped: boolean;
 };
 
 export type ConversationWebhook = { url: string; secret?: string };

@@ -58,16 +58,17 @@ it is not built; see [not built yet](#not-built-yet).
 
 ### Operating it
 
-| Capability                             | Max    | Notes                                                                                        |
-| -------------------------------------- | ------ | -------------------------------------------------------------------------------------------- |
-| Summary, outcome and extracted fields  | Yes    | After each conversation, to a webhook or a log file.                                         |
-| Personal-data redaction                | Partly | Pattern-based: emails, phone numbers, card numbers, SSNs, IP addresses. Text only.           |
-| Automated tests with simulated users   | Yes    | Scripted and model-played users, an LLM judge, pass rates. See [testing](testing-agents.md). |
-| Traces                                 | Yes    | OpenTelemetry (OTLP/HTTP), a span per session, turn and tool call.                           |
-| Metrics, latency per turn              | Yes    | Prometheus `/metrics` and per-turn telemetry events.                                         |
-| Usage metering and limits              | Yes    | Per user and month. See [usage and billing](usage-and-billing.md).                           |
-| Agent versions and A/B tests           | No     | The config is a file; version it in git.                                                     |
-| Compliance attestations (SOC 2, HIPAA) | No     | Self-hosting puts compliance in your hands; we hold no attestations.                         |
+| Capability                             | Max    | Notes                                                                                                                                                                                                       |
+| -------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Summary, outcome and extracted fields  | Yes    | After each conversation, to a webhook or a log file.                                                                                                                                                        |
+| Personal-data redaction                | Partly | Pattern-based: emails, phone numbers, card numbers, SSNs, IP addresses. Text only.                                                                                                                          |
+| Guardrails on what is said             | Partly | Blocked terms stopped before they are shown; rules for the assistant and for users judged by a model while it speaks. Speech is not held back for the judge. See [guardrails](conversations.md#guardrails). |
+| Automated tests with simulated users   | Yes    | Scripted and model-played users, an LLM judge, pass rates. See [testing](testing-agents.md).                                                                                                                |
+| Traces                                 | Yes    | OpenTelemetry (OTLP/HTTP), a span per session, turn and tool call.                                                                                                                                          |
+| Metrics, latency per turn              | Yes    | Prometheus `/metrics` and per-turn telemetry events.                                                                                                                                                        |
+| Usage metering and limits              | Yes    | Per user and month. See [usage and billing](usage-and-billing.md).                                                                                                                                          |
+| Agent versions and A/B tests           | No     | The config is a file; version it in git.                                                                                                                                                                    |
+| Compliance attestations (SOC 2, HIPAA) | No     | Self-hosting puts compliance in your hands; we hold no attestations.                                                                                                                                        |
 
 ### Reaching users
 
@@ -112,7 +113,9 @@ In rough order of how much they would matter to most users:
    web SDK has a method for it; the iOS and Android clients and the widget do not, so a native client sends the
    `image.input` event itself. The OpenAI and Gemini paths were built to the vendors' documentation and not run against
    their servers.
-5. **Guardrails beyond redaction**, such as moderation of what the agent says.
+5. **Guardrails that hold speech back.** Blocked terms are stopped before they are shown. Rules are judged by a model
+   while the assistant speaks, so the start of an answer that breaks one is usually heard before it is cut. Tool
+   arguments and results are not checked.
 6. **A visual flow builder, agent versions and A/B tests.**
 7. **Warm transfers and batch outbound campaigns.**
 8. **WebRTC in the native iOS and Android clients.** The web SDK has it; the native clients use the WebSocket.

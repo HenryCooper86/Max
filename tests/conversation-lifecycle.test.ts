@@ -172,6 +172,30 @@ describe("conversation delivery", () => {
     for (const body of bodies) expect("recording" in body).toBe(false);
   });
 
+  it("lists what the guardrails found, and leaves the key out when they found nothing", async () => {
+    const h = harness();
+    const lifecycle = createConversationLifecycle(
+      base({ env: { CONVERSATION_WEBHOOK_URL: HOOK }, request: h.request })
+    );
+    const observer = lifecycle.open(info);
+    converse(observer);
+    observer.event({ type: "guardrail", speaker: "assistant", kind: "term", rule: "Acme", at: 1234, stopped: true });
+    observer.event({ type: "guardrail", speaker: "user", kind: "rule", rule: "No threats.", at: 2345, stopped: false });
+    // Not something a session sends: ignored rather than recorded half-read.
+    observer.event({ type: "guardrail", speaker: "nobody", kind: "term", rule: "x", at: 1 });
+    observer.end("client");
+    const quiet = lifecycle.open(info);
+    converse(quiet);
+    quiet.end("client");
+    await lifecycle.drain(1000);
+    const [first, second] = h.hooks();
+    expect(first!.guardrails).toEqual([
+      { speaker: "assistant", kind: "term", rule: "Acme", at: 1234, stopped: true },
+      { speaker: "user", kind: "rule", rule: "No threats.", at: 2345, stopped: false }
+    ]);
+    expect("guardrails" in second!).toBe(false);
+  });
+
   it("omits optional session fields when not given", async () => {
     const h = harness();
     const lifecycle = createConversationLifecycle(

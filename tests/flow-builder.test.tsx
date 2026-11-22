@@ -292,7 +292,7 @@ describe("flow builder", () => {
   it("adds, conditions and removes arrows in the editor, and opens a step to any step again", async () => {
     const { api } = await mount();
     await select("orders");
-    const adder = root().find((node) => node.type === "select");
+    const adder = byClass("flowAddArrow")[0]!.find((node) => node.type === "select");
     // The steps there is no arrow to yet.
     expect(adder.findAllByType("option").map((option) => option.props.value)).toEqual(["", "main"]);
     await act(async () => adder.props.onChange({ currentTarget: { value: "main" } }));
@@ -334,6 +334,113 @@ describe("flow builder", () => {
     expect(box("open_page").props.checked).toBe(true);
     await act(async () => button(/保存流程/).props.onClick());
     expect(api.saveStudioFlow.mock.calls[0]![0][2]!.tools).toEqual(["refund", "open_page"]);
+  });
+
+  describe("what a step does by rule on arriving", () => {
+    const ENTRY = {
+      say: "One moment.",
+      call: { tool: "find_order", arguments: { which: "latest" } },
+      next: [{ to: "refunds", if: { path: "status", is: "delivered" } }, { to: "main" }]
+    };
+    const withEntry = (): FlowStep[] => [STEPS[0]!, { ...STEPS[1]!, onEnter: ENTRY }, STEPS[2]!];
+    const labelled = (label: string) =>
+      root().findAll((node) => typeof node.type === "string" && node.props["aria-label"] === label);
+    const type = (node: ReactTestInstance, value: string) =>
+      act(async () => node.props.onChange({ currentTarget: { value } }));
+
+    it("shows it, draws its branches as arrows of their own, and saves it as it was", async () => {
+      const { api } = await mount(fakeApi(flow(withEntry())));
+      // Two handoffs and two branches.
+      expect(arrowPaths().map((path) => path.props.className)).toEqual(["", "", "byRule", "byRule"]);
+      expect(byClass("flowCondition").map(textOf)).toEqual(["An order.", "status = delivered"]);
+      await select("orders");
+      expect(field("flow-entry-say").props.value).toBe("One moment.");
+      expect(field("flow-entry-tool").props.value).toBe("find_order");
+      expect(field("flow-entry-arguments").props.value).toBe('{"which":"latest"}');
+      expect(labelled("转到哪一步").map((node) => node.props.value)).toEqual(["refunds", "main"]);
+      expect(labelled("条件").map((node) => node.props.value)).toEqual(["is", "always"]);
+      // A change elsewhere, and the save carries the onEnter along untouched.
+      await type(field("flow-step-instructions"), "Help with the order.");
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(api.saveStudioFlow.mock.calls[0]![0][1]).toEqual({
+        ...STEPS[1],
+        instructions: "Help with the order.",
+        onEnter: ENTRY
+      });
+    });
+
+    it("writes a sentence, a call with arguments and branches", async () => {
+      const { api } = await mount();
+      await select("orders");
+      await type(field("flow-entry-say"), "  One moment,   please. ");
+      await type(field("flow-entry-tool"), "find_order");
+      // Not JSON yet: said so, and the arguments stay as they were.
+      await type(field("flow-entry-arguments"), '{ "which": ');
+      await act(async () => field("flow-entry-arguments").props.onBlur());
+      expect(byClass("flowNameRefused").map(textOf).join()).toContain("不是一个 JSON 对象");
+      await type(field("flow-entry-arguments"), '{ "which": "latest" }');
+      await act(async () => field("flow-entry-arguments").props.onBlur());
+      expect(byClass("flowNameRefused")).toEqual([]);
+      await act(async () => button(/添加一个分支/).props.onClick());
+      // A branch with nothing to compare with cannot be saved.
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(api.saveStudioFlow).not.toHaveBeenCalled();
+      expect(byClass("flowProblems").map(textOf).join()).toContain("有一个分支没有写比较的值");
+      await type(labelled("转到哪一步")[0]!, "refunds");
+      await type(labelled("看答复里的哪一项")[0]!, " order.total ");
+      await type(labelled("条件")[0]!, "above");
+      await type(labelled("比较的值")[0]!, "100.5");
+      await act(async () => button(/添加一个分支/).props.onClick());
+      await type(labelled("条件")[1]!, "failed");
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(api.saveStudioFlow.mock.calls[0]![0][1]!.onEnter).toEqual({
+        say: "One moment, please.",
+        call: { tool: "find_order", arguments: { which: "latest" } },
+        next: [
+          { to: "refunds", if: { path: "order.total", above: 100.5 } },
+          { to: "main", if: { failed: true } }
+        ]
+      });
+    });
+
+    it("keeps a list of values as it is typed, and reads numbers among them", async () => {
+      const { api } = await mount(fakeApi(flow(withEntry())));
+      await select("orders");
+      await type(labelled("条件")[0]!, "in");
+      await type(labelled("比较的值")[0]!, "shipped, ");
+      // The comma that was just typed is still there.
+      expect(labelled("比较的值")[0]!.props.value).toBe("shipped, ");
+      await type(labelled("比较的值")[0]!, "shipped, packed, 3");
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(api.saveStudioFlow.mock.calls[0]![0][1]!.onEnter!.next![0]).toEqual({
+        to: "refunds",
+        if: { path: "status", in: ["shipped", "packed", 3] }
+      });
+    });
+
+    it("will not save a branch with a condition and no call, or a tool the step may not use", async () => {
+      const { api } = await mount(fakeApi(flow(withEntry())));
+      await select("orders");
+      await type(field("flow-entry-tool"), "");
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(byClass("flowProblems").map(textOf).join()).toContain("带条件的分支要看工具的答复");
+      await type(field("flow-entry-tool"), "refund");
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(byClass("flowProblems").map(textOf).join()).toContain("不在这一步可以用的工具里");
+      expect(api.saveStudioFlow).not.toHaveBeenCalled();
+    });
+
+    it("removes a branch, and with a step the branches that led to it", async () => {
+      const { api } = await mount(fakeApi(flow(withEntry())));
+      await select("orders");
+      await act(async () => labelled("删除这个分支")[1]!.props.onClick());
+      expect(labelled("转到哪一步").map((node) => node.props.value)).toEqual(["refunds"]);
+      await select("refunds");
+      confirmAnswer = true;
+      await act(async () => button(/删除这一步/).props.onClick());
+      await act(async () => button(/保存流程/).props.onClick());
+      expect(api.saveStudioFlow.mock.calls[0]![0][1]!.onEnter).toEqual({ say: ENTRY.say, call: ENTRY.call });
+    });
   });
 
   it("deletes a step with its arrows, but offers no such thing for the start", async () => {

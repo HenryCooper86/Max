@@ -76,7 +76,8 @@ export type ChatLoop = {
   addContext(text: string): void;
   /** Holds a picture for the next user turn; it starts nothing and stops nothing. */
   addImage(image: EngineImage): void;
-  sendToolResult(callId: string, output: string): void;
+  /** `say`: a line to speak as it is, before the model carries on with the result. */
+  sendToolResult(callId: string, output: string, say?: string): void;
 };
 
 type ChatToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
@@ -197,7 +198,7 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   /** Pictures shown without words, waiting for the next user turn. */
   let pendingImages: EngineImage[] = [];
   /** Tool calls waiting for `sendToolResult`, by call id. */
-  const toolWaiters = new Map<string, (output: string) => void>();
+  const toolWaiters = new Map<string, (output: string, say?: string) => void>();
   /** Bumped whenever the current work must stop: barge-in, cancel, close. */
   let generation = 0;
   let abort: AbortController | undefined;
@@ -224,7 +225,9 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
     signal: AbortSignal,
     onDelta: (delta: string) => void,
     onSentence: ((sentence: string) => void) | undefined,
-    offerTools: boolean
+    offerTools: boolean,
+    /** Sentences the user has just heard from the relay itself. A reply that begins by repeating them is not let to. */
+    heard: readonly string[] = []
   ): Promise<{ text: string; toolCalls: ChatToolCall[] }> {
     const stage = options.stage();
     const tools = offerTools ? options.tools() : [];
@@ -268,6 +271,32 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
     let sentence = "";
     let full = "";
     const calls: Array<{ id: string; name: string; arguments: string }> = [];
+    // The beginning of the reply, kept back while it could still be a repeat of what was just said.
+    const echoes = heard.map((line) => line.toLowerCase());
+    let head: string | undefined = echoes.length > 0 ? "" : undefined;
+    /** A repeat was taken out: what follows it starts without the gap that parted the two. */
+    let cut = false;
+    const take = (delta: string): void => {
+      if (head === undefined) return consume(delta);
+      let kept: string = head + delta;
+      for (;;) {
+        const start = kept.trimStart();
+        const lower = start.toLowerCase();
+        const repeated = echoes.find((line) => lower.startsWith(line));
+        if (repeated === undefined) {
+          // Could still turn into one of them: wait for more.
+          if (echoes.some((line) => line.startsWith(lower))) head = kept;
+          else {
+            head = undefined;
+            if (cut) kept = kept.trimStart();
+            if (kept) consume(kept);
+          }
+          return;
+        }
+        cut = true;
+        kept = start.slice(repeated.length);
+      }
+    };
     const consume = (delta: string) => {
       full += delta;
       onDelta(delta);
@@ -299,7 +328,7 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
           continue; // a keep-alive or partial line
         }
         const delta = chunk.choices?.[0]?.delta;
-        if (delta?.content) consume(delta.content);
+        if (delta?.content) take(delta.content);
         // Tool calls stream in pieces: the first piece of each carries its id
         // and name, later pieces append to its arguments.
         for (const piece of delta?.tool_calls ?? []) {
@@ -314,6 +343,8 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
         }
       }
     }
+    // What was kept back and turned out to be no repeat after all: the beginning of one, and then the reply ended.
+    if (head?.trim() && !echoes.includes(head.trim().toLowerCase())) consume(head);
     if (onSentence && sentence.trim()) onSentence(sentence.trim());
     const toolCalls = calls
       .filter((call) => call.name)
@@ -326,24 +357,24 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   }
 
   /** Hands one call to the session and waits for its result. */
-  function awaitTool(call: ChatToolCall, signal: AbortSignal): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
+  function awaitTool(call: ChatToolCall, signal: AbortSignal): Promise<{ output: string; say?: string }> {
+    return new Promise<{ output: string; say?: string }>((resolve, reject) => {
       const onAbort = () => {
         toolWaiters.delete(call.id);
         reject(new Error("aborted"));
       };
       if (signal.aborted) return onAbort();
       signal.addEventListener("abort", onAbort, { once: true });
-      toolWaiters.set(call.id, (output) => {
+      toolWaiters.set(call.id, (output, say) => {
         signal.removeEventListener("abort", onAbort);
-        resolve(output);
+        resolve({ output, ...(say ? { say } : {}) });
       });
       const events = options.events();
       if (events?.onToolCall) {
         events.onToolCall({ callId: call.id, name: call.function.name, arguments: call.function.arguments });
       } else {
         toolWaiters.delete(call.id);
-        resolve(JSON.stringify({ error: "tools are not available" }));
+        resolve({ output: JSON.stringify({ error: "tools are not available" }) });
       }
     });
   }
@@ -386,6 +417,8 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
           : undefined;
         const turn: ChatMessage[] = userMessage ? [userMessage] : [];
         let full = "";
+        /** Lines of the relay's own spoken in this reply, whole and sentence by sentence. */
+        const heard: string[] = [];
         let nudged = false;
         // With a guardrail that holds speech, nothing of the reply is spoken or
         // shown until the session has read it: sentence by sentence, and every
@@ -471,7 +504,8 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
               speaker.delta?.(delta);
             },
             hold ? held : speaker.sentence?.bind(speaker),
-            offerTools
+            offerTools,
+            heard
           );
           full += result.text;
           if (
@@ -490,9 +524,25 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
           if (!result.toolCalls.length || !offerTools) break;
           turn.push({ role: "assistant", content: result.text || null, tool_calls: result.toolCalls });
           for (const call of result.toolCalls) {
-            const output = await awaitTool(call, controller.signal);
+            const { output, say } = await awaitTool(call, controller.signal);
             if (!current()) return;
             turn.push({ role: "tool", tool_call_id: call.id, content: output });
+            if (say) {
+              // A line of the relay's own, in the owner's words: spoken as it is, after
+              // what the model has said so far and before what it says next.
+              if (hold) await allRead();
+              if (!current()) return;
+              if (refused) continue;
+              // With the gap that parts it from what the model says next, where the script has gaps.
+              const text = `${joined([full, say]).slice(full.length)}${/[。！？…]$/u.test(say) ? "" : " "}`;
+              full += text;
+              // A model that is told what was said tends to say it again: its next words are read for that.
+              heard.push(say, ...(say.match(/[^.!?。！？…]+[.!?。！？…]+/gu) ?? []).map((one) => one.trim()));
+              if (hold) cleared += joined([cleared, say]).slice(cleared.length);
+              options.events()?.onAgentText(text);
+              if (speaker.sentence) speaker.sentence(say);
+              else speaker.delta?.(text);
+            }
           }
         }
         if (hold) {
@@ -565,11 +615,11 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
     addImage(image) {
       pendingImages = [...pendingImages, image].slice(-MAX_PICTURES_IN_HISTORY);
     },
-    sendToolResult(callId, output) {
+    sendToolResult(callId, output, say) {
       const waiter = toolWaiters.get(callId);
       if (!waiter) return;
       toolWaiters.delete(callId);
-      waiter(output);
+      waiter(output, say);
     }
   };
 }

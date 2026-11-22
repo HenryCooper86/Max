@@ -211,6 +211,72 @@ flow: steps that a conversation moves through along the arrows you draw, each ar
   handing over, so give the starting agent only the tools it needs. For a condition on what a tool is called with,
   use [rules for tools](#guardrails).
 
+**Steps the relay does itself.** Everything above is a model following instructions. An agent's `onEnter` is not:
+it is what the relay does, by rule, when the conversation is handed to that agent. It can say a sentence in your
+words, call a tool with arguments you fixed, and move the conversation on to another agent by what the tool
+answered.
+
+```json
+{
+  "id": "orders",
+  "description": "Anything about an order the user placed.",
+  "instructions": "Help the user with their order.",
+  "tools": ["find_order"],
+  "onEnter": {
+    "say": "One moment, I am looking up your latest order.",
+    "call": { "tool": "find_order", "arguments": { "which": "latest" } },
+    "next": [
+      { "to": "tracking", "if": { "path": "status", "in": ["shipped", "packed"] } },
+      { "to": "refunds", "if": { "path": "order.total", "above": 100 } },
+      { "to": "human", "if": { "failed": true } },
+      { "to": "main" }
+    ]
+  }
+}
+```
+
+| Key    | What it does                                                                                                                                                                                                 |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `say`  | A sentence of at most 500 characters, said when the conversation arrives.                                                                                                                                    |
+| `call` | `tool`, and `arguments` (an object, at most 2,000 characters of JSON). The relay calls the tool itself, as this agent: with a `tools` list, the tool has to be on it.                                        |
+| `next` | Up to 8 branches, read in order; the first that applies is taken. A branch is `{ "to": "agent", "if": { … } }`, or just `"agent"` for "otherwise", which has to come last. No branch applies: it stays here. |
+
+A condition names a `path` into the tool's JSON answer (keys and list positions joined by dots, `order.items.0.sku`;
+without a path, the whole answer) and one test:
+
+| Test               | Applies when the value at the path                                             |
+| ------------------ | ------------------------------------------------------------------------------ |
+| `"is": "shipped"`  | is that text, number or `true`/`false`. Texts are compared without their case. |
+| `"in": ["a", "b"]` | is one of up to 16 such values.                                                |
+| `"above": 100`     | is a number, or a number written as text, greater than that.                   |
+| `"below": 100`     | is one less than that.                                                         |
+| `"exists": true`   | is there and not empty. `false`: is missing, `null` or empty.                  |
+| `"failed": true`   | (no path) the call failed, or its result was withheld by a rule.               |
+
+- **The order is: say, call, move on.** Then the agent the conversation came to does what its own `onEnter` says,
+  and so on, for at most four moves and never back to an agent it has been through on the way: a flow that goes
+  round in a circle stops where it is, with a line in the log. The agent the conversation comes to rest with is
+  given the tool's answers (`doneOnArriving` in the handover's result) and carries on from there with its model.
+- **A call that failed takes only a branch that asks for it.** Without one the conversation stays with the agent,
+  which is told what went wrong. A failed call never takes the "otherwise" branch.
+- **The call is held to the same rules as a call the model makes**: [rules for tools and for what they
+  return](#guardrails) apply, and the client sees it as `tool.activity`. `end_session` and `transfer_to_agent`
+  cannot be called from `onEnter`.
+- **In your words where the relay makes the speech.** On the cascaded backends (pipeline, local, Max Speech) the
+  sentence goes to the speech engine as written, between what the model had said and what it says next, and a model
+  that begins its next words by repeating it has the repeat cut. On the speech-to-speech backends (OpenAI Realtime,
+  Gemini Live, Grok) the vendor's model makes all the speech, so the model is told to begin with exactly these
+  words, which it usually but not provably does.
+- **When it runs.** On a handover: one the model makes with `transfer_to_agent`, or a `next` branch. Not at the
+  start of a conversation (`main`'s `onEnter` runs when a conversation is handed back to it; the first words of a
+  conversation are the [greeting](configuration.md#identity-and-behaviour)), and not when a conversation is resumed. If the user talks over the
+  reply while the tool is running, nothing more is said or moved.
+- **A mistake in an `onEnter` drops the whole `onEnter`**, with a problem in the startup log, and keeps the agent:
+  half of what was meant to happen by rule is worse than none of it. A tool name the relay does not have is
+  warned about at startup.
+- Arguments are fixed text: there are no variables to fill them from. A webhook tool is sent the session, user
+  and caller with every call, which is usually what a lookup needs.
+
 **The flow builder.** Admin → Flow draws the same thing. Each agent is a step on a canvas; Start is `main`. Add a
 step, write when to come to it and what it does, tick its tools, and draw an arrow by dragging from the dot on a
 step's right edge to another step (or choose the target in the step's editor, which also works from the keyboard).
@@ -221,7 +287,9 @@ flow can be gone back to. It writes the same file as a save in Admin → Studio:
 (see [the config file](configuration.md)). A flow that is not right in every part (a step without instructions, a
 name used twice) is not saved, and the builder says what to fix. It also points out, without stopping the save, a
 step that no arrow leads to from Start. A step's name is taken when you leave the field, and the arrows that lead to
-the step follow it. Where each step sits is stored with it as `at`, which the relay itself does not read.
+the step follow it. Where each step sits is stored with it as `at`, which the relay itself does not read. A step's
+editor also has what the relay does itself on arriving: the sentence, the tool and its arguments, and the branches,
+which are drawn as dashed arrows with their conditions.
 
 The builder edits the config's own `agents`. A [variant](#versions-and-ab-tests) that replaces `agents` keeps its own
 and is edited in the file. Tools are chosen by name from the relay's tools; a client's own tool is typed in. Max
@@ -238,6 +306,13 @@ drawing an arrow with the mouse) and then run on a relay with a local model (`qw
 Start to `orders`, looked the order up, went on to `refunds`, and refunded only after the user confirmed. Before the
 starting agent's tools were limited, the same model refunded from Start without handing over; a handover from Start
 straight to `refunds` was refused. Not tested on the hosted backends.
+
+The steps the relay does itself were run the same way: an `orders` step that says a sentence, calls `find_order`
+and branches on `status`. With the order shipped the conversation went on to `tracking`, with it delivered to
+`refunds` (and refunded after a yes), and with the order service down to `human`, each time with the sentence said
+as written and the tool's answer used by the agent that followed, 9 runs of 9. Before the repeat was cut, the same
+model said the sentence twice in 3 runs of 3 when the next agent had little else to say. A changed flow was saved
+through `PUT /auth/admin/studio/flow`, and one with a condition the relay does not know was refused.
 
 ### Backends that cannot change tools mid-session
 

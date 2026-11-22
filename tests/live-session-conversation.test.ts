@@ -722,3 +722,245 @@ describe("carrying a conversation across a dropped connection", () => {
     await provider.close();
   });
 });
+
+describe("what the relay does itself when a conversation comes to an agent", () => {
+  const found: Array<Record<string, unknown>> = [];
+  let order: unknown = { status: "delivered", total: 40 };
+  const FIND: ToolDefinition = {
+    name: "find_order",
+    description: "Finds the user's order",
+    parameters: { type: "object", properties: { which: { type: "string" } } },
+    handler: (args) => {
+      found.push(args);
+      if (order instanceof Error) throw order;
+      return order;
+    }
+  };
+  const agents = (orders: Record<string, unknown>, more: Array<Record<string, unknown>> = []) => ({
+    instructions: "You work for Acme.",
+    agents: [
+      { id: "orders", description: "Orders.", instructions: "Help with the order.", onEnter: orders },
+      { id: "tracking", description: "Where a parcel is.", instructions: "Say where the parcel is." },
+      { id: "refunds", description: "Money back.", instructions: "Refund politely.", tools: ["refund"] },
+      ...more
+    ]
+  });
+  /** A session whose engine records the line it is given with a tool's result. */
+  async function arrive(config: Record<string, unknown>, says = true, extra: Record<string, unknown> = {}) {
+    const results: Array<{ callId: string; output: Record<string, any>; say?: string }> = [];
+    const made = await setup({
+      config: { ...config, ...extra },
+      serverTools: [FIND, REFUND],
+      engine: {
+        ...(says ? { saysWithToolResult: true } : {}),
+        sendToolResult: (callId, output, say) =>
+          results.push({ callId, output: JSON.parse(output) as Record<string, any>, ...(say ? { say } : {}) })
+      }
+    });
+    const handOver = async (id = "orders", callId = "c1") => {
+      made.events().onSpeechStarted();
+      made.events().onRiderTranscript("Where is my order?", true);
+      made.events().onResponseStarted();
+      made.events().onToolCall!({ callId, name: "transfer_to_agent", arguments: JSON.stringify({ agent: id }) });
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    return { ...made, results, handOver };
+  }
+
+  beforeEach(() => {
+    found.length = 0;
+    order = { status: "delivered", total: 40 };
+  });
+
+  it("says the sentence in the owner's words and calls the tool, and tells the agent what came back", async () => {
+    const { results, handOver, client, provider } = await arrive(
+      agents({
+        say: "One moment, I am looking up your order.",
+        call: { tool: "find_order", arguments: { which: "latest" } }
+      })
+    );
+    await handOver();
+    expect(found).toEqual([{ which: "latest" }]);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.say).toBe("One moment, I am looking up your order.");
+    expect(results[0]!.output).toMatchObject({
+      ok: true,
+      agent: "orders",
+      instructions: "Help with the order.",
+      doneOnArriving: [{ agent: "orders", tool: "find_order", result: { status: "delivered", total: 40 } }]
+    });
+    expect(results[0]!.output.note).toContain("You are now the orders agent.");
+    expect(results[0]!.output.note).toContain("The relay has already called find_order for you");
+    expect(results[0]!.output.note).toContain(
+      'The user has just been told, in these words: "One moment, I am looking up your order." Do not say that again'
+    );
+    // The client sees the call like any other.
+    expect(client.ofType("tool.activity").map((event) => [event.name, event.state])).toEqual([
+      ["transfer_to_agent", "started"],
+      ["transfer_to_agent", "succeeded"],
+      ["find_order", "started"],
+      ["find_order", "succeeded"]
+    ]);
+    await provider.close();
+  });
+
+  it("has the model say the sentence where the upstream makes the speech itself", async () => {
+    const { results, handOver, provider } = await arrive(agents({ say: "This call may be recorded." }), false);
+    await handOver();
+    expect(results[0]!.say).toBeUndefined();
+    expect(results[0]!.output.note).toContain(
+      'Begin what you say next with exactly these words, changing none of them: "This call may be recorded."'
+    );
+    expect(results[0]!.output.doneOnArriving).toBeUndefined();
+    await provider.close();
+  });
+
+  it("moves on by what the tool answered, with no model choosing", async () => {
+    order = { status: "shipped", total: 40 };
+    const { results, handOver, client, toolUpdates, instructionUpdates, provider } = await arrive(
+      agents(
+        {
+          call: { tool: "find_order" },
+          next: [
+            { to: "tracking", if: { path: "status", is: "shipped" } },
+            { to: "refunds", if: { path: "total", above: 100 } }
+          ]
+        },
+        []
+      ),
+      true,
+      {}
+    );
+    await handOver();
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["orders", "tracking"]);
+    expect(results[0]!.output).toMatchObject({
+      ok: true,
+      agent: "tracking",
+      instructions: "Say where the parcel is.",
+      doneOnArriving: [{ agent: "orders", tool: "find_order", result: { status: "shipped", total: 40 } }]
+    });
+    expect(results[0]!.output.note).toContain("You are now the tracking agent.");
+    expect(instructionUpdates.at(-1)).toContain("Say where the parcel is.");
+    expect(toolUpdates.at(-1)!.map((tool) => tool.name)).toContain("find_order");
+    await provider.close();
+  });
+
+  it("stays with the agent when no branch applies", async () => {
+    const { results, handOver, client, provider } = await arrive(
+      agents({ call: { tool: "find_order" }, next: [{ to: "tracking", if: { path: "status", is: "shipped" } }] })
+    );
+    await handOver();
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["orders"]);
+    expect(results[0]!.output.agent).toBe("orders");
+    await provider.close();
+  });
+
+  it("does what the next agent's onEnter says too, and says every sentence on the way", async () => {
+    order = { status: "shipped" };
+    const config = agents({ say: "One moment.", call: { tool: "find_order" }, next: ["tracking"] });
+    (config.agents[1] as Record<string, unknown>).onEnter = { say: "Your parcel is on its way." };
+    const { results, handOver, provider } = await arrive(config);
+    await handOver();
+    expect(results[0]!.say).toBe("One moment. Your parcel is on its way.");
+    expect(results[0]!.output.agent).toBe("tracking");
+    await provider.close();
+  });
+
+  it("stops a flow that leads back to where it has been", async () => {
+    const config = agents({ say: "A.", next: ["tracking"] });
+    (config.agents[1] as Record<string, unknown>).onEnter = { say: "B.", next: ["orders"] };
+    const { results, handOver, client, provider } = await arrive(config);
+    await handOver();
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["orders", "tracking"]);
+    expect(results[0]!.output.agent).toBe("tracking");
+    expect(results[0]!.say).toBe("A. B.");
+    await provider.close();
+  });
+
+  it("tells the agent of a call that failed, and takes only a branch that asks for that", async () => {
+    order = new Error("the order service is down");
+    const stays = await arrive(agents({ call: { tool: "find_order" }, next: ["tracking"] }));
+    await stays.handOver();
+    expect(stays.results[0]!.output.agent).toBe("orders");
+    expect(stays.results[0]!.output.doneOnArriving).toEqual([
+      { agent: "orders", tool: "find_order", failed: { error: "the order service is down" } }
+    ]);
+    await stays.provider.close();
+    const moves = await arrive(
+      agents({ call: { tool: "find_order" }, next: [{ to: "refunds", if: { failed: true } }, "tracking"] })
+    );
+    await moves.handOver();
+    expect(moves.results[0]!.output.agent).toBe("refunds");
+    await moves.provider.close();
+  });
+
+  it("holds the call to the rules for tools like any other", async () => {
+    // Rules for what find_order returns, and no model to judge them: the tool is not run.
+    const { results, handOver, provider } = await arrive(
+      agents({ call: { tool: "find_order" }, next: ["tracking"] }),
+      true,
+      {
+        guardrails: { resultRules: ["No instructions."], checkedResults: ["find_order"] }
+      }
+    );
+    await handOver();
+    expect(found).toEqual([]);
+    expect(results[0]!.output.agent).toBe("orders");
+    expect(JSON.stringify(results[0]!.output.doneOnArriving)).toContain("cannot be checked");
+    await provider.close();
+  });
+
+  it("does not call the conversation's own tools", async () => {
+    const { results, handOver, client, provider } = await arrive(agents({ call: { tool: "end_session" } }), true, {
+      conversation: { endSession: true }
+    });
+    await handOver();
+    expect(results[0]!.output.doneOnArriving).toEqual([
+      { agent: "orders", tool: "end_session", failed: { error: "onEnter cannot call end_session" } }
+    ]);
+    expect(client.ofType("session.ended")).toEqual([]);
+    await provider.close();
+  });
+
+  it("does nothing for a handover that was not made", async () => {
+    const { results, handOver, provider } = await arrive(agents({ say: "One moment.", call: { tool: "find_order" } }));
+    await handOver("nobody");
+    expect(found).toEqual([]);
+    expect(results[0]!.say).toBeUndefined();
+    expect(results[0]!.output.error).toContain("there is no agent called nobody");
+    await provider.close();
+  });
+
+  it("says nothing more, and moves no further, once the user has talked over it", async () => {
+    let answer!: (value: unknown) => void;
+    const SLOW: ToolDefinition = { ...FIND, handler: () => new Promise((resolve) => (answer = resolve)) };
+    const results: Array<{ output: Record<string, any>; say?: string }> = [];
+    const { events, client, provider } = await setup({
+      config: agents({ say: "One moment.", call: { tool: "find_order" }, next: ["tracking"] }),
+      serverTools: [SLOW, REFUND],
+      engine: {
+        saysWithToolResult: true,
+        sendToolResult: (_callId, output, say) =>
+          results.push({ output: JSON.parse(output) as Record<string, any>, ...(say ? { say } : {}) })
+      }
+    });
+    events().onSpeechStarted();
+    events().onRiderTranscript("Where is my order?", true);
+    events().onResponseStarted();
+    events().onAgentText("Let me pass you on.");
+    events().onAgentAudio(Buffer.alloc(960));
+    events().onToolCall!({ callId: "c1", name: "transfer_to_agent", arguments: '{"agent":"orders"}' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(results).toEqual([]);
+    // The user talks over the reply while the order is being looked up.
+    events().onSpeechStarted();
+    events().onRiderTranscript("Never mind.", true);
+    answer({ status: "shipped" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.say).toBeUndefined();
+    expect(JSON.stringify(results[0]!.output)).not.toContain("just been told");
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["orders"]);
+    await provider.close();
+  });
+});

@@ -41,6 +41,7 @@ import {
   type AssistantProfile
 } from "../../assistant";
 import { config as appConfig } from "../../config";
+import { branchTaken, type AgentEntry } from "../../agent-entry";
 import { agentRoster, MAIN_AGENT, type AgentStage } from "../../conversation-config";
 import type { HistoryTurn } from "../../session-resume";
 import {
@@ -164,6 +165,20 @@ const BACKGROUND_STARTED = JSON.stringify({
 });
 const END_SESSION_TOOL = "end_session";
 const TRANSFER_AGENT_TOOL = "transfer_to_agent";
+/** How many agents a conversation passes through by rule, one handover of the model's. */
+const MAX_ENTRY_MOVES = 4;
+/** What of a tool's answer the next agent is shown of a call made on the way. */
+const MAX_ENTRY_RESULT_CHARS = 4000;
+
+/** A tool's answer as the model is shown it inside another result: its JSON when it is that, else its text. */
+function readable(output: string): unknown {
+  if (output.length > MAX_ENTRY_RESULT_CHARS) return `${output.slice(0, MAX_ENTRY_RESULT_CHARS)}…`;
+  try {
+    return JSON.parse(output) as unknown;
+  } catch {
+    return output;
+  }
+}
 const CANNOT_SEE = "我看不清。";
 
 // Any OpenAI-compatible vision endpoint. VISION_* wins; the Ark variables the
@@ -515,6 +530,9 @@ export function createLiveProvider(
   let restoredHistory = "";
   const roster: AgentStage[] = agentRoster(me().agents);
   let activeAgent = MAIN_AGENT;
+  /** Handovers whose target has an `onEnter` still to be done, by the id of the call that made them. */
+  const arrivals = new Map<string, string>();
+  let entryCalls = 0;
   let sessionTools: readonly ToolDefinition[] = [];
   let builtinTools: ToolDefinition[] = [];
   let idleTimer: NodeJS.Timeout | undefined;
@@ -910,7 +928,7 @@ export function createLiveProvider(
             required: ["agent"]
           };
         },
-        handler: (args) => {
+        handler: (args, context) => {
           const wanted = typeof args.agent === "string" ? args.agent.trim().toLowerCase() : "";
           const target = roster.find((agent) => agent.id.toLowerCase() === wanted);
           if (!target) {
@@ -930,38 +948,152 @@ export function createLiveProvider(
                 : `the ${activeAgent} agent cannot hand the conversation over; finish what the user needs yourself`
             );
           }
-          const from = activeAgent;
-          activeAgent = target.id;
-          log.info("conversation handed to another agent", { from, to: target.id });
-          saveResume();
-          send({ type: "agent.changed", agent: target.id });
-          if (engineReady) {
-            engine?.updateTools?.(offeredTools());
-            refreshInstructions();
-          }
-          // The instructions also travel in the result: some upstreams cannot
-          // take new instructions mid-session, and all of them read this.
-          return {
-            ok: true,
-            agent: target.id,
-            ...(target.instructions ? { instructions: target.instructions } : {}),
-            ...(target.tools ? { tools: target.tools } : {}),
-            // Where the conversation can go from here: an upstream that keeps its first instructions
-            // would otherwise go by the list of the agent it started as.
-            ...(target.handoffs
-              ? {
-                  canHandOverTo: handoffTargets(target).map(({ agent, when }) => ({
-                    agent: agent.id,
-                    when: when ?? agent.description
-                  }))
-                }
-              : {}),
-            note: `You are now the ${target.id} agent. Follow these instructions from here on and carry on helping the user. Do not greet again, and mention the handover only if it helps the user.`
-          };
+          moveTo(target);
+          // What the agent does on arriving is done once this call has answered: see `entered`.
+          if (target.onEnter) arrivals.set(context.callId, target.id);
+          return { ...arrivalResult(target), note: arrivalNote(target) };
         }
       });
     }
     return built;
+  }
+
+  /** The conversation is with another agent from here on. */
+  function moveTo(target: AgentStage): void {
+    const from = activeAgent;
+    activeAgent = target.id;
+    log.info("conversation handed to another agent", { from, to: target.id });
+    saveResume();
+    send({ type: "agent.changed", agent: target.id });
+    if (engineReady) {
+      engine?.updateTools?.(offeredTools());
+      refreshInstructions();
+    }
+  }
+
+  /** What the model is told of the agent it now is. The instructions also travel
+   *  here: some upstreams cannot take new instructions mid-session, and all of them read this. */
+  function arrivalResult(target: AgentStage): Record<string, unknown> {
+    return {
+      ok: true,
+      agent: target.id,
+      ...(target.instructions ? { instructions: target.instructions } : {}),
+      ...(target.tools ? { tools: target.tools } : {}),
+      // Where the conversation can go from here: an upstream that keeps its first instructions
+      // would otherwise go by the list of the agent it started as.
+      ...(target.handoffs
+        ? {
+            canHandOverTo: handoffTargets(target).map(({ agent, when }) => ({
+              agent: agent.id,
+              when: when ?? agent.description
+            }))
+          }
+        : {})
+    };
+  }
+
+  const arrivalNote = (target: AgentStage): string =>
+    `You are now the ${target.id} agent. Follow these instructions from here on and carry on helping the user. Do not greet again, and mention the handover only if it helps the user.`;
+
+  /** A tool the relay calls itself on arriving at an agent: refused, run and read like a call the model made. */
+  async function entryCall(
+    spec: NonNullable<AgentEntry["call"]>,
+    cancelled: () => boolean
+  ): Promise<{ ok: boolean; output: string }> {
+    if (!tools) return { ok: false, output: toolErrorText("tools are not available") };
+    // Ending the conversation and handing it over are the conversation's own doing, not a step's.
+    if (builtinTools.some((tool) => tool.name === spec.tool)) {
+      return { ok: false, output: toolErrorText(`onEnter cannot call ${spec.tool}`) };
+    }
+    entryCalls += 1;
+    const call = {
+      callId: `enter_${now().toString(36)}_${entryCalls}`,
+      name: spec.tool,
+      arguments: JSON.stringify(spec.arguments)
+    };
+    const refused = await toolRefusal(call);
+    if (refused !== undefined) return { ok: false, output: toolErrorText(refused) };
+    if (cancelled()) return { ok: false, output: JSON.stringify({ error: "cancelled" }) };
+    return checkedResult(call.name, await tools.run(call));
+  }
+
+  /**
+   * The conversation was handed to an agent with an `onEnter`: the relay does
+   * what that says, with no model choosing any of it. A tool is called, the
+   * conversation moves on by what it answered, and the agent it comes to rest
+   * with is told what was done on the way. Resolves to the handover's result
+   * for the model, and the lines to say in the owner's own words.
+   */
+  async function entered(
+    callId: string,
+    outcome: { ok: boolean; output: string },
+    cancelled: () => boolean
+  ): Promise<{ outcome: { ok: boolean; output: string }; say?: string }> {
+    const arrived = arrivals.get(callId);
+    arrivals.delete(callId);
+    let agent = arrived ? roster.find((one) => one.id === arrived) : undefined;
+    if (!agent?.onEnter || !outcome.ok) return { outcome };
+    const lines: string[] = [];
+    const done: Array<Record<string, unknown>> = [];
+    const visited = new Set([agent.id]);
+    try {
+      for (let moves = 0; agent.onEnter && !cancelled(); moves += 1) {
+        const entry: AgentEntry = agent.onEnter;
+        if (entry.say) lines.push(entry.say);
+        let result: { ok: boolean; output: string } | undefined;
+        if (entry.call) {
+          result = await entryCall(entry.call, cancelled);
+          if (cancelled()) break;
+          done.push({
+            agent: agent.id,
+            tool: entry.call.tool,
+            [result.ok ? "result" : "failed"]: readable(result.output)
+          });
+        }
+        const to = branchTaken(entry.next, result);
+        const target = to ? roster.find((one) => one.id === to) : undefined;
+        if (!target) break;
+        // A flow that leads back to where it has been would never stop of itself.
+        if (visited.has(target.id) || moves >= MAX_ENTRY_MOVES) {
+          log.warn("onEnter did not move on: the flow goes round in a circle", { from: agent.id, to: target.id });
+          break;
+        }
+        moveTo(target);
+        visited.add(target.id);
+        agent = target;
+      }
+    } catch (error) {
+      log.warn("onEnter failed", { message: error instanceof Error ? error.message : String(error) });
+    }
+    // What the user said meanwhile has cancelled the reply: nothing more is said for it.
+    const say = cancelled() || lines.length === 0 ? undefined : lines.join(" ");
+    const spoken = say !== undefined && engine?.saysWithToolResult === true;
+    const final = stage() ?? agent;
+    const tools = done.map((one) => String(one.tool)).join(", ");
+    const note = [
+      arrivalNote(final),
+      ...(done.length > 0
+        ? [
+            `The relay has already called ${tools} for you: what came back is in doneOnArriving. Go by it, and do not call ${done.length > 1 ? "them" : "it"} again for the same thing.`
+          ]
+        : []),
+      ...(say === undefined
+        ? []
+        : spoken
+          ? [`The user has just been told, in these words: "${say}" Do not say that again: carry on from there.`]
+          : [`Begin what you say next with exactly these words, changing none of them: "${say}"`])
+    ].join(" ");
+    return {
+      outcome: {
+        ok: true,
+        output: JSON.stringify({
+          ...arrivalResult(final),
+          ...(done.length > 0 ? { doneOnArriving: done } : {}),
+          note
+        })
+      },
+      ...(spoken ? { say } : {})
+    };
   }
 
   function refreshInstructions(): void {
@@ -1958,7 +2090,13 @@ export function createLiveProvider(
             return run();
           })
         : run();
-      void answer.then((outcome) => {
+      const settled =
+        call.name === TRANSFER_AGENT_TOOL
+          ? answer.then((outcome) =>
+              entered(call.callId, outcome, () => closed || epoch !== toolEpoch || engine !== current)
+            )
+          : answer.then((outcome) => ({ outcome, say: undefined }));
+      void settled.then(({ outcome, say }) => {
         toolsRunning = Math.max(0, toolsRunning - 1);
         if (closed || engine !== current) return;
         const stale = epoch !== toolEpoch;
@@ -1968,7 +2106,7 @@ export function createLiveProvider(
           toolFollowUp = true;
           toolFollowUpAt = now();
         }
-        current?.sendToolResult?.(call.callId, outcome.output);
+        current?.sendToolResult?.(call.callId, outcome.output, stale ? undefined : say);
         if (stale && toolsRunning === 0 && !responseActive) idleStatus();
       });
     },

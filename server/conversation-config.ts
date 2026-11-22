@@ -1,3 +1,5 @@
+import { agentEntryFrom, type AgentEntry } from "./agent-entry";
+
 /**
  * How a conversation is run, beyond what the assistant says: when the relay
  * checks that a silent user is still there, when it ends a conversation, and
@@ -59,6 +61,8 @@ export type AgentStage = {
    * agent, on its description alone. Empty: none, the conversation stays here.
    */
   handoffs?: AgentHandoff[];
+  /** What the relay does itself when the conversation is handed to this agent. */
+  onEnter?: AgentEntry;
 };
 
 /** How the loader says that an agent's every handoff was dropped: a consequence of loading on regardless. */
@@ -198,13 +202,22 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
         else problems.push(`agent ${id}: every handoff needs the id of an agent, as "billing" or { "to": "billing" }`);
       }
     }
+    // A mistake here costs the agent what it does on arriving, not the agent.
+    const entered = agentEntryFrom(entry.onEnter);
+    if (entered.problem) problems.push(`agent ${id}: ${entered.problem}`);
+    // The relay calls the tool as this agent, which may use only the tools on its list.
+    if (entered.entry?.call && tools && !tools.includes(entered.entry.call.tool)) {
+      problems.push(`agent ${id}: onEnter calls ${entered.entry.call.tool}, which is not one of the agent's tools`);
+      delete entered.entry;
+    }
     seen.add(key);
     agents.push({
       id: key === MAIN_AGENT ? MAIN_AGENT : id,
       description: description ?? "The agent every conversation starts with; handles everything else.",
       instructions: instructions ?? "",
       ...(tools ? { tools } : {}),
-      ...(handoffs ? { handoffs } : {})
+      ...(handoffs ? { handoffs } : {}),
+      ...(entered.entry ? { onEnter: entered.entry } : {})
     });
   }
   if (raw.length > MAX_AGENTS) problems.push(`only the first ${MAX_AGENTS} agents are used`);
@@ -230,6 +243,24 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
       problems.push(`agent ${agent.id}: ${NO_HANDOFF_LEFT}, so it cannot hand the conversation over at all`);
     }
     agent.handoffs = kept;
+  }
+  // A branch leads to an agent there is, and not back to the agent it starts from.
+  for (const agent of agents) {
+    const next = agent.onEnter?.next;
+    if (!next) continue;
+    const wrong = next
+      .map((branch) => {
+        const target = ids.get(branch.to.toLowerCase());
+        if (!target) return `there is no agent ${branch.to} for onEnter to move on to`;
+        if (target === agent.id) return "onEnter cannot move on to the agent itself";
+        branch.to = target;
+        return undefined;
+      })
+      .find(Boolean);
+    if (wrong) {
+      problems.push(`agent ${agent.id}: ${wrong}`);
+      delete agent.onEnter;
+    }
   }
   // One agent besides the starting one is the least a handover needs.
   if (agents.length > 0 && agents.every((agent) => agent.id === MAIN_AGENT)) {

@@ -3,6 +3,91 @@
 
 type FlowHandoff = { to: string; when?: string };
 
+/** A test of what the tool called on arriving answered. One of the tests, and a path for all but `failed`. */
+type FlowCondition = {
+  path?: string;
+  is?: string | number | boolean;
+  in?: Array<string | number | boolean>;
+  above?: number;
+  below?: number;
+  exists?: boolean;
+  failed?: true;
+};
+
+export type FlowBranch = { to: string; if?: FlowCondition };
+
+/** What the relay does itself when a conversation comes to a step. */
+export type FlowEntry = {
+  say?: string;
+  call?: { tool: string; arguments?: Record<string, unknown> };
+  next?: FlowBranch[];
+};
+
+/** The tests a branch can make, as the builder offers them. `always` is a branch without a condition. */
+export const BRANCH_TESTS = ["always", "is", "in", "above", "below", "exists", "missing", "failed"] as const;
+export type BranchTest = (typeof BRANCH_TESTS)[number];
+
+export function testOf(branch: FlowBranch): BranchTest {
+  const condition = branch.if;
+  if (!condition) return "always";
+  if (condition.failed) return "failed";
+  if (condition.exists !== undefined) return condition.exists ? "exists" : "missing";
+  return (["is", "in", "above", "below"] as const).find((test) => condition[test] !== undefined) ?? "is";
+}
+
+/** What a branch compares with, as it is typed: one value, or several parted by commas. */
+export function valueOf(branch: FlowBranch): string {
+  const condition = branch.if;
+  if (!condition) return "";
+  if (condition.in) return condition.in.join(", ");
+  const value = condition.is ?? condition.above ?? condition.below;
+  return value === undefined ? "" : String(value);
+}
+
+/** A number or true/false when the text is one, else the text: "40" is compared as a number either way. */
+function typed(text: string): string | number | boolean {
+  const value = text.trim();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return value !== "" && Number.isFinite(Number(value)) ? Number(value) : value;
+}
+
+/** The branch a test, a path and a value make. A number that is none makes a condition the relay will refuse. */
+export function branchOf(to: string, test: BranchTest, path: string, value: string): FlowBranch {
+  if (test === "always") return { to };
+  if (test === "failed") return { to, if: { failed: true } };
+  const where = path.trim() ? { path: path.trim() } : {};
+  if (test === "exists" || test === "missing") return { to, if: { ...where, exists: test === "exists" } };
+  if (test === "in") {
+    return {
+      to,
+      if: {
+        ...where,
+        in: value
+          .split(",")
+          .map((one) => one.trim())
+          .filter(Boolean)
+          .map(typed)
+      }
+    };
+  }
+  if (test === "is") return { to, if: { ...where, is: typed(value) } };
+  return { to, if: { ...where, [test]: Number(value.trim() === "" ? Number.NaN : value) } };
+}
+
+/** A branch's condition in a few words, for the arrow it draws. */
+function conditionText(branch: FlowBranch): string {
+  const condition = branch.if;
+  if (!condition) return "";
+  if (condition.failed) return "call failed";
+  const what = condition.path ?? "answer";
+  if (condition.exists !== undefined) return `${what} ${condition.exists ? "exists" : "missing"}`;
+  if (condition.in) return `${what} in ${condition.in.join(", ")}`;
+  if (condition.above !== undefined) return `${what} > ${condition.above}`;
+  if (condition.below !== undefined) return `${what} < ${condition.below}`;
+  return `${what} = ${String(condition.is)}`;
+}
+
 export type FlowStep = {
   id: string;
   description?: string;
@@ -11,6 +96,7 @@ export type FlowStep = {
   tools?: string[];
   /** Absent: any step. Empty: none. */
   handoffs?: FlowHandoff[];
+  onEnter?: FlowEntry;
   at?: [number, number];
 };
 
@@ -101,6 +187,8 @@ export type FlowArrow = {
   from: string;
   to: string;
   when?: string;
+  /** True for a branch the relay takes itself on arriving, by what a tool answered. */
+  byRule?: true;
   /** An SVG path from the edge of one step to the edge of the other. */
   path: string;
   /** Where the condition is written: the middle of the path. */
@@ -139,6 +227,20 @@ export function arrowsOf(steps: readonly FlowStep[]): FlowArrow[] {
         to: target.id,
         ...(handoff.when ? { when: handoff.when } : {}),
         ...curve(step.at, target.at)
+      });
+    }
+    for (const branch of step.onEnter?.next ?? []) {
+      const target = steps.find((candidate) => same(candidate.id, branch.to));
+      if (!target || !step.at || !target.at) continue;
+      // Drawn a little lower than a handoff between the same two steps, so that both can be seen.
+      const lower = (at: [number, number]): [number, number] => [at[0], at[1] + 18];
+      const text = conditionText(branch);
+      arrows.push({
+        from: step.id,
+        to: target.id,
+        byRule: true,
+        ...(text ? { when: text } : {}),
+        ...curve(lower(step.at), lower(target.at))
       });
     }
   }
@@ -204,6 +306,14 @@ export function renameStep(steps: readonly FlowStep[], from: string, to: string)
     ...(step.id === from ? { id: to } : {}),
     ...(step.handoffs
       ? { handoffs: step.handoffs.map((handoff) => (handoff.to === from ? { ...handoff, to } : handoff)) }
+      : {}),
+    ...(step.onEnter?.next
+      ? {
+          onEnter: {
+            ...step.onEnter,
+            next: step.onEnter.next.map((branch) => (branch.to === from ? { ...branch, to } : branch))
+          }
+        }
       : {})
   }));
 }
@@ -213,9 +323,13 @@ export function removeStep(steps: readonly FlowStep[], id: string): FlowStep[] {
   if (same(id, START)) return [...steps];
   return steps
     .filter((step) => step.id !== id)
-    .map((step) =>
-      step.handoffs ? { ...step, handoffs: step.handoffs.filter((handoff) => handoff.to !== id) } : step
-    );
+    .map((step) => ({
+      ...step,
+      ...(step.handoffs ? { handoffs: step.handoffs.filter((handoff) => handoff.to !== id) } : {}),
+      ...(step.onEnter?.next
+        ? { onEnter: { ...step.onEnter, next: step.onEnter.next.filter((branch) => branch.to !== id) } }
+        : {})
+    }));
 }
 
 /**
@@ -235,7 +349,7 @@ export function connect(steps: readonly FlowStep[], from: string, to: string): F
 
 export type FlowProblem = {
   step: string;
-  field: "id" | "description" | "instructions" | "handoffs" | "flow";
+  field: "id" | "description" | "instructions" | "handoffs" | "onEnter" | "flow";
   kind: string;
 };
 
@@ -264,8 +378,45 @@ export function flowProblems(steps: readonly FlowStep[]): FlowProblem[] {
     if (step.handoffs?.some((handoff) => (handoff.when?.trim().length ?? 0) > 300)) {
       problems.push({ step: step.id, field: "handoffs", kind: "long" });
     }
+    const kind = entryProblem(step);
+    if (kind) problems.push({ step: step.id, field: "onEnter", kind });
   }
   return problems;
+}
+
+/** What is wrong with a step's `onEnter`, as the relay would say it, if anything is. */
+function entryProblem(step: FlowStep): string | undefined {
+  const entry = step.onEnter;
+  if (!entry) return undefined;
+  if ((entry.say?.trim().length ?? 0) > 500) return "say";
+  const tool = entry.call?.tool.trim();
+  if (entry.call && !tool) return "tool";
+  if (tool && step.tools && !step.tools.includes(tool)) return "notOffered";
+  const next = entry.next ?? [];
+  if (next.some((branch) => branch.if) && !tool) return "noCall";
+  if (next.slice(0, -1).some((branch) => !branch.if)) return "alwaysFirst";
+  for (const branch of next) {
+    const condition = branch.if;
+    if (!condition || condition.failed || condition.exists !== undefined) continue;
+    if (condition.in ? condition.in.length === 0 : condition.is === "") return "value";
+    for (const test of ["above", "below"] as const) {
+      if (condition[test] !== undefined && !Number.isFinite(condition[test])) return "number";
+    }
+  }
+  return undefined;
+}
+
+/** A step's `onEnter` as the relay takes it: nothing of it when nothing is written in it. */
+function entryToSave(entry: FlowEntry | undefined): FlowEntry | undefined {
+  if (!entry) return undefined;
+  const say = entry.say?.replace(/\s+/g, " ").trim();
+  const tool = entry.call?.tool.trim();
+  const saved: FlowEntry = {
+    ...(say ? { say } : {}),
+    ...(tool ? { call: { tool, arguments: entry.call?.arguments ?? {} } } : {}),
+    ...(entry.next?.length ? { next: entry.next } : {})
+  };
+  return Object.keys(saved).length > 0 ? saved : undefined;
 }
 
 export type FlowWarning = { step: string; kind: "ends" | "unreachable" };
@@ -285,8 +436,9 @@ export function flowWarnings(steps: readonly FlowStep[]): FlowWarning[] {
     if (reached.has(step.id)) continue;
     reached.add(step.id);
     // Without arrows of its own a step is open to every other.
+    const byRule = step.onEnter?.next ?? [];
     const next = step.handoffs
-      ? steps.filter((other) => step.handoffs!.some((handoff) => same(handoff.to, other.id)))
+      ? steps.filter((other) => [...step.handoffs!, ...byRule].some((arrow) => same(arrow.to, other.id)))
       : steps;
     queue.push(...next.filter((other) => !reached.has(other.id)));
   }
@@ -308,6 +460,7 @@ export function flowToSave(steps: readonly FlowStep[]): FlowStep[] {
           }))
         }
       : {}),
+    ...(entryToSave(step.onEnter) ? { onEnter: entryToSave(step.onEnter) } : {}),
     ...(step.at ? { at: step.at } : {})
   }));
 }

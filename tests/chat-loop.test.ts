@@ -139,6 +139,69 @@ describe("chat loop", () => {
     expect(chats[2].messages.map((message: any) => message.role)).toEqual(["system", "user", "assistant", "user"]);
   });
 
+  it("speaks a line it is given with a tool's result, between what the model said and what it says next", async () => {
+    const { loop, chats, toolCalls, sentences, seen } = setup([
+      () =>
+        sseOf([
+          text("Let me pass you on."),
+          toolPiece({ index: 0, id: "c1", function: { name: "lookup", arguments: "{}" } })
+        ]),
+      () => sseOf([text("It was delivered on Monday.")]),
+      () => sseOf([text("Sure.")])
+    ]);
+    const done = loop.reply("where is my order");
+    await vi.waitFor(() => expect(toolCalls).toEqual(["c1"]));
+    loop.sendToolResult("c1", "result", "One moment, I am looking up your order.");
+    await done;
+    // Spoken as it is: no model wrote it.
+    expect(chats).toHaveLength(2);
+    expect(sentences).toEqual([
+      "Let me pass you on.",
+      "One moment, I am looking up your order.",
+      "It was delivered on Monday."
+    ]);
+    expect(seen).toContain("text: One moment, I am looking up your order. ");
+    // And remembered as part of what the assistant said.
+    await loop.reply("thanks");
+    expect(chats[2].messages.slice(1, 3)).toEqual([
+      { role: "user", content: "where is my order" },
+      {
+        role: "assistant",
+        content: "Let me pass you on. One moment, I am looking up your order. It was delivered on Monday."
+      }
+    ]);
+  });
+
+  it("does not let the model begin by repeating the line that was just spoken", async () => {
+    const run = async (...pieces: string[]) => {
+      const { loop, toolCalls, sentences, seen } = setup([
+        () => sseOf([toolPiece({ index: 0, id: "c1", function: { name: "lookup", arguments: "{}" } })]),
+        () => sseOf(pieces.map(text))
+      ]);
+      const done = loop.reply("where is my order");
+      await vi.waitFor(() => expect(toolCalls).toEqual(["c1"]));
+      loop.sendToolResult("c1", "result", "One moment. I am sorry, the order system is down.");
+      await done;
+      return { sentences: sentences.slice(1), shown: seen.filter((one) => one.startsWith("text:")).slice(1) };
+    };
+    // The whole of it, in pieces as a model streams them.
+    expect(await run("One mom", "ent. I am sorry, the order", " system is down. A colleague will call you.")).toEqual({
+      sentences: ["A colleague will call you."],
+      shown: ["text:A colleague will call you."]
+    });
+    // One sentence of it, in other capitals.
+    expect((await run("i am sorry, the order system is down. A colleague will call you.")).sentences).toEqual([
+      "A colleague will call you."
+    ]);
+    // Nothing but the repeat: nothing more is said.
+    expect((await run("One moment. I am sorry, the order system is down.")).sentences).toEqual([]);
+    // What only begins like it is the model's own, and is said in full.
+    expect((await run("One moment", " more, please.")).sentences).toEqual(["One moment more, please."]);
+    expect((await run("I am")).sentences).toEqual(["I am"]);
+    // And so is a reply that has nothing of it.
+    expect((await run("A colleague will call you.")).sentences).toEqual(["A colleague will call you."]);
+  });
+
   it("asks again, once, when the model promises a lookup and calls nothing", async () => {
     const { loop, chats, toolCalls, sentences } = setup([
       () => sseOf([text("Let me check that for you.")]),

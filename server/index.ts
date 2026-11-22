@@ -2234,6 +2234,18 @@ for (const profile of [assistant(), ...assistant().variants.map((variant) => var
     );
   }
 }
+// The same for a tool an agent's onEnter calls: the step would arrive, call nothing and say why.
+{
+  const known = new Set(installedServerTools().map((tool) => tool.name));
+  for (const agent of assistant().agents) {
+    const tool = agent.onEnter?.call?.tool;
+    if (tool && !known.has(tool)) {
+      log.warn(
+        `agents: ${agent.id}: onEnter calls ${tool}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the call will fail.`
+      );
+    }
+  }
+}
 // Max Cloud sessions a crash or restart left unbooked are charged up to their last checkpoint, and
 // bookings that failed are retried: now, and from then on every 15 seconds.
 recoverCloudSessions();

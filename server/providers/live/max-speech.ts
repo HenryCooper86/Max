@@ -423,8 +423,9 @@ export function createMaxSpeechEngine(
     addContext(text) {
       chat.addContext(text);
     },
-    sendToolResult(callId, output) {
-      chat.sendToolResult(callId, output);
+    saysWithToolResult: true,
+    sendToolResult(callId, output, say) {
+      chat.sendToolResult(callId, output, say);
     },
     // Only when the owner said the chat model sees pictures (LOCAL_LLM_IMAGES).
     ...(chatStage().images ? { sendImage } : {}),

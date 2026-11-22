@@ -83,6 +83,11 @@
   same user gets the same variant every time, the record names it as `session.variant`, and `GET /v1/variants` counts
   conversations, length, end reasons, analysis success and sentiment for each. Its `comparison` says whether each
   variant's success rate differs from the first variant's by more than chance (Fisher's exact test). See [versions and A/B tests](docs/conversations.md#versions-and-ab-tests).
+- Flow steps the relay does itself. An agent's new `onEnter` says a sentence in your words, calls a tool with fixed
+  arguments and moves the conversation on by what the tool answered (`is`, `in`, `above`, `below`, `exists`,
+  `failed`), with no model deciding any of it. On the cascaded backends the sentence is spoken as written. The
+  flow builder edits it and draws the branches as dashed arrows. See
+  [Flows](docs/conversations.md#flows).
 - MCP servers that are programs, after review: a server none of whose tools can be used is stopped and not started
   again every few minutes; a program is not left running when it is stopped while starting; an answer written just
   before a program exits is read; the program is stopped with whatever it started; its log lines are limited.

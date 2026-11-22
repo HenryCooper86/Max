@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import {
   addStep,
   arrowsOf,
+  BRANCH_TESTS,
+  branchOf,
   connect,
   curve,
   flowProblems,
@@ -18,7 +20,12 @@ import {
   START,
   stepAt,
   surfaceSize,
+  testOf,
   tidy,
+  valueOf,
+  type BranchTest,
+  type FlowBranch,
+  type FlowEntry,
   type FlowProblem,
   type FlowStep
 } from "../../lib/flow";
@@ -47,6 +54,163 @@ const DRAG_THRESHOLD = 4;
  * through another step's name ("refund" on the way to "refund_policy") is not
  * in the way, and the arrows are rewritten once.
  */
+type Say = (zh: string, en: string) => string;
+
+/**
+ * The arguments of the call a step makes on arriving, as JSON. What is typed
+ * is kept as typed, and becomes the step's only once it is an object.
+ */
+function EntryArguments({
+  value,
+  say,
+  onChange
+}: {
+  value: Record<string, unknown> | undefined;
+  say: Say;
+  onChange(value: Record<string, unknown>): void;
+}) {
+  const [draft, setDraft] = useState(() => (value && Object.keys(value).length > 0 ? JSON.stringify(value) : ""));
+  const [refused, setRefused] = useState(false);
+  const commit = () => {
+    if (!draft.trim()) {
+      setRefused(false);
+      onChange({});
+      return;
+    }
+    try {
+      const parsed: unknown = JSON.parse(draft);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+      setRefused(false);
+      onChange(parsed as Record<string, unknown>);
+    } catch {
+      setRefused(true);
+    }
+  };
+  return (
+    <div className="studioField">
+      <label className="studioLabel" htmlFor="flow-entry-arguments">
+        {say("调用时的参数（JSON）", "With these arguments (JSON)")}
+      </label>
+      <input
+        id="flow-entry-arguments"
+        className="studioInput mono"
+        value={draft}
+        maxLength={2000}
+        spellCheck={false}
+        placeholder='{ "which": "latest" }'
+        aria-invalid={refused ? true : undefined}
+        onChange={(event) => {
+          setDraft(event.currentTarget.value);
+          setRefused(false);
+        }}
+        onBlur={commit}
+      />
+      {refused ? (
+        <p className="studioHint flowNameRefused" role="alert">
+          {say(
+            '这不是一个 JSON 对象，参数没有改动。例如：{ "which": "latest" }',
+            'This is not a JSON object, so the arguments were not changed. For example: { "which": "latest" }'
+          )}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** One branch a step takes by rule: where to, and what of the tool's answer decides it. */
+function BranchRow({
+  branch,
+  targets,
+  say,
+  nameOf,
+  onChange,
+  onRemove
+}: {
+  branch: FlowBranch;
+  targets: string[];
+  say: Say;
+  nameOf(id: string): string;
+  onChange(branch: FlowBranch): void;
+  onRemove(): void;
+}) {
+  const test = testOf(branch);
+  // As typed: "1." and "a, " are on the way to a value, and must not be tidied away under the cursor.
+  const [value, setValue] = useState(() => valueOf(branch));
+  const path = branch.if?.path ?? "";
+  const label: Record<BranchTest, string> = {
+    always: say("其余情况", "otherwise"),
+    is: say("等于", "is"),
+    in: say("是其中之一", "is one of"),
+    above: say("大于", "is above"),
+    below: say("小于", "is below"),
+    exists: say("存在", "is there"),
+    missing: say("不存在", "is not there"),
+    failed: say("调用失败", "the call failed")
+  };
+  const reads = test !== "always" && test !== "failed";
+  const compares = reads && test !== "exists" && test !== "missing";
+  return (
+    <li>
+      <ArrowRight size={14} aria-hidden="true" />
+      <select
+        className="studioInput"
+        aria-label={say("转到哪一步", "Go to")}
+        value={branch.to}
+        onChange={(event) => onChange({ ...branch, to: event.currentTarget.value })}
+      >
+        {targets.map((id) => (
+          <option key={id} value={id}>
+            {nameOf(id)}
+          </option>
+        ))}
+      </select>
+      {reads ? (
+        <input
+          className="studioInput mono"
+          aria-label={say("看答复里的哪一项", "Which part of the answer")}
+          placeholder="order.status"
+          maxLength={120}
+          value={path}
+          onChange={(event) => onChange(branchOf(branch.to, test, event.currentTarget.value, value))}
+        />
+      ) : null}
+      <select
+        className="studioInput"
+        aria-label={say("条件", "Condition")}
+        value={test}
+        onChange={(event) => onChange(branchOf(branch.to, event.currentTarget.value as BranchTest, path, value))}
+      >
+        {BRANCH_TESTS.map((one) => (
+          <option key={one} value={one}>
+            {label[one]}
+          </option>
+        ))}
+      </select>
+      {compares ? (
+        <input
+          className="studioInput"
+          aria-label={say("比较的值", "The value to compare with")}
+          placeholder={test === "in" ? "shipped, packed" : test === "is" ? "shipped" : "100"}
+          maxLength={200}
+          value={value}
+          onChange={(event) => {
+            setValue(event.currentTarget.value);
+            onChange(branchOf(branch.to, test, path, event.currentTarget.value));
+          }}
+        />
+      ) : null}
+      <button
+        type="button"
+        className="studioButton"
+        aria-label={say("删除这个分支", "Remove this branch")}
+        onClick={onRemove}
+      >
+        <Trash size={14} aria-hidden="true" />
+      </button>
+    </li>
+  );
+}
+
 function StepName({
   steps,
   id,
@@ -259,6 +423,33 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
             `"${step}" cannot be a step's name: start with a letter and use letters, digits, _ and -, 32 characters at most.`
           );
     }
+    if (problem.field === "onEnter") {
+      const texts: Record<string, string> = {
+        say: say(
+          `${step}：到达时说的话最多 500 个字符。`,
+          `${step}: what is said on arriving can be 500 characters at most.`
+        ),
+        tool: say(`${step}：选一个到达时调用的工具。`, `${step}: choose the tool to call on arriving.`),
+        notOffered: say(
+          `${step}：到达时调用的工具不在这一步可以用的工具里。`,
+          `${step}: the tool called on arriving is not one of the tools this step may use.`
+        ),
+        noCall: say(
+          `${step}：带条件的分支要看工具的答复，先选一个到达时调用的工具。`,
+          `${step}: a branch with a condition reads a tool's answer. Choose a tool to call on arriving first.`
+        ),
+        alwaysFirst: say(
+          `${step}：“其余情况”的分支总会被走到，所以只能放在最后。`,
+          `${step}: an "otherwise" branch is always taken, so it has to be the last one.`
+        ),
+        value: say(`${step}：有一个分支没有写比较的值。`, `${step}: a branch has no value to compare with.`),
+        number: say(
+          `${step}：“大于”和“小于”要和一个数字比较。`,
+          `${step}: "is above" and "is below" compare with a number.`
+        )
+      };
+      return texts[problem.kind] ?? `${step}: onEnter`;
+    }
     if (problem.kind === "long") {
       return problem.field === "instructions"
         ? say(`${step}：指令最多 8000 个字符。`, `${step}: the instructions can be 8,000 characters at most.`)
@@ -381,6 +572,16 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
     ? steps.filter((step) => step.id !== current.id && !current.handoffs?.some((handoff) => handoff.to === step.id))
     : [];
   const toolChoices = current ? [...new Set([...tools, ...(current.tools ?? [])])] : [];
+  const entry: FlowEntry = current?.onEnter ?? {};
+  const branches = entry.next ?? [];
+  // The call is made as this step, with the tools this step may use.
+  const entryTools = current
+    ? [...new Set([...(current.tools ?? tools), ...(entry.call?.tool ? [entry.call.tool] : [])])]
+    : [];
+  const others = current ? steps.filter((step) => step.id !== current.id).map((step) => step.id) : [];
+  const patchEntry = (values: Partial<FlowEntry>) => {
+    if (current) patch(current.id, { onEnter: { ...entry, ...values } });
+  };
 
   return (
     <section className="flowBuilder studioScope" aria-labelledby="studio-flow">
@@ -460,8 +661,8 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
             </defs>
             {arrows.map((arrow) => (
               <path
-                key={`${arrow.from}>${arrow.to}`}
-                className={arrow.from === selected ? "selected" : ""}
+                key={`${arrow.from}>${arrow.to}${arrow.byRule ? ">rule" : ""}`}
+                className={`${arrow.from === selected ? "selected" : ""}${arrow.byRule ? " byRule" : ""}`.trim()}
                 d={arrow.path}
                 markerEnd="url(#flow-arrowhead)"
               />
@@ -474,8 +675,8 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
             .filter((arrow) => arrow.when)
             .map((arrow) => (
               <span
-                key={`${arrow.from}>${arrow.to}`}
-                className={`flowCondition${arrow.from === selected ? " selected" : ""}`}
+                key={`${arrow.from}>${arrow.to}${arrow.byRule ? ">rule" : ""}`}
+                className={`flowCondition${arrow.from === selected ? " selected" : ""}${arrow.byRule ? " byRule" : ""}`}
                 style={{ left: arrow.middle[0], top: arrow.middle[1] }}
                 title={arrow.when}
               >
@@ -786,6 +987,93 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
                     </p>
                   </>
                 ) : null}
+              </fieldset>
+
+              <fieldset className="flowFieldset">
+                <legend className="studioLabel">
+                  {say("对话到这一步时，中继自己做的事", "What the relay does itself when a conversation comes here")}
+                </legend>
+                <p className="studioHint">
+                  {say(
+                    "这些都不由模型决定：先说一句固定的话，再调用一个工具，然后按工具的答复转到下一步。它在对话被转交到这一步时发生，不在对话开始时发生。",
+                    "No model decides any of this: a fixed sentence, then a tool call, then on to another step by what the tool answered. It happens when a conversation is handed to this step, not when a conversation starts."
+                  )}
+                </p>
+                <div className="studioField">
+                  <label className="studioLabel" htmlFor="flow-entry-say">
+                    {say("原样说这句话", "Say, in these words")}
+                  </label>
+                  <input
+                    id="flow-entry-say"
+                    className="studioInput"
+                    value={entry.say ?? ""}
+                    maxLength={500}
+                    placeholder={say("请稍等，我查一下您的订单。", "One moment, I am looking up your order.")}
+                    onChange={(event) => patchEntry({ say: event.currentTarget.value })}
+                  />
+                </div>
+                <div className="studioField">
+                  <label className="studioLabel" htmlFor="flow-entry-tool">
+                    {say("然后调用这个工具", "Then call this tool")}
+                  </label>
+                  <select
+                    id="flow-entry-tool"
+                    className="studioInput"
+                    value={entry.call?.tool ?? ""}
+                    onChange={(event) =>
+                      patchEntry({
+                        call: event.currentTarget.value ? { tool: event.currentTarget.value, arguments: {} } : undefined
+                      })
+                    }
+                  >
+                    <option value="">{say("不调用", "None")}</option>
+                    {entryTools.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {entry.call ? (
+                  <EntryArguments
+                    key={`${current.id}:${entry.call.tool}`}
+                    value={entry.call.arguments}
+                    say={say}
+                    onChange={(value) => patchEntry({ call: { tool: entry.call!.tool, arguments: value } })}
+                  />
+                ) : null}
+                <ul className="flowBranches">
+                  {branches.map((branch, index) => (
+                    <BranchRow
+                      key={`${current.id}:${index}:${branches.length}`}
+                      branch={branch}
+                      targets={others}
+                      say={say}
+                      nameOf={nameOf}
+                      onChange={(changed) =>
+                        patchEntry({ next: branches.map((one, at) => (at === index ? changed : one)) })
+                      }
+                      onRemove={() => patchEntry({ next: branches.filter((_, at) => at !== index) })}
+                    />
+                  ))}
+                </ul>
+                <div>
+                  <button
+                    type="button"
+                    className="studioButton"
+                    disabled={others.length === 0 || branches.length >= 8}
+                    onClick={() =>
+                      patchEntry({
+                        next: [
+                          ...branches,
+                          entry.call ? { to: others[0]!, if: { path: "", is: "" } } : { to: others[0]! }
+                        ]
+                      })
+                    }
+                  >
+                    <Plus size={14} aria-hidden="true" /> {say("添加一个分支", "Add a branch")}
+                  </button>
+                </div>
               </fieldset>
             </div>
           </div>

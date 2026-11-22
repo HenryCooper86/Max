@@ -535,8 +535,9 @@ export function createPipelineEngine(
     addContext(text) {
       chat.addContext(text);
     },
-    sendToolResult(callId, output) {
-      chat.sendToolResult(callId, output);
+    saysWithToolResult: true,
+    sendToolResult(callId, output, say) {
+      chat.sendToolResult(callId, output, say);
     },
     // Only when the owner said the chat model sees pictures (PIPELINE_LLM_IMAGES / LOCAL_LLM_IMAGES).
     ...(settings.llm.images ? { sendImage } : {}),

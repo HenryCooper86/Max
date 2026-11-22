@@ -23,7 +23,8 @@ export type WorkspaceSection =
   | "policies"
   | "accounts"
   | "audit"
-  | "studio";
+  | "studio"
+  | "flow";
 export type AdminDataStatus = "loading" | "ready" | "stale" | "error";
 
 export function adminStatusAfterFailure(hasLoadedData: boolean): AdminDataStatus {
@@ -40,7 +41,8 @@ const ADMIN_SECTION_LABELS: Record<WorkspaceSection, string> = {
   policies: "测试策略",
   accounts: "账号管理",
   audit: "审计历史",
-  studio: "助手工作室"
+  studio: "助手工作室",
+  flow: "流程"
 };
 
 const ADMIN_SECTION_LABELS_EN: Record<WorkspaceSection, string> = {
@@ -53,7 +55,8 @@ const ADMIN_SECTION_LABELS_EN: Record<WorkspaceSection, string> = {
   policies: "Testing policies",
   accounts: "Accounts",
   audit: "Audit history",
-  studio: "Studio"
+  studio: "Studio",
+  flow: "Flow"
 };
 
 const TESTING_SECTIONS: WorkspaceSection[] = ["overview", "plans", "evidence"];
@@ -64,7 +67,7 @@ export function allowedTestingSections(role: AuthUser["role"]): WorkspaceSection
 }
 
 export function allowedAdminSections(role: AuthUser["role"]): WorkspaceSection[] {
-  return role === "admin" ? ["overview", "studio", "accounts", "audit"] : [];
+  return role === "admin" ? ["overview", "studio", "flow", "accounts", "audit"] : [];
 }
 
 export function normalizeAdminSection(section: WorkspaceSection, role: AuthUser["role"]): WorkspaceSection {

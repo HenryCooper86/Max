@@ -84,6 +84,8 @@ relay is running (relative `knowledge` paths become absolute), so a save never d
 over `./assistant.config.json`: change these keys there afterwards, or keep your config in a file named by
 `ASSISTANT_CONFIG`, which wins over the Studio's.
 
+Admin → Flow edits `agents` on a canvas, and nothing else: see [flows](conversations.md#flows).
+
 The relay keeps the last 50 configs that were live, and Admin → Studio → History goes back to any of them. See
 [going back to an earlier config](conversations.md#going-back-to-an-earlier-config).
 

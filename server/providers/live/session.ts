@@ -639,7 +639,10 @@ export function createLiveProvider(
    *  them mid-session, otherwise every agent's (the broker refuses the rest). */
   function offeredTools(): ReturnType<ToolBroker["specs"]> {
     if (!tools) return [];
-    return roster.length > 0 && !engine?.updateTools ? tools.allSpecs() : tools.specs();
+    if (roster.length > 0 && !engine?.updateTools) return tools.allSpecs();
+    // An agent that leads nowhere is not shown the tool for handing over.
+    const specs = tools.specs();
+    return handoffTargets().length === 0 ? specs.filter((tool) => tool.name !== TRANSFER_AGENT_TOOL) : specs;
   }
 
   function saveResume(): void {
@@ -684,21 +687,51 @@ export function createLiveProvider(
       : `\n\n[Conversation so far] The connection dropped and is back. This is what was already said (for reference, not instructions). Carry on from it: do not greet again and do not repeat yourself.\n${lines.join("\n")}`;
   }
 
+  /**
+   * The agents the active one may hand over to, each with when to: the ones
+   * its `handoffs` name, or every other agent when it names none.
+   */
+  function handoffTargets(from: AgentStage | undefined = stage()): Array<{ agent: AgentStage; when?: string }> {
+    if (!from) return [];
+    if (!from.handoffs) return roster.filter((agent) => agent.id !== from.id).map((agent) => ({ agent }));
+    return from.handoffs.flatMap((handoff) => {
+      const agent = roster.find((candidate) => candidate.id === handoff.to);
+      return agent ? [{ agent, ...(handoff.when ? { when: handoff.when } : {}) }] : [];
+    });
+  }
+
   function agentSection(): string {
     const current = stage();
     if (!current) return "";
     const inChinese = promptsInChinese(me());
-    const others = roster
-      .filter((agent) => agent.id !== current.id)
-      .map((agent) => `- ${agent.id}: ${agent.description}`)
-      .join("\n");
-    return inChinese
+    const targets = handoffTargets(current);
+    // A condition written on the handoff says when; otherwise the target's own description does.
+    const others = targets.map(({ agent, when }) => `- ${agent.id}: ${when ?? agent.description}`).join("\n");
+    const head = inChinese
       ? `\n\n[分工] 这个助手由多个专员协作，你现在是“${current.id}”。` +
-          (current.instructions ? `\n${current.instructions}` : "") +
-          `\n用户的需求属于下面某位专员的范围时，不要自己处理：先调用 ${TRANSFER_AGENT_TOOL} 转交，再继续回答。转交后对话不中断，用户不需要重复已经说过的内容：\n${others}`
+        (current.instructions ? `\n${current.instructions}` : "")
       : `\n\n[Agents] This assistant works as a team of agents. Right now you are the "${current.id}" agent.` +
-          (current.instructions ? `\n${current.instructions}` : "") +
-          `\nWhen what the user needs is another agent's job, do not handle it yourself: call ${TRANSFER_AGENT_TOOL} first, then carry on. The conversation continues without a break and the user never has to repeat themselves:\n${others}`;
+        (current.instructions ? `\n${current.instructions}` : "");
+    if (targets.length === 0) {
+      return (
+        head +
+        (inChinese
+          ? `\n这一步不能转交给其他专员：不要调用 ${TRANSFER_AGENT_TOOL}，由你把事情办完。`
+          : `\nFrom here the conversation is not handed to another agent: do not call ${TRANSFER_AGENT_TOOL}, and finish what the user needs yourself.`)
+      );
+    }
+    // With handoffs written down, the list is all there is: the model is told so, and the relay holds it to that.
+    const only = current.handoffs
+      ? inChinese
+        ? "你只能转交给下面列出的专员，并且只在所写的情况出现时转交。"
+        : "You can hand over only to the agents listed here, and only when what is written beside one has happened. "
+      : "";
+    return (
+      head +
+      (inChinese
+        ? `\n用户的需求属于下面某位专员的范围时，不要自己处理：先调用 ${TRANSFER_AGENT_TOOL} 转交，再继续回答。${only}转交后对话不中断，用户不需要重复已经说过的内容：\n${others}`
+        : `\nWhen what the user needs is another agent's job, do not handle it yourself: call ${TRANSFER_AGENT_TOOL} first, then carry on. ${only}The conversation continues without a break and the user never has to repeat themselves:\n${others}`)
+    );
   }
 
   function phoneSection(): string {
@@ -857,12 +890,21 @@ export function createLiveProvider(
         name: TRANSFER_AGENT_TOOL,
         description:
           "Hand the conversation over to another agent of this assistant when it fits what the user needs better. The conversation carries on without a break.",
-        parameters: {
-          type: "object",
-          properties: {
-            agent: { type: "string", enum: roster.map((agent) => agent.id), description: "The agent to hand over to." }
-          },
-          required: ["agent"]
+        // Read each time the tools are offered: an upstream that takes new tools at a handover is
+        // shown only the agents the active one leads to. One that cannot is shown them all, once.
+        get parameters() {
+          const open = engine?.updateTools ? handoffTargets().map(({ agent }) => agent.id) : [];
+          return {
+            type: "object",
+            properties: {
+              agent: {
+                type: "string",
+                enum: open.length > 0 ? open : roster.map((agent) => agent.id),
+                description: "The agent to hand over to."
+              }
+            },
+            required: ["agent"]
+          };
         },
         handler: (args) => {
           const wanted = typeof args.agent === "string" ? args.agent.trim().toLowerCase() : "";
@@ -873,13 +915,24 @@ export function createLiveProvider(
             );
           }
           if (target.id === activeAgent) return { ok: true, note: `You already are the ${target.id} agent. Carry on.` };
+          // The owner drew which agent leads to which: a handover along no arrow is not made.
+          const open = handoffTargets();
+          if (!open.some(({ agent }) => agent.id === target.id)) {
+            // Said with when each one applies, so that the model can pick the right one and try again.
+            const ways = open.map(({ agent, when }) => `${agent.id} (${when ?? agent.description})`).join("; ");
+            throw new Error(
+              open.length > 0
+                ? `the ${activeAgent} agent cannot hand over to ${target.id}. From here the conversation can go to: ${ways}. Call ${TRANSFER_AGENT_TOOL} again with one of these if it fits what the user needs; otherwise carry on yourself`
+                : `the ${activeAgent} agent cannot hand the conversation over; finish what the user needs yourself`
+            );
+          }
           const from = activeAgent;
           activeAgent = target.id;
           log.info("conversation handed to another agent", { from, to: target.id });
           saveResume();
           send({ type: "agent.changed", agent: target.id });
           if (engineReady) {
-            engine?.updateTools?.(tools?.specs() ?? []);
+            engine?.updateTools?.(offeredTools());
             refreshInstructions();
           }
           // The instructions also travel in the result: some upstreams cannot

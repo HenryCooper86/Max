@@ -137,11 +137,14 @@ import {
   clearStudioVoice,
   ConfigFileError,
   deleteStudioVersion,
+  FlowError,
   recordStartupConfig,
   removeStudioLogo,
   restoreStudioConfig,
   saveStudioConfig,
+  saveStudioFlow,
   saveStudioLogo,
+  studioFlow,
   studioHistory,
   studioState,
   studioVersion
@@ -287,6 +290,14 @@ app.use(
     if (ownerRequest(req, res)) next();
   },
   express.json({ limit: "4mb", strict: true })
+);
+// A flow is up to 12 steps of 8,000 characters each. Its limit applies after the admin check.
+app.use(
+  "/auth/admin/studio/flow",
+  (req, res, next) => {
+    if (requireAdmin(req, res)) next();
+  },
+  express.json({ limit: "512kb", strict: true })
 );
 // The Studio's voice routes set their own limits (a recording is megabytes), after the admin check.
 app.use(jsonParserExceptStudioVoices("32kb"));
@@ -1042,6 +1053,35 @@ app.put("/auth/admin/studio", (req, res) => {
     res.json(state);
   } catch (error) {
     res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Invalid assistant config." });
+  }
+});
+
+// The flow builder: the assistant's agents as steps and the arrows between them.
+// `tools` are the names a step can be limited to; a client's own tools are not known here.
+const flowTools = () => [...new Set(installedServerTools().map((tool) => tool.name))].sort();
+
+app.get("/auth/admin/studio/flow", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json({ ...studioFlow(), tools: flowTools() });
+});
+
+app.put("/auth/admin/studio/flow", (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  try {
+    const flow = saveStudioFlow(body.steps, admin.username);
+    log.info("flow saved from studio", { by: admin.username, steps: flow.steps.map((step) => step.id) });
+    res.json({ ...flow, tools: flowTools() });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (error instanceof FlowError) {
+      res.status(400).json({ ok: false, error: message, problems: error.problems });
+    } else if (error instanceof ConfigFileError) {
+      log.warn("the assistant config file could not be written", { message });
+      res.status(500).json({ ok: false, error: `The config file on the server could not be written: ${message}` });
+    } else res.status(400).json({ ok: false, error: message || "The flow could not be saved." });
   }
 });
 

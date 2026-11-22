@@ -21,6 +21,7 @@ import {
   stableJson,
   type ConfigVersionSummary
 } from "./config-history";
+import { checkFlow, flowFrom, type FlowStep } from "./flow";
 import { createLogger } from "./logger";
 import { equalizerOptions } from "./audio-eq";
 import { DEVICE_PRESETS } from "./device-presets";
@@ -182,7 +183,13 @@ function rememberDefaults(): void {
  * in it are made absolute, so they still lead to the same files from there.
  */
 export function recordStartupConfig(loaded = loadedAssistantConfig()): void {
-  if (!loaded) return;
+  const config = startupConfig(loaded);
+  if (config) remember(config, "file");
+}
+
+/** The config the relay started from, written so that it means the same in the Studio's own file. */
+function startupConfig(loaded = loadedAssistantConfig()): Record<string, unknown> | undefined {
+  if (!loaded) return undefined;
   const config: Record<string, unknown> = { ...loaded.raw };
   if (path.resolve(loaded.file) !== studioConfigPath()) {
     const directory = path.dirname(loaded.file);
@@ -193,7 +200,63 @@ export function recordStartupConfig(loaded = loadedAssistantConfig()): void {
     const knowledge = assistant().deployerConfig.knowledge;
     if (knowledge !== undefined) config.knowledge = knowledge;
   }
-  remember(config, "file");
+  return config;
+}
+
+// ---- the flow: the assistant's agents as steps and arrows --------------------------
+
+export type StudioFlow = {
+  ok: true;
+  /** The steps of the running assistant, the starting step first. */
+  steps: FlowStep[];
+  /** What the relay skipped in the stored `agents` key, if anything. */
+  problems: string[];
+};
+
+export function studioFlow(): StudioFlow {
+  return { ok: true, ...flowFrom(assistant().deployerConfig.agents) };
+}
+
+/** A flow that cannot be saved as drawn. `problems` says why, one sentence each. */
+export class FlowError extends Error {
+  constructor(readonly problems: string[]) {
+    super(problems.join(" "));
+  }
+}
+
+/**
+ * Saves a flow drawn in the Studio as the config's `agents` key and makes it
+ * live for new conversations. Everything else in the config stays as it is.
+ */
+export function saveStudioFlow(raw: unknown, by: string, loaded = loadedAssistantConfig()): StudioFlow {
+  const checked = checkFlow(raw);
+  if ("problems" in checked) throw new FlowError(checked.problems);
+  const file = studioConfigPath();
+  let previous: string | undefined;
+  try {
+    previous = fs.readFileSync(file, "utf8");
+  } catch {
+    /* there was no file */
+  }
+  // Without a file of the Studio's own, the relay runs the config it started from: that is what the flow goes into.
+  const next: Record<string, unknown> = { ...(previous !== undefined ? readStored() : (startupConfig(loaded) ?? {})) };
+  if (checked.agents) next.agents = checked.agents;
+  else delete next.agents;
+  rememberDefaults();
+  try {
+    writeStored(next);
+  } catch (error) {
+    throw new ConfigFileError(error instanceof Error ? error.message : String(error), { cause: error });
+  }
+  try {
+    apply(next);
+  } catch (error) {
+    if (previous !== undefined) fs.writeFileSync(file, previous, { mode: 0o600 });
+    else fs.rmSync(file, { force: true });
+    throw error;
+  }
+  remember(next, by);
+  return studioFlow();
 }
 
 export type StudioHistory = { ok: true; versions: ConfigVersionSummary[] };

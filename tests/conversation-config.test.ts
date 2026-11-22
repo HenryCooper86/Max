@@ -125,6 +125,51 @@ describe("agentStagesFrom", () => {
     ]);
   });
 
+  it("reads which agents an agent may hand over to, and when", () => {
+    const refunds = { id: "Refunds", description: "Money back.", instructions: "You refund." };
+    const { agents, problems } = agentStagesFrom([
+      { id: "main", handoffs: ["billing"] },
+      { ...billing, handoffs: [{ to: "refunds", when: "  The user wants money back.  " }, { to: "MAIN" }] },
+      { ...refunds, handoffs: [] }
+    ]);
+    expect(problems).toEqual([]);
+    expect(agents.map((agent) => agent.handoffs)).toEqual([
+      [{ to: "billing" }],
+      // Written as the target writes its own id, whatever the case here.
+      [{ to: "Refunds", when: "The user wants money back." }, { to: "main" }],
+      []
+    ]);
+    // Absent, and null, both leave every agent open.
+    expect(agentStagesFrom([billing]).agents[0]).not.toHaveProperty("handoffs");
+    expect(agentStagesFrom([{ ...billing, handoffs: null }]).agents[0]).not.toHaveProperty("handoffs");
+    // main is there to hand over to without being listed.
+    expect(agentStagesFrom([{ ...billing, handoffs: ["main"] }])).toMatchObject({
+      agents: [{ handoffs: [{ to: "main" }] }],
+      problems: []
+    });
+  });
+
+  it("drops a handoff that leads nowhere, and says so", () => {
+    const { agents, problems } = agentStagesFrom([
+      { ...billing, handoffs: ["legal", "billing", { to: "sales" }, "sales", {}, 5, { to: "sales", when: 7 }] },
+      { id: "sales", description: "Buying.", instructions: "You sell." }
+    ]);
+    expect(agents[0]!.handoffs).toEqual([{ to: "sales" }]);
+    expect(problems).toEqual([
+      'agent billing: every handoff needs the id of an agent, as "billing" or { "to": "billing" }',
+      'agent billing: every handoff needs the id of an agent, as "billing" or { "to": "billing" }',
+      "agent billing: there is no agent legal to hand over to",
+      "agent billing cannot hand over to itself",
+      "agent billing lists the handoff to sales twice; the first is used",
+      "agent billing lists the handoff to sales twice; the first is used"
+    ]);
+    // Not a list at all: the agent is skipped, like one with a bad tool list.
+    expect(agentStagesFrom([{ ...billing, handoffs: "sales" }])).toEqual({
+      agents: [],
+      problems: ["agent billing: handoffs must be a list"]
+    });
+  });
+
   it("skips an invalid id", () => {
     for (const id of ["1abc", "has space", "", "x".repeat(33), 5, undefined]) {
       const { agents, problems } = agentStagesFrom([

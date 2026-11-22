@@ -522,6 +522,133 @@ describe("handing the conversation to another agent", () => {
   });
 });
 
+describe("a flow: agents that hand over only along the arrows drawn", () => {
+  const config = {
+    instructions: "You work for Acme.",
+    agents: [
+      { id: "main", handoffs: [{ to: "billing", when: "The user asks about an invoice or a payment." }] },
+      {
+        id: "billing",
+        description: "Invoices.",
+        instructions: "Find the invoice first.",
+        tools: ["get_invoice"],
+        handoffs: [{ to: "refunds", when: "The invoice is found and the user wants the money back." }, "main"]
+      },
+      { id: "refunds", description: "Money back.", instructions: "Refund politely.", tools: ["refund"], handoffs: [] },
+      { id: "sales", description: "Buying things.", instructions: "Sell." }
+    ]
+  };
+
+  async function handOver(events: () => EngineEvents, id: string, callId: string) {
+    events().onToolCall!({ callId, name: "transfer_to_agent", arguments: JSON.stringify({ agent: id }) });
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it("tells each agent where the conversation can go from it, and on what condition", async () => {
+    const { configs, events, instructionUpdates, provider } = await setup({ config, serverTools: [LOOKUP, REFUND] });
+    const first = configs[0]!.instructions;
+    expect(first).toContain("- billing: The user asks about an invoice or a payment.");
+    expect(first).toContain("You can hand over only to the agents listed here");
+    // No arrow from main to these two.
+    expect(first).not.toContain("- refunds:");
+    expect(first).not.toContain("- sales:");
+    events().onSpeechStarted();
+    events().onRiderTranscript("my invoice is wrong", true);
+    events().onResponseStarted();
+    await handOver(events, "billing", "c1");
+    const second = instructionUpdates.at(-1)!;
+    expect(second).toContain("- refunds: The invoice is found and the user wants the money back.");
+    // An arrow without a condition is described by the agent it leads to.
+    expect(second).toContain("- main: The agent every conversation starts with");
+    await handOver(events, "refunds", "c2");
+    const third = instructionUpdates.at(-1)!;
+    expect(third).toContain("Refund politely.");
+    expect(third).toContain("the conversation is not handed to another agent");
+    expect(third).not.toContain("- main:");
+    await provider.close();
+  });
+
+  it("refuses a handover along no arrow, and says where the conversation can go", async () => {
+    const { events, toolResults, client, provider } = await setup({ config, serverTools: [LOOKUP, REFUND] });
+    events().onSpeechStarted();
+    events().onRiderTranscript("give me my money back", true);
+    events().onResponseStarted();
+    await handOver(events, "refunds", "c1");
+    expect(JSON.parse(toolResults[0]![1]).error).toBe(
+      "the main agent cannot hand over to refunds. From here the conversation can go to: billing (The user asks about an invoice or a payment.). Call transfer_to_agent again with one of these if it fits what the user needs; otherwise carry on yourself"
+    );
+    expect(client.ofType("agent.changed")).toEqual([]);
+    await handOver(events, "billing", "c2");
+    await handOver(events, "refunds", "c3");
+    expect(client.ofType("agent.changed").map((event) => event.agent)).toEqual(["billing", "refunds"]);
+    // The last step leads nowhere.
+    await handOver(events, "main", "c4");
+    expect(JSON.parse(toolResults[3]![1]).error).toBe(
+      "the refunds agent cannot hand the conversation over; finish what the user needs yourself"
+    );
+    expect(client.ofType("agent.changed")).toHaveLength(2);
+    await provider.close();
+  });
+
+  it("offers each agent only the agents it leads to, and no handover at all to one that leads nowhere", async () => {
+    const { configs, events, toolUpdates, provider } = await setup({ config, serverTools: [LOOKUP, REFUND] });
+    const choices = (tools: Array<{ name: string; parameters?: unknown }>) =>
+      (
+        tools.find((tool) => tool.name === "transfer_to_agent")?.parameters as {
+          properties: { agent: { enum: string[] } };
+        }
+      )?.properties.agent.enum;
+    expect(choices(configs[0]!.tools)).toEqual(["billing"]);
+    events().onSpeechStarted();
+    events().onRiderTranscript("my invoice", true);
+    events().onResponseStarted();
+    await handOver(events, "billing", "c1");
+    expect(choices(toolUpdates.at(-1)!)).toEqual(["refunds", "main"]);
+    await handOver(events, "refunds", "c2");
+    expect(toolUpdates.at(-1)!.map((tool) => tool.name)).toEqual(["refund"]);
+    await provider.close();
+  });
+
+  it("shows every agent to an upstream that cannot take new tools, and still holds it to the arrows", async () => {
+    const { configs, events, toolResults, provider } = await setup({
+      config,
+      serverTools: [LOOKUP, REFUND],
+      engine: { updateTools: undefined }
+    });
+    const transfer = configs[0]!.tools.find((tool) => tool.name === "transfer_to_agent")!;
+    expect((transfer.parameters as { properties: { agent: { enum: string[] } } }).properties.agent.enum).toEqual([
+      "main",
+      "billing",
+      "refunds",
+      "sales"
+    ]);
+    events().onSpeechStarted();
+    events().onRiderTranscript("money back", true);
+    events().onResponseStarted();
+    await handOver(events, "sales", "c1");
+    expect(JSON.parse(toolResults[0]![1]).error).toMatch(/cannot hand over to sales/);
+    await provider.close();
+  });
+
+  it("leaves an agent without handoffs open to every other agent, as before", async () => {
+    const { configs, events, instructionUpdates, client, provider } = await setup({
+      config: { ...config, agents: [config.agents[3]!, ...config.agents.slice(0, 3)] },
+      serverTools: [LOOKUP, REFUND],
+      context: { resume: { history: [], agent: "sales" } }
+    });
+    const text = instructionUpdates.at(-1) ?? configs[0]!.instructions;
+    expect(text).toContain('you are the "sales" agent');
+    for (const id of ["main", "billing", "refunds"]) expect(text).toContain(`- ${id}:`);
+    expect(text).not.toContain("You can hand over only to");
+    events().onSpeechStarted();
+    events().onRiderTranscript("refund", true);
+    events().onResponseStarted();
+    await handOver(events, "refunds", "c1");
+    expect(client.ofType("agent.changed").at(-1)).toEqual({ type: "agent.changed", agent: "refunds" });
+    await provider.close();
+  });
+});
+
 describe("carrying a conversation across a dropped connection", () => {
   it("saves what was said as the conversation goes", async () => {
     const saved: ResumeState[] = [];

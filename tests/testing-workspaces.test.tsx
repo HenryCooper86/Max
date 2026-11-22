@@ -590,7 +590,13 @@ describe("OperationsWorkspace", () => {
 
     await act(async () => root().findAllByProps({ className: "workspaceSwitch" })[0].props.onClick(plainClick));
     expect(locationStub.hash()).toBe("#/admin/overview");
-    expect(navTargets(root())).toEqual(["#/admin/overview", "#/admin/studio", "#/admin/accounts", "#/admin/audit"]);
+    expect(navTargets(root())).toEqual([
+      "#/admin/overview",
+      "#/admin/studio",
+      "#/admin/flow",
+      "#/admin/accounts",
+      "#/admin/audit"
+    ]);
     expect(root().findAll((node) => node.type === "button" && text(node).startsWith("复制令牌"))).toHaveLength(1);
 
     await act(async () => root().findAllByProps({ className: "workspaceSwitch" })[0].props.onClick(plainClick));

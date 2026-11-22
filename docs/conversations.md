@@ -130,6 +130,7 @@ keeps talking to the same voice and never repeats themselves.
 | `description`  | string (≤ 400)  | When to hand over to this agent. The other agents read it. Required, except for `main`.             |
 | `instructions` | string (≤ 8000) | This agent's instructions, added to the assistant's own. Required, except for `main`.               |
 | `tools`        | string array    | Names of the tools this agent may use, at most 64. Absent: every tool.                              |
+| `handoffs`     | array           | The agents this one may hand over to, each with when to. Absent: any agent. See [flows](#flows).    |
 
 Rules:
 
@@ -157,6 +158,80 @@ Rules:
 ```js
 agent.on("agentchange", ({ agent: id }) => banner.show(id === "billing" ? "Billing" : "Support"));
 ```
+
+### Flows
+
+By default any agent can hand over to any other, going by their descriptions. `handoffs` turns the agents into a
+flow: steps that a conversation moves through along the arrows you draw, each arrow with the condition for taking it.
+
+```json
+{
+  "agents": [
+    {
+      "id": "main",
+      "tools": [],
+      "handoffs": [{ "to": "orders", "when": "The user asks about an order or money back." }]
+    },
+    {
+      "id": "orders",
+      "description": "Orders and deliveries.",
+      "instructions": "Ask for the order number, then look the order up before you say anything about it.",
+      "tools": ["find_order"],
+      "handoffs": [{ "to": "refunds", "when": "The order was found and the user wants money back." }, "main"]
+    },
+    {
+      "id": "refunds",
+      "description": "Money back.",
+      "instructions": "Say the amount back and ask the user to confirm before you refund.",
+      "tools": ["refund"],
+      "handoffs": ["main"]
+    }
+  ]
+}
+```
+
+- An entry of `handoffs` is an agent's id, or `{ "to": id, "when": text }` with a condition of at most 300 characters.
+  Without `when`, the target's own `description` says when.
+- An agent with `handoffs` can hand over only to the agents listed. The model is told the list and the conditions,
+  and the relay holds it to the list: a `transfer_to_agent` call to any other agent is refused, with an error that
+  names where the conversation can go and when, so the model can pick again. On the backends that change tools
+  mid-session the tool offers only those agents to begin with.
+- An empty list (`"handoffs": []`) is a last step: the conversation stays with that agent, which is not offered the
+  handover tool (Gemini Live cannot change tools mid-session: there it is offered, and refused). Give a step an arrow back to `main` unless the conversation should end there, or the user's next
+  request has nowhere to go.
+- An agent without `handoffs` stays open to every agent, as before. The two kinds mix.
+- A handoff to an agent there is not, to the agent itself, or listed twice, is dropped with a problem in the startup
+  log.
+- The conditions are instructions to a model, not code: the relay guarantees that a conversation never moves along
+  an arrow that is not drawn, and does not check that the condition on a drawn one was met. What does hold a step to
+  its job is its `tools`: with the example above no refund can be made before the conversation is in `refunds`,
+  because no other agent has the tool. An agent with every tool can do the other steps' work itself instead of
+  handing over, so give the starting agent only the tools it needs. For a condition on what a tool is called with,
+  use [rules for tools](#guardrails).
+
+**The flow builder.** Admin → Flow draws the same thing. Each agent is a step on a canvas; Start is `main`. Add a
+step, write when to come to it and what it does, tick its tools, and draw an arrow by dragging from the dot on a
+step's right edge to another step (or choose the target in the step's editor, which also works from the keyboard).
+The condition is written on the arrow. Saving writes the `agents` key of the config file and nothing else, takes
+effect for new conversations at once, and is kept in the [config history](#going-back-to-an-earlier-config), so a
+flow can be gone back to. A flow that is not right in every part (a step without instructions, a name used twice,
+an arrow to a step that was deleted) is not saved, and the builder says what to fix. Where each step sits is stored
+with it as `at`, which the relay itself does not read.
+
+The builder edits the config's own `agents`. A [variant](#versions-and-ab-tests) that replaces `agents` keeps its own
+and is edited in the file. Tools are chosen by name from the relay's tools; a client's own tool is typed in. Max
+Cloud projects do not have agents.
+
+Over HTTP, with an admin's bearer token: `GET /auth/admin/studio/flow` answers `steps` (the starting step first),
+the relay's tool names as `tools`, and `problems` for what the relay skipped in a config written by hand.
+`PUT /auth/admin/studio/flow` takes `{ "steps": [...] }` in the same form and answers the same, or 400 with
+`problems`.
+
+**What was tested.** The flow above was drawn and saved in the builder in Chrome (adding a step, dragging one,
+drawing an arrow with the mouse) and then run on a relay with a local model (`qwen3:8b`): the conversation went from
+Start to `orders`, looked the order up, went on to `refunds`, and refunded only after the user confirmed. Before the
+starting agent's tools were limited, the same model refunded from Start without handing over; a handover from Start
+straight to `refunds` was refused. Not tested on the hosted backends.
 
 ### Backends that cannot change tools mid-session
 

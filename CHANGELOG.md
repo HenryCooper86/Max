@@ -79,6 +79,11 @@
   same user gets the same variant every time, the record names it as `session.variant`, and `GET /v1/variants` counts
   conversations, length, end reasons, analysis success and sentiment for each. Its `comparison` says whether each
   variant's success rate differs from the first variant's by more than chance (Fisher's exact test). See [versions and A/B tests](docs/conversations.md#versions-and-ab-tests).
+- Flows. An agent's new `handoffs` key lists the agents it may hand over to, each with a condition, so the agents
+  become steps a conversation moves through along the arrows you draw. The relay refuses a handover along no arrow
+  and tells the model where the conversation can go. Admin → Flow is a canvas for the same thing: add steps, drag
+  them, draw arrows, write conditions, tick each step's tools, save. Agents without `handoffs` behave as before.
+  See [flows](docs/conversations.md#flows).
 - The relay keeps the last 50 assistant configs that were live: each save from the Studio, each restore, and a file
   edited by hand when the relay next starts. Admin → Studio → History lists them with who made each live and which
   keys changed, and restores one. The same is available over HTTP with an admin's token

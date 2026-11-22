@@ -1,0 +1,271 @@
+// The flow builder's own arithmetic: where steps sit, how the arrows run, and
+// what a change to one step means for the others. No React in here.
+
+type FlowHandoff = { to: string; when?: string };
+
+export type FlowStep = {
+  id: string;
+  description?: string;
+  instructions?: string;
+  /** Absent: every tool. */
+  tools?: string[];
+  /** Absent: any step. Empty: none. */
+  handoffs?: FlowHandoff[];
+  at?: [number, number];
+};
+
+/** The step every conversation starts in. */
+export const START = "main";
+export const MAX_STEPS = 12;
+const STEP_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/;
+export const NODE = { width: 220, height: 104 } as const;
+// Wide enough between two columns for the condition written on an arrow.
+const GAP = { x: 180, y: 46 } as const;
+const MARGIN = 40;
+const CANVAS = 4000;
+
+const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/** A place on the canvas: on the grid, and never off it. */
+export function snap(x: number, y: number): [number, number] {
+  const within = (value: number) => Math.min(CANVAS, Math.max(0, Math.round(value / 10) * 10));
+  return [within(x), within(y)];
+}
+
+/**
+ * Lays every step out afresh: the start on the left, each step one column to
+ * the right of the first step that leads to it. Steps no arrow leads to go in
+ * the last column.
+ */
+export function tidy(steps: readonly FlowStep[]): FlowStep[] {
+  const depth = new Map<string, number>();
+  const queue: string[] = [];
+  const start = steps.find((step) => same(step.id, START));
+  if (start) {
+    depth.set(start.id, 0);
+    queue.push(start.id);
+  }
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const step = steps.find((candidate) => candidate.id === id);
+    for (const handoff of step?.handoffs ?? []) {
+      const target = steps.find((candidate) => same(candidate.id, handoff.to));
+      if (!target || depth.has(target.id)) continue;
+      depth.set(target.id, depth.get(id)! + 1);
+      queue.push(target.id);
+    }
+  }
+  const last = Math.max(0, ...depth.values()) + 1;
+  const rows = new Map<number, number>();
+  return steps.map((step) => {
+    const column = depth.get(step.id) ?? last;
+    const row = rows.get(column) ?? 0;
+    rows.set(column, row + 1);
+    return {
+      ...step,
+      at: [MARGIN + column * (NODE.width + GAP.x), MARGIN + row * (NODE.height + GAP.y)] as [number, number]
+    };
+  });
+}
+
+/** Gives a place to the steps that have none, and leaves the others where they were put. */
+export function placed(steps: readonly FlowStep[]): FlowStep[] {
+  if (steps.every((step) => step.at)) return [...steps];
+  const laid = tidy(steps);
+  const taken = (at: [number, number], among: readonly FlowStep[]) =>
+    among.some(
+      (other) => other.at && Math.abs(other.at[0] - at[0]) < NODE.width && Math.abs(other.at[1] - at[1]) < NODE.height
+    );
+  const result: FlowStep[] = [];
+  for (const [index, step] of steps.entries()) {
+    if (step.at) {
+      result.push(step);
+      continue;
+    }
+    let at = laid[index]!.at!;
+    const others = [...result, ...steps.slice(index + 1).filter((other) => other.at)];
+    while (taken(at, others)) at = [at[0], at[1] + NODE.height + GAP.y];
+    result.push({ ...step, at });
+  }
+  return result;
+}
+
+/** How large the canvas has to be to hold every step, with room to drag one further. */
+export function surfaceSize(steps: readonly FlowStep[]): [number, number] {
+  const right = Math.max(0, ...steps.map((step) => (step.at?.[0] ?? 0) + NODE.width));
+  const bottom = Math.max(0, ...steps.map((step) => (step.at?.[1] ?? 0) + NODE.height));
+  return [right + 160, bottom + 120];
+}
+
+export type FlowArrow = {
+  from: string;
+  to: string;
+  when?: string;
+  /** An SVG path from the edge of one step to the edge of the other. */
+  path: string;
+  /** Where the condition is written: the middle of the path. */
+  middle: [number, number];
+};
+
+/** The curve between two places: out of one step's side and into the other's. */
+export function curve(from: [number, number], to: [number, number]): { path: string; middle: [number, number] } {
+  const forward = to[0] >= from[0];
+  // A step to the left is reached from the left side, a little lower, so an arrow there and one back do not overlap.
+  const start: [number, number] = forward
+    ? [from[0] + NODE.width, from[1] + NODE.height / 2 - 10]
+    : [from[0], from[1] + NODE.height / 2 + 14];
+  const end: [number, number] = forward
+    ? [to[0], to[1] + NODE.height / 2 - 10]
+    : [to[0] + NODE.width, to[1] + NODE.height / 2 + 14];
+  const reach = Math.max(50, Math.abs(end[0] - start[0]) / 2) * (forward ? 1 : -1);
+  const c1: [number, number] = [start[0] + reach, start[1]];
+  const c2: [number, number] = [end[0] - reach, end[1]];
+  const middle: [number, number] = [
+    Math.round((start[0] + 3 * c1[0] + 3 * c2[0] + end[0]) / 8),
+    Math.round((start[1] + 3 * c1[1] + 3 * c2[1] + end[1]) / 8)
+  ];
+  return { path: `M ${start[0]} ${start[1]} C ${c1[0]} ${c1[1]}, ${c2[0]} ${c2[1]}, ${end[0]} ${end[1]}`, middle };
+}
+
+/** The arrows drawn: one for each handoff written down. A step open to any step has none. */
+export function arrowsOf(steps: readonly FlowStep[]): FlowArrow[] {
+  const arrows: FlowArrow[] = [];
+  for (const step of steps) {
+    for (const handoff of step.handoffs ?? []) {
+      const target = steps.find((candidate) => same(candidate.id, handoff.to));
+      if (!target || !step.at || !target.at) continue;
+      arrows.push({
+        from: step.id,
+        to: target.id,
+        ...(handoff.when ? { when: handoff.when } : {}),
+        ...curve(step.at, target.at)
+      });
+    }
+  }
+  return arrows;
+}
+
+/** The step under a point of the canvas, if any: the one drawn last wins. */
+export function stepAt(steps: readonly FlowStep[], x: number, y: number): FlowStep | undefined {
+  return [...steps]
+    .reverse()
+    .find(
+      (step) =>
+        step.at && x >= step.at[0] && x <= step.at[0] + NODE.width && y >= step.at[1] && y <= step.at[1] + NODE.height
+    );
+}
+
+/** A name nobody has yet: step2, step3 and so on. */
+function newStepId(steps: readonly FlowStep[]): string {
+  for (let number = steps.length + 1; ; number += 1) {
+    const id = `step${number}`;
+    if (!steps.some((step) => same(step.id, id))) return id;
+  }
+}
+
+/** Adds a step to the right of the one it was added from, or of everything. */
+export function addStep(steps: readonly FlowStep[], after?: string): FlowStep[] {
+  const origin = steps.find((step) => step.id === after)?.at;
+  const [right] = surfaceSize(steps);
+  let at: [number, number] = origin
+    ? [origin[0] + NODE.width + GAP.x, origin[1]]
+    : [Math.max(MARGIN, right - 160 + GAP.x), MARGIN];
+  while (
+    steps.some(
+      (step) => step.at && Math.abs(step.at[0] - at[0]) < NODE.width && Math.abs(step.at[1] - at[1]) < NODE.height
+    )
+  ) {
+    at = [at[0], at[1] + NODE.height + GAP.y];
+  }
+  return [...steps, { id: newStepId(steps), description: "", instructions: "", at: snap(at[0], at[1]) }];
+}
+
+/** Renames a step, and with it every arrow that leads to it. */
+export function renameStep(steps: readonly FlowStep[], from: string, to: string): FlowStep[] {
+  return steps.map((step) => ({
+    ...step,
+    ...(step.id === from ? { id: to } : {}),
+    ...(step.handoffs
+      ? { handoffs: step.handoffs.map((handoff) => (handoff.to === from ? { ...handoff, to } : handoff)) }
+      : {})
+  }));
+}
+
+/** Removes a step and the arrows that led to it. The start cannot be removed. */
+export function removeStep(steps: readonly FlowStep[], id: string): FlowStep[] {
+  if (same(id, START)) return [...steps];
+  return steps
+    .filter((step) => step.id !== id)
+    .map((step) =>
+      step.handoffs ? { ...step, handoffs: step.handoffs.filter((handoff) => handoff.to !== id) } : step
+    );
+}
+
+/**
+ * Draws an arrow. A step that was open to any step is from then on open only
+ * to the ones its arrows lead to: that is what drawing one means.
+ */
+export function connect(steps: readonly FlowStep[], from: string, to: string): FlowStep[] {
+  if (from === to) return [...steps];
+  return steps.map((step) => {
+    if (step.id !== from) return step;
+    const handoffs = step.handoffs ?? [];
+    return handoffs.some((handoff) => handoff.to === to)
+      ? { ...step, handoffs }
+      : { ...step, handoffs: [...handoffs, { to }] };
+  });
+}
+
+export type FlowProblem = {
+  step: string;
+  field: "id" | "description" | "instructions" | "handoffs" | "flow";
+  kind: string;
+};
+
+/** What has to be put right before the flow can be saved, in the order of the steps. */
+export function flowProblems(steps: readonly FlowStep[]): FlowProblem[] {
+  const problems: FlowProblem[] = [];
+  const others = steps.filter((step) => !same(step.id, START));
+  const start = steps.find((step) => same(step.id, START));
+  if (others.length === 0 && start && (start.instructions?.trim() || start.tools || start.handoffs)) {
+    problems.push({ step: START, field: "flow", kind: "alone" });
+  }
+  if (steps.length > MAX_STEPS) problems.push({ step: START, field: "flow", kind: "many" });
+  for (const step of steps) {
+    if (!STEP_ID.test(step.id)) problems.push({ step: step.id, field: "id", kind: "invalid" });
+    else if (steps.some((other) => other !== step && same(other.id, step.id))) {
+      problems.push({ step: step.id, field: "id", kind: "twice" });
+    }
+    if (!same(step.id, START)) {
+      if (!step.description?.trim()) problems.push({ step: step.id, field: "description", kind: "missing" });
+      if (!step.instructions?.trim()) problems.push({ step: step.id, field: "instructions", kind: "missing" });
+    }
+    if ((step.description?.trim().length ?? 0) > 400)
+      problems.push({ step: step.id, field: "description", kind: "long" });
+    if ((step.instructions?.trim().length ?? 0) > 8000)
+      problems.push({ step: step.id, field: "instructions", kind: "long" });
+    if (step.handoffs?.some((handoff) => (handoff.when?.trim().length ?? 0) > 300)) {
+      problems.push({ step: step.id, field: "handoffs", kind: "long" });
+    }
+  }
+  return problems;
+}
+
+/** The steps as the relay takes them: trimmed, and without what is empty. */
+export function flowToSave(steps: readonly FlowStep[]): FlowStep[] {
+  return steps.map((step) => ({
+    id: step.id.trim(),
+    ...(step.description?.trim() ? { description: step.description.trim() } : {}),
+    ...(step.instructions?.trim() ? { instructions: step.instructions.trim() } : {}),
+    ...(step.tools ? { tools: step.tools } : {}),
+    ...(step.handoffs
+      ? {
+          handoffs: step.handoffs.map((handoff) => ({
+            to: handoff.to,
+            ...(handoff.when?.trim() ? { when: handoff.when.trim() } : {})
+          }))
+        }
+      : {}),
+    ...(step.at ? { at: step.at } : {})
+  }));
+}

@@ -15,12 +15,15 @@ import {
   clearStudioVoice,
   ConfigFileError,
   deleteStudioVersion,
+  FlowError,
   recordStartupConfig,
   removeStudioLogo,
   restoreStudioConfig,
   saveStudioConfig,
+  saveStudioFlow,
   saveStudioLogo,
   studioConfigPath,
+  studioFlow,
   studioHistory,
   studioState,
   studioVersion
@@ -479,5 +482,89 @@ describe("the Studio's history", () => {
     expect(JSON.parse(fs.readFileSync(studioConfigPath(), "utf8"))).toEqual({ name: "Nova" });
     // The list goes on without it.
     expect(studioHistory().versions.map((kept) => kept.name)).toEqual(["Nova", undefined]);
+  });
+});
+
+describe("the Studio's flow", () => {
+  const billing = { id: "billing", description: "Invoices.", instructions: "Find the invoice first." };
+  const drawn = [
+    { id: "main", handoffs: [{ to: "billing", when: "An invoice or a payment." }], at: [40, 40] },
+    { ...billing, tools: ["get_invoice"], handoffs: [], at: [360, 40] }
+  ];
+
+  it("shows the start alone on a relay without agents", () => {
+    expect(studioFlow()).toEqual({ ok: true, steps: [{ id: "main" }], problems: [] });
+  });
+
+  it("saves a flow as the agents key, live at once, and leaves the rest of the config as it is", () => {
+    saveStudioConfig({ name: "Iris", greeting: "Hello." }, "nora");
+    const flow = saveStudioFlow(drawn, "omar");
+    expect(flow.steps).toEqual(drawn);
+    expect(assistant().name).toBe("Iris");
+    expect(assistant().agents.map((agent) => [agent.id, agent.handoffs])).toEqual([
+      ["main", [{ to: "billing", when: "An invoice or a payment." }]],
+      ["billing", []]
+    ]);
+    expect(JSON.parse(fs.readFileSync(studioConfigPath(), "utf8"))).toEqual({
+      name: "Iris",
+      greeting: "Hello.",
+      agents: drawn
+    });
+    // It is a config like any other: kept in the history, and a save of the form keeps it.
+    expect(studioHistory().versions[0]).toMatchObject({ by: "omar", changed: ["agents"], current: true });
+    saveStudioConfig({ name: "Nova" }, "nora");
+    expect(studioFlow().steps).toEqual(drawn);
+  });
+
+  it("takes the flow away again when only an empty start is left", () => {
+    saveStudioFlow(drawn, "omar");
+    const flow = saveStudioFlow([{ id: "main" }], "omar");
+    expect(flow.steps).toEqual([{ id: "main" }]);
+    expect(assistant().agents).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(studioConfigPath(), "utf8"))).toEqual({});
+  });
+
+  it("refuses a flow that is not right in every part, and changes nothing", () => {
+    saveStudioFlow(drawn, "omar");
+    let thrown: unknown;
+    try {
+      saveStudioFlow([drawn[0], { ...billing, handoffs: ["legal"] }, { id: "sales" }], "omar");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(FlowError);
+    expect((thrown as FlowError).problems).toEqual([
+      "Agent sales needs instructions.",
+      "Agent billing: there is no agent legal to hand over to."
+    ]);
+    expect(studioFlow().steps).toEqual(drawn);
+    expect(studioHistory().versions[0]!.by).toBe("omar");
+    expect(studioHistory().versions.filter((version) => version.by === "omar")).toHaveLength(1);
+  });
+
+  it("puts the flow into the config the relay started from when the Studio has no file yet", () => {
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "studio-elsewhere-"));
+    try {
+      const raw = { name: "Iris", instructions: "You work for Acme.", toolsModule: "./tools.mjs" };
+      const loaded = { file: path.join(elsewhere, "assistant.config.json"), raw };
+      setAssistantProfileForTests(assistantProfileFrom(raw, elsewhere));
+      saveStudioFlow(drawn, "omar", loaded);
+      expect(JSON.parse(fs.readFileSync(studioConfigPath(), "utf8"))).toEqual({
+        name: "Iris",
+        instructions: "You work for Acme.",
+        toolsModule: path.join(elsewhere, "tools.mjs"),
+        agents: drawn
+      });
+      expect(assistant().name).toBe("Iris");
+    } finally {
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it("says that the file could not be written when it cannot be", () => {
+    saveStudioConfig({ name: "Iris" }, "nora");
+    fs.mkdirSync(`${studioConfigPath()}.${process.pid}.tmp`);
+    expect(() => saveStudioFlow(drawn, "omar")).toThrow(ConfigFileError);
+    expect(assistant().agents).toEqual([]);
   });
 });

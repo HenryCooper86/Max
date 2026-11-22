@@ -85,7 +85,7 @@ describe("Admin navigation permissions", () => {
   it("shows only role-authorized workspace sections", () => {
     expect(allowedAdminSections("tester")).toEqual([]);
     expect(allowedAdminSections("reviewer")).toEqual([]);
-    expect(allowedAdminSections("admin")).toEqual(["overview", "studio", "accounts", "audit"]);
+    expect(allowedAdminSections("admin")).toEqual(["overview", "studio", "flow", "accounts", "audit"]);
     expect(normalizeAdminSection("accounts", "reviewer")).toBe("overview");
     expect(allowedTestingSections("tester")).toEqual(["overview", "plans", "evidence"]);
     expect(allowedTestingSections("reviewer")).toEqual([

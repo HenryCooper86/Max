@@ -54,6 +54,18 @@ export type AgentStage = {
   instructions: string;
   /** Names of the tools this agent may use. Absent: every tool. */
   tools?: string[];
+  /**
+   * The agents this one may hand over to, each with when to. Absent: any
+   * agent, on its description alone. Empty: none, the conversation stays here.
+   */
+  handoffs?: AgentHandoff[];
+};
+
+type AgentHandoff = {
+  /** The id of the agent to hand over to, as that agent writes it. */
+  to: string;
+  /** When to hand over, for the model to read. Absent: the target's description says when. */
+  when?: string;
 };
 
 /** The id of the agent a conversation starts with. */
@@ -162,15 +174,50 @@ export function agentStagesFrom(raw: unknown): { agents: AgentStage[]; problems:
       }
       tools = [...new Set((entry.tools as string[]).map((name) => name.trim()))].slice(0, MAX_AGENT_TOOLS);
     }
+    let handoffs: AgentHandoff[] | undefined;
+    if (entry.handoffs !== undefined && entry.handoffs !== null) {
+      if (!Array.isArray(entry.handoffs)) {
+        problems.push(`agent ${id}: handoffs must be a list`);
+        continue;
+      }
+      handoffs = [];
+      for (const item of entry.handoffs) {
+        const to =
+          typeof item === "string" ? item.trim() : isRecord(item) && typeof item.to === "string" ? item.to.trim() : "";
+        const when = isRecord(item) ? line(item.when, 300) : undefined;
+        // Which agents there are is known only once every entry is read: the targets are checked below.
+        if (to) handoffs.push({ to, ...(when ? { when } : {}) });
+        else problems.push(`agent ${id}: every handoff needs the id of an agent, as "billing" or { "to": "billing" }`);
+      }
+    }
     seen.add(key);
     agents.push({
       id: key === MAIN_AGENT ? MAIN_AGENT : id,
       description: description ?? "The agent every conversation starts with; handles everything else.",
       instructions: instructions ?? "",
-      ...(tools ? { tools } : {})
+      ...(tools ? { tools } : {}),
+      ...(handoffs ? { handoffs } : {})
     });
   }
   if (raw.length > MAX_AGENTS) problems.push(`only the first ${MAX_AGENTS} agents are used`);
+  // A handoff leads to an agent there is, not to the agent itself, and to each agent once.
+  const ids = new Map([
+    [MAIN_AGENT, MAIN_AGENT],
+    ...agents.map((agent) => [agent.id.toLowerCase(), agent.id] as const)
+  ]);
+  for (const agent of agents) {
+    if (!agent.handoffs) continue;
+    const kept: AgentHandoff[] = [];
+    for (const handoff of agent.handoffs) {
+      const target = ids.get(handoff.to.toLowerCase());
+      if (!target) problems.push(`agent ${agent.id}: there is no agent ${handoff.to} to hand over to`);
+      else if (target === agent.id) problems.push(`agent ${agent.id} cannot hand over to itself`);
+      else if (kept.some((other) => other.to === target)) {
+        problems.push(`agent ${agent.id} lists the handoff to ${target} twice; the first is used`);
+      } else kept.push({ ...handoff, to: target });
+    }
+    agent.handoffs = kept;
+  }
   // One agent besides the starting one is the least a handover needs.
   if (agents.length > 0 && agents.every((agent) => agent.id === MAIN_AGENT)) {
     return { agents: [], problems: [...problems, "agents needs at least one agent besides main"] };

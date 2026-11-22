@@ -192,14 +192,17 @@ in `_total` is exposed as a counter, anything else as a gauge.
 
 All of these are off until set. See [after the conversation](conversations.md#after-the-conversation).
 
-| Variable                      | Default | What it does                                                                                                                                   |
-| ----------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CONVERSATION_WEBHOOK_URL`    | off     | POSTed a signed `conversation.ended` record when each conversation ends. HTTPS, or plain HTTP to a local or private host.                      |
-| `CONVERSATION_WEBHOOK_SECRET` | none    | Signs those requests, exactly like [tool webhooks](tools.md#verifying-the-signature).                                                          |
-| `CONVERSATION_LOG_FILE`       | off     | A file the same record is appended to, one JSON object per line.                                                                               |
-| `ANALYSIS_LLM_BASE_URL`       | none    | An OpenAI-compatible endpoint for the `analysis` key. Without it, the pipeline's chat model or a local one is used.                            |
-| `ANALYSIS_LLM_API_KEY`        | none    | That endpoint's key.                                                                                                                           |
-| `ANALYSIS_LLM_MODEL`          | none    | The model for the analysis. Falls back to `PIPELINE_LLM_MODEL`, then `gpt-4o-mini` (or `LOCAL_LLM_MODEL`, then `qwen3:8b`, for a local model). |
+| Variable                           | Default  | What it does                                                                                                                                   |
+| ---------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CONVERSATION_WEBHOOK_URL`         | off      | POSTed a signed `conversation.ended` record when each conversation ends. HTTPS, or plain HTTP to a local or private host.                      |
+| `CONVERSATION_WEBHOOK_SECRET`      | none     | Signs those requests, exactly like [tool webhooks](tools.md#verifying-the-signature).                                                          |
+| `CONVERSATION_LOG_FILE`            | off      | A file the same record is appended to, one JSON object per line.                                                                               |
+| `CONVERSATION_RECORDING`           | off      | `phone` records the audio of phone calls, `on` of every conversation. See [recording the audio](conversations.md#recording-the-audio).         |
+| `CONVERSATION_RECORDING_DIR`       | none     | Where the recordings go, one WAV file for each conversation. Required for recording.                                                           |
+| `CONVERSATION_RECORDING_KEEP_DAYS` | for ever | Delete recordings older than this many days (1 to 3650).                                                                                       |
+| `ANALYSIS_LLM_BASE_URL`            | none     | An OpenAI-compatible endpoint for the `analysis` key. Without it, the pipeline's chat model or a local one is used.                            |
+| `ANALYSIS_LLM_API_KEY`             | none     | That endpoint's key.                                                                                                                           |
+| `ANALYSIS_LLM_MODEL`               | none     | The model for the analysis. Falls back to `PIPELINE_LLM_MODEL`, then `gpt-4o-mini` (or `LOCAL_LLM_MODEL`, then `qwen3:8b`, for a local model). |
 
 ### Knowledge base
 

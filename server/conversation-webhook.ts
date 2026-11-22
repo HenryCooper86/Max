@@ -27,6 +27,8 @@ export type ConversationEndedPayload = {
     phone?: { direction: "inbound" | "outbound"; from?: string; to?: string; callSid?: string };
   };
   transcript: ConversationTurn[];
+  /** The audio, when the relay records conversations: fetch it with GET /v1/recordings/<file>. */
+  recording?: { file: string; durationMs: number };
   analysis?: AnalysisResult;
   /** Why there is no analysis, when one was configured. */
   analysisError?: string;

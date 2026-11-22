@@ -44,6 +44,14 @@ const log = createLogger("conversations");
 
 const MAX_PENDING = 200;
 const ANALYSIS_TIMEOUT_MS = 30_000;
+/** How long a record waits for its recording's file to be finished. */
+const RECORDING_WAIT_MS = 10_000;
+
+/** What a session hands over when it ends, besides why it ended. */
+type ConversationEnding = {
+  /** The conversation's recording, once its file is complete; nothing when there is none. */
+  recording?: Promise<{ file: string; durationMs: number } | undefined>;
+};
 
 type ConversationSessionInfo = {
   sessionId: string;
@@ -59,7 +67,7 @@ type ConversationObserver = {
   /** Feed every event the relay sends the client. */
   event(payload: unknown): void;
   /** The session is over. Returns at once; the follow-up work runs on its own. */
-  end(reason?: string): void;
+  end(reason?: string, ending?: ConversationEnding): void;
 };
 
 export type ConversationLifecycleOptions = {
@@ -158,12 +166,24 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
     info: ConversationSessionInfo,
     recorder: ReturnType<typeof conversationRecorder>,
     backend: string,
-    endReason: string | undefined
+    endReason: string | undefined,
+    ending: ConversationEnding | undefined
   ): Promise<void> {
     const transcript = redactTurns(recorder.turns(), kinds);
     // A session nobody spoke in is not a conversation.
     if (!transcript.some((turn) => turn.speaker === "user")) return;
     const endedAt = now();
+    let recording: { file: string; durationMs: number } | undefined;
+    if (ending?.recording) {
+      let timer: NodeJS.Timeout | undefined;
+      const late = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), RECORDING_WAIT_MS);
+        timer.unref?.();
+      });
+      const finished = await Promise.race([ending.recording.catch(() => undefined), late]);
+      if (timer) clearTimeout(timer);
+      if (finished) recording = { file: finished.file, durationMs: finished.durationMs };
+    }
     let result: AnalysisResult | undefined;
     let analysisError: string | undefined;
     if (analysis) {
@@ -196,6 +216,7 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
         ...(info.phone ? { phone: kinds.includes("phone") ? withoutNumbers(info.phone) : info.phone } : {})
       },
       transcript,
+      ...(recording ? { recording } : {}),
       ...(result ? { analysis: result } : {}),
       ...(analysisError ? { analysisError } : {})
     };
@@ -257,7 +278,7 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
           recorder?.event(payload);
           tracer?.event(captureContent ? redactedEvent(payload, kinds) : payload);
         },
-        end(reason) {
+        end(reason, ending) {
           if (ended) return;
           ended = true;
           const why = endReason ?? reason;
@@ -268,7 +289,7 @@ export function createConversationLifecycle(options: ConversationLifecycleOption
             log.warn("conversation dropped: too many are waiting to be delivered", { sessionId: info.sessionId });
             return;
           }
-          const work = finish(info, recorder, backend || "unknown", why)
+          const work = finish(info, recorder, backend || "unknown", why, ending)
             .catch((error: unknown) => {
               log.warn("conversation follow-up failed", {
                 sessionId: info.sessionId,

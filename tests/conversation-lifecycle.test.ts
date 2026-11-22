@@ -134,6 +134,44 @@ describe("conversation delivery", () => {
     expect(body.analysis).toBeUndefined();
   });
 
+  it("names the recording in the record, once its file is finished", async () => {
+    const h = harness();
+    const lifecycle = createConversationLifecycle(
+      base({ env: { CONVERSATION_WEBHOOK_URL: HOOK }, request: h.request })
+    );
+    const observer = lifecycle.open(info);
+    converse(observer);
+    let finish!: (value: { file: string; durationMs: number; bytes: number }) => void;
+    observer.end("client", { recording: new Promise((resolve) => (finish = resolve)) });
+    await Promise.resolve();
+    // The record waits for the file: a record that named a half-written file would be no use.
+    expect(h.hooks()).toHaveLength(0);
+    finish({ file: "0b0e6d0c-7c1f-4d57-9d3a-2f6f6f0a1b2c.wav", durationMs: 30_000, bytes: 1_920_044 });
+    await lifecycle.drain(1000);
+    expect(h.hooks()[0]!.recording).toEqual({ file: "0b0e6d0c-7c1f-4d57-9d3a-2f6f6f0a1b2c.wav", durationMs: 30_000 });
+  });
+
+  it("delivers the record without a recording when there is none, it failed, or it never finishes", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    const lifecycle = createConversationLifecycle(
+      base({ env: { CONVERSATION_WEBHOOK_URL: HOOK }, request: h.request })
+    );
+    for (const recording of [
+      Promise.resolve(undefined),
+      Promise.reject(new Error("disk")),
+      new Promise<undefined>(() => undefined)
+    ]) {
+      const observer = lifecycle.open(info);
+      converse(observer);
+      observer.end("client", { recording });
+    }
+    await vi.advanceTimersByTimeAsync(11_000);
+    const bodies = h.hooks();
+    expect(bodies).toHaveLength(3);
+    for (const body of bodies) expect("recording" in body).toBe(false);
+  });
+
   it("omits optional session fields when not given", async () => {
     const h = harness();
     const lifecycle = createConversationLifecycle(

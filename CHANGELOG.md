@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-11-22 — WebRTC transport, noise suppression, pictures, Telnyx, background tools and a larger knowledge base
+## 2026-11-22 — WebRTC transport, noise suppression, pictures, Telnyx, recording, background tools and a larger knowledge base
 
 - Web clients can send audio over WebRTC instead of the WebSocket: `WEBRTC=on` on the relay, `transport: "webrtc"`
   in the SDK (`transport="webrtc"` on the widget). Audio travels over UDP as Opus, so a lost packet is concealed
@@ -57,6 +57,17 @@
   are put back in order.
 - Written to Telnyx's documentation and tested against a stand-in that speaks the documented messages. Not yet run on
   a real Telnyx call.
+
+### Recording
+
+- `CONVERSATION_RECORDING=phone` (or `on`) with `CONVERSATION_RECORDING_DIR` records each conversation's audio as a
+  stereo WAV file, the user on the left channel and the assistant on the right. Off by default. The assistant's
+  channel holds what was heard: speech the user interrupted before it was played is left out.
+- The conversation record names the file in `recording`. With the relay's token, `GET /v1/recordings` lists the
+  recordings, and `GET` and `DELETE /v1/recordings/<file>` fetch and remove one. `CONVERSATION_RECORDING_KEEP_DAYS`
+  deletes old recordings.
+- Redaction does not apply to audio, and the relay does not announce the recording to callers. See
+  [recording the audio](docs/conversations.md#recording-the-audio).
 
 ### Tools and knowledge
 

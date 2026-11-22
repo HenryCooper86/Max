@@ -38,6 +38,7 @@ import type { HelmetPeer } from "./companion-registry";
 import { isResumeId, resumeStore } from "./session-resume";
 import type { ToolDefinition } from "./tools";
 import { createNoiseSuppressor, type NoiseSuppressor } from "./noise-suppression";
+import { interruptsPlayback } from "./transcript-events";
 
 export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) => AgentProvider;
 
@@ -66,7 +67,49 @@ export type AgentSessionHooks = {
   trustedContext?: string;
   /** Clean the microphone audio before any backend hears it (server/noise-suppression.ts). */
   noiseSuppression?: boolean;
+  /** Where the conversation's audio is recorded (server/recording.ts). */
+  recording?: SessionRecording;
+  /** What plays the recorded conversation's audio: a phone call drops queued speech on fewer events. */
+  recordingClient?: "phone";
 };
+
+/** What a session tells a recording: the audio each way, and when the client dropped speech unplayed. */
+export type SessionRecording = {
+  user(pcm16k: Buffer): void;
+  agent(pcm24k: Buffer): void;
+  agentCleared(): void;
+};
+
+/**
+ * Lets a recording hear what the backend sends the client: the assistant's
+ * audio, and the events on which the client drops what it has not played.
+ * A recording must never cost a conversation anything, so nothing it throws
+ * gets out.
+ */
+function recordingTap(client: WebSocket, recording: SessionRecording, playedBy: "app" | "phone"): WebSocket {
+  return new Proxy(client, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      if (property !== "send") return (value as (...args: unknown[]) => unknown).bind(target);
+      return (data: unknown, ...rest: unknown[]) => {
+        try {
+          if (typeof data === "string") {
+            if (interruptsPlayback(data, playedBy)) recording.agentCleared();
+          } else if (target.readyState === target.OPEN) {
+            if (Buffer.isBuffer(data)) recording.agent(data);
+            else if (ArrayBuffer.isView(data)) {
+              recording.agent(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+            }
+          }
+        } catch {
+          /* the conversation goes on without it */
+        }
+        return (target.send as (...args: unknown[]) => unknown)(data, ...rest);
+      };
+    }
+  });
+}
 
 const MAX_TEXT_INPUT_CHARS = 2_000;
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -774,7 +817,7 @@ export class AgentSessionController {
   ) {
     this.provider = providerFactory(
       announcingRelayFacts(
-        client,
+        hooks?.recording ? recordingTap(client, hooks.recording, hooks.recordingClient ?? "app") : client,
         () => this.audioPlan,
         () => this.resumeId
       ),
@@ -848,7 +891,15 @@ export class AgentSessionController {
         // Until the model has loaded, audio passes through as it came.
         if (this.hooks?.noiseSuppression) this.noiseSuppressor ??= createNoiseSuppressor();
         const audio = this.noiseSuppressor ? this.noiseSuppressor.process(chunk) : chunk;
-        if (audio.byteLength > 0) await this.provider.sendAudio(audio);
+        if (audio.byteLength > 0) {
+          // What the backend heard, which is the cleaned audio when the relay cleans it.
+          try {
+            this.hooks?.recording?.user(audio);
+          } catch {
+            /* the conversation goes on without it */
+          }
+          await this.provider.sendAudio(audio);
+        }
         this.silenceFiller?.frame();
         return;
       }

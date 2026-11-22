@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { MediaStreamTrack, RTCDataChannel, RTCPeerConnection, RtpPacket } from "werift";
 import type { Logger } from "../logger";
 import { PacketOrder } from "../packet-order";
+import { interruptsPlayback } from "../transcript-events";
 import { loadOpus, MAX_OPUS_PACKET_BYTES, type OpusCodec, type OpusFactory } from "./opus";
 
 /**
@@ -179,22 +180,6 @@ function shortMessageType(text: string): string | undefined {
 }
 
 /**
- * True for the events on which a WebSocket client drops the speech it has
- * buffered: the user started to speak, or said or typed something. Here the
- * buffer is the relay's, so the relay drops it.
- */
-function interrupts(event: string): boolean {
-  if (!event.includes('"status"') && !event.includes('"transcript"')) return false;
-  try {
-    const parsed = JSON.parse(event) as { type?: unknown; state?: unknown; speaker?: unknown };
-    if (parsed.type === "status") return parsed.state === "hearing" || parsed.state === "asr";
-    return parsed.type === "transcript" && parsed.speaker === "rider";
-  } catch {
-    return false;
-  }
-}
-
-/**
  * The part of a `ws` WebSocket that a session uses, over a peer connection.
  * Events: "message" (data, isBinary), "close" (code, reason), "error", "pong".
  */
@@ -252,7 +237,7 @@ export class RtcSocket extends EventEmitter {
       return;
     }
     if (typeof data === "string") {
-      if (interrupts(data)) this.clearQueue();
+      if (interruptsPlayback(data)) this.clearQueue();
       try {
         this.channel.send(data);
       } catch (error) {

@@ -2,7 +2,7 @@ import express from "express";
 import http from "node:http";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, promises as fsPromises } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import {
@@ -42,6 +42,7 @@ import { cloudCounters } from "./cloud/counters";
 import { cloudSessionTokens, sessionTokens } from "./session-tokens";
 import { installServerTools } from "./tools/registry";
 import { createConversationLifecycle } from "./conversation-lifecycle";
+import { createRecordings, recordingSettingsFromEnv } from "./recording";
 import {
   telnyxCarrier,
   telnyxSettingsFromEnv,
@@ -179,6 +180,11 @@ const activeSessions = new Map<WebSocket, AgentSessionController>();
 const telephonySockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
 const telephonyConfig = telephonySettingsFromEnv();
 const telnyxConfig = telnyxSettingsFromEnv();
+// Recording of conversations' audio (server/recording.ts). Off unless asked for.
+const recordingConfig = recordingSettingsFromEnv();
+const recordings = recordingConfig.settings
+  ? createRecordings(recordingConfig.settings, { log: createLogger("recording") })
+  : undefined;
 let telephony: Telephony | undefined;
 let telnyx: Telephony | undefined;
 /** Media-stream sockets that have not presented a ticket yet, by client address. */
@@ -576,6 +582,48 @@ app.delete("/v1/users/:userId/memory", (req, res) => {
   const removed = clearUserConversationMemory(externalUserMemoryKey(req.params.userId));
   log.info("a token user's conversation memory was cleared", { removed });
   res.json({ ok: true, removed });
+});
+
+// The finished recordings, newest first. Owner-only, like the two routes after it.
+app.get("/v1/recordings", async (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  if (!recordings) {
+    res.status(404).json({ ok: false, error: "Recording is not on." });
+    return;
+  }
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json({ ok: true, ...(await recordings.list()) });
+});
+
+// A conversation's recording, by the file name its record gives. Owner-only:
+// it is what people said, as sound.
+app.get("/v1/recordings/:file", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const file = recordings?.pathOf(req.params.file);
+  if (!file) {
+    res.status(404).json({ ok: false, error: "There is no such recording." });
+    return;
+  }
+  res.set("Cache-Control", "private, no-store");
+  res.type("audio/wav").sendFile(file, { dotfiles: "allow" }, (error) => {
+    if (error && !res.headersSent) res.status(404).json({ ok: false, error: "There is no such recording." });
+  });
+});
+
+app.delete("/v1/recordings/:file", async (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const file = recordings?.pathOf(req.params.file);
+  if (!file) {
+    res.status(404).json({ ok: false, error: "There is no such recording." });
+    return;
+  }
+  try {
+    await fsPromises.rm(file, { force: true });
+    log.info("a recording was deleted", { file: req.params.file });
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ ok: false, error: "The recording could not be deleted." });
+  }
 });
 
 app.get("/health", (_req, res) => {
@@ -1438,6 +1486,13 @@ if (noiseSuppression.mode !== "off") {
       log.info("noise suppression ready", { sessions: noiseSuppression.mode === "on" ? "all" : "phone calls" });
   });
 }
+for (const problem of recordingConfig.problems) log.warn(problem);
+if (recordingConfig.settings) {
+  log.info("conversation recording on", {
+    conversations: recordingConfig.settings.mode === "on" ? "all" : "phone calls",
+    keepDays: recordingConfig.settings.keepDays ?? "for ever"
+  });
+}
 for (const problem of webRtcConfig.problems) log.warn(problem);
 if (webRtcConfig.settings) {
   log.info("webrtc ready", {
@@ -1471,6 +1526,7 @@ const callDeps = (logName: string): TelephonyDeps => ({
           ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
         })
       : undefined;
+    const recording = recordings?.records("phone") ? recordings.open(sessionId) : undefined;
     metrics.sessionOpened();
     const socket = client as unknown as WebSocket;
     const session = new AgentSessionController(
@@ -1487,6 +1543,7 @@ const callDeps = (logName: string): TelephonyDeps => ({
         resumeScope: "phone",
         channel: "phone",
         noiseSuppression: noiseSuppression.mode !== "off",
+        ...(recording ? { recording, recordingClient: "phone" as const } : {}),
         sessionTools: extras.sessionTools,
         trustedContext: extras.trustedContext,
         ...(call.userId ? { tokenGrant: { userId: call.userId } } : {}),
@@ -1505,7 +1562,8 @@ const callDeps = (logName: string): TelephonyDeps => ({
         if (over) return;
         over = true;
         metered.close();
-        observer?.end(reason ?? "caller");
+        const recorded = recording?.close();
+        observer?.end(reason ?? "caller", recorded ? { recording: recorded } : undefined);
         activeSessions.delete(socket);
         metrics.sessionClosed();
         void session.close().catch((error: unknown) => {
@@ -1646,6 +1704,8 @@ wss.on("connection", (client, request) => {
           ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
         })
       : undefined;
+  // A Max Cloud project's conversations are its customer's: the relay's owner does not record them.
+  const recording = !cloudProject && recordings?.records("web") ? recordings.open(usageSessionId) : undefined;
   let sessionProvider: AgentProvider | undefined;
   const session = new AgentSessionController(
     client,
@@ -1674,6 +1734,7 @@ wss.on("connection", (client, request) => {
         !cloudProject && (relayTokenPresented(request) || (!config.relayAuthToken && !authActive())),
       privateSession: Boolean(cloudProject),
       noiseSuppression: noiseSuppression.mode === "on",
+      ...(recording ? { recording } : {}),
       ...(cloudProject ? { resumeScope: `cloud:${cloudProject.projectId}` } : {}),
       ...(tokenGrant ? { tokenGrant: { userId: tokenGrant.userId, context: tokenGrant.context } } : {}),
       onServerEvent: (payload) => {
@@ -1704,7 +1765,11 @@ wss.on("connection", (client, request) => {
     if (usageCheck) clearInterval(usageCheck);
     if (embedLimit) clearTimeout(embedLimit);
     const usage = meteredSession.close();
-    observer?.end(code === 1000 || code === 1005 ? "client" : "disconnected");
+    const recorded = recording?.close();
+    observer?.end(
+      code === 1000 || code === 1005 ? "client" : "disconnected",
+      recorded ? { recording: recorded } : undefined
+    );
     const endedAt = usage?.endedAt ?? Date.now();
     const billedSeconds = cloudSession?.close(endedAt);
     if (cloudProject && recorder) {
@@ -1868,6 +1933,7 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     usageMeter.flush();
     // Conversations that just ended still owe their webhook and their traces.
     await conversations.drain(3_000);
+    await recordings?.close();
     await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);
     closeTestingStore();
     await serverClosed;

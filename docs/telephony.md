@@ -314,9 +314,10 @@ A free tunnel's address usually changes every time you start it, so update both 
 
 - **Twilio and Telnyx only.** There is no direct SIP trunk and no other carrier yet. A SIP destination is supported
   only as somewhere to transfer a call to. Telnyx has not been run on a real call: see [Telnyx](#telnyx).
-- **The relay does not record calls.** Audio is never stored. The [conversation log](conversations.md#the-log-file)
-  has the text only. If you need recordings, ask Twilio to record the call, and check what the law and your callers'
-  consent require where you operate.
+- **Calls are not recorded unless you ask.** With `CONVERSATION_RECORDING=phone` the relay writes each call's audio
+  to a file: see [recording the audio](conversations.md#recording-the-audio), and check what the law and your callers'
+  consent require where you operate. Otherwise audio is never stored, and the
+  [conversation log](conversations.md#the-log-file) has the text only.
 - **A line the backend cannot voice is not spoken.** The relay's own lines (the greeting, a check-in, the farewell) are
   voiced by the backend. When it cannot voice one at that moment, for example because its connection to the voice
   model has just dropped, the relay sends the line as text for the client to speak itself. A web client does that with

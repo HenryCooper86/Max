@@ -264,8 +264,9 @@ All of it happens after the call and never delays it.
 
 A conversation is recorded when you set `CONVERSATION_WEBHOOK_URL` or `CONVERSATION_LOG_FILE`. A session in which the
 user never said anything produces no record. A record contains the final text of each turn (up to 400 turns of at most
-2000 characters), and for each tool call a line with its name, whether it worked and how long it took. Audio is never
-recorded, and tool arguments and results are not part of it.
+2000 characters), and for each tool call a line with its name, whether it worked and how long it took. Tool arguments
+and results are not part of it. Neither is the audio, unless you turn on [recording](#recording-the-audio), and then
+the record only names the file.
 
 ### Analysis
 
@@ -380,6 +381,8 @@ The URL must be HTTPS, or plain HTTP to a local or private host (the same rule a
 - Speakers are `user`, `agent` and `tool`. A tool line carries `ok` and `ms` and, for a failure, the error text.
 - `id` is unique per conversation and the same across retries, so you can use it to ignore a repeat.
 - `analysis` appears only when `analysis` is configured and succeeded; `analysisError` replaces it when it failed.
+- `recording`, as in `"recording": { "file": "4b1e….wav", "durationMs": 88400 }`, appears only when the relay
+  [recorded the audio](#recording-the-audio).
 
 Headers: `content-type: application/json`, `x-voice-agent-event: conversation.ended`, `x-voice-agent-delivery` (the
 `id`), and, with a secret, `x-voice-agent-timestamp` and `x-voice-agent-signature`, signed exactly as for tool
@@ -435,6 +438,70 @@ The relay appends the same record, one JSON object per line, when each conversat
 file if needed (the file readable by the relay's user only, because it holds what people said), and never rotates or
 deletes it: use `logrotate` or your own job, and keep it under your retention policy. A failure to write is logged and
 does not stop the webhook.
+
+### Recording the audio
+
+```bash
+CONVERSATION_RECORDING=phone                    # phone calls only; "on" records web conversations too
+CONVERSATION_RECORDING_DIR=/var/lib/max/recordings
+CONVERSATION_RECORDING_KEEP_DAYS=30
+```
+
+Off unless you set it. With it, the relay writes one WAV file for each conversation: stereo, 16 kHz, 16-bit, with the
+user on the left channel and the assistant on the right. That is about 3.8 MB a minute. The file is named after the
+session id, `<session id>.wav`. When the [conversation webhook or the log file](#after-the-conversation) is on, the
+conversation's record names the file in `recording`. The relay also logs "recording finished" with the file name, and
+lists the files (see below).
+
+Before you turn it on:
+
+- **Tell people.** In many places the law requires that people are told, or asked, before a call is recorded. The relay
+  does not announce it for you: put it in the assistant's greeting, and check what applies where your callers are.
+- **Redaction does not reach it.** `privacy.redact` works on text. A card number that is replaced by `[card]` in the
+  record is still spoken in the recording.
+- **Recordings are kept until you delete them**, unless `CONVERSATION_RECORDING_KEEP_DAYS` is set. Then the relay
+  deletes its own recordings older than that many days, at startup and every six hours.
+
+What is in the file:
+
+- The user's channel is the microphone audio the voice backend was given. With
+  [noise suppression](configuration.md#noise-suppression) on, that is the cleaned audio.
+- The assistant's channel is what the user heard, as far as the relay can know. Speech is sent to the client faster
+  than it is spoken, so the relay places it where the client plays it, and when the user interrupts, the part the
+  client had not played yet is left out.
+- The two channels are placed by the relay's clock, as a rule to within a quarter of a second. The relay cannot see
+  the client's own playback delay, so the assistant's channel is typically a tenth of a second or two early.
+- When the user's connection stalls and then delivers the held-up audio at once, the relay moves that audio back to
+  where it was spoken. It can do that for a stall of up to five seconds. After a longer one, the oldest part of the
+  held-up audio is left out.
+- The file ends with the last audio. A recording stops at four hours; the conversation carries on.
+- Assistant speech that the relay sent more than five minutes before it would be played is not recorded.
+- A session with no audio leaves no file. A recording is made even when the session produces no conversation record
+  (conversation records are off, or nobody said anything that was transcribed).
+
+A problem with the disk never touches the conversation: the recording stops, the relay logs "recording stopped", and
+what reached the disk until then is kept as a valid file. Each file is readable by the relay's user only, and so is
+the directory when the relay creates it: the relay does not change the permissions of a directory that is already
+there. The relay never writes over a file that is already there.
+
+List, fetch or delete recordings from your own backend, with the relay's token:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_AUTH_TOKEN" https://voice.example.com/v1/recordings
+# {"ok":true,"recordings":[{"file":"4b1e0c7a-….wav","bytes":1920044,"finishedAt":"2026-11-22T10:15:00.000Z"}],"more":false}
+
+curl -H "Authorization: Bearer $RELAY_AUTH_TOKEN" -o call.wav \
+  https://voice.example.com/v1/recordings/4b1e0c7a-52c1-4f4e-9a3b-0d6a5e8c9f10.wav
+
+curl -X DELETE -H "Authorization: Bearer $RELAY_AUTH_TOKEN" \
+  https://voice.example.com/v1/recordings/4b1e0c7a-52c1-4f4e-9a3b-0d6a5e8c9f10.wav
+```
+
+All three need `RELAY_AUTH_TOKEN` to be set and answer 401 without it. The list has the newest thousand recordings,
+newest first, and `more` says whether there are older ones. A name that is not a recording answers 404, and so does a
+recording that is still being written: it appears when its conversation ends. The download supports range requests,
+so an audio player can seek in it. Recording applies to the relay's own assistant:
+conversations of Max Cloud projects are not recorded.
 
 ### Redacting personal data
 

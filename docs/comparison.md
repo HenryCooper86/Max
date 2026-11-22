@@ -46,14 +46,15 @@ it is not built; see [not built yet](#not-built-yet).
 
 ### Phone calls
 
-| Capability                                  | Max | Notes                                                            |
-| ------------------------------------------- | --- | ---------------------------------------------------------------- |
-| Inbound and outbound calls                  | Yes | Through Twilio or Telnyx. See [phone calls](telephony.md).       |
-| Transfer to a person, keypad input, hang up | Yes | Cold transfer to numbers you list. No warm (announced) transfer. |
-| Answering-machine detection                 | Yes | Twilio's; a voicemail message can be left. Not on Telnyx yet.    |
-| A second carrier                            | Yes | Telnyx, written to its documentation; not run on a real call.    |
-| Direct SIP trunks, further carriers         | No  |                                                                  |
-| Buying numbers, batch campaigns, recordings | No  | Numbers and recording stay in your carrier account.              |
+| Capability                                  | Max | Notes                                                                                                                       |
+| ------------------------------------------- | --- | --------------------------------------------------------------------------------------------------------------------------- |
+| Inbound and outbound calls                  | Yes | Through Twilio or Telnyx. See [phone calls](telephony.md).                                                                  |
+| Transfer to a person, keypad input, hang up | Yes | Cold transfer to numbers you list. No warm (announced) transfer.                                                            |
+| Answering-machine detection                 | Yes | Twilio's; a voicemail message can be left. Not on Telnyx yet.                                                               |
+| A second carrier                            | Yes | Telnyx, written to its documentation; not run on a real call.                                                               |
+| Direct SIP trunks, further carriers         | No  |                                                                                                                             |
+| Call recording                              | Yes | Stereo WAV, user and assistant on separate channels, off by default. See [recording](conversations.md#recording-the-audio). |
+| Buying numbers, batch campaigns             | No  | Numbers stay in your carrier account.                                                                                       |
 
 ### Operating it
 
@@ -114,7 +115,7 @@ In rough order of how much they would matter to most users:
 5. **Background tools for client tools and MCP servers.** They exist for webhook and code tools.
 6. **Guardrails beyond redaction**, such as moderation of what the agent says.
 7. **A visual flow builder, agent versions and A/B tests.**
-8. **Warm transfers, batch outbound campaigns and call recording.**
+8. **Warm transfers and batch outbound campaigns.**
 9. **WebRTC in the native iOS and Android clients.** The web SDK has it; the native clients use the WebSocket.
 10. **Avatars.**
 

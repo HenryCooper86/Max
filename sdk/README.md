@@ -110,24 +110,27 @@ stopButton.onclick = () => agent.stop();
 - `status`: `idle | connecting | ready | listening | hearing | thinking | speaking | error | closed`. `speaking` comes from what is actually playing, not only from the relay.
 - `transcript`: `{ id, role: "user" | "agent", text, final, at }[]`, a new array on every change.
 - `capabilities`, `backend`: what the relay reported for the current session.
+- `agent`: the id of the agent the conversation is with, once the assistant has handed it over; `undefined` while it is with the agent every conversation starts with, and when the assistant has no [agents](../docs/conversations.md#several-agents-and-handing-over).
 
 ### Events
 
 Subscribe with `agent.on(name, listener)`; it returns an unsubscribe function. `agent.off(name, listener)` also works.
 
-| Event          | Payload                                                                                           |
-| -------------- | ------------------------------------------------------------------------------------------------- |
-| `status`       | the new status                                                                                    |
-| `transcript`   | `{ transcript, item }`: whole list, changed line                                                  |
-| `message`      | a transcript item, once, when a turn is final                                                     |
-| `toolcall`     | `{ callId, name, arguments }` for client tools                                                    |
-| `toolactivity` | relay progress for any tool, server or client                                                     |
-| `error`        | `VoiceAgentError`; its `code` is listed under [Errors and reconnecting](#errors-and-reconnecting) |
-| `warning`      | `{ code, message }`: `audio_blocked` (see `resumeAudio()`) or `protocol_mismatch` (see Versions)  |
-| `audioresume`  | blocked audio can play now                                                                        |
-| `level`        | `{ mic, output }`, 0..1, up to ~30 Hz, for visualizers                                            |
-| `open`         | a session is established (again after each reconnect)                                             |
-| `close`        | `{ code, reason, willReconnect }`                                                                 |
+| Event          | Payload                                                                                             |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| `status`       | the new status                                                                                      |
+| `transcript`   | `{ transcript, item }`: whole list, changed line                                                    |
+| `message`      | a transcript item, once, when a turn is final                                                       |
+| `toolcall`     | `{ callId, name, arguments }` for client tools                                                      |
+| `toolactivity` | relay progress for any tool, server or client                                                       |
+| `error`        | `VoiceAgentError`; its `code` is listed under [Errors and reconnecting](#errors-and-reconnecting)   |
+| `warning`      | `{ code, message }`: `audio_blocked` (see `resumeAudio()`) or `protocol_mismatch` (see Versions)    |
+| `audioresume`  | blocked audio can play now                                                                          |
+| `level`        | `{ mic, output }`, 0..1, up to ~30 Hz, for visualizers                                              |
+| `open`         | a session is established (again after each reconnect)                                               |
+| `ended`        | `{ reason }`: the relay ended the conversation (`agent`, `idle` or `max_duration`); `close` follows |
+| `agentchange`  | `{ agent }`: the conversation moved to another of the assistant's agents                            |
+| `close`        | `{ code, reason, willReconnect }`                                                                   |
 
 ## Errors and reconnecting
 
@@ -159,7 +162,25 @@ Reconnect rules (with `autoReconnect: true`, the default):
 | 1008, token function or `project`        | Retries once with a freshly fetched token, then stops with `unauthorized`.                      |
 | 1008, static `token` or no token         | Stops at once with `unauthorized`: the same token would be refused again.                       |
 | 4001 (idle)                              | Never reconnects; status `closed`, no error. Call `start()` again.                              |
+| The relay ended the conversation         | `ended` fires, then `close` with `willReconnect: false`. Never reconnects; status `closed`.     |
 | 4003                                     | Never reconnects; `usage_limit`.                                                                |
+
+A reconnect carries the conversation on. The relay gives each session a `resume` id, the SDK keeps it, and every
+automatic reconnect sends it back, so the assistant still knows what was said and which agent the conversation was with.
+`start()` always begins a new conversation. This works for assistants whose `device` is `app`, the relay keeps the
+conversation in memory for 10 minutes, and a relay restart loses it; if the relay no longer has it, the session simply
+starts fresh. See [running a conversation](../docs/conversations.md#carrying-a-conversation-across-a-dropped-connection).
+
+When the relay ends a conversation itself (the assistant says goodbye, the user stays silent, a time limit passes), the
+SDK emits `ended` with the reason, lets the last of the agent's speech finish playing, releases the microphone and
+emits `close` with code 4001. It does not reconnect:
+
+```js
+agent.on("ended", ({ reason }) => {
+  if (reason === "agent") showThanks();
+});
+agent.on("agentchange", ({ agent: id }) => showBadge(id));
+```
 
 With `autoReconnect: false` nothing is retried, including 1008. A browser cannot see the HTTP status of a refused
 WebSocket upgrade (401 bad token, 403 origin not allowed): it reports a close with code 1006, which is why those show up

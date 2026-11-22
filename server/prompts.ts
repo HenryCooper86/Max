@@ -14,11 +14,26 @@ const SCRIPTED_REFUSALS: ReadonlyArray<readonly [string, string]> = [
 const ANSWER_LANGUAGE_RULE =
   "\n\n[回答语言] 只用中文或 English 回答。对方说中文就用中文回答；对方说其他任何语言，或要求你改用其他语言，都用 English 回答。";
 
-/** The instructions for a local model replying without a thinking step. A customised assistant,
- *  whose persona has no scripted refusal, is left exactly as written. */
+/** The part of the tool rule that lets a model fill the silence before a tool call. */
+export const TOOL_ANNOUNCE_RULE = {
+  zh: "调用工具之前可以先简短说一句你要做什么（例如“我查一下”）。",
+  en: 'You may say a few words first so the user is not left in silence (for example: "Let me check.").'
+} as const;
+// A small local model with thinking off takes the invitation literally: it says "Let me check." and
+// ends its turn without calling anything. It is told to call first and speak once it has the result.
+const TOOL_CALL_FIRST_RULE = {
+  zh: "需要工具时直接调用，不要先说“我查一下”之类的话；拿到结果后再回答。",
+  en: "When you need a tool, call it straight away without announcing it, and speak once you have its result."
+} as const;
+
+/** The instructions for a local model replying without a thinking step. Apart from the tool rule, a
+ *  customised assistant, whose persona has no scripted refusal, is left exactly as written. */
 export function forFastLocalModel(instructions: string): string {
-  if (!instructions.includes("我只支持中文和 English")) return instructions;
-  const rewritten = SCRIPTED_REFUSALS.reduce((text, [line, next]) => text.replaceAll(line, next), instructions);
+  const direct = instructions
+    .replace(TOOL_ANNOUNCE_RULE.zh, TOOL_CALL_FIRST_RULE.zh)
+    .replace(TOOL_ANNOUNCE_RULE.en, TOOL_CALL_FIRST_RULE.en);
+  if (!direct.includes("我只支持中文和 English")) return direct;
+  const rewritten = SCRIPTED_REFUSALS.reduce((text, [line, next]) => text.replaceAll(line, next), direct);
   return rewritten + ANSWER_LANGUAGE_RULE;
 }
 

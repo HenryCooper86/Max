@@ -1,13 +1,23 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  createHybridSearch,
+  knowledgeConfigFrom,
+  knowledgeTool,
+  loadKnowledge,
+  type KnowledgeIndex
+} from "../knowledge";
+import { embeddingModelFromEnv, embedTexts, type EmbeddingModel } from "../knowledge-embeddings";
 import { createLogger } from "../logger";
 import type { ToolDefinition } from "./index";
+import { loadMcpTools, mcpServerFrom, type McpServerConfig } from "./mcp";
 import { toolSpecFrom } from "./schema";
 import { webhookToolFrom } from "./webhook";
 
 /**
- * The relay's own tools: webhook tools from `assistant.config.json` and code
- * tools from its `toolsModule`. Loaded once at startup (and again when the
+ * The relay's own tools: code tools from the `toolsModule`, webhook tools,
+ * the knowledge-base search and the tools of remote MCP servers, all declared
+ * in `assistant.config.json`. Loaded once at startup (and again when the
  * Studio saves a new config); every session reads the current set.
  */
 
@@ -15,12 +25,61 @@ const log = createLogger("tools");
 
 let installed: ToolDefinition[] = [];
 let problems: string[] = [];
+/** Bumped on every install, so a retry of an older config never lands. */
+let generation = 0;
+let retryTimer: NodeJS.Timeout | undefined;
+
+const MAX_MCP_SERVERS = 8;
+const MCP_RETRY_MS = [15_000, 60_000, 300_000];
+/** More passages than this stay on keyword search: the vectors live in memory and are paid for at every start. */
+const MAX_EMBEDDED_PASSAGES = 5000;
+
+/** Embeds the passages after the build has returned, then swaps the tool's searcher. The swap
+ *  happens in the caller's closure, so a job from a replaced build only touches its own tool. */
+async function embedInBackground(
+  index: KnowledgeIndex,
+  model: EmbeddingModel,
+  request: typeof fetch | undefined,
+  limit: number,
+  swap: (search: (query: string, limit: number) => Promise<ReturnType<KnowledgeIndex["search"]>>) => void
+): Promise<void> {
+  try {
+    if (index.size > limit) {
+      log.warn(`knowledge has ${index.size} passages; embeddings are limited to ${limit}, so keyword search is used`);
+      return;
+    }
+    const vectors = await embedTexts(model, index.passageTexts(), { request });
+    const embedQuery = async (text: string) => (await embedTexts(model, [text], { request, timeoutMs: 2000 }))[0]!;
+    const hybrid = createHybridSearch(index, vectors, embedQuery, {
+      log: (message) => log.warn(message)
+    });
+    swap((query, max) => hybrid(query, max));
+    log.info("knowledge embeddings ready", { passages: index.size, dimensions: vectors[0]?.length ?? 0 });
+  } catch (error) {
+    log.warn(
+      `knowledge embeddings failed, keyword search is used: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
 
 export type ServerToolSource = {
   /** Raw `tools` array from the config file. */
   tools?: unknown;
   /** Absolute path of the `toolsModule`, already resolved against the config file. */
   modulePath?: string;
+  /** Raw `mcpServers` array from the config file. */
+  mcpServers?: unknown;
+  /** Raw `knowledge` key from the config file. */
+  knowledge?: unknown;
+  /** The config file's directory: relative knowledge paths resolve against it. */
+  baseDir?: string;
+};
+
+type BuiltTools = {
+  tools: ToolDefinition[];
+  problems: string[];
+  /** MCP servers that could not be reached: worth trying again later. */
+  unreachable: McpServerConfig[];
 };
 
 function isTool(value: unknown): value is ToolDefinition {
@@ -68,9 +127,11 @@ export async function loadToolsModule(modulePath: string): Promise<{ tools: Tool
 /** Builds the tool set from a config source. Bad entries are skipped with a
  *  reason; one broken tool must not take the others (or the relay) down. */
 export async function buildServerTools(
-  source: ServerToolSource
-): Promise<{ tools: ToolDefinition[]; problems: string[] }> {
+  source: ServerToolSource,
+  options: { request?: typeof fetch; env?: NodeJS.ProcessEnv; maxEmbeddedPassages?: number } = {}
+): Promise<BuiltTools> {
   const tools: ToolDefinition[] = [];
+  const unreachable: McpServerConfig[] = [];
   const found: string[] = [];
   const names = new Set<string>();
   const add = (tool: ToolDefinition) => {
@@ -96,16 +157,115 @@ export async function buildServerTools(
       }
     }
   }
-  return { tools, problems: found };
+  const knowledge = knowledgeConfigFrom(source.knowledge, source.baseDir ?? process.cwd());
+  if (knowledge.problem) found.push(knowledge.problem);
+  if (knowledge.config) {
+    const loaded = await loadKnowledge(knowledge.config);
+    found.push(...loaded.problems.map((problem) => `knowledge: ${problem}`));
+    if (loaded.index.size > 0) {
+      let searcher: {
+        search(
+          query: string,
+          limit: number
+        ): ReturnType<KnowledgeIndex["search"]> | Promise<ReturnType<KnowledgeIndex["search"]>>;
+      } = loaded.index;
+      add(knowledgeTool(() => searcher, knowledge.config.maxResults));
+      const embeddings = embeddingModelFromEnv(options.env ?? process.env);
+      if (embeddings.problem) found.push(`knowledge: ${embeddings.problem}`);
+      if (embeddings.model)
+        void embedInBackground(
+          loaded.index,
+          embeddings.model,
+          options.request,
+          options.maxEmbeddedPassages ?? MAX_EMBEDDED_PASSAGES,
+          (search) => {
+            searcher = { search };
+          }
+        );
+      log.info("knowledge base ready", { documents: loaded.index.sources.length, passages: loaded.index.size });
+    } else found.push("knowledge: nothing to search was found, so the assistant has no knowledge base");
+  }
+  if (source.mcpServers !== undefined) {
+    if (!Array.isArray(source.mcpServers)) found.push("mcpServers must be an array");
+    else {
+      if (source.mcpServers.length > MAX_MCP_SERVERS)
+        found.push(`only the first ${MAX_MCP_SERVERS} MCP servers are used`);
+      const servers: McpServerConfig[] = [];
+      const seen = new Set<string>();
+      for (const entry of source.mcpServers.slice(0, MAX_MCP_SERVERS)) {
+        const { server, problem } = mcpServerFrom(entry);
+        if (problem) found.push(problem);
+        if (!server) continue;
+        if (seen.has(server.name)) {
+          found.push(`mcp server ${server.name} is defined twice; the first definition is used`);
+          continue;
+        }
+        seen.add(server.name);
+        servers.push(server);
+      }
+      // Together: one slow server must not hold the others (or startup) up.
+      const loaded = await Promise.all(servers.map((server) => loadMcpTools(server, options)));
+      loaded.forEach((result, index) => {
+        result.tools.forEach(add);
+        found.push(...result.problems);
+        if (result.tools.length === 0 && result.problems.length > 0) unreachable.push(servers[index]!);
+      });
+    }
+  }
+  return { tools, problems: found, unreachable };
+}
+
+/** Tries the MCP servers that were down again, so a relay that started before
+ *  its integrations picks their tools up without a restart. */
+function retryUnreachable(servers: McpServerConfig[], mine: number, attempt: number): void {
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = undefined;
+  if (servers.length === 0) return;
+  retryTimer = setTimeout(
+    () => {
+      retryTimer = undefined;
+      void Promise.all(servers.map((server) => loadMcpTools(server))).then((loaded) => {
+        if (mine !== generation) return;
+        const still: McpServerConfig[] = [];
+        const names = new Set(installed.map((tool) => tool.name));
+        const added: ToolDefinition[] = [];
+        loaded.forEach((result, index) => {
+          const server = servers[index]!;
+          if (result.tools.length === 0 && result.problems.length > 0) {
+            still.push(server);
+            return;
+          }
+          // The server answered: its old "not available" problem no longer holds.
+          problems = problems.filter((problem) => !problem.startsWith(`${server.name} MCP server`));
+          problems.push(...result.problems);
+          for (const tool of result.tools) {
+            if (names.has(tool.name)) continue;
+            names.add(tool.name);
+            added.push(tool);
+          }
+        });
+        if (added.length) {
+          installed = [...installed, ...added];
+          log.info("MCP tools ready", { tools: added.map((tool) => tool.name) });
+        }
+        retryUnreachable(still, mine, attempt + 1);
+      });
+    },
+    MCP_RETRY_MS[Math.min(attempt, MCP_RETRY_MS.length - 1)]
+  );
+  retryTimer.unref?.();
 }
 
 /** Loads and installs the relay's tools, logging what was found. */
 export async function installServerTools(source: ServerToolSource): Promise<void> {
+  const mine = (generation += 1);
   const built = await buildServerTools(source);
+  if (mine !== generation) return;
   installed = built.tools;
   problems = built.problems;
   for (const problem of problems) log.warn(problem);
   if (installed.length) log.info("tools ready", { tools: installed.map((tool) => tool.name) });
+  retryUnreachable(built.unreachable, mine, 0);
 }
 
 /** The relay's current tools. */
@@ -120,6 +280,9 @@ export function serverToolProblems(): readonly string[] {
 
 /** Test seam. */
 export function setServerToolsForTests(tools: ToolDefinition[] = []): void {
+  generation += 1;
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = undefined;
   installed = tools;
   problems = [];
 }

@@ -6,6 +6,22 @@ import { normalizeEqualizer } from "./audio-eq";
 import { devicePreset, type DevicePreset } from "./device-presets";
 import { configureWakePhrase, DEFAULT_WAKE_NAMES, type WakeNames } from "../shared/wake";
 import type { ServerToolSource } from "./tools/registry";
+import { analysisConfigFrom, type AnalysisConfig } from "./conversation-analysis";
+import { redactionKindsFrom, type RedactionKind } from "./redact";
+import { knowledgeConfigFrom } from "./knowledge";
+
+/**
+ * Config keys that are wired up by whoever deploys the relay and never typed
+ * into the Studio: they name servers, files on disk and where records go.
+ */
+export const DEPLOYER_KEYS = ["conversation", "agents", "analysis", "privacy", "knowledge", "mcpServers"] as const;
+import {
+  agentStagesFrom,
+  conversationSettingsFrom,
+  DEFAULT_CONVERSATION_SETTINGS,
+  type AgentStage,
+  type ConversationSettings
+} from "./conversation-config";
 
 /**
  * The assistant's identity: who it is, what it is worn in, what it answers to.
@@ -69,6 +85,19 @@ export type AssistantProfile = {
   wakeWord: boolean;
   /** Where the relay's own tools come from (server/tools/registry.ts). */
   tools: ServerToolSource;
+  /** When the relay checks in on a silent user and when it ends a conversation. */
+  conversation: ConversationSettings;
+  /** Specialist agents the conversation can be handed to. Empty: one agent. */
+  agents: AgentStage[];
+  /** What to work out about a finished conversation (server/conversation-analysis.ts). */
+  analysis?: AnalysisConfig;
+  /** Kinds of personal data removed from records that leave the relay (server/redact.ts). */
+  redact: RedactionKind[];
+  /** What was wrong with the conversation keys of the config file, for /health and startup. */
+  configProblems: string[];
+  /** The config keys only whoever deploys the relay sets (see {@link DEPLOYER_KEYS}), as written, so
+   *  the Studio can carry them into its own file. Knowledge paths are absolute here. */
+  deployerConfig: Record<string, unknown>;
   /** True when nothing overrides the built-in Max profile. */
   isDefault: boolean;
 };
@@ -177,6 +206,11 @@ export const DEFAULT_ASSISTANT_PROFILE: AssistantProfile = {
   wake: DEFAULT_WAKE_NAMES,
   wakeWord: true,
   tools: {},
+  conversation: DEFAULT_CONVERSATION_SETTINGS,
+  agents: [],
+  redact: [],
+  configProblems: [],
+  deployerConfig: {},
   isDefault: true
 };
 
@@ -275,6 +309,30 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
   const renamed = name !== DEFAULT_ASSISTANT_PROFILE.name;
   // Changing only the look, the logo or the sound leaves the assistant who it was.
   const stock = !PERSONA_KEYS.some((key) => raw[key] !== undefined && raw[key] !== null);
+  const deployerConfig: Record<string, unknown> = {};
+  for (const key of DEPLOYER_KEYS) {
+    if (raw[key] !== undefined && raw[key] !== null) deployerConfig[key] = raw[key];
+  }
+  // Relative knowledge paths belong to this file's directory: pin them, so
+  // they still resolve when the Studio writes its own file somewhere else.
+  const knowledge = knowledgeConfigFrom(raw.knowledge, baseDir).config;
+  if (knowledge) {
+    deployerConfig.knowledge = {
+      files: knowledge.paths,
+      ...(knowledge.text ? { text: knowledge.text } : {}),
+      maxResults: knowledge.maxResults,
+      chunkChars: knowledge.chunkChars
+    };
+  }
+  const conversation = conversationSettingsFrom(raw.conversation);
+  const agents = agentStagesFrom(raw.agents);
+  const analysis = analysisConfigFrom(raw.analysis);
+  const privacy = raw.privacy;
+  const redact = redactionKindsFrom(
+    privacy && typeof privacy === "object" && !Array.isArray(privacy)
+      ? (privacy as { redact?: unknown }).redact
+      : undefined
+  );
   return {
     name,
     device,
@@ -311,8 +369,21 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     wakeWord: typeof raw.wakeWord === "boolean" ? raw.wakeWord : !preset.general,
     tools: {
       ...(raw.tools !== undefined ? { tools: raw.tools } : {}),
-      ...(text(raw.toolsModule, 400) ? { modulePath: path.resolve(baseDir, text(raw.toolsModule, 400)!) } : {})
+      ...(text(raw.toolsModule, 400) ? { modulePath: path.resolve(baseDir, text(raw.toolsModule, 400)!) } : {}),
+      ...(raw.mcpServers !== undefined ? { mcpServers: raw.mcpServers } : {}),
+      ...(raw.knowledge !== undefined && raw.knowledge !== null ? { knowledge: raw.knowledge, baseDir } : {})
     },
+    conversation: conversation.settings,
+    agents: agents.agents,
+    ...(analysis.config ? { analysis: analysis.config } : {}),
+    redact: redact.kinds,
+    deployerConfig,
+    configProblems: [
+      ...conversation.problems,
+      ...agents.problems,
+      ...(analysis.problem ? [analysis.problem] : []),
+      ...(redact.problem ? [redact.problem] : [])
+    ],
     // Changing only the look, the logo or the sound leaves the assistant who
     // it was: it keeps the original Max prompts word for word.
     isDefault: stock

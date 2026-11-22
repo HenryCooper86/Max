@@ -61,7 +61,7 @@ Requests to any path other than `/agent` and `/companion` are dropped without a 
 | 1001 | relay  | The relay is shutting down. Reconnect with backoff.                                                                                                                                                                                                                            |
 | 1008 | relay  | Policy: a logged-in user signed out, their session expired or the account was deleted, or a client sent a device registration without the relay token. Do not retry with the same credentials; fetch a new token first, and retry at most once. The web SDK does exactly that. |
 | 1011 | relay  | The voice backend failed to start. An `error` event comes first. Reconnect with backoff.                                                                                                                                                                                       |
-| 4001 | relay  | Idle: no client traffic for `RELAY_IDLE_TIMEOUT_MS` (default 10 minutes). Do not reconnect automatically.                                                                                                                                                                      |
+| 4001 | relay  | Final: the session is over and the client should not reconnect. Either idle (no client traffic for `RELAY_IDLE_TIMEOUT_MS`, default 10 minutes), or the relay ended the conversation and sent [`session.ended`](#sessionended) first.                                          |
 | 4003 | relay  | Voice minutes used up: the account's monthly allowance is spent (see [usage and billing](usage-and-billing.md)). New connections are refused the same way until the month ends. Do not reconnect.                                                                              |
 
 The relay pings every `RELAY_HEARTBEAT_MS` (default 30 s) and drops a client that does not answer. Any WebSocket library
@@ -169,6 +169,7 @@ First message. The fields that matter for an app or a website:
 | `context`          | string            | Up to 2000 characters of facts from your app. See [Context](#context).                         |
 | `memory`           | object            | The last `session.memory` event, echoed back when you restart a session.                       |
 | `protocol`         | integer           | The protocol version your client speaks. See [Versions](#versions).                            |
+| `resume`           | string            | The `resume` of an earlier `session.started`, when reconnecting. See [Resuming](#resuming).    |
 
 Fields for QA and telemetry, all optional strings of at most 40 to 160 bytes without control characters: `testerId`,
 `testerRegion`, `testingCampaignId`, `testingTestCaseId`, `testingRunId`, `testingAssignmentId`, `appVersion`,
@@ -241,17 +242,19 @@ The answer to a `tool.call`. Send exactly one per call, within 15 seconds.
 
 ## Events from relay to client
 
-| Event             | Meaning                                                                      |
-| ----------------- | ---------------------------------------------------------------------------- |
-| `connection`      | Link state: `{ state, detail }`. `state` is `relay` right after connecting.  |
-| `session.started` | The backend is ready: `{ provider, mode, capabilities, protocol?, audio? }`. |
-| `status`          | `{ state, detail }`. See [Status values](#status-values).                    |
-| `transcript`      | What the user said or the assistant says. See [Transcripts](#transcripts).   |
-| `tool.call`       | Run one of your client tools. See [Tools](#tools).                           |
-| `tool.activity`   | Progress of any tool call, for a UI.                                         |
-| `metric`          | `{ latencyMs, droppedFrames?, outgoingFps? }`.                               |
-| `telemetry`       | `{ asrMs, thinkMs, firstAudioMs, totalMs }` timings for the last turn.       |
-| `error`           | `{ message }`. The session usually continues.                                |
+| Event             | Meaning                                                                           |
+| ----------------- | --------------------------------------------------------------------------------- |
+| `connection`      | Link state: `{ state, detail }`. `state` is `relay` right after connecting.       |
+| `session.started` | The backend is ready: `{ provider, mode, capabilities, protocol?, audio? }`.      |
+| `status`          | `{ state, detail }`. See [Status values](#status-values).                         |
+| `transcript`      | What the user said or the assistant says. See [Transcripts](#transcripts).        |
+| `tool.call`       | Run one of your client tools. See [Tools](#tools).                                |
+| `tool.activity`   | Progress of any tool call, for a UI.                                              |
+| `session.ended`   | The relay is ending the conversation: `{ reason }`. See [below](#sessionended).   |
+| `agent.changed`   | The conversation moved to another agent: `{ agent }`. See [below](#agentchanged). |
+| `metric`          | `{ latencyMs, droppedFrames?, outgoingFps? }`.                                    |
+| `telemetry`       | `{ asrMs, thinkMs, firstAudioMs, totalMs }` timings for the last turn.            |
+| `error`           | `{ message }`. The session usually continues.                                     |
 
 `session.started` fields:
 
@@ -261,6 +264,7 @@ The answer to a `tool.call`. Send exactly one per call, within 15 seconds.
 | `mode`         | `mock` or `live`.                                                                                                                                                                                                                 |
 | `capabilities` | `serverVad`, `synthesizedAudio`, `transcriptEvents`, `bargeIn`, `voiceSelection`, `weatherContext`, `sessionMemory`, `emergencyMode`, `tools`, `textInput`. `tools` and `textInput` are absent on relays older than tool support. |
 | `audio`        | The audio plan: `wakeGate`, `silenceFill`, `bargeIn`. See the audio contract.                                                                                                                                                     |
+| `resume`       | An id to send back as `session.start.resume` when you reconnect, so the conversation carries on. Absent from relays older than resumption. See [Resuming](#resuming).                                                             |
 
 `synthesizedAudio: false` means the backend sends text only (the mock). The page should speak the text itself. See
 [`useBrowserSpeech`](#usebrowserspeech).
@@ -372,6 +376,66 @@ Tool output reaching the model is capped at 16 KiB. Whether a backend supports t
 The relay puts it in the assistant's instructions, framed as information that cannot change the assistant's rules.
 Because the client sends it, treat it as untrusted. Facts you need to trust (who the user is) should come from your
 backend through a session token's `userId` and `context`. See [security](security.md).
+
+### Resuming
+
+A voice model's memory ends with its WebSocket. To carry a conversation across a dropped connection, keep the `resume`
+value from `session.started` and send it as `session.start.resume` on the next connection. The relay then starts the
+new session with the conversation so far, and with the agent it was with, and does not greet again.
+
+```json
+{
+  "type": "session.started",
+  "provider": "openai",
+  "mode": "live",
+  "capabilities": {},
+  "resume": "rsm_Zk3p0xT1q8mYVw2n5HcA9rUe7LdJbG4s"
+}
+```
+
+```json
+{ "type": "session.start", "sampleRate": 16000, "channels": 1, "resume": "rsm_Zk3p0xT1q8mYVw2n5HcA9rUe7LdJbG4s" }
+```
+
+- The id is a string of at most 64 characters, issued by the relay. One that is malformed, unknown or expired is dropped,
+  not rejected: the session starts fresh and `session.started.resume` carries a new id. A resumed session returns the id
+  it was given.
+- It only works for the same user (the signed-in account, or the `userId` of the session token) on the same deployment.
+- Send it only on a reconnect. To start a new conversation, leave it out.
+- The state is kept in the relay's memory for 10 minutes after the last turn, holds the last 40 turns of at most 600
+  characters, and exists only for `app` assistants. It is lost when the relay restarts. Details and limits are in
+  [running a conversation](conversations.md#carrying-a-conversation-across-a-dropped-connection).
+
+### session.ended
+
+The relay is ending the conversation. The last of the assistant's speech has been sent, so play it out, then expect the
+close.
+
+```json
+{ "type": "session.ended", "reason": "idle" }
+```
+
+| `reason`       | Why                                                                      |
+| -------------- | ------------------------------------------------------------------------ |
+| `agent`        | The assistant ended a finished conversation (`conversation.endSession`). |
+| `idle`         | The user stayed silent through every check-in.                           |
+| `max_duration` | The conversation reached `conversation.maxDurationSeconds`.              |
+
+Right after it the relay closes the WebSocket with close code **4001**, with the reason as the close reason. 4001 means
+"do not reconnect", so a client must not resume or reconnect after it. A client that does not know the event still sees
+the close code and does the right thing. See [running a conversation](conversations.md).
+
+### agent.changed
+
+The conversation moved to another of the assistant's agents (see
+[several agents](conversations.md#several-agents-and-handing-over)).
+
+```json
+{ "type": "agent.changed", "agent": "billing" }
+```
+
+`agent` is the id from the assistant's `agents` list. It is sent each time the conversation hands over, and once at the
+start of a resumed session that was not with the `main` agent. A session without `agents` never sends it.
 
 ## Wearable extensions
 

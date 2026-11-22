@@ -50,6 +50,10 @@
             "protocol": {
               "type": "integer",
               "minimum": 1
+            },
+            "resume": {
+              "type": "string",
+              "maxLength": 64
             }
           },
           "required": ["type", "sampleRate", "channels"]
@@ -423,6 +427,9 @@
             "protocol": {
               "type": "integer",
               "minimum": 1
+            },
+            "resume": {
+              "type": "string"
             }
           },
           "required": ["type", "provider", "mode", "capabilities"]
@@ -931,6 +938,32 @@
             }
           },
           "required": ["type", "callId", "name", "where", "state"]
+        },
+        {
+          "title": "SessionEnded",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "session.ended"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "reason"]
+        },
+        {
+          "title": "AgentChanged",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "agent.changed"
+            },
+            "agent": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "agent"]
         }
       ]
     }

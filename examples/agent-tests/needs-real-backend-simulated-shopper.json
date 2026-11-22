@@ -1,0 +1,12 @@
+{
+  "name": "real backend only: shopper asks about an order",
+  "context": "The shopper is on the orders page.",
+  "simulate": {
+    "persona": "You are a shopper who ordered hiking boots and is impatient. Your order number is A-1042. You answer briefly and only give the order number when asked.",
+    "goal": "Find out whether your order has shipped.",
+    "maxTurns": 6,
+    "firstMessage": "Where is my order?"
+  },
+  "success": "The agent looked the order up with get_order_status and told the user it has shipped, without inventing a delivery date that the tool did not return.",
+  "expect": { "toolCalled": "get_order_status", "toolNotCalled": ["check_stock"], "maxTurns": 6 }
+}

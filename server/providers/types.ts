@@ -7,6 +7,8 @@ import type {
 } from "../../shared/agent";
 import type { UserMemoryFact, UserMemoryTurn } from "../user-memory";
 import type { NavPromptSpeech } from "../routing";
+import type { ResumeState } from "../session-resume";
+import type { ToolDefinition } from "../tools";
 
 export type { ClientEvent, SessionStartEvent, VoiceGender } from "../../shared/agent";
 
@@ -37,6 +39,20 @@ export type ProviderSessionContext = {
     turns: UserMemoryTurn[];
     facts: UserMemoryFact[];
   };
+  /** How the session reaches its user. A phone call has no screen and can be
+   *  hung up; a web session has neither property. */
+  channel?: "web" | "phone";
+  /** Tools that exist only for this session (a phone call's transfer and
+   *  keypad tools). Offered alongside the relay's own. */
+  sessionTools?: readonly ToolDefinition[];
+  /** Where the conversation left off, when this session resumes an earlier
+   *  one (server/session-resume.ts). */
+  resume?: ResumeState;
+  /** Called whenever the conversation's resumable state changes. */
+  saveResume?(state: ResumeState): void;
+  /** Ends the session from the relay's side: the client is told why
+   *  (`session.ended`) and the connection closes. */
+  endSession?(reason: string): void;
   /** Live read of whether the relay currently has a route planned — backed by
    *  server/routing.ts's createNavHandler().activeRoute(), the same signal
    *  createNavPromptHandler already trusts to gate relay nav prompts. Not a

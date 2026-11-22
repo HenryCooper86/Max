@@ -1,5 +1,63 @@
 # Changelog
 
+## 2026-11-22 — Phone calls, MCP, knowledge, multiple agents and conversation records
+
+We compared Max with the leading voice-agent platforms and built what was missing.
+[How Max compares](docs/comparison.md) lists every capability, and what is still not built.
+
+### Phone calls
+
+- The assistant answers and places phone calls through Twilio, on any voice backend. Callers can interrupt it, press
+  keypad digits, be transferred to a person on a list you set, and the assistant hangs up when the call is done.
+  `POST /v1/calls` places a call and can leave a voicemail message when a machine answers.
+  See [phone calls](docs/telephony.md).
+
+### Tools and knowledge
+
+- Remote MCP servers: list them under `mcpServers` and their tools become the assistant's tools. A server that is down
+  when the relay starts is tried again without a restart.
+- A built-in knowledge base: point `knowledge` at your Markdown, text, HTML, JSON or CSV files and the assistant
+  searches them before answering. Search is by keyword, and with `KNOWLEDGE_EMBEDDINGS_MODEL` set it is also by
+  meaning, through any OpenAI-compatible embeddings endpoint, hosted or local. See [tools](docs/tools.md).
+
+### Conversations
+
+- The assistant can check in on a silent user, end a conversation that is finished (`end_session`), and stop at a time
+  limit. Clients get a `session.ended` event with the reason.
+- Several agents in one assistant: each has its own instructions and tools, and the conversation is handed over
+  without the user repeating themselves. Clients get an `agent.changed` event.
+- A dropped connection no longer loses the conversation of a `"device": "app"` assistant. A client that reconnects
+  within 10 minutes carries on where it stopped, and so does the relay when its own connection to the voice model
+  drops.
+- With `conversation.rememberUsers`, a user your backend names in a session token is remembered between
+  conversations: the assistant starts the next one knowing what was said in the last. `GET` and `DELETE
+/v1/users/:userId/memory` let your backend look at or forget one user.
+- Memory between conversations no longer fills up with the pieces of one reply: a reply that arrives as it is written
+  is stored as one turn. This also fixes recall for people signed in to the relay's own accounts.
+- After each conversation the relay can write a summary, judge whether it succeeded, extract the fields you name, and
+  send the record to a webhook or a log file, with emails, phone numbers, card numbers and other personal data
+  removed first. See [running a conversation](docs/conversations.md).
+- OpenTelemetry traces: a span for each session, turn and tool call, to any collector that accepts OTLP over HTTP.
+- Admin → Studio keeps `conversation`, `agents`, `analysis`, `privacy`, `knowledge` and `mcpServers` when it saves.
+- With a small local chat model, a reply that promises a lookup ("Let me check.") and then calls no tool is asked
+  again, so the user gets the answer.
+
+### Testing
+
+- `npm run agent:test` runs scripted and simulated conversations against a relay and checks tool calls, replies and
+  an LLM judge's verdict, with pass rates over repeated runs and a JSON report for CI.
+  See [testing your agent](docs/testing-agents.md).
+
+### Web SDK
+
+- New `ended` and `agentchange` events, and an `agent` property. Reconnects carry the conversation on. These are part
+  of 0.2.0, which is not yet on npm.
+
+### Protocol
+
+- `session.start` and `session.started` have an optional `resume` field, and there are two new relay events,
+  `session.ended` and `agent.changed`. Older clients ignore them. The protocol version is still 1.
+
 ## 2026-11-22 — Reliability, security and billing fixes across the kit
 
 A review of the whole project turned up gaps in billing, security, the SDK's failure handling and release hygiene.

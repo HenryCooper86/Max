@@ -383,6 +383,7 @@ export function createRealtimeEngine(
 
   return {
     responseMode: dialect.responseMode,
+    answersToolsInNewReply: true,
     connect(config, engineEvents) {
       events = engineEvents;
       if (!dialect.apiKey) return Promise.reject(new Error(`${dialect.name}: API key is not configured on the relay`));
@@ -473,6 +474,23 @@ export function createRealtimeEngine(
       sendEvent({
         type: "session.update",
         session: { ...(dialect.sessionType ? { type: dialect.sessionType } : {}), instructions }
+      });
+    },
+    updateTools(tools) {
+      if (!ready) return;
+      // An empty list must be sent as such: leaving `tools` out keeps the old ones.
+      sendEvent({
+        type: "session.update",
+        session: {
+          ...(dialect.sessionType ? { type: dialect.sessionType } : {}),
+          tools: tools.map((tool) => ({
+            type: "function",
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters
+          })),
+          tool_choice: "auto"
+        }
       });
     },
     addContext(text) {

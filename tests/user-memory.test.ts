@@ -22,6 +22,28 @@ describe("per-user conversation memory", () => {
 
   it("isolates users, stores only final turns, deduplicates retries, and stays bounded", () => {
     recordUserMemoryEvent(aliceId, { type: "transcript", speaker: "rider", text: "partial", final: false }, 1);
+    // A reply is sent as it is written: one turn id, growing text, the last one final. That is one turn.
+    const carol = "33333333-3333-4333-8333-333333333333";
+    recordUserMemoryEvent(carol, { type: "transcript", speaker: "rider", text: "bye", final: true, turnId: "r1" }, 1);
+    for (const text of ["Good", "Goodbye", "Goodbye!"]) {
+      recordUserMemoryEvent(carol, { type: "transcript", speaker: "agent", text, turnId: "a1" }, 2);
+    }
+    recordUserMemoryEvent(
+      carol,
+      { type: "transcript", speaker: "agent", text: "Goodbye!", final: true, turnId: "a1" },
+      3
+    );
+    expect(userConversationMemory(carol)?.turns.map((turn) => turn.text)).toEqual(["bye", "Goodbye!"]);
+    // A new turn id is a new turn, even from the same speaker.
+    recordUserMemoryEvent(
+      carol,
+      { type: "transcript", speaker: "agent", text: "Still there?", final: true, turnId: "a2" },
+      4
+    );
+    expect(userConversationMemory(carol)?.turns).toHaveLength(3);
+    // A fact is taken from what the user finished saying, not from a half-heard sentence.
+    recordUserMemoryEvent(carol, { type: "transcript", speaker: "rider", text: "remember that my", turnId: "r2" }, 5);
+    expect(userConversationMemory(carol)?.facts).toEqual([]);
     for (let index = 0; index < 30; index += 1) {
       recordUserMemoryEvent(
         aliceId,

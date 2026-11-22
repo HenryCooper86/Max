@@ -1,0 +1,22 @@
+{
+  "name": "demo: order status",
+  "context": "The shopper is on the orders page.",
+  "turns": [
+    {
+      "user": "get_order_status {\"orderId\": \"A-1042\"}",
+      "expect": {
+        "toolCalled": "get_order_status",
+        "toolNotCalled": ["check_stock"],
+        "replyContains": ["shipped", "UPS"],
+        "withinMs": 8000
+      }
+    },
+    {
+      "user": "get_order_status {\"orderId\": \"Z-0000\"}",
+      "expect": {
+        "toolCalled": "get_order_status",
+        "replyContains": "failed"
+      }
+    }
+  ]
+}

@@ -135,6 +135,12 @@ export interface VoiceAgentEvents {
   audioresume: void;
   /** A session is established (fires again after each reconnect). */
   open: void;
+  /** The relay ended the conversation: the agent finished it (`agent`), the
+   *  user stayed silent (`idle`) or it reached its time limit (`max_duration`).
+   *  The last of the agent's speech still plays; `close` follows. */
+  ended: { reason: string };
+  /** The conversation moved to another of the assistant's agents. */
+  agentchange: { agent: string };
   /** A connection ended. */
   close: CloseInfo;
 }
@@ -291,6 +297,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private blocked = false;
   private protocolWarned = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  /** What the relay gave this conversation to carry it across a reconnect. */
+  private resumeId: string | undefined;
+  private endedByRelay = false;
+  private activeAgent: string | undefined;
   private levelTimer: ReturnType<typeof setInterval> | undefined;
   private lastLevel = { mic: 0, output: 0 };
   private cancelPending: ((error: VoiceAgentError) => void) | undefined;
@@ -344,6 +354,12 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   /** The voice backend serving the current session. Undefined until a session starts. */
   get backend(): string | undefined {
     return this.provider;
+  }
+
+  /** The agent the conversation is with, once the assistant has handed it
+   *  over; undefined while it is with the one every conversation starts with. */
+  get agent(): string | undefined {
+    return this.activeAgent;
   }
 
   /** Whether the microphone is muted. */
@@ -564,7 +580,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     this.reportError(wrapped);
   }
 
-  private teardown(final: "idle" | "closed"): void {
+  private teardown(final: "idle" | "closed", keepPlayback = false): void {
+    this.resumeId = undefined;
+    this.endedByRelay = false;
+    this.activeAgent = undefined;
     this.generation += 1;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
@@ -574,7 +593,7 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     this.cancelPending = undefined;
     this.startPromise = undefined;
     this.audio?.releaseMic();
-    this.audio?.clearPlayback();
+    if (!keepPlayback) this.audio?.clearPlayback();
     this.stopLevelTimer();
     this.wantMic = false;
     this.isMuted = false;
@@ -688,6 +707,8 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
               ...(this.options.voice ? { voice: this.options.voice } : {}),
               ...(this.options.backend ? { backend: this.options.backend } : {}),
               ...(this.context ? { context: this.context } : {}),
+              // Only a reconnect carries the conversation on: start() begins a new one.
+              ...(!initial && this.resumeId ? { resume: this.resumeId } : {}),
               tools: [...this.tools.values()]
             })
           )
@@ -713,7 +734,8 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
         this.socket = undefined;
         this.socketReady = false;
         this.serverState = undefined;
-        this.audio?.clearPlayback();
+        // A goodbye the relay just sent must be heard out, not cut off.
+        if (!this.endedByRelay) this.audio?.clearPlayback();
         const wasReady = this.lifecycle === "active";
         if (initial && !wasReady && event.code !== IDLE_CLOSE_CODE) {
           if (this.takeAuthRetry(event.code)) {
@@ -751,6 +773,12 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     this.attempts += 1;
     const willReconnect =
       this.takeAuthRetry(code) || shouldReconnect(code, this.attempts, this.options.autoReconnect ?? true);
+    if (this.endedByRelay) {
+      // The conversation is over by the relay's own decision, whatever the code.
+      this.emit("close", { code, reason, willReconnect: false });
+      this.teardown("closed", true);
+      return;
+    }
     this.emit("close", { code, reason, willReconnect });
     if (code === IDLE_CLOSE_CODE) {
       this.teardown("closed");
@@ -797,6 +825,7 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
         this.socketReady = true;
         this.attempts = 0;
         this.authRetried = false;
+        this.resumeId = event.resume;
         this.checkRelayProtocol(event.protocol);
         this.setLifecycle("active");
         if (this.streaming) this.sendIfReady({ type: "audio.start" });
@@ -847,6 +876,16 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
         break;
       case "error":
         this.reportError(new VoiceAgentError("relay", event.message));
+        break;
+      case "session.ended":
+        this.endedByRelay = true;
+        // Nothing more goes up: the microphone is no longer needed.
+        this.audio?.releaseMic();
+        this.emit("ended", { reason: event.reason });
+        break;
+      case "agent.changed":
+        this.activeAgent = event.agent;
+        this.emit("agentchange", { agent: event.agent });
         break;
       case "connection":
         break;

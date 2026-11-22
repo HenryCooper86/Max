@@ -6,6 +6,7 @@ import {
   assistant,
   assistantProfileFrom,
   assistantSummary,
+  DEPLOYER_KEYS,
   installAssistantProfile,
   wakeWordActive,
   type AssistantProfile
@@ -171,6 +172,13 @@ export function saveStudioConfig(raw: unknown): StudioState {
   else if (running.tools !== undefined) next.tools = running.tools;
   if (typeof previous.toolsModule === "string") next.toolsModule = previous.toolsModule;
   else if (running.modulePath) next.toolsModule = running.modulePath;
+  // The same goes for everything else a deployer wires up: agents, MCP
+  // servers, the knowledge base, conversation rules and records.
+  const deployed = assistant().deployerConfig;
+  for (const key of DEPLOYER_KEYS) {
+    if (previous[key] !== undefined) next[key] = previous[key];
+    else if (deployed[key] !== undefined) next[key] = deployed[key];
+  }
 
   const before = readStored();
   writeStored(next);

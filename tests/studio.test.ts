@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- stored config files are inspected structurally */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -182,5 +183,53 @@ describe("studio", () => {
     saveStudioConfig({ name: "Vee", device: "vr" });
     expect(fs.existsSync(process.env.ASSISTANT_CONFIG)).toBe(true);
     expect(studioState().config).toMatchObject({ name: "Vee" });
+  });
+});
+
+describe("what a deployer wired up survives a Studio save", () => {
+  const deployed = {
+    name: "Ava",
+    device: "app",
+    conversation: { endSession: true, idleReminderSeconds: 12 },
+    agents: [{ id: "billing", description: "Refunds.", instructions: "Refund politely." }],
+    analysis: { summary: true },
+    privacy: { redact: ["email"] },
+    mcpServers: [{ name: "crm", url: "https://crm.example.com/mcp" }],
+    knowledge: { files: ["./kb"], text: "Open nine to five." }
+  };
+
+  it("carries the running config's keys into the Studio's file, with knowledge paths pinned", () => {
+    setAssistantProfileForTests(assistantProfileFrom(deployed, "/srv/app"));
+    saveStudioConfig({ name: "Bea", device: "app" });
+    const stored = JSON.parse(fs.readFileSync(studioConfigPath(), "utf8")) as Record<string, any>;
+    expect(stored.name).toBe("Bea");
+    expect(stored.conversation).toEqual(deployed.conversation);
+    expect(stored.agents).toEqual(deployed.agents);
+    expect(stored.analysis).toEqual(deployed.analysis);
+    expect(stored.privacy).toEqual(deployed.privacy);
+    expect(stored.mcpServers).toEqual(deployed.mcpServers);
+    // The Studio's file lives elsewhere: a relative path would point at nothing.
+    expect(stored.knowledge.files).toEqual([path.resolve("/srv/app", "kb")]);
+    expect(stored.knowledge.text).toBe("Open nine to five.");
+    // The saved assistant still has them.
+    expect(assistant().agents.map((agent) => agent.id)).toEqual(["billing"]);
+    expect(assistant().conversation.endSession).toBe(true);
+    expect(assistant().redact).toEqual(["email"]);
+  });
+
+  it("keeps what the Studio's own file already holds across later saves", () => {
+    setAssistantProfileForTests(assistantProfileFrom(deployed, "/srv/app"));
+    saveStudioConfig({ name: "Bea", device: "app" });
+    saveStudioConfig({ name: "Cy", device: "app", greeting: "Hello." });
+    const stored = JSON.parse(fs.readFileSync(studioConfigPath(), "utf8")) as Record<string, any>;
+    expect(stored.name).toBe("Cy");
+    expect(stored.agents).toEqual(deployed.agents);
+    expect(stored.mcpServers).toEqual(deployed.mcpServers);
+  });
+
+  it("cannot be set from the Studio itself", () => {
+    saveStudioConfig({ name: "Bea", device: "app", mcpServers: [{ name: "evil", url: "https://evil.example/mcp" }] });
+    const stored = JSON.parse(fs.readFileSync(studioConfigPath(), "utf8")) as Record<string, any>;
+    expect(stored.mcpServers).toBeUndefined();
   });
 });

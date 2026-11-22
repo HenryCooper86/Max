@@ -293,6 +293,10 @@ export type SessionStartEvent = {
   /** Facts from the host app the assistant should know this session
    *  ("the user is on the pricing page"). Treated as untrusted context. */
   context?: string;
+  /** The `resume` id of an earlier `session.started`, sent when reconnecting
+   *  so the conversation carries on where it stopped. Unknown or expired ids
+   *  are ignored and the session starts fresh. */
+  resume?: string;
 };
 
 /** A tool the client declares in `session.start` and executes itself. */
@@ -336,6 +340,18 @@ export type ToolActivityEvent = {
   durationMs?: number;
   error?: string;
 };
+
+/** Server → client: the relay is ending the session. The last of the
+ *  assistant's speech has been sent; play it out, then expect the close. */
+type SessionEndedEvent = {
+  type: "session.ended";
+  /** `agent`: the assistant ended a finished conversation. `idle`: the user
+   *  stayed silent. `max_duration`: the time limit. */
+  reason: string;
+};
+
+/** Server → client: the conversation moved to another agent. */
+type AgentChangedEvent = { type: "agent.changed"; agent: string };
 
 /** Client → server: the outcome of one device command. Exactly one of these
  *  follows every command; the relay treats silence past its timeout as failure. */
@@ -554,6 +570,9 @@ export type AgentEvent =
       /** How the relay treats this session's audio; absent from relays older
        *  than the audio contract. */
       audio?: AudioPlan;
+      /** Send this back as `session.start.resume` when reconnecting, to carry
+       *  the conversation on. Absent from relays older than resumption. */
+      resume?: string;
     }
   | { type: "connection"; state: ConnectionState; detail: string }
   | { type: "status"; state: string; detail: string }
@@ -647,7 +666,9 @@ export type AgentEvent =
   | NavRouteEvent
   | NavErrorEvent
   | ToolCallEvent
-  | ToolActivityEvent;
+  | ToolActivityEvent
+  | SessionEndedEvent
+  | AgentChangedEvent;
 
 /** What kind of wearable this assistant lives in. Drives copy and artwork only. */
 export type AssistantDevice = "helmet" | "glasses" | "other";

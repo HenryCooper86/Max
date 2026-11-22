@@ -752,3 +752,62 @@ describe("protocol version", () => {
     expect(warnings).toEqual(["protocol_mismatch"]);
   });
 });
+
+describe("conversations the relay carries on or ends", () => {
+  const RESUMABLE = { ...STARTED, resume: "rsm_abcdefghijklmnopqrstuvwxyz012345" };
+
+  it("sends the resume id back when it reconnects, and not on a fresh start", async () => {
+    const { agent, socket } = await started();
+    expect(socket.ofType("session.start")[0]).not.toHaveProperty("resume");
+    socket.serverSends(RESUMABLE);
+    socket.serverCloses(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    const second = FakeSocket.instances[1]!;
+    second.open();
+    expect(second.ofType("session.start")[0]).toMatchObject({ resume: RESUMABLE.resume });
+    second.serverSends(RESUMABLE);
+
+    // stop() ends the conversation: the next start() begins a new one.
+    agent.stop();
+    const again = agent.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const third = FakeSocket.instances[2]!;
+    third.open();
+    expect(third.ofType("session.start")[0]).not.toHaveProperty("resume");
+    third.serverSends(STARTED);
+    await again;
+  });
+
+  it("reports why the relay ended the conversation, lets the goodbye play and does not reconnect", async () => {
+    const { agent, socket, calls } = await started();
+    const ended: string[] = [];
+    const closes: Array<{ code: number; willReconnect: boolean }> = [];
+    agent.on("ended", (event) => ended.push(event.reason));
+    agent.on("close", (event) => closes.push(event));
+    calls.length = 0;
+    socket.serverSends({ type: "session.ended", reason: "agent" });
+    expect(ended).toEqual(["agent"]);
+    expect(calls).toContain("releaseMic");
+    // Even a plain 1000 from an older relay build must not start a new session.
+    socket.serverCloses(1000, "agent");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(agent.status).toBe("closed");
+    expect(closes[0]).toEqual({ code: 1000, reason: "agent", willReconnect: false });
+    expect(calls).not.toContain("clear");
+  });
+
+  it("reports the agent a conversation was handed to", async () => {
+    const { agent, socket } = await started();
+    const agents: string[] = [];
+    agent.on("agentchange", (event) => agents.push(event.agent));
+    expect(agent.agent).toBeUndefined();
+    socket.serverSends({ type: "agent.changed", agent: "billing" });
+    expect(agents).toEqual(["billing"]);
+    expect(agent.agent).toBe("billing");
+    socket.serverSends({ type: "agent.changed" });
+    expect(agents).toEqual(["billing"]);
+    agent.stop();
+    expect(agent.agent).toBeUndefined();
+  });
+});

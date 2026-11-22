@@ -21,6 +21,7 @@
     "cloud:reencrypt": "tsx scripts/cloud-reencrypt.ts",
     "check:sdk": "tsc -p sdk/tsconfig.json --noEmit",
     "generate:protocol": "tsx scripts/generate-agent-protocol.ts",
+    "agent:test": "tsx scripts/agent-test/cli.ts",
     "check:protocol": "tsx scripts/generate-agent-protocol.ts --check",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "eslint .",

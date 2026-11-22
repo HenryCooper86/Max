@@ -88,6 +88,8 @@ export type SessionStartMessage = {
   voiceProvider?: string;
   tools?: ClientToolSpec[];
   context?: string;
+  /** The `resume` id of the session this one continues after a dropped connection. */
+  resume?: string;
 };
 
 /** Client to relay messages. */
@@ -137,7 +139,11 @@ export type RelayEvent =
       capabilities?: AgentCapabilities;
       /** The relay's wire protocol; absent from relays older than the version handshake. */
       protocol?: number;
+      /** Sent back on reconnect so the conversation carries on; absent from older relays. */
+      resume?: string;
     }
+  | { type: "session.ended"; reason: string }
+  | { type: "agent.changed"; agent: string }
   | { type: "status"; state: string; detail?: string }
   | { type: "connection"; state: string; detail?: string }
   | TranscriptEvent
@@ -187,6 +193,10 @@ export function parseRelayEvent(raw: string): RelayEvent | undefined {
         : undefined;
     case "error":
       return typeof value.message === "string" ? (value as RelayEvent) : undefined;
+    case "session.ended":
+      return { type: "session.ended", reason: typeof value.reason === "string" ? value.reason : "ended" };
+    case "agent.changed":
+      return typeof value.agent === "string" && value.agent ? { type: "agent.changed", agent: value.agent } : undefined;
     default:
       return undefined;
   }
@@ -270,6 +280,8 @@ export type SessionStartInput = {
   backend?: string;
   context?: string;
   tools?: ReadonlyArray<{ name: string; description: string; parameters?: JsonSchema }>;
+  /** The previous session's resume id, when reconnecting. */
+  resume?: string;
 };
 
 /** Builds the `session.start` message. Empty optional fields are omitted. */
@@ -287,7 +299,8 @@ export function buildSessionStart(input: SessionStartInput): SessionStartMessage
     ...(input.voice ? { voiceGender: input.voice } : {}),
     ...(input.backend ? { voiceProvider: input.backend } : {}),
     ...(tools ? { tools } : {}),
-    ...(context ? { context } : {})
+    ...(context ? { context } : {}),
+    ...(input.resume ? { resume: input.resume } : {})
   };
 }
 

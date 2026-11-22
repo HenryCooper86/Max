@@ -517,6 +517,10 @@ export function createPipelineEngine(
     updateInstructions(next) {
       instructions = next;
     },
+    updateTools(tools) {
+      // Read per chat request, so the next reply already sees the new set.
+      if (config) config = { ...config, tools };
+    },
     addContext(text) {
       chat.addContext(text);
     },

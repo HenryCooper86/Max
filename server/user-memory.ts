@@ -6,6 +6,7 @@
 // immutable account id. Anonymous/operator-token sessions deliberately get no
 // durable memory because the relay cannot safely tell one rider from another.
 
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -56,6 +57,10 @@ const MAX_FACT_CHARS = 240;
 const ACCOUNT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const memories = new Map<string, UserConversationMemory>();
+/** The turn each user's latest stored entry belongs to, while it may still grow. Not persisted. */
+const openTurns = new Map<string, { turnId: string }>();
+const REVISION_PERSIST_MS = 1_500;
+let revisionTimer: NodeJS.Timeout | undefined;
 let loaded = false;
 let loadFailed = false;
 let persistFailed = false;
@@ -78,9 +83,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+const EXTERNAL_KEY_PATTERN = /^ext-[0-9a-f]{48}$/;
+
+/**
+ * The memory key of a user the relay knows only by the `userId` in their
+ * session token: your product's user, not an account on this relay. A digest,
+ * so the file does not list your users' ids, and so no id however it is
+ * written can collide with an account's.
+ */
+export function externalUserMemoryKey(userId: string): string {
+  return `ext-${createHash("sha256").update(`token-user\n${userId}`).digest("hex").slice(0, 48)}`;
+}
+
 function normalizeUserId(value: unknown): string {
   if (typeof value !== "string") return "";
   const normalized = value.normalize("NFKC").trim().toLowerCase();
+  if (EXTERNAL_KEY_PATTERN.test(normalized)) return normalized;
   // Account ids are immutable UUIDs. Older builds keyed this file by mutable
   // usernames, which could expose a deleted rider's history to a later account
   // that reused the same name. Ignore those legacy keys rather than guessing.
@@ -272,6 +290,15 @@ function persistMemories(): void {
     });
 }
 
+function persistSoon(): void {
+  if (revisionTimer) return;
+  revisionTimer = setTimeout(() => {
+    revisionTimer = undefined;
+    persistMemories();
+  }, REVISION_PERSIST_MS);
+  revisionTimer.unref?.();
+}
+
 function cloneMemory(memory: UserConversationMemory): UserConversationMemory {
   return JSON.parse(JSON.stringify(memory)) as UserConversationMemory;
 }
@@ -322,18 +349,36 @@ export function recordUserMemoryEvent(userIdInput: unknown, payload: unknown, no
     }
   }
 
+  let revision = false;
   if (payload.type === "transcript" && payload.final !== false) {
     const turn = cleanTurn({ at: now, speaker: payload.speaker, text: payload.text });
     if (turn) {
       const previous = current.turns.at(-1);
+      const turnId = typeof payload.turnId === "string" && payload.turnId ? payload.turnId : undefined;
+      const open = openTurns.get(userId);
+      // A reply is sent as it is written: the same turn id, with more text
+      // each time, and only the last of them marked final. Those are one turn.
+      // Counted separately they filled the whole window with one reply's pieces.
+      if (previous && turnId && open?.turnId === turnId && previous.speaker === turn.speaker) {
+        if (previous.text !== turn.text) {
+          previous.text = turn.text;
+          previous.at = turn.at;
+          changed = true;
+          revision = payload.final !== true;
+        }
+      }
       // Providers can occasionally replay the same final after reconnecting.
       // Do not let transport retries consume the small cross-session window.
-      if (!previous || previous.speaker !== turn.speaker || previous.text !== turn.text) {
+      else if (!previous || previous.speaker !== turn.speaker || previous.text !== turn.text) {
         current.turns.push(turn);
         current.turns = current.turns.slice(-MAX_STORED_TURNS);
         changed = true;
       }
-      if (turn.speaker === "rider") {
+      if (turnId) openTurns.set(userId, { turnId });
+      else openTurns.delete(userId);
+      // A fact is taken from what the user finished saying. A turn with an id
+      // and no final mark may still be half heard; one with no id is whole.
+      if (turn.speaker === "rider" && (payload.final === true || !turnId)) {
         const explicitFact = extractExplicitMemoryFact(turn.text);
         if (explicitFact) {
           const normalizedFact = explicitFact.normalize("NFKC").toLocaleLowerCase();
@@ -351,7 +396,9 @@ export function recordUserMemoryEvent(userIdInput: unknown, payload: unknown, no
   if (!changed) return;
   current.updatedAt = now;
   memories.set(userId, current);
-  persistMemories();
+  // A turn that is still growing is written once it settles, not on every word.
+  if (revision) persistSoon();
+  else persistMemories();
 }
 
 export function clearUserConversationMemory(userIdInput: unknown): boolean {
@@ -359,6 +406,7 @@ export function clearUserConversationMemory(userIdInput: unknown): boolean {
   ensureLoaded();
   const userId = normalizeUserId(userIdInput);
   const removed = Boolean(userId) && memories.delete(userId);
+  openTurns.delete(userId);
   if (removed) persistMemories();
   return removed;
 }
@@ -391,12 +439,20 @@ export function buildPreviousConversationPrompt(turns: UserMemoryTurn[], facts: 
 
 /** Test hook: waits for queued writes. */
 export function flushUserMemory(): Promise<void> {
+  if (revisionTimer) {
+    clearTimeout(revisionTimer);
+    revisionTimer = undefined;
+    persistMemories();
+  }
   return persistQueue;
 }
 
 /** Test hook: resets module state without deleting a configured file. */
 export function resetUserMemoryForTests(): void {
   memories.clear();
+  openTurns.clear();
+  if (revisionTimer) clearTimeout(revisionTimer);
+  revisionTimer = undefined;
   loaded = false;
   loadFailed = false;
   persistFailed = false;

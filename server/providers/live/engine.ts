@@ -71,6 +71,9 @@ export type EngineEvents = {
 
 export type VoiceEngine = {
   readonly responseMode: EngineResponseMode;
+  /** True when the upstream ends the reply that asked for a tool and answers
+   *  the tool's result in a new one. Otherwise the same reply carries on. */
+  readonly answersToolsInNewReply?: boolean;
   /** Resolves once the upstream accepted the session; rejects with a message
    *  fit to show the person setting the kit up. */
   connect(config: EngineConfig, events: EngineEvents): Promise<void>;
@@ -93,6 +96,10 @@ export type VoiceEngine = {
   sendToolResult?(callId: string, output: string): void;
   /** A turn the user typed: answer it as if it had been spoken. */
   sendText?(text: string): void;
+  /** Replace the tools the model may call (the conversation moved to another
+   *  agent). Engines whose upstream fixes the tools at connect omit this; the
+   *  session then offers every tool up front and refuses the ones out of turn. */
+  updateTools?(tools: ToolSpec[]): void;
   close(): void;
 };
 

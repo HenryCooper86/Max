@@ -53,6 +53,34 @@ Every key is optional.
 Both are described in the [tools guide](tools.md). The Studio keeps them when it saves, but does not edit them: a
 module path is code on the server's disk, so it is set by whoever deploys the relay.
 
+Two more keys add tools from other places:
+
+| Key          | Type                    | What it does                                                                                                                                                                  |
+| ------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcpServers` | array (≤ 8)             | Remote MCP servers whose tools the assistant may use: `name`, `url`, `headers`, `allowedTools`, `prefix`, `timeoutMs`. See [remote MCP servers](tools.md#remote-mcp-servers). |
+| `knowledge`  | string, array or object | Documents the assistant searches with `search_knowledge`: `files`, `text`, `maxResults`, `chunkChars`. See [knowledge base](tools.md#knowledge-base).                         |
+
+### Conversation, agents and records
+
+These keys shape how a conversation runs and what happens to it afterwards. They apply to the relay's own assistant, not
+to Max Cloud projects. Each is explained in [running a conversation](conversations.md).
+
+| Key              | Type                     | What it does                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conversation`   | object                   | `idleReminderSeconds`, `idleReminders`, `maxIdleReminders`, `maxDurationSeconds`, `farewell`, `endSession` and `rememberUsers`: checking in on a silent user, a time limit, letting the assistant end the conversation, and remembering a user between conversations. See [checking in](conversations.md#checking-in-a-time-limit-and-ending-the-conversation). |
+| `agents`         | array (≤ 12)             | Specialist agents the conversation can be handed to, each with `id`, `description`, `instructions` and an optional `tools` list. See [several agents](conversations.md#several-agents-and-handing-over).                                                                                                                                                        |
+| `analysis`       | `true` or object         | Summary, sentiment, success criteria and extracted `fields` for each finished conversation. Runs only when `CONVERSATION_WEBHOOK_URL` or `CONVERSATION_LOG_FILE` is set. See [analysis](conversations.md#analysis).                                                                                                                                             |
+| `privacy.redact` | `true`, `"all"` or array | Removes personal data from records that leave the relay. Kinds: `email`, `card`, `ssn`, `ip`, `phone`. See [redacting](conversations.md#redacting-personal-data).                                                                                                                                                                                               |
+
+A bad entry in any of these is skipped or ignored with a line in the relay's startup log, and the rest of the file still
+applies.
+
+Admin → Studio edits only the identity, look and sound keys. When it saves, it copies `tools`, `toolsModule`,
+`conversation`, `agents`, `analysis`, `privacy`, `knowledge` and `mcpServers` into its own file from the config the
+relay is running (relative `knowledge` paths become absolute), so a save never drops them. The Studio's file then wins
+over `./assistant.config.json`: change these keys there afterwards, or keep your config in a file named by
+`ASSISTANT_CONFIG`, which wins over the Studio's.
+
 ### Look and sound
 
 These shape the relay's own web app and the native apps. The SDK widget takes its colour from its `accent` attribute
@@ -157,6 +185,57 @@ being able to open voice sessions. Use a long random value (`openssl rand -hex 3
 Code in the relay can add its own numbers to `/metrics` with `registerMetricsSource(() => ({ ... }))` from
 `server/prometheus.ts`. Each key becomes a metric name (camelCase is snake-cased and `max_` is prefixed). A name ending
 in `_total` is exposed as a counter, anything else as a gauge.
+
+### Conversation records and analysis
+
+All of these are off until set. See [after the conversation](conversations.md#after-the-conversation).
+
+| Variable                      | Default | What it does                                                                                                                                   |
+| ----------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CONVERSATION_WEBHOOK_URL`    | off     | POSTed a signed `conversation.ended` record when each conversation ends. HTTPS, or plain HTTP to a local or private host.                      |
+| `CONVERSATION_WEBHOOK_SECRET` | none    | Signs those requests, exactly like [tool webhooks](tools.md#verifying-the-signature).                                                          |
+| `CONVERSATION_LOG_FILE`       | off     | A file the same record is appended to, one JSON object per line.                                                                               |
+| `ANALYSIS_LLM_BASE_URL`       | none    | An OpenAI-compatible endpoint for the `analysis` key. Without it, the pipeline's chat model or a local one is used.                            |
+| `ANALYSIS_LLM_API_KEY`        | none    | That endpoint's key.                                                                                                                           |
+| `ANALYSIS_LLM_MODEL`          | none    | The model for the analysis. Falls back to `PIPELINE_LLM_MODEL`, then `gpt-4o-mini` (or `LOCAL_LLM_MODEL`, then `qwen3:8b`, for a local model). |
+
+### Knowledge base
+
+See [turning on embeddings](tools.md#turning-on-embeddings). Off until `KNOWLEDGE_EMBEDDINGS_MODEL` is set.
+
+| Variable                        | Default                     | What it does                                                                                  |
+| ------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------- |
+| `KNOWLEDGE_EMBEDDINGS_MODEL`    | off                         | An embeddings model. Turns on hybrid (keyword and meaning) search of the knowledge base.      |
+| `KNOWLEDGE_EMBEDDINGS_BASE_URL` | `https://api.openai.com/v1` | An OpenAI-compatible `/embeddings` endpoint. HTTPS, or plain HTTP to a local or private host. |
+| `KNOWLEDGE_EMBEDDINGS_API_KEY`  | `OPENAI_API_KEY`            | The key. `OPENAI_API_KEY` is used only with the default OpenAI URL.                           |
+
+### Tracing
+
+Conversations are exported as OpenTelemetry traces (OTLP over HTTP with JSON) when an endpoint is set. See
+[tracing](conversations.md#tracing).
+
+| Variable                             | Default     | What it does                                                               |
+| ------------------------------------ | ----------- | -------------------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`        | none        | The collector's base URL; `/v1/traces` is added.                           |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | none        | The full traces URL. Wins over the one above.                              |
+| `OTEL_EXPORTER_OTLP_HEADERS`         | none        | Headers on every export, as `name=value,name2=value2`, values URL-encoded. |
+| `OTEL_EXPORTER_OTLP_TRACES_HEADERS`  | none        | The same, for traces only. Wins when it is not empty.                      |
+| `OTEL_SERVICE_NAME`                  | `max-relay` | The service name on the spans.                                             |
+| `OTEL_SDK_DISABLED`                  | off         | `true` turns tracing off.                                                  |
+| `MAX_TRACE_CONTENT`                  | off         | `on` adds what was said to the spans (redacted per `privacy.redact`).      |
+
+### Phone calls
+
+Set `TWILIO_AUTH_TOKEN` to turn phone calls on. See [phone calls](telephony.md).
+
+| Variable                     | Default | What it does                                                                                 |
+| ---------------------------- | ------- | -------------------------------------------------------------------------------------------- |
+| `TWILIO_AUTH_TOKEN`          | none    | Your Twilio auth token. Turns telephony on and checks Twilio's webhook signatures.           |
+| `TWILIO_ACCOUNT_SID`         | none    | Needed to transfer calls and place outbound calls.                                           |
+| `TWILIO_PHONE_NUMBER`        | none    | The number outbound calls come from, in E.164 form.                                          |
+| `TELEPHONY_PUBLIC_URL`       | derived | The relay's public address as Twilio reaches it. Set it behind a proxy or a tunnel.          |
+| `TELEPHONY_TRANSFER_NUMBERS` | none    | Where the assistant may transfer a call: `support=+14155550100,sales=sip:sales@example.com`. |
+| `TELEPHONY_MAX_CALLS`        | `20`    | Simultaneous calls, 1 to 1000.                                                               |
 
 ### Behaviour
 

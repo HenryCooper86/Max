@@ -139,6 +139,69 @@ describe("chat loop", () => {
     expect(chats[2].messages.map((message: any) => message.role)).toEqual(["system", "user", "assistant", "user"]);
   });
 
+  it("asks again, once, when the model promises a lookup and calls nothing", async () => {
+    const { loop, chats, toolCalls, sentences } = setup([
+      () => sseOf([text("Let me check that for you.")]),
+      () => sseOf([toolPiece({ index: 0, id: "c1", function: { name: "lookup", arguments: "{}" } })]),
+      () => sseOf([text("It ships in four days.")]),
+      () => sseOf([text("Sure.")])
+    ]);
+    const done = loop.reply("how long is shipping");
+    await vi.waitFor(() => expect(toolCalls).toEqual(["c1"]));
+    expect(chats[1].messages.slice(-2)).toEqual([
+      { role: "assistant", content: "Let me check that for you." },
+      { role: "user", content: expect.stringContaining("Call the tool now") }
+    ]);
+    loop.sendToolResult("c1", "4 days");
+    await done;
+    expect(sentences).toEqual(["Let me check that for you.", "It ships in four days."]);
+    // The nudge is the relay's own: history keeps what was said, in one piece.
+    await loop.reply("thanks");
+    expect(chats[3].messages.slice(1, 3)).toEqual([
+      { role: "user", content: "how long is shipping" },
+      { role: "assistant", content: "Let me check that for you. It ships in four days." }
+    ]);
+  });
+
+  it("does not ask twice, and leaves ordinary answers and questions alone", async () => {
+    const stalled = setup([() => sseOf([text("Let me check.")]), () => sseOf([text("One moment.")])]);
+    await stalled.loop.reply("hours?");
+    expect(stalled.chats).toHaveLength(2);
+
+    const answers = [
+      "We open at nine.",
+      "Sure, let me check. Which order number is it?",
+      "我们九点开门。",
+      // Answers that only sound like promises.
+      "I can confirm your appointment is at 3pm tomorrow.",
+      "I can see why that is confusing. The fee is 5 dollars.",
+      "Hold on to your receipt until the refund arrives.",
+      "I will get you the refund within five days.",
+      // A promise followed by the answer itself is finished.
+      "Let me check. We open at nine.",
+      "Let me confirm: your total is 3.5 dollars."
+    ];
+    for (const answer of answers) {
+      const plain = setup([() => sseOf([text(answer)])]);
+      await plain.loop.reply("hours?");
+      expect(plain.chats).toHaveLength(1);
+    }
+    const promises = [
+      "我帮您查一下。",
+      "One moment.",
+      "Hold on, please.",
+      "I'll look that up.",
+      "Sure! Let me pull up your order.",
+      "That is 3.5 dollars. Let me check the stock.",
+      "I'm going to transfer you now"
+    ];
+    for (const promise of promises) {
+      const again = setup([() => sseOf([text(promise)]), () => sseOf([text("Done.")])]);
+      await again.loop.reply("hours?");
+      expect(again.chats).toHaveLength(2);
+    }
+  });
+
   it("stops deltas once the reply is stopped mid-stream", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));

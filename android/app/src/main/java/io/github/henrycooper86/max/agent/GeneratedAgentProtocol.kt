@@ -45,7 +45,9 @@ object ServerEventTypes {
     const val NAV_ERROR = "nav.error"
     const val TOOL_CALL = "tool.call"
     const val TOOL_ACTIVITY = "tool.activity"
-    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR, CRASH_ACK, CRASH_SIMULATE, COMPANION_PAIRING, COMPANION_DISCOVERY, PHONE_LOCATION, PHONE_LOCATION_STATUS, NAV_ROUTE, NAV_ERROR, TOOL_CALL, TOOL_ACTIVITY)
+    const val SESSION_ENDED = "session.ended"
+    const val AGENT_CHANGED = "agent.changed"
+    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR, CRASH_ACK, CRASH_SIMULATE, COMPANION_PAIRING, COMPANION_DISCOVERY, PHONE_LOCATION, PHONE_LOCATION_STATUS, NAV_ROUTE, NAV_ERROR, TOOL_CALL, TOOL_ACTIVITY, SESSION_ENDED, AGENT_CHANGED)
 }
 
 val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
@@ -70,5 +72,7 @@ val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
         "nav.route" to setOf("type", "commandId", "destinationName", "destination", "distanceMeters", "etaSeconds", "polyline", "steps"),
         "nav.error" to setOf("type", "commandId", "code"),
         "tool.call" to setOf("type", "callId", "name", "arguments"),
-        "tool.activity" to setOf("type", "callId", "name", "where", "state")
+        "tool.activity" to setOf("type", "callId", "name", "where", "state"),
+        "session.ended" to setOf("type", "reason"),
+        "agent.changed" to setOf("type", "agent")
 )

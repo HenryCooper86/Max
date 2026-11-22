@@ -35,13 +35,19 @@ export type ToolBrokerOptions = {
   log: Logger;
   clientTimeoutMs?: number;
   now?: () => number;
+  /** Whether the agent the conversation is with may use a tool right now.
+   *  Absent: every tool. Read on every call, because the agent can change. */
+  allowed?: (name: string) => boolean;
 };
 
 type PendingClientCall = { name: string; resolve(outcome: ToolOutcome): void; timer: NodeJS.Timeout };
 
 export type ToolBroker = {
-  /** Everything the model may call this session. */
+  /** Everything the model may call right now. */
   specs(): ToolSpec[];
+  /** Everything any agent of this session may call, for upstreams whose tools
+   *  cannot change once the session has started. */
+  allSpecs(): ToolSpec[];
   /** Runs one call to completion. Never rejects. */
   run(call: ToolCall): Promise<ToolOutcome>;
   /** A client's answer to a `tool.call`. Unknown or late answers are ignored. */
@@ -123,17 +129,24 @@ export function createToolBroker(options: ToolBrokerOptions): ToolBroker {
     });
   }
 
+  function everySpec(): ToolSpec[] {
+    const specs: ToolSpec[] = options.serverTools().map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters ?? { type: "object", properties: {} }
+    }));
+    const taken = new Set(specs.map((spec) => spec.name));
+    for (const tool of options.clientTools) if (!taken.has(tool.name)) specs.push(tool);
+    return specs;
+  }
+
   return {
     specs() {
-      const specs: ToolSpec[] = options.serverTools().map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters ?? { type: "object", properties: {} }
-      }));
-      const taken = new Set(specs.map((spec) => spec.name));
-      for (const tool of options.clientTools) if (!taken.has(tool.name)) specs.push(tool);
-      return specs;
+      const allowed = options.allowed;
+      return allowed ? everySpec().filter((spec) => allowed(spec.name)) : everySpec();
     },
+
+    allSpecs: everySpec,
 
     async run(call) {
       if (closed) return { ok: false, output: toolErrorText("the session ended") };
@@ -144,6 +157,13 @@ export function createToolBroker(options: ToolBrokerOptions): ToolBroker {
       if (!server && !client) {
         options.log.warn("model called an unknown tool", { tool: call.name });
         return { ok: false, output: toolErrorText(`there is no tool called ${call.name}`) };
+      }
+      if (options.allowed && !options.allowed(call.name)) {
+        // Only reachable on upstreams that were offered every agent's tools up front.
+        return {
+          ok: false,
+          output: toolErrorText(`${call.name} is not available to the agent handling this conversation`)
+        };
       }
       activity(call, where, "started");
       let outcome: ToolOutcome;

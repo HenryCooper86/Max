@@ -39,6 +39,8 @@ import { metricsResponse, registerMetricsSource } from "./prometheus";
 import { cloudCounters } from "./cloud/counters";
 import { cloudSessionTokens, sessionTokens } from "./session-tokens";
 import { installServerTools } from "./tools/registry";
+import { createConversationLifecycle } from "./conversation-lifecycle";
+import { createTelephony, telephonySettingsFromEnv, type Telephony } from "./telephony/twilio-calls";
 import { createUsageMeter, monthOf, usageSettingsFromEnv } from "./usage";
 import {
   cloudEnabled,
@@ -120,7 +122,7 @@ import { AgentSessionController } from "./session-controller";
 import { markClientActivity, startWatchdog, trackClient } from "./watchdog";
 import type { Logger } from "./logger";
 import { staticCacheControl } from "./static-cache";
-import { clearUserConversationMemory, flushUserMemory, userMemorySummary } from "./user-memory";
+import { clearUserConversationMemory, externalUserMemoryKey, flushUserMemory, userMemorySummary } from "./user-memory";
 import { registerAmapRoutes } from "./amap-proxy";
 import { createCompanionBindingStore } from "./companion-store";
 import { createCompanionRegistry } from "./companion-registry";
@@ -154,6 +156,16 @@ server.requestTimeout = 30_000;
 server.keepAliveTimeout = 5_000;
 server.maxRequestsPerSocket = 1_000;
 const activeSessions = new Map<WebSocket, AgentSessionController>();
+// Phone calls (server/telephony): Twilio's media streams carry no credentials,
+// so they have their own socket server and prove themselves with a ticket.
+const telephonySockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
+const telephonyConfig = telephonySettingsFromEnv();
+let telephony: Telephony | undefined;
+/** Media-stream sockets that have not presented a ticket yet, by client address. */
+const pendingStreams = new Map<string, number>();
+let pendingStreamTotal = 0;
+const MAX_PENDING_STREAMS_PER_ADDRESS = 8;
+const MAX_PENDING_STREAMS = 64;
 const usageMeter = createUsageMeter(usageSettingsFromEnv());
 /** A public-embed session ends after this long, so nobody can hold one open for hours. */
 const CLOUD_EMBED_SESSION_MS = 15 * 60_000;
@@ -354,6 +366,84 @@ app.get("/v1/usage", (req, res) => {
   }
   const userId = typeof req.query.userId === "string" && req.query.userId ? req.query.userId : undefined;
   res.json(usageMeter.report(month, userId));
+});
+
+/** The origin a request was made to, as the caller saw it. */
+function requestOrigin(req: express.Request): string {
+  const forwarded = req.headers["x-forwarded-proto"];
+  const proto = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
+  const scheme = proto === "https" || proto === "http" ? proto : req.protocol;
+  return `${scheme}://${req.headers.host ?? "localhost"}`;
+}
+
+// Twilio asks this what to do with a call; the answer connects it to the
+// assistant. Authenticated by Twilio's signature over the URL and the form.
+app.post("/telephony/twilio/voice", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  if (!telephony) {
+    res.status(404).type("text/plain").send("Telephony is not configured. Set TWILIO_AUTH_TOKEN.");
+    return;
+  }
+  const params: Record<string, string> = {};
+  for (const [name, value] of Object.entries((req.body ?? {}) as Record<string, unknown>)) {
+    if (typeof value === "string") params[name] = value;
+  }
+  const origin = telephonyConfig.settings?.publicUrl ?? requestOrigin(req);
+  const signature = req.headers["x-twilio-signature"];
+  const answer = telephony.voiceWebhook({
+    url: `${origin}${req.originalUrl}`,
+    params,
+    signature: Array.isArray(signature) ? signature[0] : signature
+  });
+  if (answer.status === 403) log.warn("rejected a telephony webhook: bad signature", { address: clientAddress(req) });
+  res.status(answer.status).type("text/xml").send(answer.body);
+});
+
+// Places a phone call for the assistant to hold. Owner-only, and never open:
+// a relay without a token must not let strangers dial numbers on its account.
+app.post("/v1/calls", async (req, res) => {
+  if (!config.relayAuthToken || !relayTokenPresented(req)) {
+    res.status(401).json({
+      ok: false,
+      error: config.relayAuthToken
+        ? "Send the relay token: Authorization: Bearer <RELAY_AUTH_TOKEN>."
+        : "Set RELAY_AUTH_TOKEN before placing calls."
+    });
+    return;
+  }
+  if (!telephony) {
+    res.status(503).json({ ok: false, error: "Telephony is not configured. Set TWILIO_AUTH_TOKEN." });
+    return;
+  }
+  const placed = await telephony.placeCall((req.body ?? {}) as Record<string, unknown>, requestOrigin(req));
+  if (placed.ok) res.status(201).json({ ok: true, callSid: placed.callSid });
+  else res.status(placed.status).json({ ok: false, error: placed.error });
+});
+
+// What the relay remembers about one of your users between conversations
+// (`conversation.rememberUsers`), by the id your backend put in their session
+// token. Owner-only: this is how a product honours "forget me".
+function ownerRequest(req: express.Request, res: express.Response): boolean {
+  if (config.relayAuthToken && relayTokenPresented(req)) return true;
+  res.status(401).json({
+    ok: false,
+    error: config.relayAuthToken
+      ? "Send the relay token: Authorization: Bearer <RELAY_AUTH_TOKEN>."
+      : "Set RELAY_AUTH_TOKEN to use this route."
+  });
+  return false;
+}
+
+app.get("/v1/users/:userId/memory", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const { enabled, updatedAt, turnCount, factCount } = userMemorySummary(externalUserMemoryKey(req.params.userId));
+  res.json({ ok: true, memory: { enabled, ...(updatedAt ? { updatedAt } : {}), turnCount, factCount } });
+});
+
+app.delete("/v1/users/:userId/memory", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const removed = clearUserConversationMemory(externalUserMemoryKey(req.params.userId));
+  log.info("a token user's conversation memory was cleared", { removed });
+  res.json({ ok: true, removed });
 });
 
 app.get("/health", (_req, res) => {
@@ -1097,6 +1187,44 @@ server.on("upgrade", (request, socket, head) => {
     companionSockets.handleUpgrade(request, socket, head);
     return;
   }
+  if (url.pathname === "/telephony/twilio/stream") {
+    const calls = telephony;
+    const address = clientAddress(request);
+    const waiting = pendingStreams.get(address) ?? 0;
+    // A media stream carries no credentials until its first message, so the
+    // sockets that have not shown a ticket yet are rationed: none at all unless
+    // a call is waiting for its stream, a few per address, and a fixed number
+    // in total. Calls in progress do not count against them.
+    // Through a proxy the relay was not told to trust, every client has the
+    // proxy's address: a per-address ration would be one ration for everybody,
+    // Twilio included. The total still holds.
+    const shared = !config.trustProxy && Boolean(request.headers["x-forwarded-for"] ?? request.headers.forwarded);
+    if (
+      !calls ||
+      !calls.expectsStream() ||
+      (!shared && waiting >= MAX_PENDING_STREAMS_PER_ADDRESS) ||
+      pendingStreamTotal >= MAX_PENDING_STREAMS
+    ) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    pendingStreams.set(address, waiting + 1);
+    pendingStreamTotal += 1;
+    let counted = true;
+    const settled = () => {
+      if (!counted) return;
+      counted = false;
+      pendingStreamTotal -= 1;
+      const left = (pendingStreams.get(address) ?? 1) - 1;
+      if (left > 0) pendingStreams.set(address, left);
+      else pendingStreams.delete(address);
+    };
+    // A handshake that never completes gives its slot back too.
+    socket.once("close", settled);
+    telephonySockets.handleUpgrade(request, socket, head, (stream) => calls.handleStream(stream, settled));
+    return;
+  }
   if (url.pathname !== "/agent") {
     socket.destroy();
     return;
@@ -1128,6 +1256,92 @@ function selectProvider(client: WebSocket, sessionLog: Logger, telemetry: Provid
     });
     if (id !== config.voiceProvider) sessionLog.info("session picked its own voice backend", { provider: id });
     return createVoiceProvider(id, client, sessionLog, telemetry);
+  });
+}
+
+// Traces, post-conversation analysis and the conversation webhook, for the
+// relay's own assistant. (Max Cloud projects keep their history in the console.)
+const conversations = createConversationLifecycle({
+  ...(assistant().analysis ? { analysis: assistant().analysis } : {}),
+  redact: assistant().redact
+});
+for (const problem of [...assistant().configProblems, ...conversations.problems()]) log.warn(problem);
+
+for (const problem of telephonyConfig.problems) log.warn(problem);
+if (telephonyConfig.settings) {
+  telephony = createTelephony(telephonyConfig.settings, {
+    log: createLogger("telephony"),
+    openSession(client, call, extras) {
+      const usageUserId = call.userId ?? "phone";
+      if (shuttingDown) return { refused: "shutting down" };
+      if (usageMeter.overLimit(usageUserId)) return { refused: "usage limit reached" };
+      const sessionId = randomUUID();
+      const sessionLog = createLogger(`call:${shortSessionId(sessionId)}`);
+      const metered = usageMeter.open(sessionId, usageUserId);
+      const observer = conversations.active()
+        ? conversations.open({
+            sessionId,
+            channel: "phone",
+            assistant: assistant().name,
+            phone: {
+              direction: call.direction,
+              callSid: call.callSid,
+              ...(call.from ? { from: call.from } : {}),
+              ...(call.to ? { to: call.to } : {})
+            },
+            ...(call.userId ? { userId: call.userId } : {}),
+            ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
+          })
+        : undefined;
+      metrics.sessionOpened();
+      const socket = client as unknown as WebSocket;
+      const session = new AgentSessionController(
+        socket,
+        (target, telemetry) => selectProvider(target, sessionLog, telemetry),
+        sessionLog,
+        "phone",
+        undefined,
+        undefined,
+        {
+          deviceRegistrationAuthorized: false,
+          // A caller is a member of the public: nothing they say is QA evidence.
+          privateSession: true,
+          resumeScope: "phone",
+          channel: "phone",
+          sessionTools: extras.sessionTools,
+          trustedContext: extras.trustedContext,
+          ...(call.userId ? { tokenGrant: { userId: call.userId } } : {}),
+          onServerEvent: (payload) => {
+            observer?.event(payload);
+            const event = payload as { type?: unknown; state?: unknown };
+            if (event?.type === "tool.activity" && event.state === "started") metered.toolCall();
+          }
+        }
+      );
+      activeSessions.set(socket, session);
+      let over = false;
+      return {
+        handleMessage: (data, isBinary) => session.handleMessage(data, isBinary),
+        close(reason) {
+          if (over) return;
+          over = true;
+          metered.close();
+          observer?.end(reason ?? "caller");
+          activeSessions.delete(socket);
+          metrics.sessionClosed();
+          void session.close().catch((error: unknown) => {
+            sessionLog.warn("session close failed", {
+              message: error instanceof Error ? error.message : String(error)
+            });
+          });
+        }
+      };
+    },
+    ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
+  });
+  log.info("telephony ready", {
+    transfers: [...telephonyConfig.settings.transferTargets.keys()],
+    outbound: Boolean(telephonyConfig.settings.accountSid && telephonyConfig.settings.phoneNumber)
   });
 }
 
@@ -1225,6 +1439,18 @@ wss.on("connection", (client, request) => {
   embedLimit?.unref();
   metrics.sessionOpened();
   trackClient(client);
+  const observer =
+    !cloudProject && conversations.active()
+      ? conversations.open({
+          sessionId: usageSessionId,
+          channel: "web",
+          assistant: assistant().name,
+          ...((authenticatedUser?.id ?? tokenGrant?.userId)
+            ? { userId: authenticatedUser?.id ?? tokenGrant?.userId }
+            : {}),
+          ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
+        })
+      : undefined;
   let sessionProvider: AgentProvider | undefined;
   const session = new AgentSessionController(
     client,
@@ -1252,10 +1478,12 @@ wss.on("connection", (client, request) => {
       deviceRegistrationAuthorized:
         !cloudProject && (relayTokenPresented(request) || (!config.relayAuthToken && !authActive())),
       privateSession: Boolean(cloudProject),
+      ...(cloudProject ? { resumeScope: `cloud:${cloudProject.projectId}` } : {}),
       ...(tokenGrant ? { tokenGrant: { userId: tokenGrant.userId, context: tokenGrant.context } } : {}),
       onServerEvent: (payload) => {
         cloudSession?.observe(payload, sessionProvider?.upstreamUsable?.());
         recorder?.event(payload);
+        observer?.event(payload);
         const event = payload as { type?: unknown; state?: unknown };
         if (event?.type === "tool.activity" && event.state === "started") meteredSession.toolCall();
       },
@@ -1280,6 +1508,7 @@ wss.on("connection", (client, request) => {
     if (usageCheck) clearInterval(usageCheck);
     if (embedLimit) clearTimeout(embedLimit);
     const usage = meteredSession.close();
+    observer?.end(code === 1000 || code === 1005 ? "client" : "disconnected");
     const endedAt = usage?.endedAt ?? Date.now();
     const billedSeconds = cloudSession?.close(endedAt);
     if (cloudProject && recorder) {
@@ -1432,11 +1661,14 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     forceTimer.unref();
 
     for (const client of wss.clients) client.close(1001, "server shutdown");
+    for (const client of telephonySockets.clients) client.close(1001, "server shutdown");
     await companionSockets.close();
     await companionRegistry.close();
     await companionStore.flush();
     await Promise.allSettled([...activeSessions.values()].map((session) => session.close()));
     usageMeter.flush();
+    // Conversations that just ended still owe their webhook and their traces.
+    await conversations.drain(3_000);
     await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);
     closeTestingStore();
     await serverClosed;

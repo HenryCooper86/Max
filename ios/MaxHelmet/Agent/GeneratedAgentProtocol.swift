@@ -45,7 +45,9 @@ enum ServerEventTypes {
     static let navError = "nav.error"
     static let toolCall = "tool.call"
     static let toolActivity = "tool.activity"
-    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error, crashAck, crashSimulate, companionPairing, companionDiscovery, phoneLocation, phoneLocationStatus, navRoute, navError, toolCall, toolActivity]
+    static let sessionEnded = "session.ended"
+    static let agentChanged = "agent.changed"
+    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error, crashAck, crashSimulate, companionPairing, companionDiscovery, phoneLocation, phoneLocationStatus, navRoute, navError, toolCall, toolActivity, sessionEnded, agentChanged]
 }
 
 let serverEventRequiredFields: [String: Set<String>] = [
@@ -70,5 +72,7 @@ let serverEventRequiredFields: [String: Set<String>] = [
     "nav.route": ["type", "commandId", "destinationName", "destination", "distanceMeters", "etaSeconds", "polyline", "steps"],
     "nav.error": ["type", "commandId", "code"],
     "tool.call": ["type", "callId", "name", "arguments"],
-    "tool.activity": ["type", "callId", "name", "where", "state"]
+    "tool.activity": ["type", "callId", "name", "where", "state"],
+    "session.ended": ["type", "reason"],
+    "agent.changed": ["type", "agent"]
 ]

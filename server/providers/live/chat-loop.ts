@@ -85,6 +85,34 @@ type ChatMessage =
 /** Tool rounds one reply may take before the model must answer in words. */
 const MAX_TOOL_ROUNDS = 4;
 
+/**
+ * A reply that promises a lookup ("Let me check.") and then ends without
+ * calling anything. Small models do this; left alone, the user waits for an
+ * answer that never comes. The model is told once, and its next round carries on.
+ */
+const MAX_STALLED_REPLY_CHARS = 160;
+// "Let me X" is a promise whatever X is. "I'll X" is one only for looking
+// things up or passing the caller on: "I'll get you the refund" is an answer.
+const STALLED_PROMISE =
+  /\b(?:let me|allow me to)\s+(?:just\s+|quickly\s+)?(?:check|look|find|search|pull|see|get|verify|confirm|transfer|connect)\b|\b(?:i(?:'|’)ll|i will|i am going to|i(?:'|’)m going to)\s+(?:just\s+|quickly\s+)?(?:check|look (?:that|this|it|into|up|for)|find out|search|pull (?:that|this|it) up|pull up|transfer you|connect you)\b|^\W*(?:one moment|just a moment|hold on|give me a (?:second|moment))(?:,? please)?\W*$|(?:我|让我|帮你|帮您|为您|给您)(?:来|先|去)?(?:查一下|查查|查询|查看|看一下|看看|确认一下|找一下|转接)|稍等|请稍候/i;
+// Sent as the user's turn, marked as not theirs: several local chat templates
+// refuse a system message anywhere but first.
+const STALLED_NUDGE =
+  "(Automatic note, not from the user.) You said you would look something up or take an action, but you called no tool. Call the tool now. Do not repeat what you already said.";
+
+/** Whether a reply with no tool call reads as an unkept promise to use one:
+ *  short, not a question, and ending on the promise rather than on an answer. */
+function repliedWithoutActing(text: string): boolean {
+  const said = text.trim();
+  if (said.length === 0 || said.length > MAX_STALLED_REPLY_CHARS || /[?？]\s*$/.test(said)) return false;
+  // Sentences end at a full stop followed by a space, so "3.5" stays whole.
+  const sentences = said.split(/(?<=[.!])\s+|(?<=[。！…\n])/).filter((part) => /[\p{L}\p{N}]/u.test(part));
+  const last = sentences.at(-1) ?? said;
+  const promise = STALLED_PROMISE.exec(last);
+  // "Let me confirm: your total is $5." has kept its promise in the same breath.
+  return promise !== null && !/[:：]/.test(last.slice(promise.index + promise[0].length));
+}
+
 type StreamedChunk = {
   choices?: Array<{
     delta?: {
@@ -279,6 +307,7 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
       } else {
         const turn: ChatMessage[] = userText ? [{ role: "user", content: userText }] : [];
         let full = "";
+        let nudged = false;
         for (let round = 0; ; round += 1) {
           // The last round offers no tools, so the model has to answer in words.
           const offerTools = round < MAX_TOOL_ROUNDS;
@@ -304,6 +333,19 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
             offerTools
           );
           full += result.text;
+          if (
+            !result.toolCalls.length &&
+            offerTools &&
+            !nudged &&
+            options.tools().length > 0 &&
+            repliedWithoutActing(result.text)
+          ) {
+            nudged = true;
+            log.info(`${options.label} reply promised a lookup without calling a tool; asking again`);
+            full += " ";
+            turn.push({ role: "assistant", content: result.text }, { role: "user", content: STALLED_NUDGE });
+            continue;
+          }
           if (!result.toolCalls.length || !offerTools) break;
           turn.push({ role: "assistant", content: result.text || null, tool_calls: result.toolCalls });
           for (const call of result.toolCalls) {

@@ -52,6 +52,12 @@ export type EngineToolCall = {
 export type EngineEvents = {
   /** The wearer started talking. Fires for every new turn, including barge-in. */
   onSpeechStarted(): void;
+  /**
+   * The wearer's turn was taken to be over: the upstream's detection said so, or the relay's.
+   * Only for the clock: how long the answer takes is counted from here, where an engine can say
+   * it, and not from when the words of the turn were written down, which is often later.
+   */
+  onSpeechEnded?(): void;
   /** The wearer's words so far for the current turn (cumulative). */
   onRiderTranscript(text: string, final: boolean): void;
   onResponseStarted(): void;

@@ -382,6 +382,7 @@ export function createRealtimeEngine(
     },
     onEnd() {
       if (!ready) return;
+      events?.onSpeechEnded?.();
       sendEvent({ type: "input_audio_buffer.commit" });
       if (!answerTurns) return;
       turnWaiting = responseActive || createPending;
@@ -481,6 +482,10 @@ export function createRealtimeEngine(
     if (type === "input_audio_buffer.speech_started") {
       // With the relay taking the turns its detector has said so already.
       if (!turns.on) speechStarted();
+      return;
+    }
+    if (type === "input_audio_buffer.speech_stopped") {
+      if (!turns.on) events?.onSpeechEnded?.();
       return;
     }
     if (type.startsWith(TRANSCRIPTION)) {

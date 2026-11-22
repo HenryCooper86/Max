@@ -853,6 +853,25 @@ describe("Gemini Live with the relay's turn detector", () => {
     expect(socket.readyState).toBe(3);
   });
 
+  it("says when the user's turn ended, for the clock", async () => {
+    process.env.GEMINI_API_KEY = "k";
+    const hand = handWatcher();
+    const socket = new FakeSocket();
+    const ended: string[] = [];
+    const engine = createGeminiLiveEngine(log, () => socket as never, undefined, undefined, withDetector(hand).factory);
+    const connected = engine.connect(CONFIG, { ...engineEvents().handlers, onSpeechEnded: () => ended.push("ended") });
+    await vi.waitFor(() => expect(hand.state.connects).toHaveLength(1));
+    await Promise.resolve();
+    await Promise.resolve();
+    socket.emit("open");
+    socket.receive({ setupComplete: {} });
+    await connected;
+    hand.start();
+    expect(ended).toEqual([]);
+    hand.end();
+    expect(ended).toEqual(["ended"]);
+  });
+
   it("is Gemini as before when the detector is not there", async () => {
     process.env.GEMINI_VAD_SILENCE_MS = "900";
     const hand = handWatcher({ fail: "connect ECONNREFUSED" });
@@ -1101,6 +1120,49 @@ describe("OpenAI Realtime and Grok with the relay's turn detector", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(seen).toEqual([["closed", "the turn detector went away (closed (1012))"]]);
     expect(socket.readyState).toBe(3);
+  });
+
+  it("says when the user's turn ended, for the clock: its own detector's word, or the upstream's", async () => {
+    process.env.OPENAI_API_KEY = "k";
+    const connect = async (hand: ReturnType<typeof handWatcher>) => {
+      const socket = new FakeSocket();
+      const ended: string[] = [];
+      const engine = createRealtimeEngine(openAiDialect(), log, () => socket as never, withDetector(hand).factory);
+      const connected = engine.connect(CONFIG, {
+        ...engineEvents().handlers,
+        onSpeechEnded: () => ended.push("ended")
+      });
+      await vi.waitFor(() => expect(hand.state.connects).toHaveLength(1));
+      await Promise.resolve();
+      await Promise.resolve();
+      socket.emit("open");
+      socket.receive({ type: "session.updated" });
+      await connected;
+      return { socket, ended };
+    };
+    // The relay takes the turns: the end is its detector's, and what the upstream thinks is not asked.
+    const hand = handWatcher();
+    const relay = await connect(hand);
+    hand.start();
+    relay.socket.receive({ type: "input_audio_buffer.speech_stopped" });
+    expect(relay.ended).toEqual([]);
+    hand.end();
+    expect(relay.ended).toEqual(["ended"]);
+    // A noise is no turn, and has no end to tell.
+    vi.useFakeTimers();
+    try {
+      hand.start();
+      hand.end(false);
+      vi.advanceTimersByTime(1_200);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(relay.ended).toEqual(["ended"]);
+    // The upstream takes the turns: it says so itself.
+    const vendor = await connect(handWatcher({ fail: "connect ECONNREFUSED" }));
+    vendor.socket.receive({ type: "input_audio_buffer.speech_started" });
+    vendor.socket.receive({ type: "input_audio_buffer.speech_stopped" });
+    expect(vendor.ended).toEqual(["ended"]);
   });
 
   it("is the backend as before when the detector is not there", async () => {

@@ -137,6 +137,7 @@ In rough order of how much they would matter to most users:
 9. **Avatars.**
 
 Traces and phone calls currently apply to the relay's own assistant. Max Cloud projects have their own conversation
-history in the console, a [conversation webhook](cloud.md#the-studio) of their own, the same
+history in the console, with how long each answer took to begin, a [conversation webhook](cloud.md#the-studio) of
+their own, the same
 [conversation analysis](cloud.md#who-pays-for-an-analysis) (run with the project's own model key) and the same
 [flows](cloud.md#the-studio) of several agents, drawn in the console, and do not have the others yet.

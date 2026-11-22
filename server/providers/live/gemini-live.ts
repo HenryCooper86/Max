@@ -212,6 +212,7 @@ export function createGeminiLiveEngine(
     },
     onEnd() {
       if (!ready) return;
+      events?.onSpeechEnded?.();
       sendMessage({ realtimeInput: { activityEnd: {} } });
       // Whatever comes now answers this turn.
       staleReply = false;

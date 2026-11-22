@@ -116,6 +116,10 @@
   `answerMs` (the end of the user's turn to the first sound of the answer) in the conversation webhook and the
   conversation log, on the relay's own assistant and on Max Cloud projects. The Max Cloud console shows it on each
   answer, as a median per conversation, and as a median over the conversations listed.
+- The latency the relay reports (`metric.latencyMs`, and `answerMs` above) is counted from when the user's turn
+  ended, where the backend or the relay's turn detector says so, and no longer only from when their words were
+  final. On OpenAI Realtime and Grok the words often arrive after the answer is ready, and the number used to read
+  close to zero; it is now the wait the user had. Expect it to be larger than before on those backends.
 - Max Cloud: conversation analysis for projects. A project can have each conversation analysed when it ends: a
   summary, how the visitor felt, a pass or fail against the owner's own rule, and fields to find in what was said.
   The result is shown with the conversation in the console and sent with it to the project's server. It runs on the

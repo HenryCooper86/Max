@@ -315,19 +315,19 @@ The answer to a `tool.call`. Send exactly one per call, within 15 seconds.
 
 ## Events from relay to client
 
-| Event             | Meaning                                                                           |
-| ----------------- | --------------------------------------------------------------------------------- |
-| `connection`      | Link state: `{ state, detail }`. `state` is `relay` right after connecting.       |
-| `session.started` | The backend is ready: `{ provider, mode, capabilities, protocol?, audio? }`.      |
-| `status`          | `{ state, detail }`. See [Status values](#status-values).                         |
-| `transcript`      | What the user said or the assistant says. See [Transcripts](#transcripts).        |
-| `tool.call`       | Run one of your client tools. See [Tools](#tools).                                |
-| `tool.activity`   | Progress of any tool call, for a UI.                                              |
-| `session.ended`   | The relay is ending the conversation: `{ reason }`. See [below](#sessionended).   |
-| `agent.changed`   | The conversation moved to another agent: `{ agent }`. See [below](#agentchanged). |
-| `metric`          | `{ latencyMs, droppedFrames?, outgoingFps? }`.                                    |
-| `telemetry`       | `{ asrMs, thinkMs, firstAudioMs, totalMs }` timings for the last turn.            |
-| `error`           | `{ message }`. The session usually continues.                                     |
+| Event             | Meaning                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `connection`      | Link state: `{ state, detail }`. `state` is `relay` right after connecting.                                              |
+| `session.started` | The backend is ready: `{ provider, mode, capabilities, protocol?, audio? }`.                                             |
+| `status`          | `{ state, detail }`. See [Status values](#status-values).                                                                |
+| `transcript`      | What the user said or the assistant says. See [Transcripts](#transcripts).                                               |
+| `tool.call`       | Run one of your client tools. See [Tools](#tools).                                                                       |
+| `tool.activity`   | Progress of any tool call, for a UI.                                                                                     |
+| `session.ended`   | The relay is ending the conversation: `{ reason }`. See [below](#sessionended).                                          |
+| `agent.changed`   | The conversation moved to another agent: `{ agent }`. See [below](#agentchanged).                                        |
+| `metric`          | `{ latencyMs, droppedFrames?, outgoingFps? }`. `latencyMs`: the end of the user's turn to the first sound of the answer. |
+| `telemetry`       | `{ asrMs, thinkMs, firstAudioMs, totalMs }` timings for the last turn.                                                   |
+| `error`           | `{ message }`. The session usually continues.                                                                            |
 
 `session.started` fields:
 

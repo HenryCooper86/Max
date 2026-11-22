@@ -208,6 +208,46 @@ describe("live voice session", () => {
     expect(client.of("telemetry")).toHaveLength(1);
   });
 
+  it("counts the wait for an answer from when the turn was over, not from when its words were written down", async () => {
+    const { client, engine } = await open("auto", { wakeWord: false });
+    const waited = () => client.of("metric").at(-1)?.latencyMs;
+    // A speech-to-speech backend: it says the user stopped, answers, and writes their words down last.
+    engine().events.onSpeechStarted();
+    await vi.advanceTimersByTimeAsync(2_000);
+    engine().events.onSpeechEnded!();
+    await vi.advanceTimersByTimeAsync(600);
+    engine().events.onResponseStarted();
+    engine().events.onAgentAudio(Buffer.alloc(1920, 1));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(client.of("metric")).toHaveLength(0);
+    engine().events.onRiderTranscript("what time is it", true);
+    // Heard 900 ms after the turn ended, although the words and the first sound came at the same moment.
+    expect(waited()).toBe(900);
+    expect(client.of("telemetry").at(-1)).toMatchObject({ asrMs: 2_900, totalMs: 2_900 });
+    engine().events.onResponseDone({ cancelled: false });
+
+    // An engine that does not say when the turn ended: the words are all there is to go by.
+    engine().events.onSpeechStarted();
+    await vi.advanceTimersByTimeAsync(1_000);
+    engine().events.onRiderTranscript("and tomorrow", true);
+    await vi.advanceTimersByTimeAsync(450);
+    engine().events.onResponseStarted();
+    engine().events.onAgentAudio(Buffer.alloc(1920, 1));
+    expect(waited()).toBe(450);
+    engine().events.onResponseDone({ cancelled: false });
+
+    // Said after the words were final, the end is not news, and an end from the turn before is not carried over.
+    engine().events.onSpeechStarted();
+    await vi.advanceTimersByTimeAsync(1_000);
+    engine().events.onRiderTranscript("thanks", true);
+    await vi.advanceTimersByTimeAsync(200);
+    engine().events.onSpeechEnded!();
+    await vi.advanceTimersByTimeAsync(100);
+    engine().events.onResponseStarted();
+    engine().events.onAgentAudio(Buffer.alloc(1920, 1));
+    expect(waited()).toBe(300);
+  });
+
   it("withholds a reply from a self-answering backend until the wearer's words settle", async () => {
     const { client, engine } = await open("auto");
     expect(engine().config.manualResponse).toBe(false);

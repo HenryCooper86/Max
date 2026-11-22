@@ -483,6 +483,8 @@ export function createLiveProvider(
   let lastExplicitWakeAt = 0;
   let speechStartedAt = 0;
   let riderFinalAt = 0;
+  /** When the engine said the turn was over, where it says so: often before the turn's words are final. */
+  let speechEndedAt = 0;
 
   // ---- The assistant's current reply ---------------------------------------
   let responseActive = false;
@@ -1399,7 +1401,12 @@ export function createLiveProvider(
     if (replyAudioBytes === 0) {
       replyFirstAudioAt = now();
       status("speaking", t(`${me().name} 正在回答`, `${me().name} is speaking`));
-      const reference = riderFinalAt || speechStartedAt;
+      // The wait is counted from when the turn was known to be over: by the engine's word or by the
+      // turn's final words, whichever came first. (A speech-to-speech backend often has its answer
+      // ready before the words are written down, and counted from those the wait would look like none.)
+      const turnOver =
+        speechEndedAt && riderFinalAt ? Math.min(speechEndedAt, riderFinalAt) : speechEndedAt || riderFinalAt;
+      const reference = turnOver || speechStartedAt;
       if (reference && !replyForced) {
         const latencyMs = Math.max(0, now() - reference);
         send({ type: "metric", latencyMs });
@@ -2089,6 +2096,7 @@ export function createLiveProvider(
     riderTurnAddressed = true;
     speechStartedAt = at;
     riderFinalAt = at;
+    speechEndedAt = 0;
     riderDelivery = createTranscriptDelivery();
     if (wakeWordEnabled) {
       // Typing to the assistant is addressing it: a spoken follow-up may skip the name.
@@ -2244,6 +2252,7 @@ export function createLiveProvider(
       riderDelivery = createTranscriptDelivery();
       speechStartedAt = now();
       riderFinalAt = 0;
+      speechEndedAt = 0;
       clearIdle();
       if (responseActive && !replyInterrupted && (replyAudioBytes > 0 || replyGate === "held")) {
         // Barge-in: stop talking, and stop the client's buffered playback.
@@ -2255,6 +2264,10 @@ export function createLiveProvider(
       }
       status("hearing", t("检测到语音", "Hearing you"));
     },
+    onSpeechEnded() {
+      if (closed || !speechStartedAt || riderFinalAt) return;
+      speechEndedAt ||= now();
+    },
     onRiderTranscript(text, final) {
       if (closed) return;
       clearIdle();
@@ -2265,6 +2278,7 @@ export function createLiveProvider(
         riderFinal = false;
         riderDelivery = createTranscriptDelivery();
         speechStartedAt = speechStartedAt || now();
+        speechEndedAt = 0;
       }
       riderText = text;
       if (final) finalizeRiderTurn();

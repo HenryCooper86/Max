@@ -139,5 +139,5 @@ dependencies {
     // implementation so parseAgentEvent/buildNavRequest/etc. can be unit tested
     // directly. Never reaches the production classpath. Authorized exception,
     // plan Tech Stack line (2026-08-08-nav-android-plan-c), Task 3.
-    testImplementation("org.json:json:20231013")
+    testImplementation("org.json:json:20260814")
 }

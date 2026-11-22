@@ -117,7 +117,7 @@ const TEMPLATE = `
   .actions { display: flex; gap: 8px; }
   .sound { margin: 0 12px 8px; align-self: flex-start; }
   .picture { margin: 0 12px 8px; align-self: flex-start; }
-  .picture[disabled] { opacity: 0.55; cursor: default; }
+  .picture[aria-disabled="true"] { opacity: 0.55; cursor: default; }
   input[type="file"] { display: none; }
   .lines li[data-picture] { padding: 4px; }
   .lines li img { display: block; max-width: 160px; max-height: 120px; border-radius: 8px; }
@@ -164,7 +164,7 @@ const TEMPLATE = `
       <input type="text" part="input" maxlength="2000" autocomplete="off" />
       <button class="small" part="send" type="submit"></button>
     </form>
-    <input class="file" type="file" accept="image/jpeg,image/png" tabindex="-1" aria-hidden="true" />
+    <input class="file" type="file" accept="image/jpeg,image/png" tabindex="-1" />
   </section>
   <button class="fab" part="button" type="button" aria-pressed="false">
     <span class="ring" aria-hidden="true"></span>
@@ -216,8 +216,8 @@ export class VoiceAgentElement extends ElementBase {
   #error: VoiceAgentError | undefined;
   /** Why the last picture did not go out, until the next one does or a session starts. */
   #notice: "pictureNotSent" | "pictureUnusable" | undefined;
-  /** A picture is being prepared and sent. */
-  #sendingPicture = false;
+  /** The session a picture is being prepared and sent for. */
+  #sendingFor: VoiceAgent | undefined;
   /** Object URLs of the thumbnails shown, to release with the list. */
   #thumbnails: string[] = [];
   /** The user closed the panel; it stays closed until the next session starts. */
@@ -306,7 +306,10 @@ export class VoiceAgentElement extends ElementBase {
     ui.sound.addEventListener("click", () => {
       void this.#agent?.resumeAudio().then(() => this.#renderStatus());
     });
-    ui.picture.addEventListener("click", () => ui.file.click());
+    ui.picture.addEventListener("click", () => {
+      // Not `disabled` while a picture is on its way: that would throw the keyboard's focus away.
+      if (ui.picture.getAttribute("aria-disabled") !== "true") ui.file.click();
+    });
     ui.file.addEventListener("change", () => {
       const file = ui.file.files?.[0];
       // The same file can be chosen again next time.
@@ -328,7 +331,12 @@ export class VoiceAgentElement extends ElementBase {
   disconnectedCallback(): void {
     this.#off.forEach((unsubscribe) => unsubscribe());
     this.#off = [];
+    // The transcript goes with the session: pictures in it could not be shown again once released.
+    this.#lines.clear();
+    this.#ui?.list.replaceChildren();
     this.#releaseThumbnails();
+    this.#notice = undefined;
+    this.#sendingFor = undefined;
     this.#agent?.destroy();
     this.#agent = undefined;
   }
@@ -343,6 +351,10 @@ export class VoiceAgentElement extends ElementBase {
   async start(): Promise<void> {
     this.#dismissed = false;
     const agent = this.#ensureAgent();
+    // What went wrong last time is not this conversation's news.
+    this.#error = undefined;
+    this.#notice = undefined;
+    this.#renderNote();
     try {
       await agent.start();
     } catch {
@@ -359,15 +371,19 @@ export class VoiceAgentElement extends ElementBase {
    * Shows the assistant a picture, as the picture button does: with what is
    * typed in the text box as the words that go with it, when there is a text
    * box and something in it. The picture appears in the transcript. Resolves
-   * to whether it was sent; when it was not, the panel says so.
+   * to whether it was sent, and `voice-agent:image` says the same; when a
+   * picture was not sent in a conversation, the panel says so.
    */
   async sendImage(source: ImageSource, options: { text?: string; maxSide?: number } = {}): Promise<boolean> {
     const agent = this.#agent;
-    if (!agent || this.#sendingPicture) return false;
+    // No conversation to send it in, or this one is still preparing a picture.
+    if (!agent || this.#sendingFor === agent) return this.#pictureDone(false);
     const ui = this.#ui;
     const typed = options.text === undefined && !ui.form.hidden ? ui.input.value.trim() : "";
     const text = options.text ?? typed;
-    this.#sendingPicture = true;
+    // The words go with the picture from here on: out of the box, so that Send cannot send them a second time.
+    if (typed) ui.input.value = "";
+    this.#sendingFor = agent;
     this.#renderStatus();
     let sent = false;
     let unusable = false;
@@ -379,16 +395,29 @@ export class VoiceAgentElement extends ElementBase {
     } catch {
       unusable = true;
     }
-    this.#sendingPicture = false;
-    // The session was replaced or ended while the picture was prepared: nothing of it belongs in this panel.
-    if (this.#agent !== agent) return false;
-    this.#notice = sent ? undefined : unusable ? "pictureUnusable" : "pictureNotSent";
+    if (this.#sendingFor === agent) this.#sendingFor = undefined;
+    // The session was replaced, or the element removed, while the picture was prepared: nothing of it belongs in this panel.
+    if (this.#agent !== agent) {
+      if (this.#ui) this.#renderStatus();
+      return this.#pictureDone(false);
+    }
+    // Words that did not go out come back, unless the user has typed something else meanwhile.
+    if (!sent && typed && !ui.input.value) ui.input.value = typed;
+    // Outside a conversation the panel is closed, and there is nobody to tell.
+    this.#notice = sent || !this.#active() ? undefined : unusable ? "pictureUnusable" : "pictureNotSent";
     if (sent) {
-      if (typed) ui.input.value = "";
-      this.#renderPicture(source);
+      try {
+        this.#renderPicture(source);
+      } catch {
+        // The picture went out; a browser that cannot show it back is no reason to say it did not.
+      }
     }
     this.#renderNote();
     this.#renderStatus();
+    return this.#pictureDone(sent);
+  }
+
+  #pictureDone(sent: boolean): boolean {
     this.dispatchEvent(new CustomEvent("voice-agent:image", { detail: { sent }, bubbles: true, composed: true }));
     return sent;
   }
@@ -411,7 +440,9 @@ export class VoiceAgentElement extends ElementBase {
   #dismiss(): void {
     const hadFocus = this.#root.activeElement !== null && this.#root.activeElement !== this.#ui.fab;
     this.#dismissed = true;
+    this.#notice = undefined;
     this.stop();
+    this.#renderNote();
     this.#renderStatus();
     if (hadFocus) this.#ui.fab.focus();
   }
@@ -433,9 +464,14 @@ export class VoiceAgentElement extends ElementBase {
   }
 
   #renderNote(): void {
+    // The newer of the two: a picture's notice is dropped when an error comes after it.
+    if (this.#notice) {
+      this.#ui.note.textContent = this.#t()[this.#notice];
+      return;
+    }
     const error = this.#error;
     if (!error) {
-      this.#ui.note.textContent = this.#notice ? this.#t()[this.#notice] : "";
+      this.#ui.note.textContent = "";
       return;
     }
     const known = (this.#t().errors as Record<string, string | undefined>)[error.code];
@@ -503,6 +539,7 @@ export class VoiceAgentElement extends ElementBase {
       agent.on("toolcall", (call) => emit("toolcall", call)),
       agent.on("error", (error) => {
         this.#error = error;
+        this.#notice = undefined;
         this.#renderNote();
         emit("error", { error });
       }),
@@ -534,8 +571,17 @@ export class VoiceAgentElement extends ElementBase {
     ui.mute.hidden = !active;
     ui.sound.hidden = !(this.#agent?.audioBlocked ?? false);
     // Only where it can work: asked for on the page, in a conversation, with a model that sees pictures.
-    ui.picture.hidden = !(this.hasAttribute("image-input") && active && this.#agent?.capabilities?.imageInput === true);
-    ui.picture.disabled = this.#sendingPicture;
+    // A session that is still connecting has not said yet what its model takes: what the last one said does not count.
+    ui.picture.hidden = !(
+      this.hasAttribute("image-input") &&
+      active &&
+      status !== "connecting" &&
+      this.#agent?.capabilities?.imageInput === true
+    );
+    ui.picture.setAttribute(
+      "aria-disabled",
+      String(this.#sendingFor !== undefined && this.#sendingFor === this.#agent)
+    );
     if (!active) ui.fab.style.setProperty("--level", "0");
   }
 

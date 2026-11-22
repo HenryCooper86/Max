@@ -467,12 +467,15 @@ DOM events (bubbling, composed): `voice-agent:status` (`{ status }`),
 
 With `image-input` the panel has a "Show a picture" button during a conversation. The user chooses a JPEG or PNG; the
 widget sends it with [`sendImage`](#pictures) and shows it in the transcript. What is typed in the text box at that
-moment goes with the picture as its question, and the assistant answers aloud; with an empty box, or without
+moment goes with the picture as its question, and the assistant answers aloud; the words leave the box at once and
+come back if the picture could not be sent; with an empty box, or without
 `text-input`, the picture joins the conversation silently and the assistant sees it with the user's next turn. The
 button is there only when the relay says its model takes pictures (`capabilities.imageInput`), so it is safe to set
 the attribute on any page. A picture that was not sent (one went out less than a second ago, or the file cannot be
 read as a picture) is said in the panel. To send a picture from your own code, such as a camera frame or a canvas,
-call `el.sendImage(source, { text?, maxSide? })` on the element: it does what the button does.
+call `el.sendImage(source, { text?, maxSide? })` on the element: it does what the button does. It resolves to whether the
+picture was sent, and `voice-agent:image` fires with the same answer every time, also when there was no conversation
+to send it in.
 
 The error note names the problem: no microphone permission, a used-up allowance (`usage_limit`), refused credentials
 (`unauthorized`), and so on. A code the widget does not know shows the error's own message before any generic text.

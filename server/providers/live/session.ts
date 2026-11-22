@@ -71,6 +71,7 @@ import {
   blockedTermsFrom,
   createGuardrailJudge,
   guardrailModelFromEnv,
+  toolIsChecked,
   type BlockedTerms,
   type GuardrailJudge,
   type GuardrailsConfig
@@ -85,7 +86,14 @@ import { toolErrorText } from "../../tools/schema";
 import type { ToolDefinition } from "../../tools";
 import { serverTools as installedServerTools } from "../../tools/registry";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent } from "../types";
-import { env, type EngineConfig, type EngineEvents, type EngineImage, type VoiceEngine } from "./engine";
+import {
+  env,
+  type EngineConfig,
+  type EngineEvents,
+  type EngineImage,
+  type EngineToolCall,
+  type VoiceEngine
+} from "./engine";
 
 /** What a live backend contributes besides its engine. */
 export type LiveBackend = {
@@ -1109,7 +1117,7 @@ export function createLiveProvider(
     guardFor = config;
     guardTerms = config ? blockedTermsFrom(config.blockedTerms) : undefined;
     guardJudge = undefined;
-    if (config && config.rules.length + config.userRules.length > 0) {
+    if (config && config.rules.length + config.userRules.length + config.toolRules.length > 0) {
       const model = options.guardrailModel ?? guardrailModelFromEnv();
       if (model) {
         guardJudge = createGuardrailJudge(config, model, {
@@ -1185,6 +1193,46 @@ export function createLiveProvider(
       guardLineTimer = undefined;
       voiceGuardLine();
     }, FAREWELL_WAIT_MS);
+  }
+
+  /**
+   * Has the judge read a tool call that the rules for tools cover. Nothing
+   * when the tool is not covered. Otherwise a promise of why the call is
+   * refused, or of nothing when it may run. A call that cannot be judged is
+   * refused: an action is not taken on the strength of a check that did not happen.
+   */
+  function toolRefusal(call: EngineToolCall): Promise<string | undefined> | undefined {
+    const config = guard();
+    // The relay's own tools for the conversation itself (ending it, handing over) are not actions of the owner's.
+    if (!toolIsChecked(config, call.name) || builtinTools.some((tool) => tool.name === call.name)) return undefined;
+    if (!guardJudge) {
+      return Promise.resolve(
+        "this action cannot be checked against the rules of this service, so it was not done. Tell the user you cannot do that right now."
+      );
+    }
+    const description = offeredTools().find((tool) => tool.name === call.name)?.description;
+    return guardJudge
+      .checkTool({ name: call.name, description, arguments: call.arguments, before: riderText })
+      .then((verdict) => {
+        if (verdict.broken) {
+          log.warn("guardrail", { speaker: "assistant", kind: "tool", tool: call.name });
+          telemetry?.relayEvent?.({
+            type: "guardrail",
+            speaker: "assistant",
+            kind: "tool",
+            rule: verdict.rule,
+            tool: call.name,
+            at: now(),
+            stopped: true
+          });
+          return `this action is not allowed by a rule of this service: "${verdict.rule}" It was not done. Do not try it again in another way. Tell the user you cannot do that.`;
+        }
+        if ("unchecked" in verdict) {
+          log.warn("a tool call was not run: it could not be checked", { tool: call.name, problem: verdict.unchecked });
+          return "this action could not be checked against the rules of this service just now, so it was not done. Tell the user you cannot do that right now.";
+        }
+        return undefined;
+      });
   }
 
   /** Looks for a blocked term in the reply. True when one was found: the reply is stopped. */
@@ -1738,26 +1786,39 @@ export function createLiveProvider(
       clearIdle();
       status("thinking", t(`${me().name} 正在使用工具：${call.name}`, `${me().name} is using ${call.name}`));
       const current = engine;
+      const broker = tools;
       // A background tool answers the model at once with "started" and does
       // its work on the side. What the user says next does not cancel it.
-      let answer: ReturnType<ToolBroker["run"]>;
-      if (!tools.runsInBackground(call.name)) answer = tools.run(call);
-      else if (backgroundRunning >= MAX_BACKGROUND_TOOLS) {
-        answer = Promise.resolve({
-          ok: false,
-          output: toolErrorText("too many background tasks are still running; wait until one has finished")
-        });
-      } else {
+      const run = (): ReturnType<ToolBroker["run"]> => {
+        if (!broker.runsInBackground(call.name)) return broker.run(call);
+        if (backgroundRunning >= MAX_BACKGROUND_TOOLS) {
+          return Promise.resolve({
+            ok: false,
+            output: toolErrorText("too many background tasks are still running; wait until one has finished")
+          });
+        }
         backgroundRunning += 1;
         const name = call.name;
-        void tools.run(call).then((outcome) => {
+        void broker.run(call).then((outcome) => {
           backgroundRunning = Math.max(0, backgroundRunning - 1);
           if (closed) return;
           backgroundResults.push({ name, ok: outcome.ok, output: outcome.output });
           scheduleBackgroundReport(0);
         });
-        answer = Promise.resolve({ ok: true, output: BACKGROUND_STARTED });
-      }
+        return Promise.resolve({ ok: true, output: BACKGROUND_STARTED });
+      };
+      // A tool the owner's rules cover is read by the judge first, and runs only if no rule is broken.
+      const refusal = toolRefusal(call);
+      const answer = refusal
+        ? refusal.then((refused) => {
+            if (refused !== undefined) return { ok: false, output: toolErrorText(refused) };
+            // What the user said while the judge read it has cancelled the reply: the tool is not started for it.
+            if (closed || epoch !== toolEpoch || engine !== current) {
+              return { ok: false, output: JSON.stringify({ error: "cancelled" }) };
+            }
+            return run();
+          })
+        : run();
       void answer.then((outcome) => {
         toolsRunning = Math.max(0, toolsRunning - 1);
         if (closed || engine !== current) return;

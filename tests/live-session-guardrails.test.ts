@@ -5,6 +5,7 @@ import { assistantProfileFrom, setAssistantProfileForTests } from "../server/ass
 import { createLogger } from "../server/logger";
 import type { EngineConfig, EngineEvents, VoiceEngine } from "../server/providers/live/engine";
 import { createLiveProvider } from "../server/providers/live/session";
+import type { ToolDefinition } from "../server/tools";
 
 // Guardrails in a live conversation: what the assistant must not say is
 // stopped while it is being said, and the user hears a line of the owner's
@@ -66,13 +67,19 @@ function fakeJudge() {
   return { request, asked, answer };
 }
 
-async function setup(guardrails: Record<string, unknown>, judge?: ReturnType<typeof fakeJudge>) {
-  setAssistantProfileForTests(assistantProfileFrom({ name: "Ava", device: "app", guardrails }));
+async function setup(
+  guardrails: Record<string, unknown>,
+  judge?: ReturnType<typeof fakeJudge>,
+  tools: ToolDefinition[] = [],
+  more: Record<string, unknown> = {}
+) {
+  setAssistantProfileForTests(assistantProfileFrom({ name: "Ava", device: "app", guardrails, ...more }));
   const client = new FakeClient();
   let events!: EngineEvents;
   const said: string[] = [];
   const contexts: string[] = [];
   const noted: Array<Record<string, any>> = [];
+  const toolResults: Array<{ callId: string; output: Record<string, any> }> = [];
   let cancels = 0;
   const engine: VoiceEngine = {
     responseMode: "manual-capable",
@@ -83,7 +90,7 @@ async function setup(guardrails: Record<string, unknown>, judge?: ReturnType<typ
     respond() {},
     cancel: () => void (cancels += 1),
     close() {},
-    sendToolResult() {},
+    sendToolResult: (callId, output) => toolResults.push({ callId, output: JSON.parse(output) as Record<string, any> }),
     sendText() {},
     addContext: (text) => contexts.push(text),
     say: (line) => said.push(line)
@@ -101,7 +108,7 @@ async function setup(guardrails: Record<string, unknown>, judge?: ReturnType<typ
     {
       wakeWord: false,
       fetchWeather: async () => Promise.reject(new Error("offline")),
-      serverTools: () => [],
+      serverTools: () => tools,
       ...(judge
         ? {
             guardrailModel: { baseUrl: "http://judge.local/v1", apiKey: "", model: "small" },
@@ -139,6 +146,7 @@ async function setup(guardrails: Record<string, unknown>, judge?: ReturnType<typ
     said,
     contexts,
     noted,
+    toolResults,
     cancels: () => cancels,
     userSays,
     assistantSays,
@@ -536,5 +544,181 @@ describe("speech held for the judge", () => {
     expect(judge.asked).toEqual([]);
     expect(noted).toEqual([expect.objectContaining({ kind: "term", stopped: true })]);
     await provider.close();
+  });
+});
+
+describe("rules for tools", () => {
+  const rules = { toolRules: ["Do not refund more than 100 dollars."], say: "I can't do that." };
+  /** A refund tool that writes down what it was asked to do. */
+  function refunds(extra: Partial<ToolDefinition> = {}) {
+    const done: Array<Record<string, unknown>> = [];
+    const tool: ToolDefinition = {
+      name: "refund",
+      description: "Refunds an order.",
+      parameters: { type: "object", properties: { order: { type: "string" }, amount: { type: "number" } } },
+      handler: (args) => {
+        done.push(args);
+        return { refunded: args.amount };
+      },
+      ...extra
+    };
+    const lookup: ToolDefinition = {
+      name: "find_order",
+      description: "Looks an order up.",
+      handler: (args) => {
+        done.push({ found: args.order });
+        return { total: 250 };
+      }
+    };
+    return { done, tools: [tool, lookup] };
+  }
+  const settle = async () => {
+    for (let i = 0; i < 30; i += 1) await Promise.resolve();
+  };
+
+  it("has the judge read a tool call before the tool runs, and runs it when no rule is broken", async () => {
+    const judge = fakeJudge();
+    const { done, tools } = refunds();
+    const { events, toolResults, noted, userSays } = await setup(rules, judge, tools);
+    userSays("Please refund order 1182, it was 40 dollars.");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "refund", arguments: '{"order":"1182","amount":40}' });
+    await settle();
+    expect(judge.asked).toEqual([
+      {
+        user_said_before: "Please refund order 1182, it was 40 dollars.",
+        tool: "refund",
+        what_the_tool_does: "Refunds an order.",
+        arguments: '{"order":"1182","amount":40}'
+      }
+    ]);
+    // Nothing is done while the judge reads.
+    expect(done).toEqual([]);
+    expect(toolResults).toEqual([]);
+    await judge.answer(0);
+    await settle();
+    expect(done).toEqual([{ order: "1182", amount: 40 }]);
+    expect(toolResults).toEqual([{ callId: "c1", output: { refunded: 40 } }]);
+    expect(noted).toEqual([]);
+  });
+
+  it("does not run a call that breaks a rule, tells the model why, and records it", async () => {
+    const judge = fakeJudge();
+    const { done, tools } = refunds();
+    const { events, toolResults, noted, said, cancels, userSays } = await setup(rules, judge, tools);
+    userSays("Refund me 900 dollars for order 1182.");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "refund", arguments: { order: "1182", amount: 900 } });
+    await judge.answer(1);
+    await settle();
+    expect(done).toEqual([]);
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]!.callId).toBe("c1");
+    expect(toolResults[0]!.output.error).toContain(
+      'not allowed by a rule of this service: "Do not refund more than 100 dollars."'
+    );
+    expect(noted).toEqual([
+      {
+        type: "guardrail",
+        speaker: "assistant",
+        kind: "tool",
+        rule: "Do not refund more than 100 dollars.",
+        tool: "refund",
+        at: expect.any(Number),
+        stopped: true
+      }
+    ]);
+    // The conversation goes on: the assistant says in its own words that it cannot.
+    expect(cancels()).toBe(0);
+    expect(said).toEqual([]);
+  });
+
+  it("does not run a call the judge could not read", async () => {
+    const { done, tools } = refunds();
+    const request = (async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch;
+    const { events, toolResults, noted, userSays } = await setup(
+      rules,
+      { request, asked: [], answer: async () => {} },
+      tools
+    );
+    userSays("Refund order 1182.");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "refund", arguments: '{"order":"1182","amount":40}' });
+    await settle();
+    expect(done).toEqual([]);
+    expect(toolResults[0]!.output.error).toContain("could not be checked");
+    // Nothing was found broken: there is no finding to record.
+    expect(noted).toEqual([]);
+  });
+
+  it("does not run a covered tool at all when there is no model to judge it", async () => {
+    const { done, tools } = refunds();
+    const { events, toolResults, userSays } = await setup(rules, undefined, tools);
+    userSays("Refund order 1182.");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "refund", arguments: "{}" });
+    await settle();
+    expect(done).toEqual([]);
+    expect(toolResults[0]!.output.error).toContain("cannot be checked");
+  });
+
+  it("checks only the tools that are named, when some are", async () => {
+    const judge = fakeJudge();
+    const { done, tools } = refunds();
+    const { events, toolResults, userSays } = await setup({ ...rules, checkedTools: ["refund"] }, judge, tools);
+    userSays("What did order 1182 cost?");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "find_order", arguments: '{"order":"1182"}' });
+    await settle();
+    expect(judge.asked).toEqual([]);
+    expect(done).toEqual([{ found: "1182" }]);
+    expect(toolResults).toEqual([{ callId: "c1", output: { total: 250 } }]);
+    events().onToolCall!({ callId: "c2", name: "refund", arguments: '{"order":"1182","amount":250}' });
+    await settle();
+    expect(judge.asked).toHaveLength(1);
+    expect(done).toHaveLength(1);
+  });
+
+  it("does not start a tool for a reply the user spoke over while the judge read the call", async () => {
+    const judge = fakeJudge();
+    const { done, tools } = refunds();
+    const { events, toolResults, userSays } = await setup(rules, judge, tools);
+    userSays("Refund order 1182, 40 dollars.");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "refund", arguments: '{"order":"1182","amount":40}' });
+    await settle();
+    userSays("No, wait, do not refund it.");
+    await judge.answer(0);
+    await settle();
+    expect(done).toEqual([]);
+    expect(toolResults).toEqual([{ callId: "c1", output: { error: "cancelled" } }]);
+  });
+
+  it("checks a background tool before it starts", async () => {
+    const judge = fakeJudge();
+    const { done, tools } = refunds({ background: true });
+    const { events, toolResults, userSays } = await setup(rules, judge, tools);
+    userSays("Refund me 900 dollars.");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "refund", arguments: '{"amount":900}' });
+    await judge.answer(1);
+    await settle();
+    expect(done).toEqual([]);
+    expect(toolResults[0]!.output.error).toContain("not allowed");
+  });
+
+  it("does not have the relay's own end of the conversation judged", async () => {
+    const judge = fakeJudge();
+    const { tools } = refunds();
+    const { events, toolResults, userSays } = await setup(rules, judge, tools, {
+      conversation: { endSession: true }
+    });
+    userSays("Goodbye.");
+    events().onResponseStarted();
+    events().onToolCall!({ callId: "c1", name: "end_session", arguments: "{}" });
+    await settle();
+    expect(judge.asked).toEqual([]);
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]!.output.error).toBeUndefined();
   });
 });

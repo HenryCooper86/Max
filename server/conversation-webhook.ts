@@ -41,10 +41,12 @@ export type ConversationEndedPayload = {
 
 export type GuardrailFinding = {
   speaker: "assistant" | "user";
-  /** A blocked term, or a rule a model judged broken. */
-  kind: "term" | "rule";
+  /** A blocked term, a rule a model judged broken, or a tool call a rule for tools refused. */
+  kind: "term" | "rule" | "tool";
   /** The term or the rule, as the config has it. */
   rule: string;
+  /** With `tool`: the tool that was not run. */
+  tool?: string;
   at: number;
   stopped: boolean;
 };

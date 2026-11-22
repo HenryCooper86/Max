@@ -1649,12 +1649,15 @@ if (assistant().variants.length > 0) {
     );
 }
 if (assistant().guardrails) {
-  const { blockedTerms, rules, userRules, endConversation, hold } = assistant().guardrails!;
+  const { blockedTerms, rules, userRules, toolRules, checkedTools, endConversation, hold } = assistant().guardrails!;
   log.info("guardrails on", {
     blockedTerms: blockedTerms.length,
     rules: rules.length,
     userRules: userRules.length,
-    ...(rules.length + userRules.length > 0 ? { model: guardrailModelFromEnv()?.model ?? "none" } : {}),
+    ...(toolRules.length > 0 ? { toolRules: toolRules.length, checkedTools: checkedTools ?? "all" } : {}),
+    ...(rules.length + userRules.length + toolRules.length > 0
+      ? { model: guardrailModelFromEnv()?.model ?? "none" }
+      : {}),
     ...(hold ? { hold: true } : {}),
     then: endConversation ? "end the conversation" : "carry on"
   });

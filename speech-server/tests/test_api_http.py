@@ -10,6 +10,7 @@ import soundfile as sf
 from max_speech.api import openai_routes
 from max_speech.engines.base import Transcript
 from max_speech.engines.fake import FakeTts
+from max_speech.settings import Settings
 
 
 def client(app, **kw):
@@ -536,3 +537,53 @@ async def test_custom_voice_works_through_speech(make_app, tmp_path):
     assert len(r.content) == 2 * round(0.2 * 24000) * 2  # cloned audio comes back at 24 kHz
     assert streamed.status_code == 200 and len(streamed.content) == round(0.2 * 24000) * 2
     assert [call[1] for call in cloning.calls] == [voice.id] * 3  # one call per sentence
+
+
+async def test_healthz_reports_a_failed_load_with_503(make_app):
+    import threading
+
+    app = make_app(ready=threading.Event())
+    app.state.slots.fail("ModelDownloadError: disk full")
+    async with client(app) as c:
+        r = await c.get("/healthz")
+    assert r.status_code == 503
+    assert r.json() == {"ok": False, "ready": False, "error": "ModelDownloadError: disk full"}
+
+
+async def test_healthz_stays_200_while_loading_but_shows_a_retry_error(make_app):
+    import threading
+
+    app = make_app(ready=threading.Event())
+    app.state.slots.retry_error = "ModelDownloadError: timeout (attempt 1 of 4, retrying in 5 s)"
+    async with client(app) as c:
+        r = await c.get("/healthz")
+    assert r.status_code == 200
+    assert r.json() == {
+        "ok": True,
+        "ready": False,
+        "error": "ModelDownloadError: timeout (attempt 1 of 4, retrying in 5 s)",
+    }
+
+
+async def test_discovery_publishes_the_live_languages_and_limits(make_app):
+    class Stream:
+        id, model_id = "sherpa-onnx", "x-asr-zh-en-480ms"
+        languages = ("zh", "en")
+        keyterms = False
+
+    app = make_app()
+    app.state.slots.stt_stream = Stream()
+    async with client(app) as c:
+        d = (await c.get("/.well-known/max-speech")).json()
+    assert d["live"] == {
+        "languages": ["zh", "en"],
+        "keyterms": False,
+        "max_sessions": 2,
+        "idle_timeout_s": None,
+    }
+    app = make_app(Settings(session_idle_timeout_s=120))
+    app.state.slots.stt_stream = Stream()
+    async with client(app) as c:
+        assert (await c.get("/.well-known/max-speech")).json()["live"]["idle_timeout_s"] == 120
+    async with client(make_app()) as c:
+        assert "live" not in (await c.get("/.well-known/max-speech")).json()

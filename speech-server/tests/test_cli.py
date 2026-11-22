@@ -151,6 +151,20 @@ def test_uvicorn_config_ignores_proxy_headers():
     assert config.ws_max_size == 1 << 20
 
 
+def test_uvicorn_config_pings_websocket_clients():
+    """A peer that stops answering is closed after at most interval + timeout (40 s), which frees its session slot
+    (see test_session_ws: a dead peer). That, not an idle timeout, is what catches dead riders."""
+    from uvicorn.protocols.websockets.websockets_sansio_impl import WebSocketsSansIOProtocol
+
+    app = create_app(Settings(), stt=None, tts=None, profile="cpu")
+    config = cli._uvicorn_config(app, Settings())
+    assert (config.ws_ping_interval, config.ws_ping_timeout) == (20.0, 20.0)
+    config.load()  # resolves ws="auto"
+    assert (
+        config.ws_protocol_class is WebSocketsSansIOProtocol
+    )  # the implementation that honours both settings
+
+
 def _serve_must_not_start(monkeypatch):
     started = []
     monkeypatch.setattr("uvicorn.Server", lambda config: started.append(config) or None)
@@ -286,3 +300,112 @@ def test_a_working_design_engine_reaches_the_slots(monkeypatch, tmp_path):
     slots = EngineSlots(ready_event=threading.Event(), voices=VoiceStore(tmp_path), lexicon=Lexicon(tmp_path))
     cli._load_engines(slots, Settings(), "mlx")
     assert slots.ready and slots.design is design
+
+
+# ---- load failures: retry what may be transient, then exit so a supervisor restarts the server ---------------
+
+
+def _flaky_build(monkeypatch, failures, error=None):
+    calls = []
+    engines = Engines(stt=FakeStt(), tts=FakeTts())
+
+    def build(settings, profile, progress=None):
+        calls.append(1)
+        if len(calls) <= failures:
+            raise error or cli.ModelDownloadError("connection reset")
+        return engines
+
+    monkeypatch.setattr(cli, "build_engines", build)
+    return calls
+
+
+def _slots(tmp_path):
+    return EngineSlots(ready_event=threading.Event(), voices=VoiceStore(tmp_path), lexicon=Lexicon(tmp_path))
+
+
+def test_a_transient_load_failure_is_retried_with_doubling_backoff(monkeypatch, tmp_path):
+    calls = _flaky_build(monkeypatch, failures=2)
+    slept = []
+    slots = _slots(tmp_path)
+    ok = cli._load_engines(slots, Settings(load_attempts=4, load_backoff_s=3), "cpu", sleep=slept.append)
+    assert ok and slots.ready and slots.load_error is None and slots.retry_error is None
+    assert len(calls) == 3 and slept == [3, 6]
+
+
+def test_the_error_is_visible_while_a_retry_is_pending(monkeypatch, tmp_path):
+    _flaky_build(monkeypatch, failures=1)
+    slots = _slots(tmp_path)
+    seen = []
+    cli._load_engines(
+        slots,
+        Settings(load_backoff_s=1),
+        "cpu",
+        sleep=lambda s: seen.append((slots.retry_error, slots.ready)),
+    )
+    assert seen == [("ModelDownloadError: connection reset (attempt 1 of 4, retrying in 1 s)", False)]
+
+
+def test_retries_run_out_then_the_load_fails(monkeypatch, tmp_path):
+    calls = _flaky_build(monkeypatch, failures=99)
+    slots = _slots(tmp_path)
+    slept = []
+    ok = cli._load_engines(slots, Settings(load_attempts=3, load_backoff_s=1), "cpu", sleep=slept.append)
+    assert not ok and not slots.ready and len(calls) == 3 and slept == [1, 2]
+    assert "connection reset" in slots.load_error and "3 attempts" in slots.load_error
+
+
+def test_backoff_is_capped(monkeypatch, tmp_path):
+    _flaky_build(monkeypatch, failures=99)
+    slept = []
+    cli._load_engines(
+        _slots(tmp_path), Settings(load_attempts=8, load_backoff_s=20), "cpu", sleep=slept.append
+    )
+    assert max(slept) == cli.MAX_BACKOFF_S
+
+
+@pytest.mark.parametrize("error", [ValueError("bad model id"), ImportError("no mlx"), FileNotFoundError("x")])
+def test_a_config_or_install_error_is_not_retried(monkeypatch, tmp_path, error):
+    calls = _flaky_build(monkeypatch, failures=99, error=error)
+    slots = _slots(tmp_path)
+    slept = []
+    assert not cli._load_engines(slots, Settings(), "cpu", sleep=slept.append)
+    assert len(calls) == 1 and not slept and slots.load_error
+
+
+def test_a_failed_serve_load_stops_the_server_with_a_nonzero_exit(monkeypatch):
+    stopped = []
+
+    class Server:
+        should_exit = False
+
+    server = Server()
+    monkeypatch.setattr(cli, "_load_engines", lambda *a, **k: False)
+    outcome = cli.LoadOutcome()
+    cli._load_then_supervise(server, outcome, EngineSlots(), Settings(), "cpu")
+    assert server.should_exit and outcome.failed
+    stopped.append(1)
+
+    server2 = Server()
+    monkeypatch.setattr(cli, "_load_engines", lambda *a, **k: True)
+    outcome2 = cli.LoadOutcome()
+    cli._load_then_supervise(server2, outcome2, EngineSlots(), Settings(), "cpu")
+    assert not server2.should_exit and not outcome2.failed
+
+
+def test_serve_returns_nonzero_when_the_load_failed(clean_env, monkeypatch):
+    import uvicorn
+
+    class FakeServer:
+        def __init__(self, config):
+            self.should_exit = False
+
+        def run(self):
+            # the loader thread has been started; wait for it to ask the server to stop
+            for _ in range(200):
+                if self.should_exit:
+                    return
+                threading.Event().wait(0.01)
+
+    monkeypatch.setattr(uvicorn, "Server", FakeServer)
+    monkeypatch.setattr(cli, "_load_engines", lambda *a, **k: False)
+    assert cli.main(["serve", "--profile", "cpu"]) == 1

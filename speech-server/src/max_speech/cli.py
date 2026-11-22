@@ -5,7 +5,10 @@ import dataclasses
 import logging
 import sys
 import threading
+import time
 from collections.abc import Sequence
+
+import httpx
 
 from max_speech.api.slots import EngineSlots
 from max_speech.engines.select import build_engines, cloning_companions, licensed, plan, zh_model_id
@@ -17,6 +20,11 @@ from max_speech.settings import PROFILES, Settings
 log = logging.getLogger("max_speech")
 
 WS_MAX_MESSAGE_BYTES = 1 << 20
+# The WebSocket keepalive: uvicorn pings each client this often and closes the connection when the pong is this late,
+# so a rider whose network went away frees its session slot within 40 s. This is what detects dead peers; the session
+# idle timeout is off by default because a muted rider legitimately sends nothing for minutes.
+WS_PING_INTERVAL_S = 20.0
+WS_PING_TIMEOUT_S = 20.0
 
 
 def _progress_logger():
@@ -33,34 +41,89 @@ def _progress_logger():
     return progress
 
 
-def _load_engines(slots: EngineSlots, settings: Settings, profile: str) -> None:
-    """Runs in a background thread: a failure is recorded on the slots so the server keeps answering 503."""
-    try:
-        engines = build_engines(settings, profile, progress=_progress_logger())
-        for engine in engines.loaded():
-            warm_up = getattr(engine, "warm_up", None)  # the VAD has nothing to warm up
-            if warm_up is None:
+MAX_BACKOFF_S = 60.0
+
+
+def _transient(exc: BaseException) -> bool:
+    """Worth retrying: the network or a download failed. A bad config, a missing package or a corrupt model
+    fails the same way every time."""
+    from huggingface_hub.errors import HfHubHTTPError
+
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(
+            exc, ModelDownloadError | httpx.HTTPError | HfHubHTTPError | ConnectionError | TimeoutError
+        ):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def _load_once(slots: EngineSlots, settings: Settings, profile: str) -> None:
+    engines = build_engines(settings, profile, progress=_progress_logger())
+    for engine in engines.loaded():
+        warm_up = getattr(engine, "warm_up", None)  # the VAD has nothing to warm up
+        if warm_up is None:
+            continue
+        try:
+            warm_up()
+        except Exception as exc:
+            if engine is not engines.cloning or settings.cloning_model is not None:
+                raise  # only a default cloning engine may fail without taking the server down
+            log.warning(
+                "voice cloning is unavailable, continuing without it (%s: %s)", type(exc).__name__, exc
+            )
+            engines.cloning = None
+            engines.design = None  # a designed voice is spoken by cloning
+    slots.design = engines.design
+    slots.stt = engines.stt
+    slots.install_tts(engines.tts, engines.cloning)
+    slots.vad, slots.turn, slots.stt_stream = engines.vad, engines.turn, engines.stt_stream
+    slots.second_pass = engines.second_pass
+    slots.mark_ready()
+
+
+def _load_engines(slots: EngineSlots, settings: Settings, profile: str, *, sleep=time.sleep) -> bool:
+    """Runs in a background thread. Returns False after recording the failure on the slots.
+
+    A transient failure (network, download) is retried with doubling backoff; `/healthz` shows the error meanwhile
+    but stays 200 so a slow first download is not killed. Anything else, or the last attempt, fails the load and the
+    caller stops the process: a server that stays up answering 503 forever is never restarted by its supervisor."""
+    attempts = max(settings.load_attempts, 1)
+    for attempt in range(1, attempts + 1):
+        try:
+            _load_once(slots, settings, profile)
+        except Exception as exc:  # anything at all must surface as a readable error
+            reason = f"{type(exc).__name__}: {exc}"
+            if attempt < attempts and _transient(exc):
+                delay = min(settings.load_backoff_s * 2 ** (attempt - 1), MAX_BACKOFF_S)
+                slots.retry_error = f"{reason} (attempt {attempt} of {attempts}, retrying in {delay:g} s)"
+                log.warning("loading models failed: %s", slots.retry_error, exc_info=True)
+                sleep(delay)
                 continue
-            try:
-                warm_up()
-            except Exception as exc:
-                if engine is not engines.cloning or settings.cloning_model is not None:
-                    raise  # only a default cloning engine may fail without taking the server down
-                log.warning(
-                    "voice cloning is unavailable, continuing without it (%s: %s)", type(exc).__name__, exc
-                )
-                engines.cloning = None
-                engines.design = None  # a designed voice is spoken by cloning
-        slots.design = engines.design
-        slots.stt = engines.stt
-        slots.install_tts(engines.tts, engines.cloning)
-        slots.vad, slots.turn, slots.stt_stream = engines.vad, engines.turn, engines.stt_stream
-        slots.second_pass = engines.second_pass
-        slots.mark_ready()
+            log.exception("loading models failed")
+            slots.retry_error = None
+            slots.fail(f"{reason} (after {attempt} attempts)" if attempt > 1 else reason)
+            return False
+        slots.retry_error = None
         log.info("models ready")
-    except Exception as exc:  # anything at all must surface as a readable 503
-        log.exception("loading models failed")
-        slots.fail(f"{type(exc).__name__}: {exc}")
+        return True
+    return False  # not reached: the last attempt returns above
+
+
+@dataclasses.dataclass
+class LoadOutcome:
+    failed: bool = False
+
+
+def _load_then_supervise(
+    server, outcome: LoadOutcome, slots: EngineSlots, settings: Settings, profile: str
+) -> None:
+    if not _load_engines(slots, settings, profile):
+        log.error("models could not be loaded; exiting so the supervisor can restart the server")
+        outcome.failed = True
+        server.should_exit = True
 
 
 def _settings_with_profile(profile_arg: str | None) -> tuple[Settings, str]:
@@ -83,6 +146,8 @@ def _uvicorn_config(app, settings: Settings):
         log_level="info",
         proxy_headers=False,
         ws_max_size=WS_MAX_MESSAGE_BYTES,
+        ws_ping_interval=WS_PING_INTERVAL_S,
+        ws_ping_timeout=WS_PING_TIMEOUT_S,
     )
 
 
@@ -111,11 +176,16 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     app = create_app(settings, stt=None, tts=None, profile=profile, ready=threading.Event())
+    server = uvicorn.Server(_uvicorn_config(app, settings))
+    outcome = LoadOutcome()
     threading.Thread(
-        target=_load_engines, args=(app.state.slots, settings, profile), name="load-engines", daemon=True
+        target=_load_then_supervise,
+        args=(server, outcome, app.state.slots, settings, profile),
+        name="load-engines",
+        daemon=True,
     ).start()
-    uvicorn.Server(_uvicorn_config(app, settings)).run()
-    return 0
+    server.run()
+    return 1 if outcome.failed else 0
 
 
 def _cmd_download(args: argparse.Namespace) -> int:

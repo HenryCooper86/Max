@@ -9,9 +9,13 @@ import uvicorn
 import websockets
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
+from voice_helpers import good_wav, wav_of
 
 from max_speech.engines.fake import FakeStt, FakeTts
+from max_speech.engines.fake_cloning import FakeCloningTts
+from max_speech.engines.mlx_gate import MLX_GATE, stepwise
 from max_speech.settings import Settings
+from max_speech.voices.store import VoiceStore
 
 FRAME = 512
 LOUD = (np.full(FRAME, 8000, dtype="<i2")).tobytes()
@@ -214,7 +218,14 @@ def test_ready_names_the_engines(build):
             "stt": "fake-stream-model",
             "tts": "fake-tts",
         },
+        "idle_timeout_s": None,  # off by default: a quiet (muted) client is not closed
     }
+
+
+def test_ready_says_when_an_idle_timeout_is_set(build):
+    client, cm = connect(build(Settings(session_idle_timeout_s=90)))
+    with client, cm as ws:
+        assert open_session(ws)["idle_timeout_s"] == 90
 
 
 def test_nothing_is_sent_before_the_first_session_update(build):
@@ -646,7 +657,7 @@ def test_second_pass_in_flight_at_disconnect_is_cancelled(build):
 
 
 def test_concurrent_sessions_never_overlap_inside_an_engine(build, engines):
-    app = build(tts=SlowTts(delay=0.01))
+    app = build(Settings(max_sessions=3), tts=SlowTts(delay=0.01))
     client = TestClient(app, client=("127.0.0.1", 5000))
     results = []
 
@@ -1010,3 +1021,426 @@ def test_custom_voice_through_session_update(build, engines, tmp_path):
     assert [c[1] for c in cloning.calls] == [voice.id]
     assert engines["tts"].texts == []  # the preset engine never ran
     assert err["type"] == "error" and err["code"] == "unknown_voice"
+
+
+# ---- limits: concurrent sessions, handshake and idle timeouts -------------------------------------------------
+def test_sessions_over_the_cap_are_refused_busy_with_1013(build):
+    app = build(Settings(max_sessions=1))
+    first_client, first_cm = connect(app)
+    with first_client, first_cm as first:
+        open_session(first)
+        client, cm = connect(app)
+        with client, cm as second:
+            err = second.receive_json()
+            assert err["type"] == "error" and err["code"] == "busy" and "1" in err["message"]
+            with pytest.raises(WebSocketDisconnect) as info:
+                second.receive_json()
+            assert (info.value.code, info.value.reason) == (1013, "busy")
+        first.send_json({"type": "speak", "id": "r1", "text": "", "final": True})  # the first is unaffected
+        assert first.receive_json()["type"] == "audio.done"
+    assert app.state.slots.sessions == 0
+
+
+def test_a_finished_session_frees_its_place(build):
+    app = build(Settings(max_sessions=1))
+    for _ in range(3):
+        client, cm = connect(app)
+        with client, cm as ws:
+            open_session(ws)
+
+
+def test_the_default_cap_follows_the_profile(build):
+    from max_speech.api import session_ws
+
+    assert session_ws.session_cap(Settings(), "cpu") == 2
+    assert session_ws.session_cap(Settings(max_sessions=5), "cpu") == 5
+
+
+def test_a_client_that_never_sends_session_update_is_dropped(build):
+    app = build(Settings(session_handshake_timeout_s=0.2))
+    client, cm = connect(app)
+    with client, cm as ws:
+        err = ws.receive_json()
+        assert err["code"] == "handshake_timeout" and "session.update" in err["message"]
+        with pytest.raises(WebSocketDisconnect) as info:
+            ws.receive_json()
+        assert (info.value.code, info.value.reason) == (1008, "handshake_timeout")
+    assert app.state.slots.sessions == 0
+
+
+def test_an_idle_session_is_closed_and_any_message_keeps_it_alive(build):
+    app = build(Settings(session_idle_timeout_s=0.4))
+    client, cm = connect(app)
+    with client, cm as ws:
+        open_session(ws)
+        for _ in range(4):  # 0.8 s in all, but never 0.4 s without a message
+            time.sleep(0.2)
+            ws.send_bytes(QUIET)
+        err = ws.receive_json()
+        assert err["code"] == "idle_timeout"
+        with pytest.raises(WebSocketDisconnect) as info:
+            ws.receive_json()
+        assert (info.value.code, info.value.reason) == (1000, "idle_timeout")
+
+
+def test_a_quiet_session_is_kept_open_by_default(build, monkeypatch):
+    """A muted rider's relay stops sending audio; with the default settings the session is not timed out."""
+    waits = []
+    real = asyncio.wait_for
+
+    async def spy(aw, timeout):
+        waits.append(timeout)
+        return await real(aw, timeout)
+
+    monkeypatch.setattr("max_speech.api.session_ws.asyncio.wait_for", spy)
+    client, cm = connect(build())
+    with client, cm as ws:
+        open_session(ws)
+        ws.send_bytes(QUIET)
+        ws.send_json({"type": "speak", "id": "r1", "text": "", "final": True})
+        assert ws.receive_json()["type"] == "audio.done"
+    assert waits[0] == 15.0  # the handshake keeps its timeout
+    assert None in waits[1:] and all(w is None or w == 5.0 for w in waits[1:])  # receives: none; sends: 5 s
+
+
+def test_a_dead_peer_is_closed_by_the_server_ping_and_frees_its_slot(build):
+    """The server's own uvicorn config (cli._uvicorn_config) pings every client; a peer that stops answering (its
+    network went away) is closed when the pong is late, and its session slot is freed. The intervals are shortened
+    here; in production they are cli.WS_PING_INTERVAL_S and cli.WS_PING_TIMEOUT_S."""
+    import socket
+
+    from max_speech import cli
+
+    app = build(Settings(max_sessions=1))
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    config = cli._uvicorn_config(app, Settings(host="127.0.0.1", port=port))
+    config.ws_ping_interval, config.ws_ping_timeout = 0.3, 0.3
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    wait_for(lambda: server.started, timeout=10)
+    url = f"ws://127.0.0.1:{port}/v1/speech/session"
+
+    async def scenario():
+        dead = await websockets.connect(url, ping_interval=None)
+        await dead.send(json.dumps({"type": "session.update"}))
+        assert json.loads(await dead.recv())["type"] == "ready"
+        assert app.state.slots.sessions == 1
+        dead.transport.pause_reading()  # gone: it neither reads nor answers pings from here on
+        start = time.monotonic()
+        while app.state.slots.sessions:
+            assert time.monotonic() - start < 5, "the dead peer still holds its slot"
+            await asyncio.sleep(0.05)
+        async with websockets.connect(url) as ws:  # the slot is free for the next rider
+            await ws.send(json.dumps({"type": "session.update"}))
+            assert json.loads(await ws.recv())["type"] == "ready"
+        dead.transport.abort()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        server.should_exit = True
+        thread.join(5)
+
+
+def test_timeouts_of_zero_are_off(build):
+    app = build(Settings(session_handshake_timeout_s=0, session_idle_timeout_s=0))
+    client, cm = connect(app)
+    with client, cm as ws:
+        time.sleep(0.3)
+        open_session(ws)
+        time.sleep(0.3)
+        ws.send_json({"type": "speak", "id": "r1", "text": "", "final": True})
+        assert ws.receive_json()["type"] == "audio.done"
+
+
+# ---- what the live recognizer can do: languages and keyterms --------------------------------------------------
+class BilingualStt(FakeStreamingStt):
+    languages = ("zh", "en")
+    keyterms = False
+
+
+def _warnings(ws, count_after):
+    """Send a barrier (an empty final reply) and return the warnings seen before its audio.done."""
+    ws.send_json({"type": "speak", "id": count_after, "text": "", "final": True})
+    return [m for m in recv_until(ws, "audio.done") if isinstance(m, dict) and m["type"] == "warning"]
+
+
+def test_ready_publishes_the_live_languages_and_keyterm_support(build):
+    client, cm = connect(build(stt_stream=BilingualStt()))
+    with client, cm as ws:
+        ready = open_session(ws)
+    assert ready["languages"] == ["zh", "en"] and ready["keyterms"] is False
+
+
+def test_ready_omits_what_the_engine_does_not_declare(build):
+    client, cm = connect(build())
+    with client, cm as ws:
+        ready = open_session(ws)
+    assert "languages" not in ready and "keyterms" not in ready
+
+
+def test_an_unsupported_language_without_a_second_pass_gets_one_warning(build):
+    client, cm = connect(build(stt_stream=BilingualStt()))
+    with client, cm as ws:
+        ws.send_json({"type": "session.update", "languages": ["en", "ja"]})
+        assert ws.receive_json()["type"] == "ready"
+        warning = ws.receive_json()
+        assert warning["type"] == "warning" and warning["code"] == "language_unsupported"
+        assert warning["languages"] == ["ja"] and warning["supported"] == ["zh", "en"]
+        ws.send_json({"type": "session.update", "languages": ["en", "ja"]})  # the same request again
+        assert _warnings(ws, "b1") == []
+        ws.send_json({"type": "session.update", "languages": ["ko"]})  # a different one
+        assert [w["languages"] for w in _warnings(ws, "b2")] == [["ko"]]
+
+
+def test_a_second_pass_covers_a_language_the_stream_cannot_do(build):
+    client, cm = connect(build(stt_stream=BilingualStt(), second_pass=True, stt=FakeStt()))
+    with client, cm as ws:
+        ws.send_json({"type": "session.update", "languages": ["ja"]})
+        assert ws.receive_json()["type"] == "ready"
+        assert _warnings(ws, "b1") == []
+
+
+def test_supported_languages_and_region_tags_do_not_warn(build):
+    client, cm = connect(build(stt_stream=BilingualStt()))
+    with client, cm as ws:
+        ws.send_json({"type": "session.update", "languages": ["zh-CN", "en_US"]})
+        assert ws.receive_json()["type"] == "ready"
+        assert _warnings(ws, "b1") == []
+
+
+def test_an_unrecognised_language_code_is_dropped_with_a_warning(build, engines):
+    client, cm = connect(build())
+    with client, cm as ws:
+        ws.send_json({"type": "session.update", "languages": ["xx", "fr-CA"]})
+        warning = ws.receive_json()
+        assert warning["type"] == "warning" and warning["code"] == "language_unknown"
+        assert warning["languages"] == ["xx"]
+        assert ws.receive_json()["type"] == "ready"
+        ws.send_json({"type": "speak", "id": "a", "text": "Hi there.", "final": True})
+        recv_until(ws, "audio.done")
+    assert engines["tts"].texts[0][2] == "fr"  # the one valid language, normalised
+
+
+def test_keyterms_a_stream_cannot_use_get_one_warning(build):
+    client, cm = connect(build(stt_stream=BilingualStt()))
+    with client, cm as ws:
+        ws.send_json({"type": "session.update", "keyterms": ["Max"]})
+        assert ws.receive_json()["type"] == "ready"
+        assert ws.receive_json()["code"] == "keyterms_unsupported"
+        ws.send_json({"type": "session.update", "keyterms": ["Max", "Kokoro"]})
+        assert _warnings(ws, "b1") == []
+
+
+def test_speak_with_bad_fields_names_its_reply(build):
+    client, cm = connect(build())
+    with client, cm as ws:
+        open_session(ws)
+        ws.send_json({"type": "speak", "id": "r7", "text": 5, "final": True})
+        err = ws.receive_json()
+        assert err["code"] == "bad_message" and err["id"] == "r7"
+
+
+# ---- live speech and the MLX gate: a batch call holding the GPU must not stall the sessions -------------------------
+
+VOICE_CONSENT = {
+    "consent": True,
+    "consent_statement": "Synthetic test voice; no real person is cloned.",
+    "consent_speaker": "Test voice",
+}
+
+
+class GatedCloning(FakeCloningTts):
+    """Like the Qwen3 MLX engine: every chunk is computed under the MLX gate."""
+
+    def synthesize_cloned(self, text, reference, *, speed=1.0, language=None):
+        yield from stepwise(super().synthesize_cloned(text, reference, speed=speed, language=language))
+
+
+class BatchOnGate:
+    """Holds the MLX gate from another thread, as a long transcription or a voice design does."""
+
+    def __init__(self):
+        self.release = threading.Event()
+        entered = threading.Event()
+
+        def run():
+            with MLX_GATE:
+                entered.set()
+                self.release.wait(10)
+
+        self.thread = threading.Thread(target=run, daemon=True)
+        self.thread.start()
+        assert entered.wait(5)
+
+    def stop(self):
+        self.release.set()
+        self.thread.join(5)
+
+
+@pytest.fixture
+def cloned_app(build, tmp_path):
+    store = VoiceStore(tmp_path / "voices")
+    voice = store.create(
+        audio=good_wav(), name="Clone", transcript="Hello there.", languages="en", **VOICE_CONSENT
+    )
+    app = build(Settings(max_sessions=2), cloning=GatedCloning(), voice_store=store)
+    return app, voice.id
+
+
+def test_a_preset_sentence_does_not_wait_for_a_cloned_sentence_stuck_on_the_gate(cloned_app):
+    """The reviewer's case: a batch call holds the GPU, a cloned sentence of one session waits for it, and another
+    session's preset (ONNX) sentence still plays at once."""
+    app, voice = cloned_app
+    batch = BatchOnGate()
+    try:
+        client = TestClient(app, client=("127.0.0.1", 5000))
+        with (
+            client,
+            client.websocket_connect("/v1/speech/session") as a,
+            client.websocket_connect("/v1/speech/session") as b,
+        ):
+            open_session(a, {"type": "session.update", "voice": voice})
+            open_session(b)
+            a.send_json({"type": "speak", "id": "c1", "text": "Hello there.", "final": True})
+            wait_for(lambda: MLX_GATE.realtime_waiting == 1)  # the cloned sentence is waiting for the GPU
+            start = time.monotonic()
+            b.send_json({"type": "speak", "id": "p1", "text": "Hello there.", "final": True})
+            got = recv_until(b, "audio.done")
+            elapsed = time.monotonic() - start
+            assert elapsed < 1.0, f"the preset sentence took {elapsed:.2f}s"
+            assert got[-1] == {"type": "audio.done", "id": "p1", "cancelled": False}
+            assert MLX_GATE.realtime_waiting == 1  # the cloned one is still waiting
+            batch.stop()
+            got = recv_until(a, "audio.done")
+            assert got[-1]["cancelled"] is False and any(isinstance(m, bytes) for m in got)
+    finally:
+        batch.stop()
+
+
+async def test_a_closing_session_frees_its_slot_while_its_sentence_waits_for_the_gate(cloned_app, live):
+    """Over a real socket: the client leaves while its cloned sentence waits for a batch call's GPU time. The session
+    gives up its place in the queue and frees its slot at once, without waiting for the batch call to finish."""
+    app, voice = cloned_app
+    url = live(app)
+    batch = BatchOnGate()
+    try:
+        async with websockets.connect(url) as ws:
+            await ws.send(json.dumps({"type": "session.update", "voice": voice}))
+            assert json.loads(await ws.recv())["type"] == "ready"
+            await ws.send(json.dumps({"type": "speak", "id": "c1", "text": "Hello there.", "final": True}))
+            wait_for(lambda: MLX_GATE.realtime_waiting == 1)
+            assert app.state.slots.sessions == 1
+        start = time.monotonic()
+        wait_for(lambda: app.state.slots.sessions == 0, timeout=2.0)
+        assert time.monotonic() - start < 1.0
+        assert (
+            MLX_GATE.held and MLX_GATE.realtime_waiting == 0
+        )  # gave up its place; the batch call carries on
+        assert not app.state.slots.cloning_lock.locked()
+    finally:
+        batch.stop()
+
+
+def test_cancelling_a_cloned_reply_that_waits_for_the_gate_ends_it_without_an_error(cloned_app):
+    app, voice = cloned_app
+    batch = BatchOnGate()
+    try:
+        client, cm = connect(app)
+        with client, cm as ws:
+            open_session(ws, {"type": "session.update", "voice": voice})
+            ws.send_json({"type": "speak", "id": "c1", "text": "Hello there.", "final": True})
+            wait_for(lambda: MLX_GATE.realtime_waiting == 1)
+            start = time.monotonic()
+            ws.send_json({"type": "cancel", "id": "c1"})
+            got = recv_until(ws, "audio.done")
+            assert time.monotonic() - start < 1.0  # not when the batch call lets go of the GPU
+            assert got == [{"type": "audio.done", "id": "c1", "cancelled": True}]
+            assert MLX_GATE.realtime_waiting == 0 and MLX_GATE.held
+    finally:
+        batch.stop()
+
+
+class InterleavingStt(FakeStt):
+    """An STT engine that, like MLX Whisper, may be called again while a call is running."""
+
+    interleaves = True
+
+    def __init__(self):
+        self.batch_started = threading.Event()
+        self.batch_release = threading.Event()
+        self.live_calls = 0
+
+    def transcribe(self, audio, rate, **kw):
+        if len(audio) > rate * 60:  # the upload
+            self.batch_started.set()
+            self.batch_release.wait(10)
+        else:
+            self.live_calls += 1
+        return super().transcribe(audio, rate, **kw)
+
+
+def test_a_long_upload_does_not_make_sessions_skip_their_second_pass(build):
+    stt = InterleavingStt()
+    app = build(stt=stt, second_pass=True)
+    upload = wav_of(np.zeros(16000 * 61, dtype=np.float32), 16000)
+    client = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 5000))
+    result = {}
+    with client:
+        uploader = threading.Thread(
+            target=lambda: result.setdefault(
+                "r", client.post("/v1/audio/transcriptions", files={"file": ("a.wav", upload, "audio/wav")})
+            )
+        )
+        uploader.start()
+        assert stt.batch_started.wait(5)
+        with client.websocket_connect("/v1/speech/session") as ws:
+            open_session(ws)
+            say(ws)
+            msgs = recv_until(ws, "transcript.final")
+        stt.batch_release.set()
+        uploader.join(5)
+    assert stt.live_calls == 1 and msgs[-1]["text"].startswith("heard ") and "s" in msgs[-1]["text"]
+    assert result["r"].status_code == 200
+
+
+async def test_closing_a_session_whose_second_pass_waits_for_the_gate_logs_no_error(build, live, caplog):
+    """The abandoned second pass raises `Abandoned` in its thread; that must be retrieved, not reported by asyncio as
+    "Task exception was never retrieved"."""
+    import gc
+    import logging
+
+    class GatedStt(FakeStt):
+        def transcribe(self, audio, rate, **kw):
+            with MLX_GATE:
+                return super().transcribe(audio, rate, **kw)
+
+    app = build(stt=GatedStt(), second_pass=True)
+    url = live(app)
+    batch = BatchOnGate()
+    caplog.set_level(logging.ERROR)
+    try:
+        async with websockets.connect(url) as ws:
+            await ws.send(json.dumps({"type": "session.update"}))
+            assert json.loads(await ws.recv())["type"] == "ready"
+            for _ in range(10):
+                await ws.send(LOUD)
+            for _ in range(12):
+                await ws.send(QUIET)
+            wait_for(lambda: MLX_GATE.realtime_waiting == 1)  # the turn's second pass waits for the GPU
+        try:
+            wait_for(lambda: app.state.slots.sessions == 0 and MLX_GATE.realtime_waiting == 0)
+        except AssertionError:
+            raise AssertionError(
+                (app.state.slots.sessions, MLX_GATE.realtime_waiting, MLX_GATE.batch_waiting)
+            ) from None
+        await asyncio.sleep(0.1)
+        gc.collect()
+        await asyncio.sleep(0.1)
+    finally:
+        batch.stop()
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert not errors, [r.getMessage() for r in errors]

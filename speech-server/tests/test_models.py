@@ -108,19 +108,89 @@ def _hf_entry() -> ModelEntry:
     )
 
 
-def test_hf_download_falls_back_to_local_copy_when_offline(tmp_path: Path, monkeypatch):
-    calls: list[bool] = []
+REV = "c" * 40
 
+
+def _snapshot(target: Path, files: dict[str, bytes], *, listed: dict[str, int] | None = None, tree=True):
+    """A local_dir as huggingface_hub leaves it: the files plus the cached tree listing of the revision."""
+    import json
+
+    for name, data in files.items():
+        (target / name).parent.mkdir(parents=True, exist_ok=True)
+        (target / name).write_bytes(data)
+    if tree:
+        trees = target / ".cache" / "huggingface" / "trees"
+        trees.mkdir(parents=True, exist_ok=True)
+        sizes = listed if listed is not None else {n: len(d) for n, d in files.items()}
+        (trees / f"{REV}.json").write_text(
+            json.dumps({"format_version": 1, "files": {n: {"size": s} for n, s in sizes.items()}})
+        )
+
+
+def _offline_only(monkeypatch, calls=None):
     def fake_snapshot_download(repo_id, **kwargs):
         offline = kwargs.get("local_files_only", False)
-        calls.append(offline)
+        if calls is not None:
+            calls.append(offline)
         if not offline:
             raise OSError("network unreachable")
         return str(kwargs["local_dir"])
 
     monkeypatch.setattr(models, "snapshot_download", fake_snapshot_download)
-    assert ensure_model(_hf_entry(), tmp_path) == tmp_path / "hfm"
-    assert calls == [False, True]
+
+
+def test_hf_download_falls_back_to_a_complete_local_copy_when_offline(tmp_path: Path, monkeypatch, caplog):
+    calls: list[bool] = []
+    _offline_only(monkeypatch, calls)
+    _snapshot(tmp_path / "hfm", {"config.json": b"{}", "weights.bin": b"w" * 10})
+    with caplog.at_level("WARNING"):
+        assert ensure_model(_hf_entry(), tmp_path) == tmp_path / "hfm"
+    assert calls == [False]  # our own check replaced the local_files_only retry
+    assert "network unreachable" in caplog.text  # the original error is not swallowed
+
+
+@pytest.mark.parametrize("problem", ["truncated", "missing", "incomplete"])
+def test_an_incomplete_local_copy_is_refused_with_how_to_resume(tmp_path: Path, monkeypatch, problem):
+    _offline_only(monkeypatch)
+    target = tmp_path / "hfm"
+    listed = {"config.json": 2, "weights.bin": 10}
+    if problem == "truncated":  # the listing says 10 bytes, the file on disk has 4
+        _snapshot(target, {"config.json": b"{}", "weights.bin": b"w" * 4}, listed=listed)
+    elif problem == "missing":
+        _snapshot(target, {"config.json": b"{}"}, listed=listed)
+    else:  # an interrupted download leaves its partial file under .cache/huggingface/download
+        _snapshot(target, {"config.json": b"{}", "weights.bin": b"w" * 10})
+        part = target / ".cache" / "huggingface" / "download"
+        part.mkdir(parents=True)
+        (part / "weights.bin.abc.incomplete").write_bytes(b"w")
+    with pytest.raises(ModelDownloadError) as info:
+        ensure_model(_hf_entry(), tmp_path)
+    message = str(info.value)
+    assert "network unreachable" in message  # the original failure
+    assert "incomplete" in message and "weights.bin" in message
+    assert "max-speech download" in message and str(target) in message
+
+
+def test_the_listing_is_filtered_by_allow_patterns(tmp_path: Path, monkeypatch):
+    import dataclasses
+
+    _offline_only(monkeypatch)
+    target = tmp_path / "hfm"
+    _snapshot(target, {"a.onnx": b"1"}, listed={"a.onnx": 1, "other.bin": 99})  # other.bin is not wanted
+    entry = dataclasses.replace(_hf_entry(), allow_patterns=("a.onnx",))
+    assert ensure_model(entry, tmp_path) == target
+
+
+def test_without_a_listing_the_wanted_patterns_must_at_least_exist(tmp_path: Path, monkeypatch):
+    import dataclasses
+
+    _offline_only(monkeypatch)
+    entry = dataclasses.replace(_hf_entry(), allow_patterns=("a.onnx", "tokens.txt"))
+    _snapshot(tmp_path / "hfm", {"a.onnx": b"1"}, tree=False)
+    with pytest.raises(ModelDownloadError, match="tokens.txt"):
+        ensure_model(entry, tmp_path)
+    _snapshot(tmp_path / "hfm", {"tokens.txt": b"t"}, tree=False)
+    assert ensure_model(entry, tmp_path) == tmp_path / "hfm"
 
 
 def test_hf_download_failure_without_local_copy_raises(tmp_path: Path, monkeypatch):
@@ -128,6 +198,13 @@ def test_hf_download_failure_without_local_copy_raises(tmp_path: Path, monkeypat
         raise OSError("network unreachable")
 
     monkeypatch.setattr(models, "snapshot_download", fake_snapshot_download)
+    with pytest.raises(ModelDownloadError, match="network unreachable"):
+        ensure_model(_hf_entry(), tmp_path)
+
+
+def test_an_empty_local_dir_is_not_a_copy(tmp_path: Path, monkeypatch):
+    _offline_only(monkeypatch)
+    (tmp_path / "hfm").mkdir()
     with pytest.raises(ModelDownloadError, match="network unreachable"):
         ensure_model(_hf_entry(), tmp_path)
 

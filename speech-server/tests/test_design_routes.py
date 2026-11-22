@@ -279,51 +279,43 @@ async def test_a_designed_voice_speaks_through_cloning(app):
     assert app.state.slots.cloning.calls and app.state.slots.cloning.calls[0][1] == v["id"]
 
 
-async def test_each_candidate_takes_the_tts_lock_separately(app):
+async def test_design_takes_no_speech_lock(app):
+    """Design is MLX work: it shares the GPU through the MLX gate (as batch work, a chunk at a time), not through the
+    speech locks, so neither preset nor custom voices queue behind a whole candidate."""
     slots = app.state.slots
-    held_between = []
+    held = []
     original = app.state.slots.design.design
 
     def watch(description, text, language, seed):
-        held_between.append(slots.tts_lock.locked())
+        held.append((slots.tts_lock.locked(), slots.cloning_lock.locked()))
         return original(description, text, language, seed)
 
     slots.design.design = watch
     async with client(app) as c:
         await make(c, count=3)
-    assert held_between == [True, True, True] and not slots.tts_lock.locked()
+    assert held == [(False, False)] * 3
 
 
-async def test_live_speech_can_interleave_between_candidates(app):
+async def test_preset_speech_runs_while_a_candidate_is_being_designed(app):
     slots = app.state.slots
-    order = []
     started = threading.Event()
     release = threading.Event()
     original = slots.design.design
 
     def slow(description, text, language, seed):
-        order.append("design")
-        if len(order) == 1:
-            started.set()
-            release.wait(5)  # hold the lock until the speech request is queued behind it
+        started.set()
+        release.wait(5)
         return original(description, text, language, seed)
 
     slots.design.design = slow
-
-    async def speech():
-        await asyncio.to_thread(started.wait, 5)
-        async with slots.tts_lock:
-            order.append("speech")
-
     async with client(app) as c:
-        job = asyncio.create_task(make(c, count=3))
-        waiter = asyncio.create_task(speech())
-        while not slots.tts_lock.locked() or not started.is_set():
-            await asyncio.sleep(0.005)
-        await asyncio.sleep(0.05)  # the speech task is now waiting on the lock
+        job = asyncio.create_task(make(c, count=1))
+        await asyncio.to_thread(started.wait, 5)
+        async with asyncio.timeout(2):  # would time out if design held the preset voices' lock
+            r = await c.post("/v1/audio/speech", json={"input": "Hello there.", "voice": "default"})
         release.set()
-        await asyncio.wait_for(asyncio.gather(job, waiter), 10)
-    assert order == ["design", "speech", "design", "design"]
+        assert (await asyncio.wait_for(job, 10)).status_code == 200
+    assert r.status_code == 200
 
 
 async def test_discovery_reports_design_and_its_attribution(make_app, tmp_path):
@@ -451,3 +443,52 @@ async def test_a_failed_model_load_is_design_unavailable(make_app, tmp_path):
     async with client(app) as c:
         r = await make(c)
     assert r.status_code == 503 and err(r)["code"] == "design_unavailable"
+
+
+async def test_design_requests_queue_off_the_threadpool_and_the_excess_gets_429(app):
+    """Each waiting design request used to park a threadpool thread on the engine's own lock; enough of them would
+    starve every live session's engine calls. Now one runs, one waits on the event loop, and more are refused."""
+    slots = app.state.slots
+    entered = []
+    release = threading.Event()
+    original = slots.design.design
+
+    def slow(description, text, language, seed):
+        entered.append(seed)
+        release.wait(5)
+        return original(description, text, language, seed)
+
+    slots.design.design = slow
+    async with client(app) as c:
+        first = asyncio.create_task(make(c, count=1))
+        while not entered:
+            await asyncio.sleep(0.01)
+        second = asyncio.create_task(make(c, count=1))
+        await asyncio.sleep(0.1)
+        assert len(entered) == 1  # the second request waits on the event loop, not inside the engine
+        third = await make(c, count=1)
+        assert third.status_code == 429 and third.headers["retry-after"].isdigit()
+        assert err(third)["code"] == "too_many_requests"
+        release.set()
+        assert (await first).status_code == 200 and (await second).status_code == 200
+    assert len(entered) == 2
+
+
+async def test_a_design_request_whose_client_leaves_is_abandoned(app):
+    from max_speech.engines.mlx_gate import current_ticket
+
+    slots = app.state.slots
+    tickets = []
+    original = slots.design.design
+
+    def watch(description, text, language, seed):
+        tickets.append(current_ticket())
+        return original(description, text, language, seed)
+
+    slots.design.design = watch
+    async with client(app) as c:
+        await make(c, count=2)
+    assert len(tickets) == 2 and tickets[0] is tickets[1]  # one ticket for the request
+    assert (
+        not tickets[0].realtime and tickets[0] is not current_ticket()
+    )  # its own batch ticket, not the default

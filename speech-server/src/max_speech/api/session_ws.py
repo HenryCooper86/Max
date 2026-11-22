@@ -12,7 +12,9 @@ Concurrency, in one place:
   resets the turn: error `overrun`), and a client that lets more than `MAX_OUTBOX_BYTES` of audio pile up, or
   cannot take one message in `SEND_TIMEOUT_S`, is closed with 1008 `slow_reader`. Engine work is cut into pieces of
   at most `PIECE_S` of audio per lock hold, so one session cannot keep an engine from the others for long.
-- Speaking is a separate `ReplySpeaker` (its own task, its own SynthJobs); it shares only the TTS lock.
+- Speaking is a separate `ReplySpeaker` (its own task, its own SynthJobs); it shares only the speech locks (one for
+  preset voices, one for custom voices). Engine work is realtime for the MLX gate (engines/mlx_gate.py), and a
+  closing session abandons whatever still waits for the gate, so it frees its slot without waiting for batch work.
 - On disconnect the worker, the background second passes, the speaker and the writer are all cancelled and awaited.
 """
 
@@ -29,6 +31,7 @@ import numpy as np
 from fastapi import APIRouter, WebSocket
 
 from max_speech.audio import INPUT_RATE, OUTPUT_RATE, pcm16_to_float
+from max_speech.languages import WHISPER_LANGUAGES, primary_language
 from max_speech.session.serial import run_serialized
 from max_speech.session.speaking import ReplySpeaker
 from max_speech.session.turns import (
@@ -41,6 +44,7 @@ from max_speech.session.turns import (
     TurnTaker,
     finalize_turn,
 )
+from max_speech.settings import Settings
 
 log = logging.getLogger(__name__)
 
@@ -71,15 +75,39 @@ class _Reconfigure:
     keyterms: tuple[str, ...]
 
 
-def _error(code: str, message: str) -> dict:
-    return {"type": "error", "code": code, "message": message}
+def _error(code: str, message: str, reply_id: str | None = None) -> dict:
+    return {"type": "error", "code": code, "message": message, **({"id": reply_id} if reply_id else {})}
+
+
+def _warning(code: str, message: str, **extra) -> dict:
+    """A non-fatal notice: the session carries on, but not quite as asked."""
+    return {"type": "warning", "code": code, "message": message, **extra}
+
+
+def session_cap(settings: Settings, profile: str) -> int:
+    return settings.session_limit(profile)
+
+
+class _SessionTimeout(Exception):
+    """The client was too slow or too quiet: tell it why, then close."""
+
+    def __init__(self, code: str, message: str, close_code: int) -> None:
+        super().__init__(message)
+        self.code, self.message, self.close_code = code, message, close_code
 
 
 class _Session:
-    def __init__(self, ws: WebSocket, slots, clock=lambda: time.monotonic() * 1000) -> None:
+    def __init__(
+        self, ws: WebSocket, slots, clock=lambda: time.monotonic() * 1000, settings: Settings | None = None
+    ) -> None:
         self.ws = ws
         self.slots = slots
         self.clock = clock
+        self.settings = settings or Settings()
+        self.farewell: tuple[dict, int] | None = (
+            None  # sent just before closing, after the writer has stopped
+        )
+        self._warned: set[tuple] = set()
         self.outbox: asyncio.Queue[dict | bytes] = asyncio.Queue()
         self.inbox: asyncio.Queue = asyncio.Queue()
         self.dead = False  # the writer failed: the peer is gone
@@ -145,6 +173,36 @@ class _Session:
     def language(self) -> str | None:
         return self.languages[0] if len(self.languages) == 1 else None
 
+    def warn_unsupported(self) -> None:
+        """Say once per distinct request what the live (streaming) STT cannot do with it.
+
+        A language the streaming model does not transcribe is still fine when the second pass re-transcribes every
+        finished turn with Whisper; only the live partials are then unreliable, so it is not worth a warning."""
+        stt = self.slots.stt_stream
+        supported = getattr(stt, "languages", None)
+        covered = bool(self.slots.second_pass and self.slots.stt is not None)
+        if supported is not None and not covered:
+            bad = tuple(lang for lang in self.languages if lang not in supported)
+            if bad and ("language", bad) not in self._warned:
+                self._warned.add(("language", bad))
+                self.emit(
+                    _warning(
+                        "language_unsupported",
+                        f"the live speech recognizer ({stt.model_id}) transcribes only "
+                        f"{', '.join(supported)}; {', '.join(bad)} will not be recognised",
+                        languages=list(bad),
+                        supported=list(supported),
+                    )
+                )
+        if self.keyterms and getattr(stt, "keyterms", True) is False and "keyterms" not in self._warned:
+            self._warned.add("keyterms")
+            self.emit(
+                _warning(
+                    "keyterms_unsupported",
+                    f"the live speech recognizer ({stt.model_id}) does not support keyterms; they are ignored",
+                )
+            )
+
     def _effective_voice(self) -> str:
         tts = self.slots.tts
         return self.voice or tts.default_voice(self.gender, self.language)
@@ -155,7 +213,19 @@ class _Session:
         langs = msg.get("languages")
         if langs is not None:
             if isinstance(langs, list) and all(isinstance(x, str) and x.strip() for x in langs):
-                self.languages = tuple(x.strip() for x in langs)
+                known = tuple(
+                    dict.fromkeys(c for x in langs if (c := primary_language(x)) in WHISPER_LANGUAGES)
+                )
+                unknown = [x.strip() for x in langs if primary_language(x) not in WHISPER_LANGUAGES]
+                if unknown:  # dropped: an engine given a code it does not know can only fail
+                    self.emit(
+                        _warning(
+                            "language_unknown",
+                            f"unrecognised language code(s) {', '.join(unknown)} ignored; use ISO 639-1 codes such as 'en' or 'zh'",
+                            languages=unknown,
+                        )
+                    )
+                self.languages = known
             else:
                 self.emit(_error("bad_message", "languages must be a list of language codes"))
         terms = msg.get("keyterms")
@@ -198,7 +268,7 @@ class _Session:
         writer = asyncio.create_task(self._write())
         worker: asyncio.Task | None = None
         try:
-            early = await self._handshake()
+            early = await self._handshake_with_timeout()
             if early is None:
                 return
             vad, stt = slots.vad, slots.stt_stream
@@ -210,25 +280,35 @@ class _Session:
                 self.eagerness, frame_samples=self._vad_stream.frame_samples, rate=INPUT_RATE
             )
             self.speaker = ReplySpeaker(
-                slots.tts, slots.tts_lock, self.emit, voice=self._effective_voice(), language=self.language
+                slots.tts, slots.speech_lock, self.emit, voice=self._effective_voice(), language=self.language
             )
             for chunk in early:
                 self.inbox_bytes += len(chunk)
                 self.inbox.put_nowait(chunk)
             worker = asyncio.create_task(self._work())
-            self.emit(
-                {
-                    "type": "ready",
-                    "protocol": PROTOCOL,
-                    "engines": {
-                        "vad": vad.model_id,
-                        "turn": slots.turn.model_id,
-                        "stt": stt.model_id,
-                        "tts": slots.tts.model_id,
-                    },
-                }
-            )
+            ready = {
+                "type": "ready",
+                "protocol": PROTOCOL,
+                "engines": {
+                    "vad": vad.model_id,
+                    "turn": slots.turn.model_id,
+                    "stt": stt.model_id,
+                    "tts": slots.tts.model_id,
+                },
+                # Whether a client that sends nothing is closed (null: never; dead peers are caught by ping).
+                "idle_timeout_s": self.settings.session_idle_timeout_s or None,
+            }
+            # What the live recognizer can do, so a client need not ask for what it cannot get.
+            if (languages := getattr(stt, "languages", None)) is not None:
+                ready["languages"] = list(languages)
+            if (keyterms := getattr(stt, "keyterms", None)) is not None:
+                ready["keyterms"] = bool(keyterms)
+            self.emit(ready)
+            self.warn_unsupported()
             await self._receive_loop()
+        except _SessionTimeout as timeout:
+            log.info("closing a session: %s", timeout.code)
+            self.farewell = (_error(timeout.code, timeout.message), timeout.close_code)
         finally:
             # Even when this handler is itself being cancelled, cleanup runs to the end: the engine locks must
             # not be released while a thread is still inside an engine.
@@ -252,6 +332,11 @@ class _Session:
         if self._closing is not None:
             await asyncio.gather(self._closing, return_exceptions=True)
         if self.dead is False:
+            if self.farewell is not None:
+                message, code = self.farewell
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self.ws.send_text(json.dumps(message)), 2)
+                    await self.ws.close(code=code, reason=message["code"])
             with contextlib.suppress(Exception):
                 await self.ws.close()  # a no-op when the client already left
 
@@ -271,6 +356,17 @@ class _Session:
             self.emit(_error("bad_message", "a message must be a JSON object with a string 'type'"))
             return {}
         return msg
+
+    async def _handshake_with_timeout(self) -> list[bytes] | None:
+        limit = self.settings.session_handshake_timeout_s
+        try:
+            return await asyncio.wait_for(self._handshake(), limit or None)
+        except TimeoutError:
+            raise _SessionTimeout(
+                "handshake_timeout",
+                f"no session.update within {limit:g} s; send it right after connecting",
+                1008,
+            ) from None
 
     async def _handshake(self) -> list[bytes] | None:
         """Wait for the first `session.update`; audio that arrives first is kept for after `ready`."""
@@ -293,8 +389,14 @@ class _Session:
             self.emit(_error("no_session", "send session.update first"))
 
     async def _receive_loop(self) -> None:
+        idle = self.settings.session_idle_timeout_s
         while not self.dead:
-            msg = await self._recv()
+            try:
+                msg = await asyncio.wait_for(self._recv(), idle or None)
+            except TimeoutError:
+                raise _SessionTimeout(
+                    "idle_timeout", f"nothing received for {idle:g} s; the session was closed", 1000
+                ) from None
             if msg is None:
                 return
             if isinstance(msg, bytes):
@@ -326,12 +428,13 @@ class _Session:
         if kind == "session.update":
             if self.apply_update(msg):
                 self.inbox.put_nowait(_Reconfigure(self.language, self.keyterms))
+            self.warn_unsupported()
         elif kind == "speak":
             rid, text, final = msg.get("id"), msg.get("text", ""), msg.get("final", False)
             if not isinstance(rid, str) or not rid or len(rid) > MAX_ID_CHARS:
                 self.emit(_error("bad_message", "speak needs a non-empty string id"))
             elif not isinstance(text, str) or not isinstance(final, bool):
-                self.emit(_error("bad_message", "speak needs string text and boolean final"))
+                self.emit(_error("bad_message", "speak needs string text and boolean final", rid))
             else:
                 self.speaker.speak(rid, text, final)
         elif kind == "cancel":
@@ -507,4 +610,16 @@ async def session(ws: WebSocket) -> None:
         await ws.send_text(json.dumps(problem[0]))
         await ws.close(code=problem[1])
         return
-    await _Session(ws, slots).serve()
+    settings = ws.app.state.settings
+    cap = session_cap(settings, ws.app.state.profile)
+    if slots.sessions >= cap:
+        await ws.send_text(
+            json.dumps(_error("busy", f"this server already has {cap} live session(s); try again shortly"))
+        )
+        await ws.close(code=1013, reason="busy")
+        return
+    slots.sessions += 1
+    try:
+        await _Session(ws, slots, settings=settings).serve()
+    finally:
+        slots.sessions -= 1

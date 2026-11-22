@@ -40,6 +40,16 @@ async def discovery(request: Request):
     live = (vad, turn, stt_stream, slots.tts)
     cloning = slots.cloning
     design = slots.design if cloning is not None else None  # a designed voice is spoken by cloning
+    live_info = None
+    if stt_stream is not None and getattr(stt_stream, "languages", None) is not None:
+        settings = request.app.state.settings
+        live_info = {
+            "languages": list(stt_stream.languages),
+            "keyterms": bool(getattr(stt_stream, "keyterms", False)),
+            "max_sessions": settings.session_limit(request.app.state.profile),
+            "idle_timeout_s": settings.session_idle_timeout_s
+            or None,  # null: a quiet session is never closed
+        }
     return {
         "protocol": "max-speech.v1",
         "version": __version__,
@@ -53,5 +63,6 @@ async def discovery(request: Request):
             "cloning": cloning is not None,
             "voice_design": design is not None,
         },
+        **({"live": live_info} if live_info else {}),
         "attributions": _attributions([slots.stt, slots.tts, cloning, design, vad, turn, stt_stream]),
     }

@@ -62,8 +62,13 @@ when it starts. The protocol, turn-taking rules and the session benchmark are in
   character error rate on a speak-then-transcribe check from about 0.4-0.7 to under 0.05; other languages use v1.0.
   Japanese uses misaki's Japanese G2P. `SPEECH_TTS_ZH_MODEL=off` turns the Chinese model off. Max Speech needs Python
   3.12 because misaki does not support 3.13.
-- Transcription with Whisper, and live partial transcripts while the wearer speaks (streaming X-ASR, Chinese and
-  English).
+- Transcription with Whisper (any of its languages, over `/v1/audio/transcriptions`), and live partial transcripts
+  while the wearer speaks. The live recognizer (streaming X-ASR) transcribes **Chinese and English only**, on every
+  profile. In a live session another language is transcribed only by the second pass, where Whisper re-transcribes
+  each finished turn: on by default for the Apple silicon and NVIDIA profiles, off on a CPU unless
+  `SPEECH_SECOND_PASS=on`. It is best effort within a 300 ms deadline, and the live partial transcripts stay wrong.
+  When a session asks for a language the recognizer cannot do and the second pass is off, the relay shows a warning.
+  Keyterms (hotwords) are not supported by the live recognizer, so the relay does not send them to it.
 - Turn detection on the server: Silero VAD and Smart Turn, with a `low`, `normal` or `high` eagerness.
 - Only loads models whose licenses are on its allowlist, and pins each model to a fixed revision.
 
@@ -86,6 +91,11 @@ echo "SPEECH_API_KEY=$(openssl rand -hex 24)" >> .env
 docker compose -f docker-compose.local-voice.yml up -d --build
 docker compose -f docker-compose.local-voice.yml exec ollama ollama pull qwen3:8b
 ```
+
+To run the relay in the same compose project, list both files:
+`docker compose -f docker-compose.yml -f docker-compose.local-voice.yml up -d --build`. The Ollama image is pinned to
+the release the stack was last tested with (`ollama/ollama:0.40.17`); raise it deliberately. See
+[Deploying Max Speech](speech-server-deployment.md#docker-cpu) for making the relay wait for Ollama.
 
 This builds the CPU image of Max Speech on `127.0.0.1:8790` and starts Ollama on `127.0.0.1:11434` (both bound to
 loopback; Ollama has no authentication). The API key is required in Docker. The first start downloads about 1.5 GB of

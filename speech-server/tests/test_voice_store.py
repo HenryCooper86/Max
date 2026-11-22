@@ -556,3 +556,96 @@ def test_a_designed_reference_needs_three_seconds():
         reference_from_samples(tone[: int(24000 * 2.8)], 24000)
     assert e.value.code == "reference_too_short"
     assert reference_from_samples(tone[: int(24000 * 3.2)], 24000).duration_s >= 3.0
+
+
+# ---- what the consent record ties to: the audio, the time, the caller; and the audit log -----------------------------
+import hashlib
+
+PROVENANCE = {"client": "10.0.0.7", "auth": "api_key", "key_id": "ab12cd34ef56"}
+
+
+def _audited(tmp_path):
+    return VoiceStore(tmp_path / "voices", audit_log=tmp_path / "audit.log")
+
+
+def _events(tmp_path):
+    return [json.loads(line) for line in (tmp_path / "audit.log").read_text().splitlines()]
+
+
+def test_consent_records_the_audio_the_time_and_the_caller(tmp_path):
+    store = _audited(tmp_path)
+    upload = good_wav()
+    v = make(store, audio=upload, provenance=PROVENANCE)
+    on_disk = (tmp_path / "voices" / v.id / "reference.wav").read_bytes()
+    c = v.consent
+    assert c["audio_sha256"] == hashlib.sha256(on_disk).hexdigest()  # checkable by whoever holds the voice
+    assert c["upload_sha256"] == hashlib.sha256(upload).hexdigest()  # checkable against the caller's own file
+    assert c["recorded_at"].endswith("Z")
+    assert c["client"] == "10.0.0.7" and c["auth"] == "api_key" and c["key_id"] == "ab12cd34ef56"
+    # and it is what is stored, so it survives a restart
+    assert VoiceStore(tmp_path / "voices").info(v.id).consent == c
+
+
+def test_without_provenance_the_record_still_has_the_hashes(store):
+    v = make(store)
+    assert len(v.consent["audio_sha256"]) == 64 and "client" not in v.consent
+
+
+def test_create_and_delete_are_appended_to_the_audit_log(tmp_path):
+    store = _audited(tmp_path)
+    v = make(store, provenance=PROVENANCE)
+    store.delete(v.id, provenance={"client": "10.0.0.9", "auth": "loopback"})
+    created, deleted = _events(tmp_path)
+    assert created["event"] == "create" and created["voice_id"] == v.id and created["time"].endswith("Z")
+    assert created["speaker"] == "Ava Lee" and created["audio_sha256"] == v.consent["audio_sha256"]
+    assert created["client"] == "10.0.0.7" and created["auth"] == "api_key"
+    assert deleted["event"] == "delete" and deleted["voice_id"] == v.id and deleted["name"] == "Ava"
+    assert deleted["client"] == "10.0.0.9" and deleted["auth"] == "loopback"
+
+
+def test_a_designed_voice_is_audited_too(tmp_path):
+    store = _audited(tmp_path)
+    v = store.create_designed(
+        audio=good_wav(),
+        name="Calm",
+        transcript="hello there this is a designed voice",
+        description="calm, low",
+        seed=1,
+        model="m",
+        provenance=PROVENANCE,
+    )
+    (event,) = _events(tmp_path)
+    assert event["event"] == "create" and event["origin"] == "designed" and event["voice_id"] == v.id
+    assert "speaker" not in event
+
+
+def test_the_audit_log_is_private_and_append_only(tmp_path):
+    store = _audited(tmp_path)
+    make(store)
+    make(store)
+    path = tmp_path / "audit.log"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert len(_events(tmp_path)) == 2
+    VoiceStore(tmp_path / "voices", audit_log=path)  # a restart keeps what was written
+    assert len(_events(tmp_path)) == 2
+
+
+def test_a_loose_existing_audit_log_is_tightened(tmp_path):
+    path = tmp_path / "audit.log"
+    path.write_text("")
+    os.chmod(path, 0o644)
+    make(_audited(tmp_path))
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
+def test_an_unwritable_audit_log_does_not_lose_the_voice(tmp_path, caplog):
+    (tmp_path / "blocker").write_text("a file where the log's directory should be")
+    store = VoiceStore(tmp_path / "voices", audit_log=tmp_path / "blocker" / "audit.log")
+    with caplog.at_level("ERROR"):
+        v = make(store)
+    assert v.id in store and "audit" in caplog.text
+
+
+def test_the_default_store_writes_no_audit_log(store, tmp_path):
+    make(store)
+    assert not (tmp_path / "audit.log").exists()

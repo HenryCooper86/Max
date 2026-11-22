@@ -1,6 +1,9 @@
+import asyncio
 import io
 import json
 import os
+import threading
+import time
 import wave
 
 import httpx
@@ -8,9 +11,10 @@ import numpy as np
 import pytest
 from voice_helpers import CONSENT, STATEMENT, good_wav, speech_like, wav_of
 
-from max_speech.engines.base import Transcript
+from max_speech.engines.base import Transcript, UnknownVoiceError
 from max_speech.engines.fake import FakeStt, FakeTts
 from max_speech.engines.fake_cloning import FakeCloningTts
+from max_speech.engines.mlx_gate import MLX_GATE, stepwise
 from max_speech.settings import Settings
 
 
@@ -368,6 +372,158 @@ async def test_preview_applies_the_lexicon(make_app, tmp_path):
     assert cloning.calls[0][0] == "hi Max speech"
 
 
+async def test_preview_holds_the_cloning_lock_one_sentence_at_a_time(make_app, tmp_path):
+    """A preview is batch work on the cloning engine: it never takes the preset voices' lock, and it lets a live cloned
+    sentence in between two of its sentences rather than after the whole preview."""
+    cloning = FakeCloningTts()
+    app = make_app(Settings(data_dir=tmp_path), cloning=cloning)
+    slots = app.state.slots
+    seen = []
+    inner = cloning.synthesize_cloned
+
+    def watch(text, reference, **kw):
+        seen.append((text, slots.cloning_lock.locked(), slots.tts_lock.locked()))
+        yield from inner(text, reference, **kw)
+
+    cloning.synthesize_cloned = watch
+    async with client(app) as c:
+        v = (await post_voice(c, languages="en")).json()
+        released = []
+        real_release = slots.cloning_lock.release
+
+        def release():
+            released.append(len(seen))
+            real_release()
+
+        slots.cloning_lock.release = release
+        r = await c.post(f"/v1/voices/{v['id']}/preview", json={"text": "One two. Three four. Five six."})
+    assert r.status_code == 200
+    assert seen == [("One two.", True, False), ("Three four.", True, False), ("Five six.", True, False)]
+    assert released == [1, 2, 3]  # let go after each sentence
+
+
+class GatedCloning(FakeCloningTts):
+    """Like the Qwen3 MLX engine: a sentence streams in 4 chunks, each computed under the MLX gate (0.02 s of work)."""
+
+    def synthesize_cloned(self, text, reference, **kw):
+        def chunks():
+            for audio in FakeCloningTts.synthesize_cloned(self, text, reference, **kw):
+                for piece in np.array_split(audio, 4):
+                    time.sleep(0.02)
+                    yield piece
+
+        yield from stepwise(chunks())
+
+
+class LongBatchOnGate:
+    """A long batch call on the GPU (a transcription): 0.3 s units with a yield point before each, 3 s in all."""
+
+    def __init__(self, units=10, unit_s=0.3):
+        self.done = threading.Event()
+        started = threading.Event()
+
+        def run():
+            with MLX_GATE:
+                started.set()
+                for _ in range(units):
+                    MLX_GATE.yield_point()
+                    time.sleep(unit_s)
+            self.done.set()
+
+        self.thread = threading.Thread(target=run, daemon=True)
+        self.thread.start()
+        assert started.wait(5)
+
+
+async def test_a_preview_does_not_make_live_cloned_speech_wait_for_a_batch_call(make_app, tmp_path):
+    """The preview holds the cloning engine's lock while it synthesizes. If it waited at the GPU gate as batch work, a
+    live cloned sentence queued on that lock (not at the gate) would wait for the whole batch call. It runs as live
+    work, so the live sentence waits about one batch unit plus the preview's current sentence (4 chunks of 0.02 s);
+    as batch work every chunk of the preview would wait for a batch unit (0.3 s) as well."""
+    app = make_app(Settings(data_dir=tmp_path), cloning=GatedCloning())
+    async with client(app) as c:
+        v = (await post_voice(c, languages="en")).json()
+        batch = LongBatchOnGate()
+        preview = asyncio.create_task(
+            c.post(f"/v1/voices/{v['id']}/preview", json={"text": "One two. Three four. Five six."})
+        )
+        await asyncio.sleep(0.1)  # the preview is in flight
+        start = time.monotonic()
+        r = await c.post(
+            "/v1/audio/speech",
+            json={"input": "Hello there.", "voice": v["id"], "response_format": "pcm"},
+        )
+        waited = time.monotonic() - start
+        assert (await preview).status_code == 200
+    assert r.status_code == 200 and r.content
+    assert waited < 0.8, f"live cloned speech took {waited:.2f}s behind a 3 s batch call"
+    assert not batch.done.is_set(), "the batch call ended first: the test proves nothing"
+    batch.thread.join(10)
+
+
+class HiRateCloning(FakeCloningTts):
+    sample_rate = 48000  # above the preset rate, so the router's streaming DownResampler is in play
+
+
+async def test_speech_in_a_custom_voice_holds_the_cloning_lock_one_sentence_at_a_time(make_app, tmp_path):
+    """One long request must not hold the cloning engine for its whole input; the audio stays exactly what one
+    synthesis of the whole input gives."""
+    from max_speech.api import openai_routes
+
+    app = make_app(Settings(data_dir=tmp_path), cloning=HiRateCloning())
+    slots = app.state.slots
+    text = "One two three. Four five six seven. Eight nine. Ten eleven twelve thirteen."
+    async with client(app) as c:
+        v = (await post_voice(c, languages="en")).json()
+        expected = b"".join(openai_routes._pcm_chunks(slots.tts, text, v["id"], 1.0, None))
+        acquired = []
+        real_acquire = slots.cloning_lock.acquire
+
+        async def acquire():
+            acquired.append(len(slots.cloning.calls))
+            return await real_acquire()
+
+        slots.cloning_lock.acquire = acquire
+        r = await c.post("/v1/audio/speech", json={"input": text, "voice": v["id"], "response_format": "pcm"})
+        streamed = await c.post(
+            "/v1/audio/speech",
+            json={"input": text, "voice": v["id"], "response_format": "pcm", "stream_format": "audio"},
+        )
+    assert r.status_code == 200 and r.content == expected
+    assert streamed.content == expected
+    assert acquired[:4] == [4, 5, 6, 7]  # one lock hold per sentence (4 calls came from computing `expected`)
+
+
+@pytest.mark.parametrize("stream_format", ["audio", "sse"])
+async def test_a_voice_that_vanishes_before_streaming_starts_stops_every_sentence_job(
+    make_app, tmp_path, stream_format
+):
+    """The first sentence finds the voice deleted (404); the jobs for the other sentences must be cancelled, not keep
+    being created and run one after another."""
+    app = make_app(Settings(data_dir=tmp_path), cloning=FakeCloningTts())
+    slots = app.state.slots
+    async with client(app) as c:
+        v = (await post_voice(c, languages="en")).json()
+        started = []
+        real = slots.tts.synthesize
+
+        def counting(text, voice, **kw):
+            started.append(text)
+            return real(text, voice, **kw)
+
+        slots.tts.synthesize = counting
+
+        def gone(voice_id):
+            raise UnknownVoiceError(voice_id)
+
+        slots.voices.get = gone
+        body = {"input": "One. Two. Three. Four. Five. Six.", "voice": v["id"], "response_format": "pcm"}
+        r = await c.post("/v1/audio/speech", json={**body, "stream_format": stream_format})
+        await asyncio.sleep(0.2)
+    assert r.status_code == 404
+    assert len(started) <= 2, started  # only the jobs already in flight, none created after the error
+
+
 # ---- lexicon ---------------------------------------------------------------------------------------------------------------
 async def test_lexicon_roundtrip_and_persistence(make_app, tmp_path):
     settings = Settings(data_dir=tmp_path)
@@ -487,3 +643,24 @@ async def test_data_dir_files_are_private(app, tmp_path):
 
 def test_speech_like_helper_is_valid():
     assert len(speech_like(1.0)) == 24000
+
+
+# ---- provenance: who asked, from where ------------------------------------------------------------------------
+async def test_the_consent_record_names_the_caller_and_the_audit_log_follows(make_app, tmp_path):
+    app = make_app(Settings(data_dir=tmp_path, api_key="s3cret"), cloning=FakeCloningTts())
+    async with client(app, headers={"Authorization": "Bearer s3cret"}) as c:
+        v = (await post_voice(c)).json()
+        assert (await c.delete(f"/v1/voices/{v['id']}")).status_code == 204
+    consent = v["consent"]
+    assert consent["auth"] == "api_key" and len(consent["key_id"]) == 12 and "s3cret" not in json.dumps(v)
+    assert consent["client"] and len(consent["audio_sha256"]) == 64
+    events = [json.loads(line) for line in (tmp_path / "voice-audit.log").read_text().splitlines()]
+    assert [e["event"] for e in events] == ["create", "delete"]
+    assert events[1]["auth"] == "api_key" and events[1]["voice_id"] == v["id"]
+
+
+async def test_without_a_key_the_caller_is_recorded_as_loopback(app, tmp_path):
+    async with client(app) as c:
+        v = (await post_voice(c)).json()
+    assert v["consent"]["auth"] == "loopback"
+    assert "key_id" not in v["consent"]

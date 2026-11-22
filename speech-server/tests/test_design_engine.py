@@ -61,7 +61,16 @@ def test_nothing_loads_until_the_first_call():
 def test_design_passes_description_language_and_seed_and_joins_chunks():
     engine, log, _ = make()
     audio = engine.design("a calm voice", "Hello.", "en", 7)
-    assert log.model.calls == [{"text": "Hello.", "instruct": "a calm voice", "lang_code": "english"}]
+    # Streamed, so live speech can take the GPU between chunks (see STREAMING_INTERVAL).
+    assert log.model.calls == [
+        {
+            "text": "Hello.",
+            "instruct": "a calm voice",
+            "lang_code": "english",
+            "stream": True,
+            "streaming_interval": 0.5,
+        }
+    ]
     assert log.seeds == [7]
     assert audio.dtype == np.float32 and audio.shape == (2400,)
     engine.design("低沉的男声", "你好。", "zh-CN", 8)
@@ -151,3 +160,23 @@ def test_ensure_loaded_counts_as_use_for_the_idle_clock():
     assert engine.sweep() is False
     clock.now += 200
     assert engine.sweep() is True
+
+
+def test_unloading_drops_the_model_and_frees_memory_inside_one_hold_of_the_mlx_gate():
+    """Freeing MLX buffers (dropping the model, collecting, clearing the cache) is MLX work: it must not overlap
+    another thread's evaluation, so all of it happens with the gate held, in one hold."""
+    from max_speech.engines.mlx_gate import MLX_GATE
+
+    seen = []
+    engine, _log, clock = make()
+    engine.design("a calm voice", "Hello.", "en", 7)
+
+    def release():
+        seen.append((MLX_GATE.held, engine._model is None))
+
+    engine._release = release
+    clock.now += engine.idle_seconds + 1
+    assert engine.sweep() is True
+    engine.design("a calm voice", "Hello.", "en", 7)
+    engine.close()
+    assert seen == [(True, True), (True, True)]  # the model was dropped inside the same hold

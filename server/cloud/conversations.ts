@@ -4,6 +4,8 @@
 
 import { now } from "./context";
 import { newId } from "./secrets";
+import type { AnalysisResult } from "../../shared/analysis";
+import type { ConversationAnalysis } from "./analysis";
 import {
   conversationById,
   insertConversation,
@@ -36,7 +38,29 @@ export type ConversationSummary = {
   source: string;
   /** The first thing the user said, as a title. */
   preview: string;
+  /** What the analysis made of it, for a mark in the list: present once it has been analysed. */
+  sentiment?: AnalysisResult["sentiment"];
+  success?: boolean;
 };
+
+/** A stored analysis, or none when there is none or it cannot be read. */
+function analysisOf(raw: string | null | undefined): ConversationAnalysis | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) && typeof parsed.at === "number" ? (parsed as ConversationAnalysis) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function marksOf(raw: string | null | undefined): Pick<ConversationSummary, "sentiment" | "success"> {
+  const result = analysisOf(raw)?.result;
+  return {
+    ...(result?.sentiment ? { sentiment: result.sentiment } : {}),
+    ...(typeof result?.success === "boolean" ? { success: result.success } : {})
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -132,7 +156,8 @@ export function listConversations(
     endedAt: row.ended_at,
     seconds: row.seconds,
     source: row.source,
-    preview: row.preview
+    preview: row.preview,
+    ...marksOf(row.analysis)
   }));
   return { ok: true, value: { conversations } };
 }
@@ -140,7 +165,13 @@ export function listConversations(
 export function readConversation(
   customerId: string,
   conversationId: string
-): Result<{ conversation: ConversationSummary & { projectId: string; turns: ConversationTurn[] } }> {
+): Result<{
+  conversation: ConversationSummary & {
+    projectId: string;
+    turns: ConversationTurn[];
+    analysis?: ConversationAnalysis;
+  };
+}> {
   const row = typeof conversationId === "string" ? conversationById(conversationId, customerId) : undefined;
   if (!row || !liveProject(row.project_id, customerId)) {
     return { ok: false, status: 404, error: "Conversation not found." };
@@ -162,7 +193,9 @@ export function readConversation(
         seconds: row.seconds,
         source: row.source,
         preview: row.preview,
-        turns
+        ...marksOf(row.analysis),
+        turns,
+        ...(analysisOf(row.analysis) ? { analysis: analysisOf(row.analysis) } : {})
       }
     }
   };

@@ -1,9 +1,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_STUDIO } from "../shared/cloud-studio";
+import { DEFAULT_ANALYSIS, DEFAULT_STUDIO, type StudioAnalysis } from "../shared/cloud-studio";
 import { LanguageProvider } from "../src/components/LanguageToggle";
-import type { Project } from "../src/console/api";
+import type { ConversationAnalysis, Project } from "../src/console/api";
+import { AnalysisMarks, AnalysisSetting, AnalysisView, analysisProblem } from "../src/console/studio/AnalysisSetting";
 import {
   countSummary,
   deliveryLine,
@@ -112,5 +113,132 @@ describe("HistoryTab", () => {
     expect(wrong).toContain("这个地址不能用");
     expect(wrong).toContain('aria-invalid="true"');
     expect(wrong).not.toContain("请保存以生效");
+  });
+});
+
+describe("what conversations are analysed for", () => {
+  const project = {
+    id: "p1",
+    name: "Demo",
+    backend: "gemini",
+    studio: structuredClone(DEFAULT_STUDIO)
+  } as unknown as Project;
+  const base = {
+    session: { api: {}, token: "t", fail: () => "" },
+    update: () => undefined,
+    updateStudio: () => undefined,
+    dirty: false,
+    save: async () => true,
+    origin: "https://example.test",
+    goTo: () => undefined,
+    onProjectChanged: () => undefined
+  };
+  const render = (analysis: Partial<StudioAnalysis>, studio: Partial<Project["studio"]> = {}) => {
+    const draft = draftFromProject(project);
+    draft.studio = { ...draft.studio, ...studio, analysis: { ...DEFAULT_ANALYSIS, ...analysis } };
+    const props = { ...base, project, draft } as unknown as StudioTabProps;
+    return renderToStaticMarkup(createElement(LanguageProvider, null, createElement(AnalysisSetting, props)));
+  };
+
+  it("is off until asked for, and says whose bill it is on", () => {
+    const off = render({});
+    expect(off).toContain("对话结束时分析每段对话");
+    // The project's own vendor, by name.
+    expect(off).toContain("你自己的 Google 密钥");
+    expect(off).not.toContain("cxsAnalysisCriteria");
+    expect(off).not.toContain("请保存以生效");
+    // A project stored before there was analysis shows the same.
+    const old = {
+      ...project,
+      studio: { ...structuredClone(DEFAULT_STUDIO), analysis: undefined }
+    } as unknown as Project;
+    const props = { ...base, project: old, draft: draftFromProject(old) } as unknown as StudioTabProps;
+    expect(renderToStaticMarkup(createElement(LanguageProvider, null, createElement(AnalysisSetting, props)))).toBe(
+      off
+    );
+  });
+
+  it("shows what to look for once it is on, and what stands in the way of saving", () => {
+    const on = render(
+      {
+        enabled: true,
+        sentiment: true,
+        successCriteria: "The order status was given.",
+        fields: [{ name: "topic", type: "enum", description: "What it was about.", options: ["orders", "returns"] }]
+      },
+      { keepConversations: true }
+    );
+    expect(on).toContain("The order status was given.");
+    expect(on).toContain('value="topic"');
+    expect(on).toContain('value="orders, returns"');
+    expect(on).toContain("请保存以生效");
+    expect(on).not.toContain("现在还不能保存");
+    // Nothing chosen.
+    expect(render({ enabled: true, summary: false }, { keepConversations: true })).toContain("没有要找的内容");
+    // A choice field with one choice: the server's own reason, and no "save to apply".
+    const short = render(
+      { enabled: true, fields: [{ name: "topic", type: "enum", description: "x", options: ["orders"] }] },
+      { keepConversations: true }
+    );
+    expect(short).toContain("field topic: enum needs 2 to 20 options");
+    expect(short).not.toContain("请保存以生效");
+    // On, with no history and no server: the result would be thrown away.
+    expect(render({ enabled: true }, { keepConversations: false, conversationWebhook: "" })).toContain(
+      "结果没有地方可去"
+    );
+    expect(
+      render({ enabled: true }, { keepConversations: false, conversationWebhook: "https://shop.example.com/hook" })
+    ).not.toContain("结果没有地方可去");
+  });
+
+  it("finds what the server would refuse", () => {
+    expect(analysisProblem({ ...DEFAULT_ANALYSIS, enabled: true })).toBeUndefined();
+    expect(analysisProblem({ ...DEFAULT_ANALYSIS, enabled: true, summary: false })).toBe("nothing to look for");
+    expect(
+      analysisProblem({ ...DEFAULT_ANALYSIS, enabled: true, summary: false, successCriteria: "It worked." })
+    ).toBeUndefined();
+    expect(
+      analysisProblem({
+        ...DEFAULT_ANALYSIS,
+        enabled: true,
+        fields: [
+          { name: "topic", type: "string", description: "x" },
+          { name: "topic", type: "string", description: "y" }
+        ]
+      })
+    ).toMatch(/topic/);
+  });
+
+  it("shows a conversation's result, its marks, and why there is none", () => {
+    const view = (analysis: ConversationAnalysis) =>
+      renderToStaticMarkup(createElement(LanguageProvider, null, createElement(AnalysisView, { analysis })));
+    const done = view({
+      at: 1,
+      result: {
+        summary: "Asked about <b>order</b> A-1042.",
+        sentiment: "positive",
+        success: false,
+        successReason: "No status was given.",
+        data: { order_number: "A-1042", wants_refund: false, items: 2, city: null }
+      }
+    });
+    // What a model wrote is text, never markup.
+    expect(done).toContain("Asked about &lt;b&gt;order&lt;/b&gt; A-1042.");
+    expect(done).toContain("未成功：No status was given.");
+    expect(done).toMatch(/<dt>order_number<\/dt><dd>A-1042<\/dd>/);
+    expect(done).toMatch(/<dt>wants_refund<\/dt><dd>否<\/dd>/);
+    expect(done).toMatch(/<dt>items<\/dt><dd>2<\/dd>/);
+    expect(done).toMatch(/<dt>city<\/dt><dd class="cxMuted">（对话中没有提到）<\/dd>/);
+    expect(view({ at: 1, error: "analysis model answered HTTP 401" })).toContain(
+      "这段对话没有分析结果：analysis model answered HTTP 401"
+    );
+    const marks = (props: { sentiment?: "positive" | "neutral" | "negative"; success?: boolean }) =>
+      renderToStaticMarkup(createElement(LanguageProvider, null, createElement(AnalysisMarks, props)));
+    expect(marks({})).toBe("");
+    expect(marks({ success: true, sentiment: "negative" })).toBe(
+      '<span class="cxsHistoryBadge good">成功</span><span class="cxsHistoryBadge bad">不满</span>'
+    );
+    expect(marks({ success: false })).toContain("未成功");
+    expect(marks({ sentiment: "neutral" })).toBe('<span class="cxsHistoryBadge ">一般</span>');
   });
 });

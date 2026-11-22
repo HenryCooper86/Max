@@ -222,6 +222,10 @@ function database(): DatabaseSync {
     if (!liveColumns.has("instance_id")) db.exec("ALTER TABLE live_sessions ADD COLUMN instance_id TEXT NULL");
     if (!liveColumns.has("seconds")) db.exec("ALTER TABLE live_sessions ADD COLUMN seconds REAL NULL");
     if (!liveColumns.has("ended_at")) db.exec("ALTER TABLE live_sessions ADD COLUMN ended_at INTEGER NULL");
+    const conversationColumns = new Set(
+      (db.prepare("PRAGMA table_info(conversations)").all() as { name: string }[]).map((column) => column.name)
+    );
+    if (!conversationColumns.has("analysis")) db.exec("ALTER TABLE conversations ADD COLUMN analysis TEXT NULL");
   } catch (error) {
     db.close();
     throw error;
@@ -902,6 +906,8 @@ export type ConversationRow = {
   preview: string;
   /** JSON list of ConversationTurn. */
   turns: string;
+  /** JSON of the conversation's analysis (server/cloud/analysis.ts), once there is one. */
+  analysis?: string | null;
 };
 
 export function insertConversation(row: ConversationRow): void {
@@ -932,10 +938,21 @@ export function projectConversations(
 ): Omit<ConversationRow, "turns">[] {
   return database()
     .prepare(
-      `SELECT id, customer_id, project_id, started_at, ended_at, seconds, source, preview FROM conversations
+      `SELECT id, customer_id, project_id, started_at, ended_at, seconds, source, preview, analysis FROM conversations
        WHERE project_id = ? AND customer_id = ? ORDER BY started_at DESC LIMIT ?`
     )
     .all(projectId, customerId, limit) as Omit<ConversationRow, "turns">[];
+}
+
+/** Writes a conversation's analysis next to it. False when the conversation is gone. */
+export function setConversationAnalysis(id: string, customerId: string, analysis: string): boolean {
+  return (
+    Number(
+      database()
+        .prepare("UPDATE conversations SET analysis = ? WHERE id = ? AND customer_id = ?")
+        .run(analysis, id, customerId).changes
+    ) > 0
+  );
 }
 
 export function conversationById(id: string, customerId: string): ConversationRow | undefined {

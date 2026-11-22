@@ -377,10 +377,18 @@ export function patchProject(
     const sent = body.studio !== undefined ? body.studio : projectStudio(current);
     // A save of the settings that says nothing of the flow leaves the flow as it is: the flow has a save of
     // its own, and a Studio opened before that one must not put an older flow back, or none.
-    const raw =
-      sent && typeof sent === "object" && !Array.isArray(sent) && (sent as Record<string, unknown>).flow === undefined
-        ? { ...(sent as object), flow: projectStudio(current).flow }
-        : sent;
+    // The same for the analysis settings: a client that does not know of them (an older console, a script
+    // that sets one thing) must not switch a project's analysis off by saving something else.
+    const stored = projectStudio(current);
+    const record =
+      sent && typeof sent === "object" && !Array.isArray(sent) ? (sent as Record<string, unknown>) : undefined;
+    const raw = record
+      ? {
+          ...record,
+          ...(record.flow === undefined ? { flow: stored.flow } : {}),
+          ...(record.analysis === undefined ? { analysis: stored.analysis } : {})
+        }
+      : sent;
     let studio = parseStudio(raw, backend);
     // A voice belongs to one backend: after a backend change, fall back to the new one's default voice.
     if (studio.error !== undefined && backend !== current.backend && raw && typeof raw === "object") {

@@ -3,6 +3,7 @@ import { useLanguage } from "../../components/LanguageToggle";
 import { STUDIO_LIMITS, toolUrlProblem } from "../../../shared/cloud-studio";
 import type { Conversation, ConversationSummary, ConversationTurn, WebhookDelivery, WebhookTestResult } from "../api";
 import { useSay } from "../hooks";
+import { AnalysisMarks, AnalysisSetting, AnalysisView } from "./AnalysisSetting";
 import type { StudioTabProps } from "./types";
 import "./history-tab.css";
 
@@ -317,10 +318,12 @@ export function HistoryTab(props: StudioTabProps) {
             {say("← 返回", "← Back")}
           </button>
           <span className="cxsHistoryBadge">{sourceLabel(open.source, say)}</span>
+          <AnalysisMarks sentiment={open.sentiment} success={open.success} />
           <span className="cxMuted">
             {formatWhen(open.startedAt, language)} · {formatDuration(open.seconds)}
           </span>
         </div>
+        {open.analysis ? <AnalysisView analysis={open.analysis} /> : null}
         {open.turns.length === 0 ? (
           <p className="cxMuted">{say("这段对话没有文字。", "This conversation has no words.")}</p>
         ) : (
@@ -372,6 +375,7 @@ export function HistoryTab(props: StudioTabProps) {
                   <span>{formatWhen(item.startedAt, language)}</span>
                   <span className="cxsHistoryDuration">{formatDuration(item.seconds)}</span>
                   <span className="cxsHistoryBadge">{sourceLabel(item.source, say)}</span>
+                  <AnalysisMarks sentiment={item.sentiment} success={item.success} />
                   {opening === item.id ? <span className="cxMuted">{say("打开中…", "Opening…")}</span> : null}
                 </span>
                 <span className="cxsHistoryPreview">{item.preview.trim() || say("（没有文字）", "(no words)")}</span>
@@ -382,6 +386,7 @@ export function HistoryTab(props: StudioTabProps) {
       ) : null}
       {setting}
       <WebhookSetting {...props} />
+      <AnalysisSetting {...props} />
     </div>
   );
 }

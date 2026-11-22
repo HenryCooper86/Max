@@ -79,8 +79,41 @@ their website in a few minutes, without writing a backend:
   record marked `"test": true`, and the tab shows how the last delivery went (kept in memory, so it is empty after
   the relay restarts). A server that is down holds each delivery for about a minute: past 20 waiting for one
   project, or 200 for all, a conversation is not sent, and the tab says so. The signing secret is on the Tools tab. Nothing is sent for a session in which nothing was said. Sending does not depend on keeping
-  transcripts: a project can do either, both or neither. The record has no analysis: Max Cloud projects have no
-  [conversation analysis](conversations.md#analysis) yet.
+  transcripts: a project can do either, both or neither.
+  A project can have each conversation analysed when it ends ("Analyse each conversation when it ends", in the same
+  tab): a summary, how the visitor felt, a pass or fail against a rule the owner writes, and up to 24 fields to find
+  in what was said (text, a number, yes or no, or one of a few choices). It is the relay's own
+  [conversation analysis](conversations.md#analysis), with the same checks on what the model answers. The result is
+  shown with the conversation, its pass or fail and mood are marks in the list, and the record sent to the project's
+  server carries it as `analysis`, or `analysisError` with the reason when there is none. That record is sent once,
+  after the analysis, so it arrives up to half a minute later than it would without one. A conversation is analysed
+  only when the visitor said something and the result has somewhere to go (kept transcripts or a server address).
+  See [who pays for an analysis](#who-pays-for-an-analysis).
+
+### Who pays for an analysis
+
+By default the analysis is one chat request to the project's own vendor with the project's own model key: a few
+thousand tokens per conversation, on the customer's bill, and the console says so where it is turned on. Nothing is
+taken from the prepaid balance for it.
+
+| Project backend | Endpoint                                                  | Model              | To use another                |
+| --------------- | --------------------------------------------------------- | ------------------ | ----------------------------- |
+| OpenAI          | `https://api.openai.com/v1`                               | `gpt-4o-mini`      | `CLOUD_ANALYSIS_MODEL_OPENAI` |
+| Gemini          | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-3.8-flash` | `CLOUD_ANALYSIS_MODEL_GEMINI` |
+| Grok            | `https://api.x.ai/v1`                                     | `grok-4.3`         | `CLOUD_ANALYSIS_MODEL_GROK`   |
+
+To run every project's analysis on one model of your own instead, set `CLOUD_ANALYSIS_LLM_BASE_URL` (any
+OpenAI-compatible chat endpoint, like `http://127.0.0.1:11434/v1` for Ollama), `CLOUD_ANALYSIS_LLM_MODEL` and, when
+the endpoint wants one, `CLOUD_ANALYSIS_LLM_API_KEY`. That endpoint is never sent a customer's key, and it is then
+you who pays and you who are sent the transcripts.
+
+At most 24 analyses run at once; a conversation that ends past that is kept and sent without one, with the reason.
+An analysis that fails (a key the vendor refuses, an answer that is not what was asked for) is not tried again
+later: the reason is kept with the conversation, without the vendor's own words.
+
+This was run end to end with a local model through `CLOUD_ANALYSIS_LLM_BASE_URL` (`qwen3:8b` on Ollama: about seven
+seconds for a six-line conversation and four fields). The three vendor endpoints and model names are from the
+vendors' documentation and were not called.
 
 ## How customers connect
 

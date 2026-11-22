@@ -3,6 +3,7 @@
 // tests can inject both.
 
 import type { FlowStep } from "../lib/flow";
+import type { AnalysisResult } from "../../shared/analysis";
 import type { ProjectStudio } from "../../shared/cloud-studio";
 
 export type { ProjectStudio } from "../../shared/cloud-studio";
@@ -54,7 +55,12 @@ export type ConversationSummary = {
   seconds: number;
   source: "test" | "embed" | "api" | string;
   preview: string;
+  /** From the conversation's analysis, when it has one. */
+  sentiment?: AnalysisResult["sentiment"];
+  success?: boolean;
 };
+/** What the project's analysis made of a conversation, or why it made nothing. */
+export type ConversationAnalysis = { at: number; result?: AnalysisResult; error?: string };
 export type ConversationTurn = {
   at: number;
   speaker: "user" | "agent" | "tool";
@@ -62,7 +68,11 @@ export type ConversationTurn = {
   ok?: boolean;
   ms?: number;
 };
-export type Conversation = ConversationSummary & { projectId: string; turns: ConversationTurn[] };
+export type Conversation = ConversationSummary & {
+  projectId: string;
+  turns: ConversationTurn[];
+  analysis?: ConversationAnalysis;
+};
 /** A project's flow as the flow builder edits it: the steps, the starting step first, and the tools a step can name. */
 export type ProjectFlow = { ok: true; steps: FlowStep[]; tools: string[]; problems: string[] };
 /** How the last delivery of a conversation to the project's server went. */

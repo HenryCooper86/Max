@@ -136,6 +136,7 @@ In rough order of how much they would matter to most users:
 8. **WebRTC in the native iOS and Android clients.** The web SDK has it; the native clients use the WebSocket.
 9. **Avatars.**
 
-Conversation analysis, traces and phone calls currently apply to the relay's own assistant. Max Cloud projects have
-their own conversation history in the console, a [conversation webhook](cloud.md#the-studio) of their own and the
-same [flows](cloud.md#the-studio) of several agents, drawn in the console, and do not have the others yet.
+Traces and phone calls currently apply to the relay's own assistant. Max Cloud projects have their own conversation
+history in the console, a [conversation webhook](cloud.md#the-studio) of their own, the same
+[conversation analysis](cloud.md#who-pays-for-an-analysis) (run with the project's own model key) and the same
+[flows](cloud.md#the-studio) of several agents, drawn in the console, and do not have the others yet.

@@ -105,6 +105,14 @@
 - iOS and Android: a picture for the assistant. When the backend takes pictures, the typing field has a button
   that opens the system photo picker and sends the photo as `image.input`, upright, scaled and small enough for the
   relay, with what is typed as one turn.
+- Max Cloud: conversation analysis for projects. A project can have each conversation analysed when it ends: a
+  summary, how the visitor felt, a pass or fail against the owner's own rule, and fields to find in what was said.
+  The result is shown with the conversation in the console and sent with it to the project's server. It runs on the
+  project's own vendor with its own model key, or on one model the operator names
+  (`CLOUD_ANALYSIS_LLM_BASE_URL`). The cloud database gains a column by itself. Run for real with a local model;
+  the vendor endpoints are built to their documentation. See
+  [who pays for an analysis](docs/cloud.md#who-pays-for-an-analysis).
+- Conversation analysis asks a model server again without JSON mode when it refuses `response_format` (HTTP 400).
 - Max Cloud: a conversation webhook per project. Each conversation is POSTed to the project's own server when it
   ends, signed with the project's signing secret, with three more tries when it fails, a test request in the
   console and the outcome of the last delivery. See [the Studio](docs/cloud.md#the-studio).

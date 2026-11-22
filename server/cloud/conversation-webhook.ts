@@ -8,6 +8,7 @@
 // the address that was checked, no redirects. Up to four attempts.
 
 import { randomUUID } from "node:crypto";
+import type { AnalysisResult } from "../../shared/analysis";
 import { deliverConversation, type ConversationEndedPayload } from "../conversation-webhook";
 import { createLogger } from "../logger";
 import { signatureHeaders } from "../tools/webhook";
@@ -52,6 +53,9 @@ type Ended = Target & {
   endedAt: number;
   seconds: number;
   turns: ConversationTurn[];
+  /** What the project's analysis made of the conversation, or why it made nothing. */
+  analysis?: AnalysisResult;
+  analysisError?: string;
 };
 
 function payloadOf(input: Omit<Ended, "url" | "secret">, test = false): ProjectConversationPayload {
@@ -69,7 +73,9 @@ function payloadOf(input: Omit<Ended, "url" | "secret">, test = false): ProjectC
       endedAt: input.endedAt,
       seconds: Math.max(0, Math.round(input.seconds))
     },
-    transcript: input.turns
+    transcript: input.turns,
+    ...(input.analysis ? { analysis: input.analysis } : {}),
+    ...(input.analysisError ? { analysisError: input.analysisError } : {})
   };
 }
 

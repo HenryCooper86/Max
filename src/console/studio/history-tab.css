@@ -158,3 +158,85 @@
   gap: 8px;
   font-size: var(--fs-15);
 }
+
+.cxsHistoryBadge.good {
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+}
+
+.cxsHistoryBadge.bad {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
+.cxsAnalysis {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.cxsAnalysisChecks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+
+.cxsAnalysisTitle {
+  font-size: var(--fs-15);
+}
+
+.cxsAnalysisField {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+}
+
+.cxsAnalysisWide {
+  grid-column: 1 / -1;
+}
+
+.cxsAnalysisActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+
+.cxsAnalysisResult {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+  overflow-wrap: anywhere;
+}
+
+.cxsAnalysisResult p {
+  margin: 0;
+  font-size: var(--fs-15);
+}
+
+.cxsAnalysisData {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.cxsAnalysisData div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+}
+
+.cxsAnalysisData dt {
+  color: var(--text-2);
+  font: var(--fs-13) / 1.5 var(--font-mono);
+}
+
+.cxsAnalysisData dd {
+  margin: 0;
+  font-size: var(--fs-15);
+}

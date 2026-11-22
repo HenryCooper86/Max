@@ -1,4 +1,7 @@
+import { analysisConfigFrom, type AnalysisConfig, type AnalysisField, type AnalysisResult } from "../shared/analysis";
 import type { ConversationTurn } from "./cloud/conversations";
+
+export { analysisConfigFrom, type AnalysisConfig, type AnalysisResult };
 
 /**
  * Post-conversation analysis: once a call ends, one chat-model request turns
@@ -13,41 +16,8 @@ import type { ConversationTurn } from "./cloud/conversations";
  * validated and coerced to the configured shape, and anything else is dropped.
  */
 
-type AnalysisField = {
-  name: string;
-  type: "string" | "number" | "boolean" | "enum";
-  /** Tells the model what to extract. */
-  description: string;
-  /** Required for enum: 2..20 distinct values. */
-  options?: string[];
-};
-
-export type AnalysisConfig = {
-  summary: boolean;
-  sentiment: boolean;
-  /** When set, the result carries `success`. */
-  successCriteria?: string;
-  fields: AnalysisField[];
-};
-
-export type AnalysisResult = {
-  summary?: string;
-  sentiment?: "positive" | "neutral" | "negative";
-  success?: boolean;
-  successReason?: string;
-  /** One entry per configured field; null when the conversation does not say. */
-  data?: Record<string, string | number | boolean | null>;
-};
-
 export type AnalysisModel = { baseUrl: string; apiKey: string; model: string };
 
-const FIELD_NAME = /^[a-zA-Z_][a-zA-Z0-9_]{0,47}$/;
-const FIELD_TYPES = ["string", "number", "boolean", "enum"] as const;
-const MAX_FIELDS = 24;
-const MAX_DESCRIPTION = 400;
-const MAX_CRITERIA = 1000;
-const MAX_OPTIONS = 20;
-const MAX_OPTION = 80;
 const MAX_SUMMARY = 1200;
 const MAX_REASON = 300;
 const MAX_STRING_VALUE = 500;
@@ -57,79 +27,6 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function fieldFrom(raw: unknown, index: number): { field?: AnalysisField; problem?: string } {
-  const label = `analysis.fields[${index}]`;
-  if (!isRecord(raw)) return { problem: `${label} must be an object` };
-  const { name, type, description, options } = raw;
-  if (typeof name !== "string" || !FIELD_NAME.test(name))
-    return {
-      problem: `${label}.name must be letters, digits and underscores, starting with a letter, at most 48 characters`
-    };
-  if (typeof type !== "string" || !FIELD_TYPES.includes(type as (typeof FIELD_TYPES)[number]))
-    return { problem: `analysis field ${name}: type must be string, number, boolean or enum` };
-  if (typeof description !== "string" || !description.trim())
-    return { problem: `analysis field ${name}: needs a description that says what to extract` };
-  if (description.trim().length > MAX_DESCRIPTION)
-    return { problem: `analysis field ${name}: description is longer than ${MAX_DESCRIPTION} characters` };
-  const field: AnalysisField = {
-    name,
-    type: type as AnalysisField["type"],
-    description: description.trim()
-  };
-  if (type === "enum") {
-    if (!Array.isArray(options) || options.some((option) => typeof option !== "string" || !option.trim()))
-      return { problem: `analysis field ${name}: enum needs options, a list of 2 to ${MAX_OPTIONS} strings` };
-    const list = options.map((option: string) => option.trim());
-    if (list.length < 2 || list.length > MAX_OPTIONS)
-      return { problem: `analysis field ${name}: enum needs 2 to ${MAX_OPTIONS} options` };
-    if (list.some((option) => option.length > MAX_OPTION))
-      return { problem: `analysis field ${name}: an option is longer than ${MAX_OPTION} characters` };
-    if (new Set(list).size !== list.length) return { problem: `analysis field ${name}: options must be distinct` };
-    field.options = list;
-  } else if (options !== undefined) {
-    return { problem: `analysis field ${name}: options are only for enum fields` };
-  }
-  return { field };
-}
-
-/** Parses the `analysis` key of assistant.config.json. `true` means { summary: true }. Absent/false → {}. */
-export function analysisConfigFrom(raw: unknown): { config?: AnalysisConfig; problem?: string } {
-  if (raw === undefined || raw === null || raw === false) return {};
-  if (raw === true) return { config: { summary: true, sentiment: false, fields: [] } };
-  if (!isRecord(raw)) return { problem: "analysis must be true or an object" };
-  for (const key of ["summary", "sentiment"] as const) {
-    if (raw[key] !== undefined && typeof raw[key] !== "boolean")
-      return { problem: `analysis.${key} must be true or false` };
-  }
-  let successCriteria: string | undefined;
-  if (raw.successCriteria !== undefined) {
-    if (typeof raw.successCriteria !== "string") return { problem: "analysis.successCriteria must be a string" };
-    successCriteria = raw.successCriteria.trim() || undefined;
-    if (successCriteria && successCriteria.length > MAX_CRITERIA)
-      return { problem: `analysis.successCriteria is longer than ${MAX_CRITERIA} characters` };
-  }
-  const fields: AnalysisField[] = [];
-  if (raw.fields !== undefined) {
-    if (!Array.isArray(raw.fields)) return { problem: "analysis.fields must be a list" };
-    if (raw.fields.length > MAX_FIELDS) return { problem: `analysis.fields has more than ${MAX_FIELDS} entries` };
-    for (const [index, item] of raw.fields.entries()) {
-      const { field, problem } = fieldFrom(item, index);
-      if (!field) return { problem };
-      if (fields.some((other) => other.name === field.name))
-        return { problem: `analysis.fields: ${field.name} is listed twice` };
-      fields.push(field);
-    }
-  }
-  return {
-    config: {
-      summary: raw.summary !== false,
-      sentiment: raw.sentiment === true,
-      ...(successCriteria ? { successCriteria } : {}),
-      fields
-    }
-  };
 }
 
 /**
@@ -353,15 +250,19 @@ export async function analyzeConversation(
 ): Promise<AnalysisResult> {
   if (!turns.length) return config.fields.length ? { data: dataFrom({}, config.fields) } : {};
   const request = options.request ?? fetch;
-  const body = JSON.stringify({
-    model: model.model,
-    temperature: 0,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: systemPrompt(config, options.language) },
-      { role: "user", content: transcriptMessage(turns) }
-    ]
-  });
+  // Asked for as JSON in the request too, where the server takes that: one that does not know
+  // `response_format` answers 400, and is asked again with the instructions alone.
+  let jsonMode = true;
+  const bodyOf = () =>
+    JSON.stringify({
+      model: model.model,
+      temperature: 0,
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+      messages: [
+        { role: "system", content: systemPrompt(config, options.language) },
+        { role: "user", content: transcriptMessage(turns) }
+      ]
+    });
   const url = `${model.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
@@ -377,10 +278,15 @@ export async function analyzeConversation(
           "content-type": "application/json",
           ...(model.apiKey ? { authorization: `Bearer ${model.apiKey}` } : {})
         },
-        body,
+        body: bodyOf(),
         signal,
         redirect: "error"
       });
+      if (response.status === 400 && jsonMode && attempt === 1) {
+        await response.body?.cancel().catch(() => undefined);
+        jsonMode = false;
+        continue;
+      }
       if (!response.ok) throw new HttpFailure(response.status);
       content = contentOf(await response.json().catch(() => undefined));
     } catch (error) {

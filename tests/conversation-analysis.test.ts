@@ -371,6 +371,21 @@ describe("analyzeConversation replies", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("asks again without JSON mode when the server refuses the request", async () => {
+    const request = mockRequest(
+      new Response("unknown field response_format", { status: 400 }),
+      chat('{"summary":"plain"}')
+    );
+    expect(await analyzeConversation(turns, summaryOnly, model, { request })).toEqual({ summary: "plain" });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(sent(request, 0).body.response_format).toEqual({ type: "json_object" });
+    expect(sent(request, 1).body).not.toHaveProperty("response_format");
+    // A request that is refused either way is given up on.
+    const refused = mockRequest(new Response("no", { status: 400 }), new Response("no", { status: 400 }));
+    await expect(analyzeConversation(turns, summaryOnly, model, { request: refused })).rejects.toThrow("HTTP 400");
+    expect(refused).toHaveBeenCalledTimes(2);
+  });
+
   it("times out", async () => {
     const request = vi.fn(
       (_url: unknown, init?: RequestInit) =>

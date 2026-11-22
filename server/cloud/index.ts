@@ -11,9 +11,10 @@ import { liveProject, liveProjectByKeyHash } from "./store";
 
 export { cloudEnabled } from "./context";
 export { registerCloudPaymentRoutes, registerCloudRoutes, registerEmbedRoutes } from "./routes";
-export { conversationRecorder, pruneOldConversations, saveConversation } from "./conversations";
+export { conversationRecorder, pruneOldConversations } from "./conversations";
 export { projectServerTools } from "./tools";
 export { projectWebhooks } from "./conversation-webhook";
+export { cloudConversationEnded } from "./conversation-end";
 export {
   createInvite as createCloudInvite,
   listInvites as listCloudInvites,

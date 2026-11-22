@@ -78,9 +78,9 @@ import {
   projectForApiKey,
   projectLimitRefusal,
   projectWebhooks,
+  cloudConversationEnded,
   pruneOldConversations,
   projectServerTools,
-  saveConversation,
   projectKeyValid,
   projectRuntime,
   recoverCloudSessions,
@@ -2140,38 +2140,16 @@ wss.on("connection", (client, request) => {
     const endedAt = usage?.endedAt ?? Date.now();
     const billedSeconds = cloudSession?.close(endedAt);
     if (cloudProject && recorder) {
-      try {
-        if (runtime?.studio.keepConversations) {
-          saveConversation({
-            customerId: cloudProject.customerId,
-            projectId: cloudProject.projectId,
-            source: cloudProject.source ?? "api",
-            seconds: usage?.seconds ?? 0,
-            recorder
-          });
-        }
-        // The project as it is now: an address changed or taken away while this conversation ran is the one
-        // that counts. (A project that was deleted has none.)
-        const current = projectRuntime(cloudProject.projectId);
-        if (current?.studio.conversationWebhook) {
-          projectWebhooks.ended({
-            projectId: cloudProject.projectId,
-            url: current.studio.conversationWebhook,
-            secret: current.webhookSecret,
-            backend: current.backend,
-            source: cloudProject.source ?? "api",
-            sessionId: usageSessionId,
-            startedAt: recorder.startedAt,
-            endedAt,
-            seconds: usage?.seconds ?? 0,
-            turns: recorder.turns()
-          });
-        }
-      } catch (error) {
-        sessionLog.warn("conversation could not be saved", {
-          message: error instanceof Error ? error.message : String(error)
-        });
-      }
+      cloudConversationEnded({
+        customerId: cloudProject.customerId,
+        projectId: cloudProject.projectId,
+        source: cloudProject.source ?? "api",
+        sessionId: usageSessionId,
+        seconds: usage?.seconds ?? 0,
+        endedAt,
+        keep: Boolean(runtime?.studio.keepConversations),
+        recorder
+      });
     }
     if (cloudProject && billedSeconds !== undefined) {
       try {

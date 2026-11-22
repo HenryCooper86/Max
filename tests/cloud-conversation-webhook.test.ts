@@ -154,6 +154,45 @@ describe("a Max Cloud project's conversation webhook", () => {
     await webhooks.drain(1_000);
   });
 
+  it("holds only so many conversations of all projects at once", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let asked = 0;
+    const request = (async () => {
+      asked += 1;
+      await held;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    const webhooks = createProjectWebhooks({ request, sleep });
+    for (let project = 0; project < 25; project += 1) {
+      for (let index = 0; index < 10; index += 1) webhooks.ended(ended({ projectId: `prj_${project}` }));
+    }
+    await Promise.resolve();
+    expect(asked).toBe(200);
+    expect(webhooks.last("prj_24")).toMatchObject({
+      ok: false,
+      attempts: 0,
+      error: expect.stringContaining("too many")
+    });
+    release();
+    await webhooks.drain(1_000);
+  });
+
+  it("does not wait out a pause between tries when the relay stops", async () => {
+    const { sent, request } = receiver([500]);
+    // The real pauses: one second after the first failure.
+    const webhooks = createProjectWebhooks({ request });
+    webhooks.ended(ended());
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const began = Date.now();
+    await webhooks.drain(20);
+    await vi.waitFor(() =>
+      expect(webhooks.last("prj_1")).toMatchObject({ ok: false, error: "delivery was cancelled" })
+    );
+    expect(Date.now() - began).toBeLessThan(500);
+    expect(sent).toHaveLength(1);
+  });
+
   it("gives up on what is still under way when the relay stops", async () => {
     const request = ((_input: unknown, init: RequestInit = {}) =>
       new Promise<Response>((_resolve, reject) => {
@@ -177,6 +216,20 @@ describe("a Max Cloud project's conversation webhook", () => {
     expect(payload).toMatchObject({ type: "conversation.ended", test: true, project: { id: "prj_1" }, source: "test" });
     expect(payload.transcript.map((turn) => turn.speaker)).toEqual(["agent", "user", "tool", "agent"]);
     expect(sent[0]!.headers.get("x-voice-agent-signature")).toMatch(/^sha256=[0-9a-f]{64}$/);
+    // The header a receiver drops repeats by is the record's own id, as in a real delivery.
+    expect(sent[0]!.headers.get("x-voice-agent-delivery")).toBe(payload.id);
+    // A test that cannot be signed does not go out and say all is well: no real delivery would.
+    const unsigned = receiver([200]);
+    expect(
+      await createProjectWebhooks({ request: unsigned.request, sleep }).test({ ...target, secret: undefined })
+    ).toMatchObject({ ok: false, error: "the signing secret could not be read" });
+    expect(unsigned.sent).toEqual([]);
+    // A server that is too slow is said to be that.
+    const slow = receiver([new Error("cancelled")]);
+    expect(await createProjectWebhooks({ request: slow.request, sleep }).test(target)).toMatchObject({
+      ok: false,
+      error: "your server did not answer within 10 seconds"
+    });
     // A test is no delivery: it does not stand in for the last real one.
     expect(webhooks.last("prj_1")).toBeUndefined();
     // What went wrong is said in words, once, with no second try.

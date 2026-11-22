@@ -17,7 +17,7 @@ import {
 } from "../shared/cloud-studio";
 import { authorizeUpgrade, resetAuthRateLimit } from "../server/auth";
 import { projectAssistantProfile } from "../server/assistant";
-import { projectRuntime, registerEmbedRoutes } from "../server/cloud";
+import { cloudConversationEnded, projectRuntime, registerEmbedRoutes } from "../server/cloud";
 import { setCloudClock } from "../server/cloud/context";
 import {
   conversationRecorder,
@@ -273,6 +273,84 @@ describe("projects with Studio settings", () => {
       project(owner, { name: "Second", studio: { conversationWebhook: "https://shop.example.com/hook" } })
         .hasWebhookSecret
     ).toBe(true);
+  });
+
+  it("keeps a finished conversation, sends it to the project's server, both or neither", async () => {
+    const owner = await customer();
+    const created = project(owner, { name: "Shop", studio: { keepConversations: false } });
+    const sent: Array<Record<string, unknown>> = [];
+    const webhooks = { ended: (input: Record<string, unknown>) => void sent.push(input) };
+    const finish = (keep: boolean, projectId = created.id) => {
+      const recorder = conversationRecorder(() => clock);
+      recorder.event({ type: "transcript", speaker: "rider", text: "Where is my order?", final: true, turnId: "t1" });
+      cloudConversationEnded(
+        {
+          customerId: owner,
+          projectId,
+          source: "embed",
+          sessionId: "sess-1",
+          seconds: 12,
+          endedAt: clock + 12_000,
+          keep,
+          recorder
+        },
+        webhooks as never
+      );
+    };
+    const kept = () => {
+      const listed = listConversations(owner, created.id);
+      return listed.ok ? listed.value.conversations.length : -1;
+    };
+    // Neither.
+    finish(false);
+    expect([kept(), sent.length]).toEqual([0, 0]);
+    // Sent and not kept: what was said is nowhere on the relay afterwards.
+    patch(owner, created.id, { studio: { conversationWebhook: "https://shop.example.com/hook" } });
+    finish(false);
+    expect([kept(), sent.length]).toEqual([0, 1]);
+    expect(sent[0]).toMatchObject({
+      projectId: created.id,
+      url: "https://shop.example.com/hook",
+      secret: expect.stringMatching(/^whsec_/),
+      backend: "openai",
+      source: "embed",
+      sessionId: "sess-1",
+      seconds: 12,
+      turns: [{ speaker: "user", text: "Where is my order?" }]
+    });
+    // Both.
+    finish(true);
+    expect([kept(), sent.length]).toEqual([1, 2]);
+    // An address taken away while the conversation ran is no longer sent to.
+    patch(owner, created.id, { studio: { conversationWebhook: "" } });
+    finish(true);
+    expect([kept(), sent.length]).toEqual([2, 2]);
+    // A webhook that throws does not undo the history, and a deleted project has neither.
+    patch(owner, created.id, { studio: { conversationWebhook: "https://shop.example.com/hook" } });
+    const failing = {
+      ended: () => {
+        throw new Error("no room");
+      }
+    };
+    const recorder = conversationRecorder(() => clock);
+    recorder.event({ type: "transcript", speaker: "rider", text: "Hello?", final: true, turnId: "t1" });
+    cloudConversationEnded(
+      {
+        customerId: owner,
+        projectId: created.id,
+        source: "api",
+        sessionId: "sess-2",
+        seconds: 3,
+        endedAt: clock,
+        keep: true,
+        recorder
+      },
+      failing as never
+    );
+    expect(kept()).toBe(3);
+    expect(deleteProject(owner, created.id).ok).toBe(true);
+    finish(true);
+    expect(sent.length).toBe(2);
   });
 
   it("falls back to the new backend's default voice when the backend changes", async () => {

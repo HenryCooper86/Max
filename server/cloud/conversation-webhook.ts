@@ -19,6 +19,8 @@ const log = createLogger("cloud");
 
 /** Deliveries of one project under way at a time: a server that is down holds each for about a minute. */
 const MAX_WAITING_PER_PROJECT = 20;
+/** And of all projects together: each holds a conversation in memory while it waits. */
+const MAX_WAITING = 200;
 /** Projects whose last delivery is remembered. */
 const MAX_REMEMBERED = 5_000;
 
@@ -74,6 +76,10 @@ function payloadOf(input: Omit<Ended, "url" | "secret">, test = false): ProjectC
 /** A failure of one request in words for the person whose server it is. */
 function inWords(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  // The request was given up on because its time was up: a server that answers too slowly.
+  if (message === "cancelled" || (error instanceof Error && /^(Abort|Timeout)Error$/.test(error.name))) {
+    return "your server did not answer within 10 seconds";
+  }
   return message
     .replace(/^tool address /, "the address ")
     .replace("the tool did not answer", "your server did not answer")
@@ -89,6 +95,19 @@ export function createProjectWebhooks(
   const pending = new Set<Promise<void>>();
   const last = new Map<string, WebhookDelivery>();
   const stopping = new AbortController();
+  // The wait before another try ends when the relay stops, and does not keep the process alive.
+  const sleep =
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(done, ms);
+        timer.unref?.();
+        stopping.signal.addEventListener("abort", done, { once: true });
+      }));
 
   function remember(projectId: string, delivery: WebhookDelivery): void {
     last.delete(projectId);
@@ -118,15 +137,20 @@ export function createProjectWebhooks(
         return;
       }
       const under = waiting.get(input.projectId) ?? 0;
-      if (under >= MAX_WAITING_PER_PROJECT) {
-        log.warn("a conversation was not sent to a project's server: too many are waiting on it", {
-          projectId: input.projectId
+      if (under >= MAX_WAITING_PER_PROJECT || pending.size >= MAX_WAITING) {
+        log.warn("a conversation was not sent to a project's server: too many are waiting", {
+          projectId: input.projectId,
+          ofTheProject: under,
+          inAll: pending.size
         });
         remember(input.projectId, {
           at: clock(),
           ok: false,
           attempts: 0,
-          error: `not sent: ${MAX_WAITING_PER_PROJECT} deliveries were already waiting on your server`
+          error:
+            under >= MAX_WAITING_PER_PROJECT
+              ? `not sent: ${MAX_WAITING_PER_PROJECT} deliveries were already waiting on your server`
+              : "not sent: too many deliveries were waiting"
         });
         return;
       }
@@ -150,7 +174,7 @@ export function createProjectWebhooks(
           request: asking,
           now: clock,
           signal: stopping.signal,
-          ...(options.sleep ? { sleep: options.sleep } : {})
+          sleep
         }
       )
         .then((found) => {
@@ -178,34 +202,35 @@ export function createProjectWebhooks(
     async test(target: Target): Promise<{ ok: boolean; status?: number; error?: string; ms: number }> {
       const started = Date.now();
       const at = clock();
-      const body = JSON.stringify(
-        payloadOf(
-          {
-            projectId: target.projectId,
-            backend: "test",
-            source: "test",
-            sessionId: "console-test",
-            startedAt: at - 42_000,
-            endedAt: at,
-            seconds: 42,
-            turns: [
-              { at: at - 40_000, speaker: "agent", text: "Hello! How can I help?" },
-              { at: at - 34_000, speaker: "user", text: "Where is my order A-1042?" },
-              { at: at - 32_000, speaker: "tool", text: "check_order", ok: true, ms: 412 },
-              { at: at - 30_000, speaker: "agent", text: "It shipped yesterday and arrives on Friday." }
-            ]
-          },
-          true
-        )
+      // A real delivery is never sent unsigned, and a test that says "it works" must be one of those.
+      if (!target.secret) return { ok: false, error: "the signing secret could not be read", ms: 0 };
+      const sample = payloadOf(
+        {
+          projectId: target.projectId,
+          backend: "test",
+          source: "test",
+          sessionId: "console-test",
+          startedAt: at - 42_000,
+          endedAt: at,
+          seconds: 42,
+          turns: [
+            { at: at - 40_000, speaker: "agent", text: "Hello! How can I help?" },
+            { at: at - 34_000, speaker: "user", text: "Where is my order A-1042?" },
+            { at: at - 32_000, speaker: "tool", text: "check_order", ok: true, ms: 412 },
+            { at: at - 30_000, speaker: "agent", text: "It shipped yesterday and arrives on Friday." }
+          ]
+        },
+        true
       );
+      const body = JSON.stringify(sample);
       try {
         const response = await request(target.url, {
           method: "POST",
           headers: {
             "content-type": "application/json",
             "x-voice-agent-event": "conversation.ended",
-            "x-voice-agent-delivery": randomUUID(),
-            ...(target.secret ? signatureHeaders(body, target.secret, clock()) : {})
+            "x-voice-agent-delivery": sample.id,
+            ...signatureHeaders(body, target.secret, clock())
           },
           body,
           signal: AbortSignal.timeout(11_000),

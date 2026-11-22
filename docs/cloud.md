@@ -67,7 +67,8 @@ their website in a few minutes, without writing a backend:
   or `test`), signed with the project's signing secret, to a public https address by the rules of a tool call. A
   delivery that fails is tried three more times, after 1, 5 and 25 seconds. "Send test request" sends one sample
   record marked `"test": true`, and the tab shows how the last delivery went (kept in memory, so it is empty after
-  the relay restarts). Nothing is sent for a session in which nothing was said. Sending does not depend on keeping
+  the relay restarts). A server that is down holds each delivery for about a minute: past 20 waiting for one
+  project, or 200 for all, a conversation is not sent, and the tab says so. The signing secret is on the Tools tab. Nothing is sent for a session in which nothing was said. Sending does not depend on keeping
   transcripts: a project can do either, both or neither. The record has no analysis: Max Cloud projects have no
   [conversation analysis](conversations.md#analysis) yet.
 

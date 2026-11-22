@@ -101,4 +101,40 @@ describe("ToolsTab", () => {
     expect(html).toMatch(/Signing secret|签名密钥/);
     expect(html).toMatch(/What your server receives|你的服务器会收到什么/);
   });
+
+  it("shows the signing secret of a project that has no tools and sends its conversations", () => {
+    const render = (hasWebhookSecret: boolean) => {
+      const project = {
+        id: "p1",
+        name: "Demo",
+        backend: "openai",
+        hasWebhookSecret,
+        studio: {
+          ...structuredClone(DEFAULT_STUDIO),
+          conversationWebhook: hasWebhookSecret ? "https://a.example.com/h" : ""
+        }
+      } as unknown as Project;
+      return renderToStaticMarkup(
+        createElement(
+          LanguageProvider,
+          null,
+          createElement(ToolsTab, {
+            session: { api: {}, token: "t", fail: () => "x" } as never,
+            project,
+            draft: draftFromProject(project),
+            update: () => {},
+            updateStudio: () => {},
+            dirty: false,
+            save: async () => true,
+            origin: "https://max.example",
+            goTo: () => {},
+            onProjectChanged: () => {}
+          })
+        )
+      );
+    };
+    expect(render(true)).toMatch(/Signing secret|签名密钥/);
+    // A project with neither has no secret, and is not shown an empty box for one.
+    expect(render(false)).not.toMatch(/Signing secret|签名密钥/);
+  });
 });

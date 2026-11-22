@@ -106,9 +106,12 @@ function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioT
   const saved = project.studio.conversationWebhook ?? "";
   const unsaved = url.trim() !== saved;
   const problem = url.trim() ? toolUrlProblem(url.trim()) : undefined;
-  const [last, setLast] = useState<WebhookDelivery | null>(null);
+  // Each with the address it is about: what is known of one address says nothing of the next.
+  const [last, setLast] = useState<{ of: string; delivery: WebhookDelivery | null } | null>(null);
   const [testing, setTesting] = useState(false);
-  const [result, setResult] = useState<WebhookTestResult | null>(null);
+  const [tested, setTested] = useState<{ of: string; result: WebhookTestResult } | null>(null);
+  const result = tested?.of === saved ? tested.result : null;
+  const delivery = last?.of === saved ? last.delivery : null;
   const [error, setError] = useState("");
   const alive = useRef(true);
   const sessionRef = useRef(session);
@@ -121,7 +124,7 @@ function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioT
       api
         .conversationWebhook(token, project.id)
         .then((answer) => {
-          if (alive.current) setLast(answer.last);
+          if (alive.current) setLast({ of: saved, delivery: answer.last });
         })
         // The address works without this line: an older relay has no such route.
         .catch(() => undefined);
@@ -133,11 +136,11 @@ function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioT
 
   async function test() {
     setTesting(true);
-    setResult(null);
+    setTested(null);
     setError("");
     try {
       const answer = await session.api.testConversationWebhook(session.token, project.id);
-      if (alive.current) setResult(answer);
+      if (alive.current) setTested({ of: saved, result: answer });
     } catch (caught) {
       if (alive.current) setError(session.fail(caught));
     } finally {
@@ -207,10 +210,10 @@ function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioT
               : say(`测试没有送达：${result.error ?? ""}`, `The test did not arrive: ${result.error ?? ""}`)}
           </p>
         ) : null}
-        {saved && last && !unsaved ? (
-          <p className={last.ok ? "cxMuted" : "cxWarn"}>
+        {saved && delivery && !unsaved ? (
+          <p className={delivery.ok ? "cxMuted" : "cxWarn"}>
             {say("最近一次对话：", "Last conversation: ")}
-            {deliveryLine(last, say)} · {formatWhen(last.at, language)}
+            {deliveryLine(delivery, say)} · {formatWhen(delivery.at, language)}
           </p>
         ) : null}
       </div>

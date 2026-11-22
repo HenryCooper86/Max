@@ -19,6 +19,7 @@ import {
   login,
   logout,
   patchProject,
+  projectStudioReadable,
   projectStudio,
   projectWebhookSecret,
   publicCustomer,
@@ -245,8 +246,20 @@ export function registerCloudRoutes(app: express.Express): void {
         res.status(404).json({ error: "Project not found." });
         return;
       }
+      const steps = body(req).steps;
+      if (!Array.isArray(steps)) {
+        res.status(400).json({ error: "The flow must be a list of steps." });
+        return;
+      }
+      // What is stored is written back with the flow: not when it can no longer be read as it was saved.
+      if (!projectStudioReadable(row)) {
+        res.status(409).json({
+          error: "This project's settings have to be saved again in the Studio before its flow can be changed."
+        });
+        return;
+      }
       // Saved like any other setting, with the rest of the project's settings as they are.
-      const saved = patchProject(customer.id, row.id, { studio: { ...projectStudio(row), flow: body(req).steps } });
+      const saved = patchProject(customer.id, row.id, { studio: { ...projectStudio(row), flow: steps } });
       if (!saved.ok) {
         send(res, saved);
         return;

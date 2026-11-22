@@ -214,6 +214,19 @@ export function logout(token: string): void {
 
 // --- projects -------------------------------------------------------------------
 
+/**
+ * Whether a project's stored settings can still be read as they were saved.
+ * False after a release that no longer takes something in them: reading them
+ * then gives the defaults, and writing those back would lose the rest.
+ */
+export function projectStudioReadable(row: Pick<ProjectRow, "studio" | "backend">): boolean {
+  try {
+    return parseStudio(JSON.parse(row.studio || "{}"), row.backend).value !== undefined;
+  } catch {
+    return false;
+  }
+}
+
 /** A project's stored Studio settings; defaults when the stored JSON is missing or no longer valid. */
 export function projectStudio(row: Pick<ProjectRow, "studio" | "backend">): ProjectStudio {
   let raw: unknown;
@@ -361,7 +374,13 @@ export function patchProject(
   }
   const backend = changes.backend ?? current.backend;
   if (body.studio !== undefined || backend !== current.backend) {
-    const raw = body.studio !== undefined ? body.studio : projectStudio(current);
+    const sent = body.studio !== undefined ? body.studio : projectStudio(current);
+    // A save of the settings that says nothing of the flow leaves the flow as it is: the flow has a save of
+    // its own, and a Studio opened before that one must not put an older flow back, or none.
+    const raw =
+      sent && typeof sent === "object" && !Array.isArray(sent) && (sent as Record<string, unknown>).flow === undefined
+        ? { ...(sent as object), flow: projectStudio(current).flow }
+        : sent;
     let studio = parseStudio(raw, backend);
     // A voice belongs to one backend: after a backend change, fall back to the new one's default voice.
     if (studio.error !== undefined && backend !== current.backend && raw && typeof raw === "object") {

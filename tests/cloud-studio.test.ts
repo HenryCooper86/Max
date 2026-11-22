@@ -410,8 +410,21 @@ describe("projects with Studio settings", () => {
     expect(created.studio.flow).toEqual([]);
     const saved = patch(owner, created.id, { modelKey: "sk-test", studio: { tools: [ORDER_TOOL], flow: FLOW } });
     expect(saved.studio.flow).toEqual(FLOW);
-    // A later save of something else leaves it as it is.
+    // A later save of something else leaves it as it is: with the flow sent along, and without.
     expect(patch(owner, created.id, { studio: { ...saved.studio, voice: "cedar" } }).studio.flow).toEqual(FLOW);
+    const settings: Record<string, unknown> = { ...saved.studio };
+    delete settings.flow;
+    const later = patch(owner, created.id, { studio: { ...settings, voice: "marin" } });
+    expect(later.studio).toMatchObject({ voice: "marin", flow: FLOW });
+    expect(patch(owner, created.id, { greeting: "Hello." }).studio.flow).toEqual(FLOW);
+    // Taking a tool away under the flow is refused the same way when the flow is not sent.
+    expect(patchProject(owner, created.id, { studio: { ...settings, tools: [] } })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("this project has no tool by that name")
+    });
+    // An empty flow, said outright, is no flow.
+    expect(patch(owner, created.id, { studio: { ...settings, flow: [] } }).studio.flow).toEqual([]);
+    patch(owner, created.id, { studio: { ...settings, flow: FLOW } });
 
     const runtime = projectRuntime(created.id)!;
     const profile = projectAssistantProfile({

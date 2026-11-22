@@ -36,13 +36,15 @@ const TABS: { id: StudioTab; zh: string; en: string }[] = [
  *  limit only when it is a whole number or empty (Settings says when it is not). */
 export function patchFromDraft(draft: StudioDraft): ProjectPatch {
   const cap = minutesCapFromDraft(draft.monthlyMinutesCap);
+  // The flow has a save of its own (the Flow tab): this one says nothing of it, and the relay leaves it as it is.
+  const studio: ProjectPatch["studio"] = { ...draft.studio, flow: undefined };
   return {
     name: draft.name,
     backend: draft.backend,
     assistantName: draft.assistantName,
     instructions: draft.instructions,
     greeting: draft.greeting,
-    studio: draft.studio,
+    studio,
     ...(cap !== undefined ? { monthlyMinutesCap: cap } : {}),
     ...(draft.modelKey.trim() ? { modelKey: draft.modelKey.trim() } : {})
   };
@@ -100,9 +102,12 @@ export function Studio({
   const say = useSay();
   const [tab, showTab] = useState<StudioTab>(initialTab);
   // The flow has unsaved changes of its own, apart from the draft: it is asked before its tab gives way.
-  const setTab = useCallback((next: StudioTab) => {
-    if (mayLeaveSection()) showTab(next);
-  }, []);
+  const setTab = useCallback(
+    (next: StudioTab) => {
+      if (next !== tab && mayLeaveSection()) showTab(next);
+    },
+    [tab]
+  );
   const [draft, setDraft] = useState<StudioDraft>(() => draftFromProject(project));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");

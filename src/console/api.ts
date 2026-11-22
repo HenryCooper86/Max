@@ -36,7 +36,8 @@ export type ProjectPatch = Partial<{
   assistantName: string;
   instructions: string;
   greeting: string;
-  studio: ProjectStudio;
+  /** Without `flow`, the project's flow stays as it is. */
+  studio: Omit<ProjectStudio, "flow"> & { flow?: ProjectStudio["flow"] };
   monthlyMinutesCap: number | null;
 }>;
 /** What a new project starts with (from a template). */

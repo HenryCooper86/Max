@@ -61,7 +61,9 @@ their website in a few minutes, without writing a backend:
   only tools: values asked of the user, a fixed sentence, a tool called by rule and a branch on its answer all work
   as they do there. The project's instructions and knowledge are what every step starts from. A flow is saved with
   its own button and checked when saved: a step cannot call, by rule, a tool the project does not have, and a tool
-  cannot be removed while a step calls it that way.
+  cannot be removed while a step calls it that way. Saving the other settings leaves the flow as it is; over the API
+  that is a `PATCH` whose `studio` has no `flow`, and the flow itself is read and saved at
+  `/cloud/api/projects/:id/flow` as `{ "steps": [...] }`.
 - **Test.** Talk to the agent in the browser (or type), with its tools running, before anyone else does. Test minutes
   count like any others.
 - **Install.** The one-line embed (below), the widget's label, colour and side, and copyable code for a backend in

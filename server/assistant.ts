@@ -470,6 +470,8 @@ export function projectAssistantProfile(input: {
   knowledge?: string;
   /** The project's flow: the agents a conversation can be handed between. */
   flow?: unknown[];
+  /** Told what of the stored flow was left out, when a later release no longer takes all of it. */
+  onProblems?: (problems: string[]) => void;
 }): AssistantProfile {
   const savedProblem = logoProblem;
   try {
@@ -482,6 +484,8 @@ export function projectAssistantProfile(input: {
       ...(input.greeting ? { greeting: input.greeting } : {}),
       ...(input.flow?.length ? { agents: input.flow } : {})
     });
+    // A flow is checked when it is saved, so this is a flow saved under older rules.
+    if (profile.configProblems.length > 0) input.onProblems?.(profile.configProblems);
     const knowledge = input.knowledge?.trim();
     if (!knowledge) return profile;
     // Added after the loader, whose 8,000-character cap is for instructions alone.

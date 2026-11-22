@@ -99,7 +99,7 @@ describe("FlowTab", () => {
 
   it("says what a flow is for, and that it is saved on its own", () => {
     const html = render(projectWith());
-    expect(html).toMatch(/保存流程|Save flow/);
+    expect(html).toMatch(/“保存流程”按钮|Save the flow button/);
     expect(html).not.toMatch(/已保存的工具|tools that are saved/);
   });
 

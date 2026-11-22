@@ -103,6 +103,49 @@ describe("project sessions", () => {
     expect(JSON.stringify(config())).not.toContain(RELAY_TOOL.name);
   });
 
+  it("with a step done by rule, call the project's own tool for it", async () => {
+    const called: unknown[] = [];
+    const lookup: ToolDefinition = {
+      name: "find_booking",
+      description: "Looks a booking up",
+      handler: (args) => {
+        called.push(args);
+        return { room: "204" };
+      }
+    };
+    const { config } = await projectSession(
+      () => [lookup],
+      [
+        {
+          id: "main",
+          onStart: { call: { tool: "find_booking", arguments: { guest: "{{session.id}}" } } },
+          handoffs: [{ to: "refunds", when: "The guest wants money back." }]
+        },
+        { id: "refunds", description: "Refunds.", instructions: "Refund politely." }
+      ]
+    );
+    // Done by the relay before the model is connected, with the project's tool and nobody else's.
+    expect(called).toEqual([{ guest: "s" }]);
+    expect(config().instructions).toContain("204");
+  });
+
+  it("says what of a stored flow is no longer taken", () => {
+    const problems: string[][] = [];
+    const profile = projectAssistantProfile({
+      name: "Lumi",
+      flow: [
+        { id: "main", handoffs: [{ to: "nowhere" }] },
+        { id: "refunds", description: "Refunds." }
+      ],
+      onProblems: (found) => problems.push(found)
+    });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.join(" ")).toContain("nowhere");
+    expect(profile.name).toBe("Lumi");
+    projectAssistantProfile({ name: "Lumi", onProblems: (found) => problems.push(found) });
+    expect(problems).toHaveLength(1);
+  });
+
   it("build the persona without disturbing the relay's logo diagnostics", () => {
     const before = assistantLogoProblem();
     projectAssistantProfile({ name: "Lumi" });

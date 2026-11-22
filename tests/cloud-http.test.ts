@@ -148,6 +148,19 @@ describe("a project's flow over HTTP", () => {
     expect(saved.body.project.studio.tools).toEqual([tool]);
     expect((await call("GET", route, { token: owner.token })).body.steps).toEqual(steps);
 
+    // A request that names no steps changes nothing: it is not read as "no flow".
+    for (const json of [{}, { steps: "main" }, { flow: [] }]) {
+      expect(await call("PUT", route, { token: owner.token, json })).toMatchObject({
+        status: 400,
+        body: { error: "The flow must be a list of steps." }
+      });
+    }
+    // Nor does a save of the settings that says nothing of the flow.
+    const patched = await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: owner.token,
+      json: { studio: { tools: [tool], voice: "cedar" } }
+    });
+    expect(patched.body.project.studio).toMatchObject({ voice: "cedar", flow: steps });
     const refused = await call("PUT", route, {
       token: owner.token,
       json: { steps: [{ id: "main", handoffs: [{ to: "nowhere" }] }] }

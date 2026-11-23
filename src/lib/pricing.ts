@@ -71,12 +71,12 @@ export const PLANS: readonly Plan[] = [
     },
     features: [
       {
-        zh: "Studio 草稿测试、版本对比、发布与恢复",
-        en: "Studio draft testing, revision comparisons, publishing and restore"
+        zh: "Studio 草稿测试、发布前回放检查、版本对比与恢复",
+        en: "Studio draft tests, pre-publish replay checks, revision comparisons and restore"
       },
       {
-        zh: "一行代码嵌入网站，不用写后端",
-        en: "One line on your website, no backend needed"
+        zh: "一行代码嵌入网站，安装诊断帮你排查连接问题",
+        en: "One-line website embed with installation diagnostics"
       },
       { zh: "托管中继：TLS、扩容和更新都由我们负责", en: "Hosted relay with TLS, scaling and updates handled" },
       {
@@ -132,8 +132,15 @@ export const PRICING_FAQ: readonly Question[] = [
   {
     question: { zh: "Studio 测试会占用分钟数吗？", en: "Which Studio tests use minutes?" },
     answer: {
-      zh: "模板的示例对话在本地运行，不占用分钟数。连接模型进行的草稿测试和重放测试都会计入账户用量，并受项目每月分钟数上限约束。重放时，工具使用你提供的模拟结果。",
-      en: "Template samples run locally and use no minutes. Live draft tests and saved conversation replays use your model, count toward account minutes, and follow the project’s monthly limit. Replays use the tool responses you supply."
+      zh: "模板示例在本地运行，不占用分钟数。交互式草稿测试和每次回放都会使用你的模型，计入账户用量，并受项目每月分钟数上限约束。「运行全部」会用你提供的模拟工具响应逐项回放，开始前会显示用例数。",
+      en: "Template samples run locally and use no minutes. Interactive draft tests and each replay use your model and count toward account minutes and the project’s monthly limit. Run all shows the case count before it starts and runs the cases in sequence with the simulated tool responses you supply."
+    }
+  },
+  {
+    question: { zh: "查看安装诊断会占用分钟数吗？", en: "Does checking installation diagnostics use minutes?" },
+    answer: {
+      zh: "查看或刷新诊断不占用分钟数。诊断会显示 Max 最近记录的网站活动和排查建议。如果你在网站上发起真实对话来验证安装，该会话按正常用量计费。",
+      en: "Viewing or refreshing diagnostics uses no minutes. It shows the last website activity Max recorded and what to check next. A live website conversation you start to verify the installation counts as normal usage."
     }
   },
   {

@@ -63,11 +63,26 @@ export function StudioSection() {
             </p>
           </div>
           <div>
-            <h3>{say("用答错的问题测试下一版", "Test the next draft against a missed answer")}</h3>
+            <h3>{say("发布前回放已保存的测试", "Run saved replay checks before publishing")}</h3>
             <p>
               {say(
-                "从出错的那一轮对话创建测试，编辑问题或隐去个人信息，再写下回答应包含的短语。重放时让工具返回模拟结果，对照实际回答检查修复效果。",
-                "Save a failed turn as a test. Edit or redact the question, specify a phrase the answer should contain, and replay it against a draft with simulated tool responses."
+                "把答错的那一轮对话保存为测试，隐去个人信息，再写下回答应包含的短语。在「发布」旁选择「运行全部」，用模拟工具响应逐项测试当前草稿。展开结果即可对照预期短语和实际回答，或查看运行错误。",
+                "Turn a missed answer into a test. Redact the question and set an expected phrase. Choose Run all beside Publish to check the draft with simulated tool responses. Open a result to compare the phrase with the actual answer or see why the run stopped."
+              )}
+            </p>
+            <p>
+              {say(
+                "修改用例后需重新运行该项测试。保存新版本后需重新运行全部测试。回放结果供发布时参考。发布前仍需对该草稿完成交互测试。",
+                "Edit a case and Studio marks it for another run. Save a new revision and all cases need another run. Replay results guide your decision. Publishing requires an interactive test of that revision."
+              )}
+            </p>
+          </div>
+          <div>
+            <h3>{say("检查网站安装卡在哪一步", "Find out where website setup stopped")}</h3>
+            <p>
+              {say(
+                "在已发布的网站上开始一次对话，再刷新「安装诊断」。查看 Max 最近收到的网站请求或会话活动，以及下一步该检查什么。例如，如果网站来源被拒绝，请核对已发布版本允许的来源。",
+                "Start a conversation on your site, then refresh Installation diagnostics. See the last website activity Max recorded and what to check next. If the widget’s origin was rejected, check the allowed origins in the published configuration."
               )}
             </p>
           </div>
@@ -75,8 +90,8 @@ export function StudioSection() {
             <h3>{say("确认访客收到了回答", "Verify the first website conversation")}</h3>
             <p>
               {say(
-                "复制嵌入代码后，安装清单会一直等待，直到网站访客第一次得到助手的回答。管理员还能看到过去 30 天新建项目中达成这一步的比例，以及成功项目从创建到首次对话所用的中位时间。",
-                "After you copy the snippet, the install checklist stays open until a visitor gets an answer on your site. Administrators can see what percentage of projects created in the last 30 days reached that point and the median time it took those projects."
+                "访客首次在网站上得到回答后，安装清单才会标记为完成。管理员可以查看过去 30 天新建项目中完成这一步的比例，以及成功项目从创建到首次对话所用的中位时间。",
+                "The checklist marks installation complete when a visitor gets their first answer on your site. Administrators can see the share of projects created in the last 30 days that reached this point and the median time it took them."
               )}
             </p>
           </div>

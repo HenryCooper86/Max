@@ -58,6 +58,8 @@ export type BrowserAudioOptions = {
   audioContext?: AudioContext;
   language?: string;
   voice?: VoiceGender;
+  /** Same-origin URL of the capture worklet, for pages whose CSP refuses `blob:` scripts. */
+  workletUrl?: string;
   /** Called when agent audio starts or finishes playing. */
   onPlayingChange(playing: boolean): void;
   /** Called when the browser keeps audio suspended (`true`) and when it runs again (`false`). */
@@ -67,7 +69,8 @@ export type BrowserAudioOptions = {
 /**
  * AudioWorklet processor source. Downsamples to 16 kHz with a streaming
  * box-average, emits 320-sample PCM16 frames, and reports a smoothed RMS level.
- * Inlined and loaded through a Blob URL so the SDK needs no extra file.
+ * Inlined and loaded through a Blob URL so the SDK needs no extra file, unless
+ * the page names its own copy with `workletUrl`.
  */
 const WORKLET_SOURCE = `
 const TARGET_RATE = 16000;
@@ -136,6 +139,33 @@ const STREAM_MUTE_SECONDS = 0.15;
 const LOCALES: Record<string, string> = { zh: "zh-CN", en: "en-US" };
 
 type WorkletMessage = { type: "frame"; pcm: ArrayBuffer } | { type: "level"; value: number };
+
+/**
+ * Builds the off-thread capture node, or returns undefined when this page
+ * cannot run it, so the caller can capture on the main thread instead. A
+ * Content-Security-Policy without `blob:` in `script-src` is the usual reason,
+ * and it says nothing about the microphone itself.
+ */
+async function createCaptureWorklet(context: AudioContext, workletUrl?: string): Promise<AudioWorkletNode | undefined> {
+  if (!context.audioWorklet || typeof AudioWorkletNode === "undefined") return undefined;
+  const canUseBlob = typeof Blob !== "undefined" && typeof URL.createObjectURL === "function";
+  if (!workletUrl && !canUseBlob) return undefined;
+  const blobUrl = workletUrl ? undefined : URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "text/javascript" }));
+  try {
+    await context.audioWorklet.addModule((workletUrl ?? blobUrl)!);
+    return new AudioWorkletNode(context, "pcm-capture", {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+      channelCount: 1,
+      channelCountMode: "explicit"
+    });
+  } catch {
+    return undefined;
+  } finally {
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+  }
+}
 
 /** Creates the real browser implementation of {@link AudioIO}. */
 export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
@@ -262,30 +292,13 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
       if (context.state === "suspended") await resumeWithin(context, () => setBlocked(true));
       const source = context.createMediaStreamSource(media);
       nodes.push(source);
-      if (
-        context.audioWorklet &&
-        typeof AudioWorkletNode !== "undefined" &&
-        typeof Blob !== "undefined" &&
-        typeof URL.createObjectURL === "function"
-      ) {
-        const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "text/javascript" }));
-        try {
-          await context.audioWorklet.addModule(url);
-        } finally {
-          URL.revokeObjectURL(url);
-        }
-        const node = new AudioWorkletNode(context, "pcm-capture", {
-          numberOfInputs: 1,
-          numberOfOutputs: 1,
-          outputChannelCount: [1],
-          channelCount: 1,
-          channelCountMode: "explicit"
-        });
-        node.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
+      const worklet = await createCaptureWorklet(context, options.workletUrl);
+      if (worklet) {
+        worklet.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
           if (event.data.type === "frame") onFrame(event.data.pcm);
           else micLevel = event.data.value;
         };
-        nodes.push(node);
+        nodes.push(worklet);
       } else {
         const framer = new PcmFramer(context.sampleRate);
         const node = context.createScriptProcessor(2048, 1, 1);

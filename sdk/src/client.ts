@@ -229,6 +229,11 @@ export interface VoiceAgentOptions {
   speakFallback?: boolean;
   /** Reuse an existing AudioContext for capture and playback. */
   audioContext?: AudioContext;
+  /**
+   * Same-origin URL of the capture worklet (`max-voice-agent/pcm-worklet.js`), for a page whose
+   * Content-Security-Policy refuses `blob:` scripts. Without it such a page captures on the main thread.
+   */
+  workletUrl?: string;
   /** @internal Test seams. Not part of the public API. */
   internals?: VoiceAgentInternals;
 }
@@ -725,6 +730,7 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     }
     this.audio ??= createBrowserAudio({
       ...(this.options.audioContext ? { audioContext: this.options.audioContext } : {}),
+      ...(this.options.workletUrl ? { workletUrl: this.options.workletUrl } : {}),
       ...(this.options.language ? { language: this.options.language } : {}),
       ...(this.options.voice ? { voice: this.options.voice } : {}),
       onPlayingChange,

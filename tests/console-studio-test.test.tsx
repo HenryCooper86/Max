@@ -250,6 +250,20 @@ describe("a running Studio test", () => {
     ]);
   });
 
+  it("loads the site's own capture worklet, which its Content-Security-Policy allows", async () => {
+    let workletUrl: string | undefined;
+    vi.spyOn(VoiceAgent.prototype, "start").mockImplementation(async function (this: VoiceAgent) {
+      workletUrl = (this as unknown as { options: { workletUrl?: string } }).options.workletUrl;
+    });
+    const base = props({}, true);
+    const page = await mount({
+      ...base,
+      prepareTest: vi.fn().mockResolvedValue({ expectedLiveRevision: "r1", language: "" })
+    });
+    await act(async () => page.findByProps({ children: "保存并开始" }).props.onClick());
+    expect(workletUrl).toBe("/pcm-worklet.js");
+  });
+
   it("keeps live tests pinned and refreshes after the relay rejects a stale revision", async () => {
     const testSession = vi.fn().mockRejectedValue(new ApiError("request", "Studio draft changed", 409));
     const refreshRelease = vi.fn().mockResolvedValue(undefined);

@@ -26,6 +26,8 @@ for (const file of required) {
 fs.rmSync(stage, { recursive: true, force: true });
 fs.mkdirSync(stage, { recursive: true });
 fs.cpSync(built, stage, { recursive: true });
+// For pages whose Content-Security-Policy refuses blob: scripts (the `workletUrl` option).
+fs.copyFileSync(path.join(root, "public/pcm-worklet.js"), path.join(stage, "pcm-worklet.js"));
 fs.copyFileSync(path.join(root, "sdk/package.json"), path.join(stage, "package.json"));
 fs.copyFileSync(path.join(root, "sdk/README.md"), path.join(stage, "README.md"));
 fs.copyFileSync(path.join(root, "LICENSE"), path.join(stage, "LICENSE"));

@@ -98,6 +98,7 @@ stopButton.onclick = () => agent.stop();
 | `autoReconnect` | `boolean` (true)                  | Exponential backoff, 6 attempts. See [Errors and reconnecting](#errors-and-reconnecting). |
 | `speakFallback` | `boolean` (true)                  | Speak with `speechSynthesis` when the relay sends text for that.                          |
 | `audioContext`  | `AudioContext`                    | Reuse your own context for capture and playback.                                          |
+| `workletUrl`    | `string`                          | Same-origin `pcm-worklet.js` for a strict CSP. See [Browser support](#browser-support).   |
 
 ### Methods and state
 
@@ -611,8 +612,10 @@ endpoints, close codes and iOS Safari.
 Needs `WebSocket`, `getUserMedia`, and `AudioContext`, in a secure context
 (HTTPS or localhost). `transport: "webrtc"` also needs `RTCPeerConnection`; a
 browser without it uses the WebSocket. Capture uses an AudioWorklet loaded from a Blob URL and
-falls back to `ScriptProcessorNode` where worklets are missing. If your Content
-Security Policy restricts `script-src`, allow `blob:`. Current Chrome, Edge,
+falls back to `ScriptProcessorNode` where a worklet cannot load, including under a Content
+Security Policy without `blob:` in `script-src`. You do not need to allow `blob:`. To keep capture
+off the main thread under such a policy, serve `max-voice-agent/pcm-worklet.js` from your own
+origin and pass its URL as `workletUrl`. Current Chrome, Edge,
 Firefox and Safari (iOS 14.5+) are supported. Browser speech fallback needs
 `speechSynthesis`; without it, those replies stay text-only.
 

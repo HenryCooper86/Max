@@ -220,6 +220,8 @@ export function TestTab({
     let ready = false;
     const agent = new VoiceAgent({
       url: origin,
+      // The site's CSP refuses blob: scripts, so capture loads the worklet the site serves itself.
+      workletUrl: "/pcm-worklet.js",
       token: async () => {
         try {
           return (await session.api.testSession(session.token, project.id, draftRevision, expectedLiveRevision)).token;

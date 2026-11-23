@@ -120,7 +120,9 @@ These are the iOS and Safari behaviours the SDK already handles, and what remain
   Safari only allows that inside the gesture. It never waits for a pending `resume()` longer than one second, so a
   blocked context cannot freeze `start()`; it raises `audio_blocked` instead (see above).
 - **Microphone capture** uses an `AudioWorklet` loaded from a `blob:` URL and falls back to `ScriptProcessorNode` where
-  worklets are missing (older Safari). If your Content Security Policy restricts `script-src`, allow `blob:`.
+  a worklet cannot load (older Safari, or a Content Security Policy without `blob:` in `script-src`). You do not need to
+  allow `blob:`. To keep capture off the main thread, serve `max-voice-agent/pcm-worklet.js` from your own origin and
+  pass its URL as `workletUrl`.
 - **Supported versions.** iOS 14.5 or newer (every iOS browser uses WebKit). In an in-app browser, such as a social
   app's built-in viewer, the microphone is often disabled: open the page in Safari.
 - **Silent switch and volume.** Web Audio on iPhone follows the ringer switch in some versions. If the connection is

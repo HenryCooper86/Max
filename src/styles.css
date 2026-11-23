@@ -9056,10 +9056,30 @@ button.opsCard:disabled {
 
 .siteStudioSample {
   min-width: 0;
-  padding: clamp(20px, 3vw, 36px);
+  margin: 0;
+  padding: clamp(12px, 1.5vw, 18px);
   border: var(--line-w) solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface-1);
+}
+
+.siteStudioSample video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 864 / 1050;
+  border-radius: calc(var(--radius-card) - 6px);
+  background: var(--surface-2, var(--surface-1));
+}
+
+.siteStudioSample figcaption {
+  margin: 12px 4px 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+
+.siteStudioSample details {
+  margin: 0 4px;
 }
 
 .siteStudioSample summary {

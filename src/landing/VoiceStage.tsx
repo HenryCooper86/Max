@@ -4,6 +4,7 @@ import { useLanguage } from "../components/LanguageToggle";
 import { localized } from "../lib/i18n";
 import { REPOSITORY_URL } from "../lib/routes";
 import { useOnScreen } from "./motion";
+import { ScreenRecording } from "./ScreenRecording";
 import clipData from "./voice-stage-clips.json";
 
 type ClipId = keyof typeof clipData;
@@ -281,40 +282,22 @@ function Wave({ moment }: { moment: Moment }) {
   );
 }
 
-/** A real recording of the Studio. It plays only while on screen, and not at all with reduced motion. */
+/** A real recording of the Studio. */
 function StudioClip() {
   const { language } = useLanguage();
   const say = (zh: string, en: string) => localized(language, zh, en);
   const code = language === "en-US" ? "en" : "zh";
-  const box = useRef<HTMLElement | null>(null);
-  const video = useRef<HTMLVideoElement | null>(null);
-  const onScreen = useOnScreen(box, "0px", false);
-  const [still] = useState(
-    () => typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)
-  );
-  useEffect(() => {
-    const element = video.current;
-    if (!element || still) return;
-    if (onScreen) void element.play().catch(() => undefined);
-    else element.pause();
-  }, [onScreen, still, code]);
   return (
-    <figure className="stageStudio" ref={box} data-reveal="">
+    <figure className="stageStudio" data-reveal="">
       <figcaption>
         <h3>{say("在工作室里完成", "Make it in the Studio")}</h3>
         <p>{say("描述、试听、保存，不用写代码。", "Describe it, listen, save it. No code.")}</p>
       </figcaption>
-      <video
+      <ScreenRecording
         key={code}
-        ref={video}
         src={`/video/studio-design-${code}.mp4`}
         poster={`/video/studio-design-${code}.jpg`}
-        aria-label={say("在 Max 工作室里设计声音的录屏", "Screen recording of designing a voice in the Max Studio")}
-        muted
-        loop
-        playsInline
-        preload="none"
-        controls={still}
+        label={say("在 Max 工作室里设计声音的录屏", "Screen recording of designing a voice in the Max Studio")}
       />
     </figure>
   );

@@ -97,12 +97,15 @@ describe("landing page", () => {
     expect(html).toContain("npm run setup");
   });
 
-  it("lets visitors open the Studio support sample and continue to the Cloud console", () => {
+  it("shows a labelled Studio test recording with its transcript and continues to the Cloud console", () => {
     const html = render(false);
     const sample = findTemplate("support")!.sample;
     expect(html).toContain('href="#studio"');
     expect(html).toContain('id="studio"');
-    expect(html).toContain(`<summary>${sample.question.zh}</summary>`);
+    expect(html).toContain("/video/studio-test-zh.mp4");
+    expect(html).toContain("模型回复和订单查询为模拟");
+    expect(html).toContain("<summary>查看文字记录</summary>");
+    expect(html).toContain(sample.question.zh);
     expect(html).toContain(sample.tool!.result.zh);
     expect(html).toContain(sample.reply.zh);
     expect(html).toContain('href="/console"');

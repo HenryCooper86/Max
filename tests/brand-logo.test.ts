@@ -35,6 +35,17 @@ describe("device logos", () => {
     expect(assistantLogo(glasses)?.path).toMatch(/brand\/devices\/sunglasses\.svg$/);
     expect(assistantLogo(assistantProfileFrom({ name: "Vee", device: "vr" }))?.path).toMatch(/vr-headset\.svg$/);
   });
+
+  it("keeps the hummingbird when a saved config names Max and its stock device", () => {
+    const saved = assistantProfileFrom({ name: "Max", device: "motorcycle-helmet" });
+    expect(saved.isDefault).toBe(false);
+    expect(assistantLogo(saved)?.path).toMatch(/brand\/hummingbird\.svg$/);
+  });
+
+  it("still shows the device for a Max moved to another device", () => {
+    const glasses = assistantProfileFrom({ name: "Max", device: "sunglasses" });
+    expect(assistantLogo(glasses)?.path).toMatch(/brand\/devices\/sunglasses\.svg$/);
+  });
 });
 
 describe("owner logo", () => {

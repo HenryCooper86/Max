@@ -191,8 +191,11 @@ function deviceLogo(presetId: string): BrandLogo | undefined {
 export function assistantLogo(profile: AssistantProfile = assistant()): BrandLogo | undefined {
   if (profile.logo) return profile.logo;
   // Max's own mark is the hummingbird; an assistant of someone else's shows
-  // its device until it has a logo of its own.
-  return profile.isDefault ? stockLogo() : deviceLogo(profile.preset.id);
+  // its device until it has a logo of its own. A saved config spells out the
+  // name and device, so isDefault alone would lose the mark on Max's own site.
+  const isMax =
+    profile.name === DEFAULT_ASSISTANT_PROFILE.name && profile.preset.id === DEFAULT_ASSISTANT_PROFILE.preset.id;
+  return profile.isDefault || isMax ? stockLogo() : deviceLogo(profile.preset.id);
 }
 
 let stockMark: BrandLogo | undefined | null = null;

@@ -99,6 +99,24 @@ their website in a few minutes, without writing a backend:
   write-only `tracesHeaders`; the project says `hasTracesHeaders`, and `POST /cloud/api/projects/:id/traces-test`
   sends the test.
 
+### Replaying a failed conversation turn
+
+Open a conversation in Studio, choose **Create test from this turn**, and review the visitor message in the Test tab.
+For an agent reply or tool failure, Studio starts with the preceding visitor message. Edit it to remove identifying
+details or add context the draft will need. The failed reply and tool error text stay in the original conversation.
+
+Enter a phrase the corrected answer should contain and, for any project tools the draft needs, enter their simulated
+JSON responses. For example, a case about a late order might use `{"check_order":{"status":"shipped","eta":"Friday"}}`
+and expect the word `Friday`. Save the case, save your draft changes, and run the case against the displayed draft revision.
+
+The replay sends the edited message to the draft's configured provider. Project tool calls receive only the supplied
+responses. A missing response fails the case. Studio compares the final answer with the expected phrase, ignoring
+case, and shows the actual answer, tool calls, and revision. Replay uses account minutes and the project's monthly
+limit. The separate live provider test still gates publishing.
+
+Saved cases belong to the project and remain available after source conversations expire. Edit or delete them in
+the Test tab. Deleting the project removes its cases.
+
 ### Testing, publishing, and restoring a revision
 
 Saving a draft leaves the website and backend on the current live revision. Studio shows the live and draft IDs

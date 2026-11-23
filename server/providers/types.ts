@@ -27,6 +27,10 @@ export type ProviderTelemetry = {
 };
 
 export type ProviderSessionContext = {
+  /** Optional admission check for a model or deterministic flow tool call. */
+  allowToolCall?(name: string, kind: "builtin" | "external" | "unavailable"): boolean;
+  /** Final model reply after any tool follow-ups for a typed Studio replay. */
+  onTurnAnswer?(text: string): void;
   /** The relay's id for this session (tools receive it). */
   sessionId?: string;
   /** Who the session belongs to: the signed-in account, or the `userId` the

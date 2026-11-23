@@ -44,6 +44,11 @@ function allowed(key: string, limit: number): boolean {
   return true;
 }
 
+/** Share the per-project attempt budget across interactive previews and replays. */
+export function allowStudioTestAttempt(projectId: string): boolean {
+  return allowed(`test:${projectId}`, LIMITS.testPerProject);
+}
+
 /** Test hook. */
 export function resetCloudSessionLimits(): void {
   hits.clear();
@@ -80,7 +85,7 @@ export function mintTestSession(
       error: "This project has used its monthly minutes limit. Raise it in Settings to keep testing."
     };
   }
-  if (!allowed(`test:${row.id}`, LIMITS.testPerProject)) {
+  if (!allowStudioTestAttempt(row.id)) {
     return { ok: false, status: 429, error: "Too many test sessions in a minute. Wait a moment." };
   }
   const minted = cloudSessionTokens.mint(

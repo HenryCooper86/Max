@@ -47,6 +47,86 @@ const release = (live: Project): StudioRelease => ({
 });
 const api = createCloudApi(async (path) => Response.json(path.endsWith("/release") ? release(project) : {}));
 
+it("opens an editable test from a failed tool turn and saves only the reviewed case", async () => {
+  const conversation = {
+    id: "conv",
+    projectId: project.id,
+    startedAt: 1,
+    endedAt: 20,
+    seconds: 19,
+    source: "embed",
+    preview: "Private conversation",
+    turns: [
+      { at: 2, speaker: "user", text: "Earlier private turn" },
+      { at: 3, speaker: "agent", text: "Earlier reply" },
+      { at: 4, speaker: "user", text: "Order for alice@example.test" },
+      { at: 5, speaker: "tool", text: "check_order: upstream private error", ok: false },
+      { at: 6, speaker: "agent", text: "Previous wrong answer" },
+      { at: 7, speaker: "user", text: "Unrelated turn" },
+      { at: 8, speaker: "tool", text: "another_tool", ok: true }
+    ] as const
+  };
+  const createReplayCase = vi.fn(
+    async (_token: string, _projectId: string, input: import("../shared/studio-replay").ReplayCaseInput) => ({
+      testCase: { ...input, id: "case1", version: 1 }
+    })
+  );
+  const session = {
+    api: {
+      ...api,
+      conversations: async () => ({ conversations: [conversation] }),
+      conversation: async () => ({ conversation: { ...conversation, turns: [...conversation.turns] } }),
+      replayCases: async () => ({ cases: [] }),
+      createReplayCase
+    },
+    token: "t",
+    fail: String
+  };
+  let renderer: ReactTestRenderer | undefined;
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  try {
+    await act(async () => {
+      renderer = create(
+        <Studio
+          project={project}
+          initialTab="history"
+          session={session}
+          origin="https://relay.example"
+          onChanged={() => {}}
+          onKeyRotated={() => {}}
+          onDeleted={() => {}}
+        />
+      );
+    });
+    const page = renderer!.root;
+    await act(async () => page.findByProps({ className: "cxsHistoryRow" }).props.onClick());
+    const failed = page.findByProps({ className: "cxsHistoryTool bad" });
+    await act(async () => failed.findByType("button").props.onClick());
+    expect(page.findByProps({ id: "cxs-p1-tab-test" }).props["aria-selected"]).toBe(true);
+    const form = page.findByProps({ className: "cxsReplayEditor" });
+    const prompt = form.findByProps({ value: "Order for alice@example.test" });
+    expect(form.findAllByType("textarea").some((node) => String(node.props.value).includes("check_order"))).toBe(true);
+    expect(JSON.stringify(renderer!.toJSON())).not.toContain("upstream private error");
+    expect(JSON.stringify(renderer!.toJSON())).not.toContain("Earlier private turn");
+    expect(JSON.stringify(renderer!.toJSON())).not.toContain("another_tool");
+    expect(createReplayCase).not.toHaveBeenCalled();
+    await act(async () => prompt.props.onChange({ target: { value: "When will the sample order arrive?" } }));
+    const expected = form.findByProps({ maxLength: 500 });
+    await act(async () => expected.props.onChange({ target: { value: "Friday" } }));
+    const fixtures = form.findAllByType("textarea").find((node) => String(node.props.value).includes("check_order"))!;
+    await act(async () => fixtures.props.onChange({ target: { value: '{"check_order":{"eta":"Friday"}}' } }));
+    await act(async () => form.props.onSubmit({ preventDefault() {} }));
+    expect(createReplayCase).toHaveBeenCalledExactlyOnceWith("t", "p1", {
+      prompt: "When will the sample order arrive?",
+      expected: "Friday",
+      fixtures: { check_order: { eta: "Friday" } }
+    });
+  } finally {
+    await act(async () => renderer?.unmount());
+    vi.unstubAllGlobals();
+  }
+});
+
 describe("logged-out view", () => {
   const html = wrap(<AuthCard api={api} onSignedIn={() => undefined} />);
   it("shows both tabs and the reassurance", () => {

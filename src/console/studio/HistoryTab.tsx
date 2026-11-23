@@ -6,6 +6,7 @@ import { useSay } from "../hooks";
 import { AnalysisMarks, AnalysisSetting, AnalysisView } from "./AnalysisSetting";
 import { TracesSetting } from "./TracesSetting";
 import type { StudioTabProps } from "./types";
+import { isReplayToolName, type ReplayCaseInput } from "../../../shared/studio-replay";
 import "./history-tab.css";
 
 /** Seconds as m:ss ("0:07", "12:05"). Bad input shows "0:00". */
@@ -93,11 +94,42 @@ export function answerSummary(list: ReadonlyArray<Pick<ConversationSummary, "ans
   );
 }
 
-function Turn({ turn, language, say }: { turn: ConversationTurn; language: string; say: Say }) {
+/** Keep the selected exchange in the editor. Errors, replies and surrounding conversations may contain private data. */
+function replaySeed(turns: ConversationTurn[], selected: number): ReplayCaseInput {
+  let start = selected;
+  while (start > 0 && turns[start]?.speaker !== "user") start--;
+  const visitor = turns[start];
+  const fixtures: Record<string, unknown> = {};
+  for (let i = start; i < turns.length; i++) {
+    const turn = turns[i]!;
+    if (i > start && turn.speaker === "user") break;
+    if (turn.speaker !== "tool") continue;
+    const name = turn.text.split(":", 1)[0]?.trim();
+    if (name && isReplayToolName(name)) fixtures[name] = null;
+  }
+  return { prompt: visitor?.speaker === "user" ? visitor.text : "", expected: "", fixtures };
+}
+
+function Turn({
+  turn,
+  language,
+  say,
+  createTest
+}: {
+  turn: ConversationTurn;
+  language: string;
+  say: Say;
+  createTest: () => void;
+}) {
+  const action = (
+    <button type="button" className="linkButton" onClick={createTest}>
+      {say("用此轮创建测试", "Create test from this turn")}
+    </button>
+  );
   if (turn.speaker === "tool") {
     return (
       <li className={`cxsHistoryTool ${turn.ok === false ? "bad" : "ok"}`}>
-        <span>{toolLine(turn, say)}</span>
+        <span>{toolLine(turn, say)}</span> {action}
       </li>
     );
   }
@@ -110,6 +142,7 @@ function Turn({ turn, language, say }: { turn: ConversationTurn; language: strin
           : ""}
       </span>
       <p>{turn.text}</p>
+      {action}
     </li>
   );
 }
@@ -266,7 +299,7 @@ function WebhookSetting({
   );
 }
 
-export function HistoryTab(props: StudioTabProps) {
+export function HistoryTab(props: StudioTabProps & { onCreateTest: (input: ReplayCaseInput) => void }) {
   const { session, project, draft, updateStudio, goTo } = props;
   const say = useSay();
   const { language } = useLanguage();
@@ -376,7 +409,13 @@ export function HistoryTab(props: StudioTabProps) {
         ) : (
           <ol className="cxsHistoryTurns" aria-label={say("对话内容", "Conversation")}>
             {open.turns.map((turn, index) => (
-              <Turn key={index} turn={turn} language={language} say={say} />
+              <Turn
+                key={index}
+                turn={turn}
+                language={language}
+                say={say}
+                createTest={() => props.onCreateTest(replaySeed(open.turns, index))}
+              />
             ))}
           </ol>
         )}

@@ -176,7 +176,7 @@ export const DEFAULT_STUDIO: ProjectStudio = {
   traces: DEFAULT_TRACES
 };
 
-const TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
+export const STUDIO_TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
 const PARAMETER_NAME = /^[a-zA-Z][a-zA-Z0-9_]{0,39}$/;
 const ACCENT = /^#[0-9a-fA-F]{6}$/;
 /** Names the SDK or relay use for their own purposes. */
@@ -322,7 +322,7 @@ function parameter(raw: unknown, tool: string, index: number): Outcome<StudioPar
 function tool(raw: unknown, index: number): Outcome<StudioTool> {
   if (!isRecord(raw)) return { error: `Tool ${index + 1} is not valid.` };
   const name = typeof raw.name === "string" ? raw.name.trim() : "";
-  if (!TOOL_NAME.test(name)) {
+  if (!STUDIO_TOOL_NAME.test(name)) {
     return { error: `Tool ${index + 1}: the name must start with a letter and use a-z, 0-9 or _ (like check_order).` };
   }
   if (RESERVED_TOOL_NAMES.has(name)) return { error: `Tool name ${name} is reserved.` };

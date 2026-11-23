@@ -712,6 +712,13 @@ export function createLiveProvider(
     return allowed.includes(name);
   }
 
+  function sessionAllowsCall(name: string): boolean {
+    if (!sessionContext?.allowToolCall) return true;
+    const builtin = builtinTools.some((tool) => tool.name === name);
+    const available = toolAllowed(name) && sessionServerTools().some((tool) => tool.name === name);
+    return sessionContext.allowToolCall(name, builtin ? "builtin" : available ? "external" : "unavailable");
+  }
+
   /** The tools an upstream is offered: the active agent's when it can swap
    *  them mid-session, otherwise every agent's (the broker refuses the rest). */
   function offeredTools(): ReturnType<ToolBroker["specs"]> {
@@ -1116,7 +1123,7 @@ export function createLiveProvider(
     what: string,
     until?: number
   ): Promise<{ ok: boolean; output: string; ran?: true }> {
-    if (!tools) return { ok: false, output: toolErrorText("tools are not available") };
+    if (!tools || !sessionAllowsCall(spec.tool)) return { ok: false, output: toolErrorText("tools are not available") };
     // Ending the conversation and handing it over are the conversation's own doing, not a step's.
     if (builtinTools.some((tool) => tool.name === spec.tool)) {
       return { ok: false, output: toolErrorText(`${what} cannot call ${spec.tool}`) };
@@ -2367,6 +2374,9 @@ export function createLiveProvider(
       flushPictureNotes(true);
       // A reply that ended by asking for tools is not the end of the turn.
       if (toolsRunning > 0) return;
+      if (audible && !replyForced && !(toolFollowUp && engine?.answersToolsInNewReply)) {
+        sessionContext?.onTurnAnswer?.(text);
+      }
       if (audioActive) status("listening", listeningDetail());
       else status("ready", t(`${backend.label} 已就绪`, `${backend.label} ready`));
       if (pendingEnd && !ending) {
@@ -2415,7 +2425,7 @@ export function createLiveProvider(
       return false;
     },
     onToolCall(call) {
-      if (closed) return;
+      if (closed || !sessionAllowsCall(call.name)) return;
       // A reply that was held for the wake decision settles first; a tool is
       // never run for speech that was not meant for the assistant.
       if (replyGate === "held") finalizeRiderTurn();
@@ -2686,6 +2696,7 @@ export function createLiveProvider(
       if (!resumed) await startByRule();
       if (closed) return;
       await connectEngine();
+      if (closed) return;
       status("ready", t(`${backend.label} 已连接`, `${backend.label} connected`));
       // A resumed conversation is with the agent it was with. (One that moved at the start has said so already.)
       if (resumed && roster.length > 0 && activeAgent !== MAIN_AGENT)

@@ -38,6 +38,8 @@ import {
   publishStudioRevision,
   restoreStudioRevision
 } from "./revisions";
+import { createReplayCase, listReplayCases, updateReplayCase, deleteReplayCase, readReplayCase } from "./replay-cases";
+import { runDraftReplay } from "./replay-runner";
 import { mintEmbedSession, mintTestSession } from "./sessions";
 import { liveProject, readStudioLiveRevision } from "./store";
 import { testProjectTool } from "./tools";
@@ -215,6 +217,59 @@ export function registerCloudRoutes(app: express.Express): void {
   api.post(
     "/projects/:id/restore",
     handle((req, res) => send(res, restoreStudioRevision(customerOf(res).id, param(req, "id"), body(req))))
+  );
+
+  const replayCases = "/projects/:id/replay-cases";
+  const replayCase = replayCases + "/:caseId";
+  api.get(
+    replayCases,
+    handle((req, res) => send(res, listReplayCases(customerOf(res).id, param(req, "id"))))
+  );
+  api.post(
+    replayCases,
+    handle((req, res) => send(res, createReplayCase(customerOf(res).id, param(req, "id"), body(req)), 201))
+  );
+  api.put(
+    replayCase,
+    handle((req, res) =>
+      send(res, updateReplayCase(customerOf(res).id, param(req, "id"), param(req, "caseId"), body(req)))
+    )
+  );
+  api.delete(
+    replayCase,
+    handle((req, res) =>
+      send(res, deleteReplayCase(customerOf(res).id, param(req, "id"), param(req, "caseId"), body(req).version))
+    )
+  );
+  api.post(
+    replayCase + "/run",
+    handle(async (req, res) => {
+      const customerId = customerOf(res).id;
+      const projectId = param(req, "id");
+      const { revision, version } = body(req);
+      const caseId = param(req, "caseId");
+      const saved = readReplayCase(customerId, projectId, caseId, version);
+      if (!saved.ok) return send(res, saved);
+      if (typeof revision !== "string" || !revision.trim()) {
+        res.status(400).json({ ok: false, error: "Choose a saved draft revision to replay." });
+        return;
+      }
+      const disconnect = new AbortController();
+      const abort = () => disconnect.abort();
+      res.once("close", abort);
+      try {
+        const result = await runDraftReplay(customerId, projectId, revision, saved.value.testCase, disconnect.signal);
+        if (res.destroyed) return;
+        if (result.ok) {
+          // An edit or deletion during the provider call makes this result obsolete.
+          const latest = readReplayCase(customerId, projectId, caseId, version);
+          if (!latest.ok) return send(res, latest);
+        }
+        send(res, result);
+      } finally {
+        res.off("close", abort);
+      }
+    })
   );
 
   function projectForProbe(req: Request, res: Response) {

@@ -1,3 +1,4 @@
+import type { ReplayCase, ReplayCaseInput, ReplayRun } from "../../shared/studio-replay";
 // Typed client for the Max Cloud JSON API (/cloud/api). Every function takes
 // the bearer token (when the endpoint needs one) and an optional fetch, so
 // tests can inject both.
@@ -140,7 +141,8 @@ async function call<T>(
   token: string | null,
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  signal?: AbortSignal
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (token) headers.authorization = `Bearer ${token}`;
@@ -150,6 +152,7 @@ async function call<T>(
     response = await (fetcher ?? ((input, init) => fetch(input, init)))(`${BASE}${path}`, {
       method,
       headers,
+      ...(signal ? { signal } : {}),
       body: body === undefined ? undefined : JSON.stringify(body)
     });
   } catch {
@@ -176,7 +179,26 @@ export function createCloudApi(fetcher?: FetchLike) {
   const send = <T>(token: string | null, method: string, path: string, body?: unknown) =>
     call<T>(fetcher, token, method, path, body);
   const id = encodeURIComponent;
+  const replayPath = (projectId: string) => `/projects/${id(projectId)}/replay-cases`;
   return {
+    replayCases: (token: string, projectId: string) => get<{ cases: ReplayCase[] }>(token, replayPath(projectId)),
+    createReplayCase: (token: string, projectId: string, input: ReplayCaseInput) =>
+      send<{ testCase: ReplayCase }>(token, "POST", replayPath(projectId), input),
+    updateReplayCase: (
+      token: string,
+      projectId: string,
+      caseId: string,
+      input: ReplayCaseInput & { version: number }
+    ) => send<{ testCase: ReplayCase }>(token, "PUT", `${replayPath(projectId)}/${id(caseId)}`, input),
+    deleteReplayCase: (token: string, projectId: string, caseId: string, version: number) =>
+      send<{ ok: true }>(token, "DELETE", `${replayPath(projectId)}/${id(caseId)}`, { version }),
+    runReplayCase: (
+      token: string,
+      projectId: string,
+      caseId: string,
+      input: { version: number; revision: string },
+      signal?: AbortSignal
+    ) => call<{ run: ReplayRun }>(fetcher, token, "POST", `${replayPath(projectId)}/${id(caseId)}/run`, input, signal),
     signup: (email: string, password: string, invite: string) =>
       send<{ token: string; customer: Customer }>(null, "POST", "/signup", { email, password, invite }),
     login: (email: string, password: string) =>

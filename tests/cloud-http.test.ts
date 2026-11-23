@@ -7,6 +7,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
+import { WebSocketServer } from "ws";
 import dns from "node:dns";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAuthRateLimit } from "../server/auth";
@@ -25,6 +26,7 @@ import { setCloudClock, setCloudPaymentProviders } from "../server/cloud/context
 import type { PaidOrder, PaymentProvider } from "../server/cloud/payments";
 import { resetCloudDatabase } from "../server/cloud/store";
 
+import * as replayRunner from "../server/cloud/replay-runner";
 import { cloudSessionTokens } from "../server/session-tokens";
 
 const KEY = randomBytes(32).toString("base64");
@@ -111,6 +113,156 @@ async function createProject(token: string, name = "Shop") {
   expect(response.status).toBe(201);
   return response.body as { project: { id: string; keyPrefix: string }; apiKey: string };
 }
+
+describe("Studio regression tests over HTTP", () => {
+  it("discards a replay result when its case is edited during the model call", async () => {
+    const { token } = await signupCustomer();
+    const { project } = await createProject(token);
+    const cases = `/cloud/api/projects/${project.id}/replay-cases`;
+    const input = { prompt: "Check delivery", expected: "Monday", fixtures: {} };
+    const created = await call("POST", cases, { token, json: input });
+    const { id, version } = created.body.testCase as { id: string; version: number };
+    const started = Promise.withResolvers<void>();
+    const complete = Promise.withResolvers<Awaited<ReturnType<typeof replayRunner.runDraftReplay>>>();
+    const run = vi.spyOn(replayRunner, "runDraftReplay").mockImplementation(() => {
+      started.resolve();
+      return complete.promise;
+    });
+    try {
+      const request = call("POST", cases + "/" + id + "/run", { token, json: { revision: "rev-1", version } });
+      await started.promise;
+      expect(
+        (await call("PUT", cases + "/" + id, { token, json: { ...input, prompt: "Updated prompt", version } })).status
+      ).toBe(200);
+      complete.resolve({
+        ok: true,
+        value: {
+          run: {
+            revision: "rev-1",
+            caseId: id,
+            caseVersion: version,
+            answer: "Obsolete reply",
+            tools: [],
+            passed: false
+          }
+        }
+      });
+      const result = await request;
+      expect(result.status).toBe(409);
+      expect(result.text).not.toContain("Obsolete reply");
+    } finally {
+      complete.resolve({ ok: false, status: 500, error: "Test ended" });
+      run.mockRestore();
+    }
+  });
+
+  it("replays the saved redacted case against the draft and returns a simulated tool result", async () => {
+    const { token } = await signupCustomer();
+    const { project } = await createProject(token);
+    const other = await signupCustomer();
+    const root = `/cloud/api/projects/${project.id}`;
+    const cases = root + "/replay-cases";
+    const input = {
+      prompt: "Where is order [redacted]?",
+      expected: "friday",
+      fixtures: { check_order: { delivery: "Friday" } }
+    };
+    expect((await call("POST", cases, { token: other.token, json: input })).status).toBe(404);
+    const created = await call("POST", cases, { token, json: input });
+    expect(created.status).toBe(201);
+    const { id, version } = created.body.testCase as { id: string; version: number };
+    const runPath = cases + "/" + id + "/run";
+    const { liveRevision } = (await call("GET", root + "/release", { token })).body;
+    const saved = await call("PUT", root + "/draft", {
+      token,
+      json: {
+        baseRevision: liveRevision,
+        draftRevision: null,
+        patch: {
+          backend: "openai",
+          modelKey: "fake-replay-key",
+          instructions: "Only use the DRAFT SHIPPING POLICY.",
+          studio: {
+            tools: [
+              {
+                name: "check_order",
+                description: "Check when an order arrives.",
+                url: "https://never-contact-me.invalid/tool",
+                parameters: []
+              }
+            ]
+          }
+        }
+      }
+    });
+    const revision = (saved.body.draft as { id: string }).id;
+    expect((await call("POST", runPath, { token, json: { version, revision: liveRevision } })).status).toBe(409);
+    expect((await call("POST", runPath, { token: other.token, json: { version, revision } })).status).toBe(404);
+    expect((await call("POST", runPath, { token, json: { version: version + 1, revision } })).status).toBe(409);
+    const upstream = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(upstream, "listening");
+    const oldUrl = process.env.OPENAI_REALTIME_URL;
+    process.env.OPENAI_REALTIME_URL = `ws://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    const requests: string[] = [];
+    let output = "";
+    upstream.on("connection", (ws) => {
+      ws.on("message", (data) => {
+        const message = JSON.parse(data.toString());
+        requests.push(data.toString());
+        const send = (event: unknown) => ws.send(JSON.stringify(event));
+        if (message.type === "session.update") send({ type: "session.updated" });
+        if (message.item?.type === "function_call_output") output = message.item.output;
+        if (message.type === "response.create") {
+          send({ type: "response.created" });
+          if (!output)
+            send({
+              type: "response.function_call_arguments.done",
+              call_id: "call-1",
+              name: "check_order",
+              arguments: "{}"
+            });
+          else send({ type: "response.output_audio_transcript.delta", delta: "Your order arrives Friday." });
+          send({ type: "response.done", response: { status: "completed" } });
+        }
+      });
+    });
+    try {
+      const run = await call("POST", runPath, {
+        token,
+        json: { revision, version, prompt: "ignored request prompt", expected: "ignored expectation" }
+      });
+      expect(run).toMatchObject({
+        status: 200,
+        body: {
+          run: {
+            revision,
+            caseId: id,
+            caseVersion: version,
+            passed: true,
+            answer: "Your order arrives Friday.",
+            tools: [{ name: "check_order", mocked: true }]
+          }
+        }
+      });
+      expect(output).toContain("Friday");
+      expect(requests.join(" ")).toContain(input.prompt);
+      expect(requests.join(" ")).toContain("DRAFT SHIPPING POLICY");
+      expect(requests.join(" ")).not.toContain("ignored request prompt");
+      expect((await call("GET", root + "/release", { token })).body).toMatchObject({
+        liveRevision,
+        draft: { id: revision, tested: false }
+      });
+      expect((await call("GET", root + "/conversations", { token })).body.conversations).toEqual([]);
+    } finally {
+      if (oldUrl === undefined) delete process.env.OPENAI_REALTIME_URL;
+      else process.env.OPENAI_REALTIME_URL = oldUrl;
+      for (const client of upstream.clients) client.terminate();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+    expect((await call("DELETE", cases + "/" + id, { token, json: { version } })).status).toBe(200);
+    expect((await call("GET", cases, { token })).body.cases).toEqual([]);
+  }, 15000);
+});
 
 describe("Studio releases over HTTP", () => {
   it("allows only the owner to save, test, publish and restore the exact revision", async () => {

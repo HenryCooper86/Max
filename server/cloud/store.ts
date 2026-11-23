@@ -243,6 +243,15 @@ function database(): DatabaseSync {
         revision TEXT NOT NULL, config TEXT NOT NULL, model_key_enc TEXT, traces_headers_enc TEXT,
         tested INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(project_id, role)
       );
+      CREATE TABLE IF NOT EXISTS studio_replay_cases (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        id TEXT NOT NULL, version INTEGER NOT NULL,
+        prompt TEXT NOT NULL, expected TEXT NOT NULL, fixtures TEXT NOT NULL,
+        PRIMARY KEY(project_id, id)
+      );
+      CREATE TRIGGER IF NOT EXISTS studio_replay_project_deleted AFTER UPDATE OF deleted_at ON projects
+      WHEN NEW.deleted_at IS NOT NULL
+      BEGIN DELETE FROM studio_replay_cases WHERE project_id = OLD.id; END;
       CREATE TEMP TRIGGER IF NOT EXISTS studio_live_revision BEFORE UPDATE OF studio_revision ON projects
       WHEN OLD.studio_revision IS NOT NULL AND OLD.studio_revision IS NOT NEW.studio_revision
       BEGIN

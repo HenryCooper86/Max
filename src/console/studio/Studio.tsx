@@ -4,6 +4,8 @@ import { useSay, type Session } from "../hooks";
 import { AgentTab } from "./AgentTab";
 import { mayLeaveSection, SECTION_LEAVE_EVENT } from "../../lib/section-leave";
 import { FlowTab } from "./FlowTab";
+import type { ReplayCaseInput } from "../../../shared/studio-replay";
+import { ReplayCases } from "./ReplayCases";
 import { HistoryTab } from "./HistoryTab";
 import { InstallTab } from "./InstallTab";
 import { KnowledgeTab } from "./KnowledgeTab";
@@ -100,6 +102,8 @@ export function Studio({
   onDeleted: (project: Project) => void;
 }) {
   const say = useSay();
+  const [replaySeed, setReplaySeed] = useState<ReplayCaseInput | null>(null);
+  const consumeReplaySeed = useCallback(() => setReplaySeed(null), []);
   const [tab, showTab] = useState<StudioTab>(initialTab);
   // The flow has unsaved changes of its own, apart from the draft: it is asked before its tab gives way.
   const setTab = useCallback(
@@ -394,9 +398,29 @@ export function Studio({
         {tab === "knowledge" ? <KnowledgeTab {...tabProps} /> : null}
         {tab === "tools" ? <ToolsTab {...tabProps} /> : null}
         {tab === "flow" ? <FlowTab {...tabProps} /> : null}
-        {tab === "test" ? <TestTab {...tabProps} /> : null}
+        {tab === "test" ? (
+          <>
+            <TestTab {...tabProps} />
+            <ReplayCases
+              session={session}
+              projectId={project.id}
+              revision={release?.draft?.id ?? null}
+              canReplay={!dirty && !tabProps.releaseBusy && !!release?.draft?.project.hasModelKey}
+              seed={replaySeed}
+              onSeedConsumed={consumeReplaySeed}
+              onDraftMayBeStale={refreshRelease}
+            />
+          </>
+        ) : null}
         {tab === "install" ? <InstallTab {...tabProps} /> : null}
-        {tab === "history" ? <HistoryTab {...tabProps} /> : null}
+        {tab === "history" ? (
+          <HistoryTab
+            {...tabProps}
+            onCreateTest={(seed) => {
+              if (setTab("test")) setReplaySeed(seed);
+            }}
+          />
+        ) : null}
         {tab === "settings" ? <SettingsTab {...tabProps} onKeyRotated={onKeyRotated} onDeleted={onDeleted} /> : null}
       </div>
       <div className={`cxsSaveBar${dirty || saveError ? " visible" : ""}`} aria-live="polite">

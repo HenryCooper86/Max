@@ -1,0 +1,70 @@
+.cxsReplay {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.cxsReplay p,
+.cxsReplay h3 {
+  margin: 0;
+}
+.cxsReplayHeader,
+.cxsReplayActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cxsReplayHeader {
+  justify-content: space-between;
+}
+.cxsReplayList,
+.cxsReplayEditor,
+.cxsReplayCase {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.cxsReplayList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cxsReplayEditor,
+.cxsReplayCase {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
+.cxsReplayEditor .cxField {
+  margin: 0;
+}
+.cxsReplayEditor textarea {
+  min-width: 0;
+  resize: vertical;
+}
+.cxsReplayPrompt,
+.cxsReplayResult dd {
+  white-space: pre-wrap;
+}
+.cxsReplayResult {
+  display: grid;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.cxsReplayResult dl,
+.cxsReplayResult dd,
+.cxsReplayResult ul {
+  margin: 0;
+}
+.cxsReplayResult dt {
+  color: var(--text-2);
+}
+.cxsReplayResult dd + dt {
+  margin-top: 8px;
+}

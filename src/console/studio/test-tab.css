@@ -136,3 +136,26 @@
     flex-wrap: wrap;
   }
 }
+
+.cxsTestSample {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
+.cxsTestSample h4,
+.cxsTestSample p {
+  margin: 0;
+}
+.cxsTestSample > div:not([hidden]) {
+  display: grid;
+  gap: 8px;
+}
+.cxsTestSample button {
+  max-width: 100%;
+  white-space: normal;
+  text-align: start;
+}

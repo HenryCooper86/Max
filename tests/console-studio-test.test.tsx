@@ -7,6 +7,7 @@ import { DEFAULT_STUDIO } from "../shared/cloud-studio";
 import { LanguageProvider } from "../src/components/LanguageToggle";
 import { ApiError, type Project } from "../src/console/api";
 import { applyAgentEvent, EMPTY_TEST_STATE, formatElapsed } from "../src/console/studio/test-helpers";
+import { AGENT_TEMPLATES } from "../src/lib/agent-templates";
 import { TestTab } from "../src/console/studio/TestTab";
 import { draftFromProject } from "../src/console/studio/types";
 import type { StudioTabProps } from "../src/console/studio/types";
@@ -107,6 +108,22 @@ describe("TestTab", () => {
     expect(html).toContain("模型密钥");
     expect(html).not.toContain("cxsTestMic");
   });
+  it("shows the support sample in the selected English UI before provider setup", () => {
+    vi.stubGlobal("window", { localStorage: { getItem: () => "en-US" } });
+    try {
+      const base = props({ hasModelKey: false });
+      base.draft.studio.template = "support";
+      const html = render(base);
+      const sample = html.indexOf("Sample conversation");
+      expect(sample).toBeGreaterThan(-1);
+      expect(html.indexOf("Add a model key")).toBeGreaterThan(sample);
+      expect(html).toContain("Where is my order A-1042?");
+      expect(html).toContain("Shipped · Estimated delivery Friday");
+      expect(html).toContain("Your package has shipped and should arrive on Friday.");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("offers Save and start when dirty", () => {
     expect(render(props({}, true))).toContain("保存并开始");
   });
@@ -128,6 +145,67 @@ describe("a running Studio test", () => {
     renderer = undefined;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it.each(AGENT_TEMPLATES)("offers the $id template's sample before key setup", async (template) => {
+    const base = props({ hasModelKey: false });
+    base.draft.studio.template = template.id;
+    const page = await mount(base);
+    expect(JSON.stringify(renderer!.toJSON())).toContain("示例对话");
+    const prompt = page.findByProps({ "aria-expanded": false });
+    const reply = page.findByProps({ id: prompt.props["aria-controls"] });
+    expect(reply.props.hidden).toBe(true);
+    expect(prompt.props.children).toBe(template.sample.question.zh);
+    await act(async () => prompt.props.onClick());
+    expect(prompt.props["aria-expanded"]).toBe(true);
+    expect(reply.props.hidden).toBe(false);
+    expect(JSON.stringify(renderer!.toJSON())).toContain(template.sample.reply.zh);
+  });
+
+  it("shows a simulated support lookup and its result before the answer without starting a real test", async () => {
+    const base = props({ hasModelKey: false }, true);
+    base.draft.studio.template = "support";
+    const start = vi.spyOn(VoiceAgent.prototype, "start").mockResolvedValue();
+    const prepareTest = vi.fn(),
+      testSession = vi.fn(),
+      refreshRelease = vi.fn(),
+      goTo = vi.fn();
+    const setItem = vi.fn();
+    vi.stubGlobal("window", { localStorage: { setItem } });
+    const page = await mount({
+      ...base,
+      prepareTest,
+      refreshRelease,
+      goTo,
+      session: { ...base.session, api: { ...base.session.api, testSession } }
+    });
+    const prompt = page.findAllByProps({ "aria-expanded": false });
+    expect(prompt).toHaveLength(1);
+    await act(async () => prompt[0]!.props.onClick());
+    const transcript = JSON.stringify(renderer!.toJSON());
+    const call = transcript.indexOf("check_order");
+    const result = transcript.indexOf("模拟结果");
+    const answer = transcript.indexOf("您的包裹已发出");
+    expect(call).toBeGreaterThan(-1);
+    expect(result).toBeGreaterThan(call);
+    expect(answer).toBeGreaterThan(result);
+    expect(start).not.toHaveBeenCalled();
+    expect(testSession).not.toHaveBeenCalled();
+    expect(prepareTest).not.toHaveBeenCalled();
+    expect(refreshRelease).not.toHaveBeenCalled();
+    expect(setItem).not.toHaveBeenCalled();
+    await act(async () => page.findByProps({ children: "去添加模型密钥" }).props.onClick());
+    expect(goTo).toHaveBeenCalledExactlyOnceWith("agent");
+  });
+
+  it.each(["", "retired-template"])("uses a generic example for a legacy template (%s)", async (template) => {
+    const base = props({ hasModelKey: false });
+    base.draft.studio.template = template;
+    const page = await mount(base);
+    expect(page.findAllByProps({ "aria-expanded": false })).toHaveLength(1);
+    expect(page.findByProps({ "aria-expanded": false }).props.children).toBe(
+      AGENT_TEMPLATES.find((t) => t.id === "blank")!.sample.question.zh
+    );
   });
 
   it("does not reopen the microphone after leaving during Save and start", async () => {

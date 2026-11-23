@@ -61,7 +61,9 @@ their website in a few minutes, without writing a backend:
   only tools: values asked of the user, a fixed sentence, a tool called by rule and a branch on its answer all work
   as they do there. The project's instructions and knowledge are what every step starts from. Choose **Apply to draft** on the canvas before testing or saving. Studio validates the flow with the tools
   in that draft, so a step cannot automatically call a tool that was removed.
-- **Test.** Start a voice or text session from the Test tab. Starting with unsaved edits saves the draft first.
+- **Test.** Before adding a model key, select the visitor’s question to explore a scripted sample for the project's template.
+  The support sample shows an order lookup, a simulated result, and the agent's reply. Samples run locally, use no minutes,
+  and leave the onboarding checklist and draft test status unchanged. Add a model key to start a real voice or text session. Starting with unsaved edits saves the draft first.
   The test runs the selected revision and its actual tools, including webhook calls that may change data at the
   destination. Test minutes count toward the project's balance and live spending limit. Studio revision tests
   skip conversation history, memory, post-call analysis, conversation webhooks, and trace export.

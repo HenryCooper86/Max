@@ -30,6 +30,11 @@ export type AgentTemplate = {
   greeting: Text;
   /** An outline with blanks to fill; empty for blank. */
   knowledge: Text;
+  sample: {
+    question: Text;
+    tool?: { call: string; result: Text };
+    reply: Text;
+  };
   tools: SuggestedTool[];
 };
 
@@ -62,6 +67,13 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
       en: "Company: [name]\nWhat we do: [one or two sentences]\nPlans and prices: [plan: price, what's included]\nHow to get started: [steps]\nContact: [email or page]\nCommon questions:\nQ: [question]\nA: [answer]",
       zh: "公司：[名称]\n我们做什么：[一两句话]\n方案和价格：[方案：价格，包含什么]\n如何开始：[步骤]\n联系方式：[邮箱或页面]\n常见问题：\n问：[问题]\n答：[回答]"
     },
+    sample: {
+      question: { zh: "我注册好了，在哪里邀请同事？", en: "I just signed up. Where can I invite my teammates?" },
+      reply: {
+        zh: "打开“设置”，选择“成员”，再点“邀请成员”。你想现在邀请第一位同事吗？",
+        en: "Open Settings, choose Members, then select Invite member. Would you like to invite your first teammate now?"
+      }
+    },
     tools: []
   },
   {
@@ -81,6 +93,14 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     knowledge: {
       en: "Shipping: [times and costs]\nReturns: [policy]\nRefunds: [how long]\nWarranty: [terms]\nOpening hours for people: [hours]\nFixes for common problems:\n- [problem]: [fix]",
       zh: "配送：[时间和费用]\n退货：[政策]\n退款：[多久到账]\n保修：[条款]\n人工客服时间：[时间]\n常见问题的解决办法：\n- [问题]：[办法]"
+    },
+    sample: {
+      question: { zh: "能帮我查一下订单 A-1042 到哪了吗？", en: "Where is my order A-1042?" },
+      tool: {
+        call: 'check_order({ "orderId": "A-1042" })',
+        result: { zh: "已发货 · 预计周五送达", en: "Shipped · Estimated delivery Friday" }
+      },
+      reply: { zh: "您的包裹已发出，预计周五送达。", en: "Your package has shipped and should arrive on Friday." }
     },
     tools: [
       {
@@ -120,6 +140,13 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     knowledge: {
       en: "Business: [name and address]\nOpening hours: [days and hours]\nServices:\n- [service]: [length], [price]\nCancellation policy: [policy]\nParking and directions: [details]",
       zh: "商家：[名称和地址]\n营业时间：[日期和时间]\n服务：\n- [服务]：[时长]，[价格]\n取消政策：[政策]\n停车和路线：[说明]"
+    },
+    sample: {
+      question: { zh: "我想周六下午预约剪发，可以吗？", en: "Can I book a haircut for Saturday afternoon?" },
+      reply: {
+        zh: "可以帮你查时间。你想约几点？",
+        en: "I can check the schedule. What time on Saturday afternoon works for you?"
+      }
     },
     tools: [
       {
@@ -164,6 +191,10 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     knowledge: {
       en: "Restaurant: [name, address]\nHours: [hours]\nDelivery area and fee: [details]\nMenu:\n- [dish]: [price]. [short description]. Allergens: [list]\nToday's specials: [items]",
       zh: "餐厅：[名称、地址]\n营业时间：[时间]\n外送范围和费用：[说明]\n菜单：\n- [菜名]：[价格]。[简介]。过敏原：[列表]\n今日推荐：[菜品]"
+    },
+    sample: {
+      question: { zh: "我想点两碗拉面。", en: "I’d like two bowls of ramen." },
+      reply: { zh: "两碗拉面。请问你想自取还是外送？", en: "Two bowls of ramen. Would you like pickup or delivery?" }
     },
     tools: [
       {
@@ -217,6 +248,16 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
       en: "Product: [one sentence]\nBest for: [who]\nNot for: [who]\nPlans and prices: [details]\nWhat customers say: [short proof]\nNext step after a call: [demo, trial]",
       zh: "产品：[一句话]\n最适合：[谁]\n不适合：[谁]\n方案和价格：[说明]\n客户评价：[简短案例]\n通话之后的下一步：[演示、试用]"
     },
+    sample: {
+      question: {
+        zh: "我们有三家门店，想让顾客打烊后也能预约。",
+        en: "We have three shops. Can we take bookings after closing time?"
+      },
+      reply: {
+        zh: "可以把语音助手接到预约系统上。三家门店现在用的是同一个预约系统吗？",
+        en: "A voice agent can take bookings through your scheduling system. Do the three shops share one calendar?"
+      }
+    },
     tools: [
       {
         name: "save_lead",
@@ -253,6 +294,13 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     },
     greeting: { en: "Hi! Let's practice together. How was your day?", zh: "你好！我们一起练习吧。今天过得怎么样？" },
     knowledge: { en: "", zh: "" },
+    sample: {
+      question: { zh: "我想说昨天去了公园：“Yesterday I go to the park.”", en: "Yesterday I go to the park." },
+      reply: {
+        zh: "昨天发生的事要用过去式：“Yesterday I went to the park.” What did you do there?",
+        en: "Try “Yesterday I went to the park.” What did you do there?"
+      }
+    },
     tools: []
   },
   {
@@ -264,6 +312,13 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
     instructions: { en: RULES.en, zh: RULES.zh },
     greeting: { en: "", zh: "" },
     knowledge: { en: "", zh: "" },
+    sample: {
+      question: { zh: "帮我给读书会想个开场问题吧。", en: "What’s a good opening question for my book club?" },
+      reply: {
+        zh: "可以问：“哪一幕让你读完后还记得？”大家可以从不同的地方说起。",
+        en: "Try asking, “Which scene stayed with you after you finished the book?” It gives everyone a place to start."
+      }
+    },
     tools: []
   }
 ];

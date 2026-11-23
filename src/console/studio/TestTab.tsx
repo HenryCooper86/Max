@@ -1,7 +1,8 @@
 import "./test-tab.css";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { VoiceAgent, VoiceAgentError } from "../../../sdk/src/index";
 import type { VoiceAgentStatus } from "../../../sdk/src/index";
+import { findTemplate } from "../../lib/agent-templates";
 import { ApiError } from "../api";
 import { useSay } from "../hooks";
 import { applyAgentEvent, EMPTY_TEST_STATE, formatElapsed } from "./test-helpers";
@@ -85,6 +86,55 @@ function TimelineRow({ entry, say }: { entry: TimelineEntry; say: Say }) {
       <strong className="cxMuted">{who}: </strong>
       {entry.text}
     </p>
+  );
+}
+
+function SampleConversation({ templateId }: { templateId: string }) {
+  const say = useSay();
+  const [expanded, setExpanded] = useState(false);
+  const conversationId = useId();
+  const template = findTemplate(templateId) ?? findTemplate("blank");
+  if (!template) return null;
+  const { question, tool, reply } = template.sample;
+
+  return (
+    <section className="cxsTestSample" aria-labelledby={conversationId + "-title"}>
+      <h4 id={conversationId + "-title"}>
+        {say("示例对话", "Sample conversation")}
+        {template.id !== "blank" && ` · ${say(template.title.zh, template.title.en)}`}
+      </h4>
+      <p className="cxMuted">
+        {say(
+          "点选访客的问题，查看预设的回答。示例在本地运行，不占用通话分钟数。",
+          "Select the visitor’s question to see a scripted reply. This sample runs locally and uses no minutes."
+        )}
+      </p>
+      <button
+        type="button"
+        className="siteButton secondary"
+        aria-controls={conversationId}
+        aria-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+      >
+        {say(question.zh, question.en)}
+      </button>
+      <div id={conversationId} hidden={!expanded}>
+        {tool && (
+          <>
+            <p className="cxsTestTool">
+              <strong>{say("模拟工具调用", "Simulated tool call")}</strong> <code>{tool.call}</code>
+            </p>
+            <p className="cxsTestTool">
+              <strong>{say("模拟结果", "Simulated result")}</strong> {say(tool.result.zh, tool.result.en)}
+            </p>
+          </>
+        )}
+        <p className="cxsTestBubble cxsTestBubbleAgent">
+          <strong>{say("助手", "Agent")} · </strong>
+          {say(reply.zh, reply.en)}
+        </p>
+      </div>
+    </section>
   );
 }
 
@@ -228,8 +278,12 @@ export function TestTab({
   if (!live && !savedProject.hasModelKey && !draft.modelKey.trim()) {
     return (
       <div className="cxsTest">
+        <SampleConversation key={draft.studio.template} templateId={draft.studio.template} />
         <p className="cxStatus">
-          {say("测试前需要先添加模型密钥，助手要靠它来回答。", "Add a model key first. Your agent needs it to answer.")}
+          {say(
+            "添加模型密钥后，就能用语音或文字测试你自己的助手。",
+            "Add a model key to test your own agent by voice or text."
+          )}
         </p>
         <div>
           <button type="button" className="siteButton" onClick={() => goTo("agent")}>
@@ -366,6 +420,7 @@ export function TestTab({
           "Tests call the configured server tools. Use test data since those calls can create or update records. Client tools run only on your own website."
         )}
       </p>
+      {!started && <SampleConversation key={draft.studio.template} templateId={draft.studio.template} />}
     </div>
   );
 }

@@ -12,6 +12,8 @@
 // state (ready, listening, thinking, speaking, ...) while it is connected.
 
 import { USAGE_LIMIT_CLOSE_CODE, type AgentEvent } from "../../shared/agent";
+import type { InstallSignalKind } from "../../shared/studio-install";
+import { isWebsiteSession, observeInstall } from "./install-diagnostics";
 import { monthOf } from "./billing";
 import {
   cloudSessionAlive,
@@ -151,15 +153,27 @@ export function projectLimitRefusal(projectId: string, at = now()): CloudRefusal
  * undefined when it may. When the balance cannot be read the session is
  * refused: nobody talks on money that could not be checked.
  */
-export function admitCloudSession(grant: CloudProjectGrant, address: string): CloudRefusal | undefined {
+export function admitCloudSession(
+  grant: CloudProjectGrant,
+  address: string,
+  origin?: string
+): CloudRefusal | undefined {
   try {
-    return admission(grant, address);
+    const refusal = admission(grant, address);
+    if (refusal && isWebsiteSession(grant, origin)) observeInstall(grant.projectId, installRefusalKind(refusal));
+    return refusal;
   } catch (error) {
     log.warn("cloud session not admitted: the store could not be read", {
       message: error instanceof Error ? error.message : String(error)
     });
     return { code: 1013, message: "Max Cloud is busy. Try again in a moment.", reason: "cloud store unavailable" };
   }
+}
+
+function installRefusalKind(refusal: CloudRefusal): InstallSignalKind {
+  if (refusal.reason === "balance used up") return "balance";
+  if (refusal.reason === "project monthly limit") return "monthlyLimit";
+  return refusal.reason.startsWith("too many") ? "busy" : "unavailable";
 }
 
 function admission(grant: CloudProjectGrant, address: string): CloudRefusal | undefined {
@@ -225,13 +239,22 @@ export function openCloudSession(
   running.set(sessionId, session);
   cloudSessionStarted({ sessionId, customerId: grant.customerId, projectId: grant.projectId });
   // The widget has its own grant; the SDK can also run in a browser using a server-minted token.
-  let trackingWebsite = grant.source !== "test" && (session.embed || /^https?:\/\//i.test(origin ?? ""));
+  let trackingWebsite = isWebsiteSession(grant, origin);
+  let lastSignal: InstallSignalKind | undefined;
+  const signal = (kind: InstallSignalKind) => {
+    if (trackingWebsite && lastSignal !== kind) {
+      observeInstall(grant.projectId, kind);
+      lastSignal = kind;
+    }
+  };
+  signal("connected");
   let visitorSpoke = false;
   let answeredAt: number | undefined;
   function recordWebsiteAnswer() {
     if (!trackingWebsite || answeredAt === undefined) return;
     try {
       markWebsiteConversation(grant.projectId, answeredAt);
+      signal("answered");
       trackingWebsite = false;
     } catch (error) {
       log.warn("website conversation milestone could not be saved", { sessionId, message: String(error) });
@@ -245,6 +268,7 @@ export function openCloudSession(
   let closedSeconds: number | undefined;
 
   const refuse = (refusal: CloudRefusal): CloudRefusal => {
+    signal(installRefusalKind(refusal));
     refused = true;
     if (preview) session.clock.stop(now());
     return refusal;
@@ -287,7 +311,15 @@ export function openCloudSession(
       session.clock.observe(event, at, upstreamUsable);
       if (!trackingWebsite || answeredAt !== undefined) return;
       if (payload?.type === "status" && payload.state === "closed") visitorSpoke = false;
+      if (payload?.type === "error" || (payload?.type === "status" && payload.state === "degraded"))
+        signal("providerError");
       if (upstreamUsable === false) return;
+      if (
+        payload?.type === "status" &&
+        (payload.state === "ready" || payload.state === "listening") &&
+        (!lastSignal || lastSignal === "connected" || lastSignal === "providerError")
+      )
+        signal("ready");
       // Cloud voice providers send this metric with the first audio answering a visitor,
       // including when recognition has not delivered the visitor's final words yet.
       if (
@@ -303,7 +335,10 @@ export function openCloudSession(
         typeof payload.text === "string" &&
         payload.text.trim()
       ) {
-        if (payload.speaker === "rider") visitorSpoke = true;
+        if (payload.speaker === "rider") {
+          visitorSpoke = true;
+          signal("waitingForAnswer");
+        }
         if (visitorSpoke && payload.speaker === "agent") answeredAt = at;
       }
       recordWebsiteAnswer();
@@ -355,6 +390,7 @@ export function openCloudSession(
     close(endedAt = now()) {
       if (closedSeconds !== undefined) return closedSeconds;
       recordWebsiteAnswer();
+      if (!refused && lastSignal !== "providerError" && answeredAt === undefined) signal("closed");
       session.clock.stop(endedAt);
       closedSeconds = session.clock.seconds(endedAt);
       running.delete(sessionId);

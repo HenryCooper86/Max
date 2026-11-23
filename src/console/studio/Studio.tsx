@@ -5,6 +5,7 @@ import { AgentTab } from "./AgentTab";
 import { mayLeaveSection, SECTION_LEAVE_EVENT } from "../../lib/section-leave";
 import { FlowTab } from "./FlowTab";
 import type { ReplayCaseInput } from "../../../shared/studio-replay";
+import { ReplayChecks } from "./ReplayChecks";
 import { ReplayCases } from "./ReplayCases";
 import { HistoryTab } from "./HistoryTab";
 import { InstallTab } from "./InstallTab";
@@ -368,7 +369,19 @@ export function Studio({
         publish={() => void changeLive("publish")}
         restore={() => void changeLive("restore")}
         goToTest={() => setTab("test")}
-      />
+      >
+        {release?.draft?.replayChecks && (
+          <ReplayChecks
+            key={release.draft.id}
+            session={session}
+            projectId={project.id}
+            revision={release.draft.id}
+            checks={release.draft.replayChecks}
+            disabled={dirty || tabProps.releaseBusy || !release.draft.project.hasModelKey}
+            refresh={refreshRelease}
+          />
+        )}
+      </ReleasePanel>
       <div className="cxsTabs" role="tablist" aria-label={say("工作室", "Studio")}>
         {TABS.map((item, index) => (
           <button
@@ -409,6 +422,7 @@ export function Studio({
               seed={replaySeed}
               onSeedConsumed={consumeReplaySeed}
               onDraftMayBeStale={refreshRelease}
+              onChecksChanged={refreshRelease}
             />
           </>
         ) : null}

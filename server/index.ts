@@ -61,6 +61,7 @@ import type { IncomingMessage } from "node:http";
 import { createWebRtcGateway, webRtcSettingsFromEnv, type WebRtcGateway } from "./webrtc/gateway";
 import { turnSettingProblems } from "./providers/live/turn-settings";
 import { loadNoiseSuppression, noiseSuppressionFromEnv } from "./noise-suppression";
+import { isWebsiteSession, observeInstall } from "./cloud/install-diagnostics";
 import { createUsageMeter, monthOf, usageSettingsFromEnv } from "./usage";
 import {
   cloudEnabled,
@@ -2004,11 +2005,14 @@ wss.on("connection", (client, request) => {
   }
   // A public-embed token opens one session (server/cloud/sessions.ts); the SDK fetches a new one to reconnect.
   if (!spendEmbedTokens(presented)) {
+    if (cloudProject?.source === "embed") observeInstall(cloudProject.projectId, "unavailable");
     unregisterAuthenticatedConnection(client);
     refuse(1008, "This conversation token was already used. Start the conversation again.", "embed token reused");
     return;
   }
   if (cloudProject && (!runtime || !projectKeyValid(cloudProject.projectId, cloudProject.keyHash))) {
+    if (isWebsiteSession(cloudProject, request.headers.origin))
+      observeInstall(cloudProject.projectId, runtime ? "unavailable" : "modelKey");
     unregisterAuthenticatedConnection(client);
     refuse(
       1008,
@@ -2035,7 +2039,7 @@ wss.on("connection", (client, request) => {
       "This account has used all of its voice minutes for this month.",
       "usage limit reached"
     );
-  const cloudRefusal = cloudProject ? admitCloudSession(cloudProject, address) : undefined;
+  const cloudRefusal = cloudProject ? admitCloudSession(cloudProject, address, request.headers.origin) : undefined;
   if (cloudRefusal || (!cloudProject && usageMeter.overLimit(usageUserId))) {
     // Refused before any session exists: nothing else to clean up.
     unregisterAuthenticatedConnection(client);

@@ -1,5 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
-import { isReplayToolName, REPLAY_LIMITS, type ReplayCase } from "../../shared/studio-replay";
+import {
+  isReplayToolName,
+  REPLAY_LIMITS,
+  type ReplayCase,
+  type ReplayCheck,
+  type ReplayCheckOutcome
+} from "../../shared/studio-replay";
 import type { Result } from "./customers";
 import { newId } from "./secrets";
 import { immediate, liveProject } from "./store";
@@ -146,5 +152,49 @@ export function readReplayCase(
     const current = currentCase(db, projectId, id, version);
     if (!current.ok) return current;
     return { ok: true, value: { testCase: replayCase(current.value) } };
+  });
+}
+
+/** Only current answers leave the store. A change to either target makes the case due for another run. */
+export function draftReplayChecks(db: DatabaseSync, projectId: string, revision: string): ReplayCheck[] {
+  const rows = db
+    .prepare(
+      `SELECT c.id, c.version, c.prompt, c.expected, r.revision AS lastRevision,
+    CASE WHEN r.revision=? AND r.version=c.version THEN r.outcome END AS outcome
+    FROM studio_replay_cases c LEFT JOIN studio_replay_results r ON c.project_id=r.project_id AND c.id=r.id
+    WHERE c.project_id=? ORDER BY c.rowid`
+    )
+    .all(revision, projectId) as (Pick<ReplayCase, "id" | "version" | "prompt" | "expected"> & {
+    lastRevision: string | null;
+    outcome: string | null;
+  })[];
+  return rows.map(({ lastRevision, outcome, ...item }) => ({
+    ...item,
+    stale: lastRevision !== null && outcome === null,
+    outcome: outcome === null ? null : (JSON.parse(outcome) as ReplayCheckOutcome)
+  }));
+}
+
+export function recordReplayOutcome(
+  customerId: string,
+  projectId: string,
+  revision: string,
+  testCase: ReplayCase,
+  outcome: ReplayCheckOutcome
+): Result<true> {
+  return withProject(customerId, projectId, (db) => {
+    const latest = currentCase(db, projectId, testCase.id, testCase.version);
+    if (!latest.ok) return latest;
+    if (
+      !db
+        .prepare("SELECT 1 FROM studio_snapshots WHERE project_id=? AND role='draft' AND revision=?")
+        .get(projectId, revision)
+    )
+      return fail(409, "The draft changed. Refresh and replay the current draft.");
+    db.prepare(
+      `INSERT INTO studio_replay_results(project_id,id,revision,version,outcome) VALUES (?,?,?,?,?)
+      ON CONFLICT(project_id,id) DO UPDATE SET revision=excluded.revision,version=excluded.version,outcome=excluded.outcome`
+    ).run(projectId, testCase.id, revision, testCase.version, JSON.stringify(outcome));
+    return { ok: true, value: true };
   });
 }

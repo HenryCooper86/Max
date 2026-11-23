@@ -282,6 +282,45 @@ it("measures the rolling creation cohort, retaining deleted projects and taking 
   expect(studioActivation(START)).toMatchObject({ newProjects: 4, activatedProjects: 3, medianTimeMs: 3_000 });
 });
 
+it("reports install attempts to the owner and preserves the reason a website session stopped", async () => {
+  const { customerId, projectId, publicId, grant, embedGrant } = await setup({ embed: true });
+  const signal = () => {
+    const state = studioRelease(customerId, projectId);
+    if (!state.ok) throw new Error(state.error);
+    return state.value.installSignal;
+  };
+  const mint = (origin: string) => mintEmbedSession({ publicId, origin, address: "visitor" });
+  expect(signal()).toBeNull();
+  const preview = openCloudSession("preview", grant, "visitor", SITE);
+  preview.observe({ type: "error", message: "private model message" });
+  preview.close();
+  expect(signal()).toBeNull();
+  expect(mint("https://unlisted.test")).toMatchObject({ ok: false, status: 403 });
+  expect(signal()).toEqual({ kind: "origin", at: clock });
+  expect(studioRelease("someone-else", projectId)).toMatchObject({ ok: false, status: 404 });
+  expect(mint(SITE).ok).toBe(true);
+  expect(signal()?.kind).toBe("tokenIssued");
+  const web = openCloudSession("diagnostic", embedGrant, "visitor", SITE);
+  expect(signal()?.kind).toBe("connected");
+  web.observe({ type: "status", state: "ready" }, true);
+  expect(signal()?.kind).toBe("ready");
+  web.observe({ type: "transcript", speaker: "rider", text: "private question", final: true });
+  expect(signal()?.kind).toBe("waitingForAnswer");
+  web.observe({ type: "error", message: "private model message" }, false);
+  web.close();
+  expect(signal()).toEqual({ kind: "providerError", at: clock });
+  expect(listProjects(customerId)[0]!.firstWebsiteConversationAt).toBeNull();
+  const retry = openCloudSession("retry", embedGrant, "visitor", SITE);
+  retry.observe({ type: "metric", latencyMs: 150 });
+  retry.close();
+  expect(signal()).toEqual({ kind: "answered", at: clock });
+  expect(listProjects(customerId)[0]!.firstWebsiteConversationAt).toBe(clock);
+  clock++;
+  openCloudSession("no-answer", embedGrant, "visitor", SITE).close();
+  expect(signal()).toEqual({ kind: "closed", at: clock });
+  expect(listProjects(customerId)[0]!.firstWebsiteConversationAt).toBe(START);
+});
+
 it("recognizes a website audio answer before the transcript arrives", async () => {
   const { customerId, embedGrant } = await setup();
   const live = openCloudSession("audio", embedGrant, "visitor", SITE);

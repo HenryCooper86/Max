@@ -107,6 +107,17 @@ their website in a few minutes, without writing a backend:
   write-only `tracesHeaders`; the project says `hasTracesHeaders`, and `POST /cloud/api/projects/:id/traces-test`
   sends the test.
 
+### Diagnosing a website installation
+
+In **Install → Installation diagnostics**, start a conversation on the published site, then choose **Refresh diagnostics**.
+Max shows the most recent recorded widget request or browser session event and what to check next. For example, a
+rejected origin calls for checking the live list of allowed origins, while an issued token followed by no connection
+calls for checking the browser connection to the relay. The first successful website conversation has its own timestamp.
+A later unsuccessful attempt can update the diagnostic while the installation milestone stays complete.
+
+The owner sees one event kind and its time. Studio previews and backend-only sessions are excluded. A snippet that
+never contacts Max, or one pointing at an unknown project ID, produces no project-specific observation.
+
 ### Replaying a failed conversation turn
 
 Open a conversation in Studio, choose **Create test from this turn**, and review the visitor message in the Test tab.
@@ -124,6 +135,15 @@ limit. The separate live provider test still gates publishing.
 
 Saved cases belong to the project and remain available after source conversations expire. Edit or delete them in
 the Test tab. Deleting the project removes its cases.
+
+Beside **Publish**, **Run all** replays every saved case sequentially against the displayed draft. The button shows the
+case count, and replays use account minutes. Keep the project open while the suite runs. **Stop replays** cancels the
+active request and skips the remaining cases. Completed results survive refreshing Studio. Expand a case to compare
+the expected phrase with the actual answer, check for a missing simulated response, or read a provider error.
+
+Studio keeps the latest completed result for each saved case. Editing the case clears its old answer. Saving a new
+draft marks earlier results as needing another run. The results are advisory. Publishing still requires a successful
+interactive provider test of the exact draft.
 
 ### Testing, publishing, and restoring a revision
 

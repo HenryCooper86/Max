@@ -1,5 +1,8 @@
 // Project configuration releases. The project row is authoritative for all identity,
 // credentials used to access Max, and operational state. Snapshots only overlay settings.
+import type { InstallSignal } from "../../shared/studio-install";
+import type { ReplayCheck } from "../../shared/studio-replay";
+import { draftReplayChecks } from "./replay-cases";
 import type { DatabaseSync } from "node:sqlite";
 import {
   prepareProjectChanges,
@@ -14,10 +17,17 @@ import { decryptModelKey, newId } from "./secrets";
 import { immediate, liveProject, readStudioDraft, updateProject, type ProjectRow } from "./store";
 
 export type ReleaseState = {
+  installSignal: InstallSignal | null;
   project: PublicProject;
   liveRevision: string;
   previousRevision: string | null;
-  draft: { id: string; project: PublicProject; tested: boolean; changedFields: string[] } | null;
+  draft: {
+    id: string;
+    project: PublicProject;
+    tested: boolean;
+    changedFields: string[];
+    replayChecks: ReplayCheck[];
+  } | null;
 };
 
 const configFields = {
@@ -95,11 +105,19 @@ function changedFields(live: ProjectRow, next: ProjectRow): string[] {
   return fields;
 }
 
-function state({ live, id, draft, previous }: Release): Result<ReleaseState> {
+function lastInstallSignal(db: DatabaseSync, projectId: string): InstallSignal | null {
+  return (
+    (db.prepare("SELECT kind,at FROM website_install_signals WHERE project_id=?").get(projectId) as
+      InstallSignal | undefined) ?? null
+  );
+}
+
+function state({ db, live, id, draft, previous }: Release): Result<ReleaseState> {
   const next = draft && overlay(live, draft);
   return {
     ok: true,
     value: {
+      installSignal: lastInstallSignal(db, live.id),
       project: publicProject(live),
       liveRevision: id,
       previousRevision: previous?.revision ?? null,
@@ -109,6 +127,7 @@ function state({ live, id, draft, previous }: Release): Result<ReleaseState> {
               id: draft.revision,
               project: publicProject(next),
               tested: !!draft.tested,
+              replayChecks: draftReplayChecks(db, live.id, draft.revision),
               changedFields: changedFields(live, next)
             }
           : null
@@ -170,7 +189,13 @@ function activate(r: Release, s: Snapshot, id: string) {
   );
   return {
     ok: true,
-    value: { project: publicProject(next), liveRevision: id, previousRevision: r.id, draft: null }
+    value: {
+      project: publicProject(next),
+      liveRevision: id,
+      previousRevision: r.id,
+      draft: null,
+      installSignal: lastInstallSignal(r.db, next.id)
+    }
   } as const;
 }
 

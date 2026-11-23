@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Project, StudioRelease } from "../api";
 import type { FlowEntry, FlowStep } from "../../lib/flow";
 import { useSay } from "../hooks";
@@ -118,8 +119,10 @@ export function ReleasePanel({
   refresh,
   publish,
   restore,
-  goToTest
+  goToTest,
+  children
 }: {
+  children?: ReactNode;
   release: StudioRelease | null;
   dirty: boolean;
   busy: boolean;
@@ -183,6 +186,7 @@ export function ReleasePanel({
           ) : null}
         </div>
       </div>
+      {children}
       {draft && release ? (
         <details>
           <summary>{say("查看草稿更改", "Review draft changes")}</summary>

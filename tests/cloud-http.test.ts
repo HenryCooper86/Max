@@ -250,7 +250,13 @@ describe("Studio regression tests over HTTP", () => {
       expect(requests.join(" ")).not.toContain("ignored request prompt");
       expect((await call("GET", root + "/release", { token })).body).toMatchObject({
         liveRevision,
-        draft: { id: revision, tested: false }
+        draft: {
+          id: revision,
+          tested: false,
+          replayChecks: [
+            { id, version, expected: "friday", outcome: { status: "passed", answer: "Your order arrives Friday." } }
+          ]
+        }
       });
       expect((await call("GET", root + "/conversations", { token })).body.conversations).toEqual([]);
     } finally {

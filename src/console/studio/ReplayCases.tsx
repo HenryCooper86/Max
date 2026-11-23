@@ -12,6 +12,7 @@ type Props = {
   canReplay: boolean;
   seed: ReplayCaseInput | null;
   onSeedConsumed: () => void;
+  onChecksChanged?: () => void;
   onDraftMayBeStale?: () => void;
 };
 
@@ -94,7 +95,8 @@ function ProjectReplayCases({
   canReplay,
   seed,
   onSeedConsumed,
-  onDraftMayBeStale
+  onDraftMayBeStale,
+  onChecksChanged
 }: Props) {
   const say = useSay();
   const headingId = useId();
@@ -237,6 +239,7 @@ function ProjectReplayCases({
       const { testCase } = editor.saved
         ? await api.updateReplayCase(token, projectId, editor.saved.id, { ...input, version: editor.saved.version })
         : await api.createReplayCase(token, projectId, input);
+      onChecksChanged?.();
       setCases((current) =>
         editor.saved
           ? (current?.map((item) => (item.id === testCase.id ? testCase : item)) ?? null)
@@ -259,6 +262,7 @@ function ProjectReplayCases({
     setBusy("delete");
     try {
       await api.deleteReplayCase(token, projectId, item.id, item.version);
+      onChecksChanged?.();
       setCases((current) => current?.filter((candidate) => candidate.id !== item.id) ?? null);
       setEditor((current) => (current?.saved?.id === item.id ? null : current));
       setRun((current) => (current?.caseId === item.id ? null : current));
@@ -293,11 +297,15 @@ function ProjectReplayCases({
         result.run.revision === revision
       ) {
         setRun(result.run);
+        onChecksChanged?.();
       } else {
         report(new ApiError("request", "Replay target changed", 409), "run");
       }
     } catch (cause) {
-      if (!controller.signal.aborted) report(cause, "run");
+      if (!controller.signal.aborted) {
+        report(cause, "run");
+        if (cause instanceof ApiError && [422, 502, 504].includes(cause.status)) onChecksChanged?.();
+      }
     } finally {
       if (!controller.signal.aborted) {
         activeRun.current = null;

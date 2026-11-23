@@ -6,6 +6,8 @@ import { LanguageProvider } from "../src/components/LanguageToggle";
 import { ApiError } from "../src/console/api";
 import type { Session } from "../src/console/hooks";
 import { mayLeaveSection } from "../src/lib/section-leave";
+import { ReplayChecks } from "../src/console/studio/ReplayChecks";
+import type { ReplayCheck } from "../shared/studio-replay";
 import { ReplayCases } from "../src/console/studio/ReplayCases";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -204,4 +206,101 @@ it("keeps unsaved redactions when the owner declines to leave or replace the edi
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+it("runs the saved suite serially on one revision, keeps going after a timeout, and refreshes the publish summary", async () => {
+  const pending = Promise.withResolvers<Awaited<ReturnType<Session["api"]["runReplayCase"]>>>();
+  const play = vi
+    .fn<Session["api"]["runReplayCase"]>()
+    .mockReturnValueOnce(pending.promise)
+    .mockRejectedValueOnce(new ApiError("request", "Model timed out", 504))
+    .mockResolvedValueOnce({
+      run: { caseId: "c", caseVersion: 3, revision: "draft-a", passed: false, answer: "Other answer", tools: [] }
+    });
+  const session = { api: { runReplayCase: play }, token: "token", fail: vi.fn() } as unknown as Session;
+  const checks: ReplayCheck[] = ["a", "b", "c"].map((id, i) => ({
+    id,
+    version: i + 1,
+    prompt: id,
+    expected: "yes",
+    outcome: null,
+    stale: false
+  }));
+  const refresh = vi.fn(async () => {
+    renderer!.update(
+      draw(
+        checks.map((c, i) => ({
+          ...c,
+          outcome:
+            i === 1
+              ? { status: "error", message: "Model timed out" }
+              : { status: i === 0 ? "passed" : "failed", answer: i === 0 ? "yes" : "Other answer", missingTools: [] }
+        }))
+      )
+    );
+  });
+  function draw(rows: ReplayCheck[]) {
+    return (
+      <ReplayChecks
+        session={session}
+        checks={rows}
+        projectId="p"
+        revision="draft-a"
+        disabled={false}
+        refresh={refresh}
+      />
+    );
+  }
+  await act(async () => {
+    renderer = create(draw(checks));
+  });
+  const root = renderer!.root;
+  expect(JSON.stringify(renderer!.toJSON())).toContain("账户分钟数");
+  await act(async () => {
+    root.findByType("button").props.onClick();
+  });
+  expect(play).toHaveBeenCalledTimes(1);
+  await act(async () =>
+    pending.resolve({
+      run: { caseId: "a", caseVersion: 1, revision: "draft-a", passed: true, answer: "yes", tools: [] }
+    })
+  );
+  expect(play.mock.calls.map(([, project, id, target]) => [project, id, target])).toEqual(
+    checks.map((c) => ["p", c.id, { version: c.version, revision: "draft-a" }])
+  );
+  expect(refresh).toHaveBeenCalledOnce();
+  const page = JSON.stringify(renderer!.toJSON());
+  for (const value of ["1/3", "Model timed out", "Other answer", "实际回答"]) expect(page).toContain(value);
+});
+
+it("stops a paid suite when its release panel unmounts", async () => {
+  const pending = Promise.withResolvers<Awaited<ReturnType<Session["api"]["runReplayCase"]>>>();
+  const play = vi.fn<Session["api"]["runReplayCase"]>().mockReturnValue(pending.promise);
+  const session = { api: { runReplayCase: play }, token: "token", fail: vi.fn() } as unknown as Session;
+  const first = { ...saved, outcome: null, stale: false };
+  const refresh = vi.fn();
+  await act(async () => {
+    renderer = create(
+      <ReplayChecks
+        checks={[first, { ...first, id: "next" }]}
+        session={session}
+        projectId="p"
+        revision="current"
+        disabled={false}
+        refresh={refresh}
+      />
+    );
+  });
+  await act(async () => {
+    renderer!.root.findByType("button").props.onClick();
+  });
+  const signal = play.mock.calls[0]![4]!;
+  await act(async () => {
+    renderer!.unmount();
+    renderer = undefined;
+  });
+  expect(signal.aborted).toBe(true);
+  await act(async () => pending.reject(new ApiError("network", "Cancelled")));
+  expect(play).toHaveBeenCalledTimes(1);
+  expect(refresh).not.toHaveBeenCalled();
 });

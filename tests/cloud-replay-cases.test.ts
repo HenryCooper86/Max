@@ -8,9 +8,11 @@ import {
   deleteReplayCase,
   listReplayCases,
   readReplayCase,
+  recordReplayOutcome,
   updateReplayCase
 } from "../server/cloud/replay-cases";
 import { immediate, insertCustomer, resetCloudDatabase, softDeleteProject } from "../server/cloud/store";
+import { saveStudioDraft, studioRelease } from "../server/cloud/revisions";
 import { REPLAY_LIMITS } from "../shared/studio-replay";
 
 const owner = "owner";
@@ -101,4 +103,42 @@ it("rejects empty, malformed and oversized inputs and enforces the project case 
   expect(createReplayCase(owner, project, input)).toMatchObject({ ok: false, status: 409 });
   expect(unwrap(listReplayCases(owner, project)).cases).toHaveLength(REPLAY_LIMITS.cases);
   expect(createReplayCase(owner, sibling, input)).toMatchObject({ ok: true });
+});
+
+it("keeps release checks after reopening the database and invalidates only the affected targets", () => {
+  const release = () => unwrap(studioRelease(owner, project));
+  const makeDraft = (greeting: string) => {
+    const current = release();
+    return unwrap(
+      saveStudioDraft(owner, project, {
+        baseRevision: current.liveRevision,
+        draftRevision: current.draft?.id ?? null,
+        patch: { greeting }
+      })
+    ).draft!;
+  };
+  const a = unwrap(createReplayCase(owner, project, input)).testCase;
+  const b = unwrap(createReplayCase(owner, project, { ...input, prompt: "Order update?" })).testCase;
+  const d = makeDraft("First draft");
+  const outcome = { status: "passed" as const, answer: "Shipment is on the way", missingTools: [] };
+  expect(unwrap(recordReplayOutcome(owner, project, d.id, a, outcome))).toBe(true);
+  expect(recordReplayOutcome(other, project, d.id, a, outcome)).toMatchObject({ ok: false, status: 404 });
+  expect(unwrap(recordReplayOutcome(owner, project, d.id, b, { status: "error", message: "Timed out" }))).toBe(true);
+  resetCloudDatabase(join(directory, "cloud.db"));
+  expect(release().draft?.replayChecks).toMatchObject([
+    { id: a.id, outcome, stale: false },
+    { id: b.id, outcome: { status: "error", message: "Timed out" } }
+  ]);
+  unwrap(updateReplayCase(owner, project, a.id, { ...input, version: 1, prompt: "Redacted" }));
+  expect(recordReplayOutcome(owner, project, d.id, a, outcome)).toMatchObject({ ok: false, status: 409 });
+  expect(release().draft?.replayChecks).toMatchObject([
+    { id: a.id, version: 2, stale: true, outcome: null },
+    { id: b.id, stale: false }
+  ]);
+  expect(JSON.stringify(release())).not.toContain("Shipment is on the way");
+  const next = makeDraft("Revised draft");
+  expect(next.replayChecks.every((c) => c.stale && !c.outcome)).toBe(true);
+  expect(recordReplayOutcome(owner, project, d.id, b, outcome)).toMatchObject({ ok: false, status: 409 });
+  unwrap(deleteReplayCase(owner, project, b.id, b.version));
+  expect(release().draft?.replayChecks).toHaveLength(1);
 });

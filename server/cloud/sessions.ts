@@ -10,6 +10,8 @@
 //           other clients can, which is why the limits matter. An embed token
 //           opens one session: the SDK fetches a new one for every connect.
 
+import type { InstallSignalKind } from "../../shared/studio-install";
+import { observeInstall } from "./install-diagnostics";
 import { cloudSessionTokens } from "../session-tokens";
 import { now } from "./context";
 import { projectStudio, type Result } from "./customers";
@@ -111,26 +113,30 @@ export function mintEmbedSession(input: { publicId: unknown; origin: unknown; ad
   }
   const row = liveProjectByPublicId(input.publicId);
   if (!row) return { ok: false, status: 404, error: "Unknown agent." };
+  const refuse = (kind: InstallSignalKind, status: number, error: string): Result<Minted> => {
+    observeInstall(row.id, kind);
+    return { ok: false, status, error };
+  };
   const studio = projectStudio(row);
   const origin = typeof input.origin === "string" ? input.origin : "";
-  if (!studio.publicEmbed.enabled || !origin || !studio.publicEmbed.origins.includes(origin)) {
-    return { ok: false, status: 403, error: NOT_EMBEDDABLE };
-  }
-  if (!row.model_key_enc) return { ok: false, status: 409, error: "This agent is not ready yet." };
+  if (!studio.publicEmbed.enabled) return refuse("disabled", 403, NOT_EMBEDDABLE);
+  if (!origin || !studio.publicEmbed.origins.includes(origin)) return refuse("origin", 403, NOT_EMBEDDABLE);
+  if (!row.model_key_enc) return refuse("modelKey", 409, "This agent is not ready yet.");
   if (!allowed(`embed-ip:${input.address}`, LIMITS.embedPerAddress)) {
-    return { ok: false, status: 429, error: "Too many conversations started. Try again in a minute." };
+    return refuse("busy", 429, "Too many conversations started. Try again in a minute.");
   }
   if (!allowed(`embed:${row.id}`, LIMITS.embedPerProject)) {
-    return { ok: false, status: 429, error: "This agent is busy. Try again in a minute." };
+    return refuse("busy", 429, "This agent is busy. Try again in a minute.");
   }
   if (projectLimitRefusal(row.id)) {
-    return { ok: false, status: 403, error: "This agent has used its minutes for this month." };
+    return refuse("monthlyLimit", 403, "This agent has used its minutes for this month.");
   }
   const minted = cloudSessionTokens.mint(
     { ttlSeconds: EMBED_TTL_SECONDS },
     { projectId: row.id, customerId: row.customer_id, keyHash: row.key_hash, source: "embed", origin }
   );
-  if (!minted.ok) return { ok: false, status: 400, error: minted.error };
+  if (!minted.ok) return refuse("unavailable", 400, minted.error);
+  observeInstall(row.id, "tokenIssued");
   return { ok: true, value: { token: minted.token, expiresAt: minted.expiresAt } };
 }
 

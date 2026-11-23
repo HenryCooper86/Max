@@ -4,6 +4,7 @@
 // two writes that move money (booking a session, crediting a paid order) each
 // run in one BEGIN IMMEDIATE transaction, idempotent on UNIQUE(kind, ref).
 
+import type { InstallSignalKind } from "../../shared/studio-install";
 import type { StudioActivation } from "../../shared/cloud-studio";
 import fs from "node:fs";
 import os from "node:os";
@@ -251,6 +252,20 @@ function database(): DatabaseSync {
         prompt TEXT NOT NULL, expected TEXT NOT NULL, fixtures TEXT NOT NULL,
         PRIMARY KEY(project_id, id)
       );
+      CREATE TABLE IF NOT EXISTS studio_replay_results (
+        project_id TEXT NOT NULL, id TEXT NOT NULL, revision TEXT NOT NULL, version INTEGER NOT NULL,
+        outcome TEXT, PRIMARY KEY(project_id,id),
+        FOREIGN KEY(project_id,id) REFERENCES studio_replay_cases(project_id,id) ON DELETE CASCADE
+      );
+      CREATE TRIGGER IF NOT EXISTS studio_replay_case_edited AFTER UPDATE OF version ON studio_replay_cases
+      BEGIN UPDATE studio_replay_results SET outcome=NULL WHERE project_id=NEW.project_id AND id=NEW.id; END;
+      CREATE TABLE IF NOT EXISTS website_install_signals (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL, at INTEGER NOT NULL
+      );
+      CREATE TRIGGER IF NOT EXISTS website_install_project_deleted AFTER UPDATE OF deleted_at ON projects
+      WHEN NEW.deleted_at IS NOT NULL
+      BEGIN DELETE FROM website_install_signals WHERE project_id=OLD.id; END;
       CREATE TRIGGER IF NOT EXISTS studio_replay_project_deleted AFTER UPDATE OF deleted_at ON projects
       WHEN NEW.deleted_at IS NOT NULL
       BEGIN DELETE FROM studio_replay_cases WHERE project_id = OLD.id; END;
@@ -393,6 +408,18 @@ export function insertProject(row: ProjectRow, limit: number): boolean {
     );
     return true;
   });
+}
+
+export function storeInstallSignal(projectId: string, kind: InstallSignalKind, at: number) {
+  database()
+    .prepare(
+      `INSERT INTO website_install_signals(project_id,kind,at)
+    SELECT id, ?, ? FROM projects WHERE id=? AND deleted_at IS NULL
+    ON CONFLICT(project_id) DO UPDATE SET kind=excluded.kind,at=excluded.at
+    WHERE excluded.at >= website_install_signals.at
+      AND (excluded.kind <> website_install_signals.kind OR excluded.at - website_install_signals.at >= 5000)`
+    )
+    .run(kind, at, projectId);
 }
 
 /** The first answered website conversation outlives transcript retention and project edits. */

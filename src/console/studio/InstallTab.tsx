@@ -1,6 +1,7 @@
 import "./install-tab.css";
 import { useId, useState, type KeyboardEvent } from "react";
 import { STUDIO_LIMITS, normalizeOrigin, type WidgetPosition } from "../../../shared/cloud-studio";
+import { InstallDiagnostics } from "./InstallDiagnostics";
 import { CopyButton } from "../CopyButton";
 import { useSay } from "../hooks";
 import { FRAMEWORKS, frameworkSnippets, mintTokenCurl, publicEmbedSnippet, type Framework } from "./install-snippets";
@@ -68,6 +69,7 @@ export function InstallTab(props: StudioTabProps) {
 
   return (
     <div className="cxsInstall">
+      <InstallDiagnostics {...props} />
       <section className="cxsInstallHero" aria-labelledby={`${ids}-easy`}>
         <h3 id={`${ids}-easy`}>
           {say("最简单：粘贴一行代码（不需要后端）", "Easiest: paste one line (no backend needed)")}

@@ -1,4 +1,5 @@
-import type { ReplayCase, ReplayCaseInput, ReplayRun } from "../../shared/studio-replay";
+import type { InstallSignal } from "../../shared/studio-install";
+import type { ReplayCase, ReplayCaseInput, ReplayCheck, ReplayRun } from "../../shared/studio-replay";
 // Typed client for the Max Cloud JSON API (/cloud/api). Every function takes
 // the bearer token (when the endpoint needs one) and an optional fetch, so
 // tests can inject both.
@@ -36,10 +37,17 @@ export type Project = {
   createdAt: number;
 };
 export type StudioRelease = {
+  installSignal?: InstallSignal | null;
   project: Project;
   liveRevision: string;
   previousRevision: string | null;
-  draft: { id: string; project: Project; tested: boolean; changedFields: string[] } | null;
+  draft: {
+    id: string;
+    project: Project;
+    tested: boolean;
+    changedFields: string[];
+    replayChecks?: ReplayCheck[];
+  } | null;
 };
 
 export type ProjectPatch = Partial<{

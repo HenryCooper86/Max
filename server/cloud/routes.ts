@@ -38,7 +38,14 @@ import {
   publishStudioRevision,
   restoreStudioRevision
 } from "./revisions";
-import { createReplayCase, listReplayCases, updateReplayCase, deleteReplayCase, readReplayCase } from "./replay-cases";
+import {
+  createReplayCase,
+  listReplayCases,
+  updateReplayCase,
+  deleteReplayCase,
+  readReplayCase,
+  recordReplayOutcome
+} from "./replay-cases";
 import { runDraftReplay } from "./replay-runner";
 import { mintEmbedSession, mintTestSession } from "./sessions";
 import { liveProject, readStudioLiveRevision } from "./store";
@@ -260,10 +267,22 @@ export function registerCloudRoutes(app: express.Express): void {
       try {
         const result = await runDraftReplay(customerId, projectId, revision, saved.value.testCase, disconnect.signal);
         if (res.destroyed) return;
-        if (result.ok) {
-          // An edit or deletion during the provider call makes this result obsolete.
-          const latest = readReplayCase(customerId, projectId, caseId, version);
-          if (!latest.ok) return send(res, latest);
+        if (result.ok || [422, 502, 504].includes(result.status)) {
+          const { testCase } = saved.value;
+          const recorded = recordReplayOutcome(
+            customerId,
+            projectId,
+            revision,
+            testCase,
+            result.ok
+              ? {
+                  status: result.value.run.passed ? "passed" : "failed",
+                  answer: result.value.run.answer,
+                  missingTools: result.value.run.tools.filter((t) => !t.mocked).map((t) => t.name)
+                }
+              : { status: "error", message: result.error }
+          );
+          if (!recorded.ok) return send(res, recorded);
         }
         send(res, result);
       } finally {

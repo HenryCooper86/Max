@@ -18,6 +18,14 @@ export type ReplayRun = {
   tools: { name: string; mocked: boolean }[];
 };
 
+export type ReplayCheckOutcome =
+  { status: "passed" | "failed"; answer: string; missingTools: string[] } | { status: "error"; message: string };
+
+export type ReplayCheck = Pick<ReplayCase, "id" | "version" | "prompt" | "expected"> & {
+  outcome: ReplayCheckOutcome | null;
+  stale: boolean;
+};
+
 export const REPLAY_LIMITS = { prompt: 4000, expected: 500, fixtures: 10, fixtureBytes: 8000, cases: 50 } as const;
 
 /** Fixture keys are project tool names; avoid special keys when constructing their JSON map. */

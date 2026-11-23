@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLocale
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -112,7 +113,6 @@ import io.github.henrycooper86.max.ui.theme.VisorTheme
 import io.github.henrycooper86.max.ui.theme.VisorType
 import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.Locale
 
 private fun turnCaption(turn: TurnState, name: String): String = when (turn) {
     TurnState.IDLE -> tr(Str.TURN_IDLE)
@@ -529,7 +529,8 @@ private fun CaptionsOverlay(
 ) {
     val c = Visor.colors
     val listState = rememberLazyListState()
-    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+    val locale = LocalLocale.current.platformLocale
+    val timeFormat = remember(locale) { SimpleDateFormat("HH:mm", locale) }
 
     LaunchedEffect(items.size, items.lastOrNull()?.text) {
         if (items.isNotEmpty()) listState.animateScrollToItem(items.lastIndex)

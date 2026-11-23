@@ -56,20 +56,20 @@ class CompanionClient(private val scope: CoroutineScope, private val stopped: ()
         ready = false; startSent = false; awaitingAttach = action != null
         mutableState.value = mutableState.value.copy(status = "connecting", detail = null, riding = desiredRide)
         socket = factory.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
-            override fun onOpen(ws: WebSocket, response: Response) { scope.launch {
-                if (owner != generation || socket !== ws) return@launch
+            override fun onOpen(webSocket: WebSocket, response: Response) { scope.launch {
+                if (owner != generation || socket !== webSocket) return@launch
                 timeout?.cancel()
                 timeout = scope.launch { delay(if (binding) 65_000 else 15_000); if (owner == generation) fail(tr(Str.COMP_TIMEOUT)) }
             } }
-            override fun onMessage(ws: WebSocket, text: String) { scope.launch {
-                if (owner != generation || socket !== ws) return@launch
+            override fun onMessage(webSocket: WebSocket, text: String) { scope.launch {
+                if (owner != generation || socket !== webSocket) return@launch
                 val incoming = CompanionProtocol.parse(text) ?: return@launch
                 // Wait for attach sync before sending a mutation: its initial ready/unpaired
                 // status must never be mistaken for the answer to pair or unpair.
                 if (awaitingAttach && incoming.status != "error") {
                     awaitingAttach = false
                     val pendingAction = action; action = null
-                    if (pendingAction != null && !ws.send(pendingAction)) transportLost(ws, owner, null)
+                    if (pendingAction != null && !webSocket.send(pendingAction)) transportLost(webSocket, owner, null)
                     return@launch
                 }
                 if (incoming.status == "error" && incoming.device?.startsWith("location.") == true) return@launch
@@ -81,14 +81,14 @@ class CompanionClient(private val scope: CoroutineScope, private val stopped: ()
                 mutableState.value = incoming.copy(riding = desiredRide, fixes = mutableState.value.fixes)
                 if (incoming.status == "ready" && desiredRide && !startSent) {
                     startSent = true
-                    if (!ws.send(CompanionProtocol.action("start"))) transportLost(ws, owner, null)
+                    if (!webSocket.send(CompanionProtocol.action("start"))) transportLost(webSocket, owner, null)
                 }
                 if (!desiredRide && incoming.status in setOf("paired", "ready", "helmetOffline")) {
-                    generation++; socket = null; endpoint = null; ws.close(1000, "paired")
+                    generation++; socket = null; endpoint = null; webSocket.close(1000, "paired")
                 }
             } }
-            override fun onClosing(ws: WebSocket, code: Int, reason: String) { ws.close(code, null); scope.launch { transportLost(ws, owner, if (code == 1008) 401 else null) } }
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) { scope.launch { transportLost(ws, owner, response?.code) } }
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null); scope.launch { transportLost(webSocket, owner, if (code == 1008) 401 else null) } }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { scope.launch { transportLost(webSocket, owner, response?.code) } }
         })
     }
     private fun transportLost(ws: WebSocket, owner: Long, status: Int?) {

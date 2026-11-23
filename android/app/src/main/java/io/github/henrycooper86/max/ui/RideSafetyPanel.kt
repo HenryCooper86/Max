@@ -22,6 +22,7 @@ import io.github.henrycooper86.max.ui.theme.VisorType
 internal fun RideSafetySettings(vm: MainViewModel) {
     val c = Visor.colors
     val companion by vm.companion.state.collectAsStateWithLifecycle()
+    val session by vm.sessionState.collectAsStateWithLifecycle()
     val tokens by vm.helmetDiscovery.tokens.collectAsStateWithLifecycle()
     var code by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
@@ -96,7 +97,7 @@ internal fun RideSafetySettings(vm: MainViewModel) {
             SettingsSwitchRow(tr(Str.LOG_ONLY), config.logOnly, { config = config.copy(logOnly = it); vm.crash.settings = config })
             SettingsRow(
                 tr(Str.CRASH_DRILL),
-                enabled = vm.sessionState.value.handsFree,
+                enabled = session.handsFree,
                 onClick = { vm.crash.controller.simulate() }
             ) { ChevronIcon() }
         }

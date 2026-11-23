@@ -2,27 +2,45 @@ import { useLanguage } from "../components/LanguageToggle";
 import { SUPPORT_SAMPLE as sample } from "../lib/support-sample";
 import { localized } from "../lib/i18n";
 import { CONSOLE_PATH } from "../lib/routes";
+import { ScreenRecording } from "./ScreenRecording";
 
 export function StudioSection() {
   const { language } = useLanguage();
   const say = (zh: string, en: string) => localized(language, zh, en);
+  const code = language === "en-US" ? "en" : "zh";
   return (
     <section className="siteSection" aria-labelledby="studio">
       <header className="sectionHead" data-reveal="">
         <h2 id="studio">{say("在 Studio 里测试你的网站助手", "Test your website agent in Studio")}</h2>
         <p>
           {say(
-            "每个模板都有一段示例对话。展开下面的客服示例，看看助手怎样根据订单查询结果回答访客。无需模型密钥，也不占用通话分钟数。",
-            "Each template includes a sample conversation. Open the support example to see how an order lookup shapes the reply. It runs without a model key and uses no minutes."
+            "按下麦克风提问，看助手查询订单并给出回答。每个模板还带有一段脚本示例，无需模型密钥，也不占用通话分钟数。",
+            "Press the mic, ask a question, and watch the agent look up the order and answer. Every template also includes a scripted sample that needs no model key and uses no minutes."
           )}
         </p>
       </header>
       <div className="siteStudioLayout" data-reveal="">
-        <div className="siteStudioSample">
-          <h3>{say("客服示例对话", "Sample support conversation")}</h3>
+        <figure className="siteStudioSample">
+          <ScreenRecording
+            key={code}
+            src={`/video/studio-test-${code}.mp4`}
+            poster={`/video/studio-test-${code}.jpg`}
+            label={say(
+              "在 Max Studio 里测试助手查询订单的录屏，模型和订单数据为模拟",
+              "Screen recording of testing an order lookup in the Max Studio, with a simulated model and order data"
+            )}
+          />
+          <figcaption>
+            {say(
+              "Studio 界面录屏。模型回复和订单查询为模拟。",
+              "Recorded in the Studio. The model and order lookup are simulated."
+            )}
+          </figcaption>
           <details>
-            <summary>{say(sample.question.zh, sample.question.en)}</summary>
+            <summary>{say("查看文字记录", "Read the transcript")}</summary>
             <dl>
+              <dt>{say("访客提问", "Visitor question")}</dt>
+              <dd>{say(sample.question.zh, sample.question.en)}</dd>
               <dt>{say("模拟订单查询", "Simulated order lookup")}</dt>
               <dd>
                 <code>{sample.tool.call}</code>
@@ -33,7 +51,7 @@ export function StudioSection() {
               <dd>{say(sample.reply.zh, sample.reply.en)}</dd>
             </dl>
           </details>
-        </div>
+        </figure>
         <div className="siteStudioWorkflow">
           <div>
             <h3>{say("发布经过测试的版本", "Publish the draft you tested")}</h3>

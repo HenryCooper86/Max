@@ -141,7 +141,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
   // The context string applies to the next session, so it can follow props without a new client.
   const context = options.context;
   useEffect(() => {
-    if (context !== undefined) agent?.setContext(context);
+    agent?.setContext(context ?? "");
   }, [agent, context]);
 
   const start = useCallback(

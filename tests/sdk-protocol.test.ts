@@ -6,7 +6,6 @@ import {
   PcmFramer,
   buildSessionStart,
   downsample,
-  float32ToPcm16,
   mergeTranscript,
   parseRelayEvent,
   pcm16ToFloat32,
@@ -122,13 +121,17 @@ describe("mergeTranscript", () => {
 
 describe("PCM helpers", () => {
   it("converts float to PCM16 with clamping and asymmetric scale", () => {
-    const pcm = float32ToPcm16(Float32Array.of(0, 1, -1, 2, -2, 0.5));
-    expect(Array.from(pcm)).toEqual([0, 32767, -32768, 32767, -32768, 16383]);
+    const input = new Float32Array(320);
+    input.set([0, 1, -1, 2, -2, 0.5]);
+    const [pcm] = new PcmFramer(16000).push(input);
+    expect(Array.from(pcm!.subarray(0, 6))).toEqual([0, 32767, -32768, 32767, -32768, 16383]);
   });
 
   it("round-trips through PCM16 within one quantization step", () => {
-    const input = Float32Array.of(0.1, -0.25, 0.9, -0.9);
-    const back = pcm16ToFloat32(float32ToPcm16(input));
+    const input = new Float32Array(320);
+    input.set([0.1, -0.25, 0.9, -0.9]);
+    const [pcm] = new PcmFramer(16000).push(input);
+    const back = pcm16ToFloat32(pcm!);
     input.forEach((value, i) => expect(back[i]).toBeCloseTo(value, 3));
   });
 
@@ -152,6 +155,14 @@ describe("PCM helpers", () => {
     expect(out).not.toBe(input);
     expect(Array.from(out)).toEqual([1, 2]);
     expect(() => downsample(input, 8000, 16000)).toThrow(RangeError);
+  });
+
+  it("quantizes a resampled frame at the same precision as the AudioWorklet", () => {
+    const input = new Float32Array(960).fill(1);
+    input[0] = 1 - 2 ** -24;
+    const [frame] = new PcmFramer(48000).push(input);
+    expect(frame![0]).toBe(32766);
+    expect(frame![1]).toBe(32767);
   });
 
   it("frames a stream into 320-sample chunks regardless of block size", () => {

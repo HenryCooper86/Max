@@ -145,6 +145,7 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
   let micNodes: AudioNode[] = [];
   let micLevel = 0;
   let micGeneration = 0;
+  let micEnabled = true;
   let micSetup: Promise<void> | undefined;
 
   let playContext: AudioContext | undefined;
@@ -190,19 +191,21 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
   // A context that runs again, for any reason, clears the warning. The
   // listeners are removed on close: a page may hand in a context that outlives
   // this client, and a listener left on it would keep the client in memory.
-  const watched: Array<() => void> = [];
-  const watching = new Set<AudioContext>();
+  const watching = new Map<AudioContext, () => void>();
+  const unwatch = (context: AudioContext) => {
+    const handler = watching.get(context);
+    if (handler) {
+      context.removeEventListener?.("statechange", handler);
+      watching.delete(context);
+    }
+  };
   const watch = (context: AudioContext) => {
     if (closed || !context.addEventListener || watching.has(context)) return;
-    watching.add(context);
     const onStateChange = () => {
       if (context.state === "running") setBlocked(false);
     };
     context.addEventListener("statechange", onStateChange);
-    watched.push(() => {
-      context.removeEventListener?.("statechange", onStateChange);
-      watching.delete(context);
-    });
+    watching.set(context, onStateChange);
   };
 
   const ensurePlayContext = (): AudioContext => {
@@ -259,7 +262,12 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
       if (context.state === "suspended") await resumeWithin(context, () => setBlocked(true));
       const source = context.createMediaStreamSource(media);
       nodes.push(source);
-      if (context.audioWorklet && typeof Blob !== "undefined" && typeof URL.createObjectURL === "function") {
+      if (
+        context.audioWorklet &&
+        typeof AudioWorkletNode !== "undefined" &&
+        typeof Blob !== "undefined" &&
+        typeof URL.createObjectURL === "function"
+      ) {
         const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "text/javascript" }));
         try {
           await context.audioWorklet.addModule(url);
@@ -289,6 +297,7 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
         nodes.push(node);
       }
       if (generation !== micGeneration) throw new Error("Microphone released while starting");
+      media.getAudioTracks().forEach((track) => (track.enabled = micEnabled));
       // The capture node must reach a destination to be pulled; its output is silent.
       source.connect(nodes[1]!);
       nodes[1]!.connect(context.destination);
@@ -305,7 +314,10 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
           /* never attached */
         }
       }
-      if (owns && context && context.state !== "closed") await context.close().catch(() => undefined);
+      if (owns && context) {
+        unwatch(context);
+        if (context.state !== "closed") await context.close().catch(() => undefined);
+      }
       throw error;
     }
   };
@@ -342,21 +354,24 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
     },
     startMic(onFrame) {
       if (stream) return Promise.resolve();
+      const generation = micGeneration;
       micSetup ??= buildMic(onFrame).catch((error: unknown) => {
-        micSetup = undefined;
+        if (generation === micGeneration) micSetup = undefined;
         throw error;
       });
       return micSetup;
     },
     setMicEnabled(enabled) {
+      micEnabled = enabled;
       stream?.getAudioTracks().forEach((track) => (track.enabled = enabled));
       if (!enabled) micLevel = 0;
     },
     releaseMic() {
       micGeneration += 1;
+      micEnabled = true;
       micSetup = undefined;
       for (const node of micNodes) {
-        if (node instanceof AudioWorkletNode) node.port.onmessage = null;
+        if (typeof AudioWorkletNode !== "undefined" && node instanceof AudioWorkletNode) node.port.onmessage = null;
         if ("onaudioprocess" in node) (node as ScriptProcessorNode).onaudioprocess = null;
         try {
           node.disconnect();
@@ -367,7 +382,10 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
       micNodes = [];
       stream?.getTracks().forEach((track) => track.stop());
       stream = undefined;
-      if (micContext && ownsMicContext && micContext.state !== "closed") void micContext.close();
+      if (micContext && ownsMicContext) {
+        unwatch(micContext);
+        if (micContext.state !== "closed") void micContext.close();
+      }
       micContext = undefined;
       micLevel = 0;
     },
@@ -500,7 +518,7 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
       sources = [];
       speaking = false;
       closed = true;
-      for (const unwatch of watched.splice(0)) unwatch();
+      for (const context of watching.keys()) unwatch(context);
       if (playContext && ownsPlayContext && playContext.state !== "closed") void playContext.close();
       playContext = undefined;
       gain = undefined;

@@ -209,6 +209,9 @@ describe("useVoiceAgent", () => {
     await render({ ...base, context: "two" });
     expect(agents()).toHaveLength(1);
     expect(agents()[0]!.context).toBe("two");
+    await render(base);
+    expect(agents()).toHaveLength(1);
+    expect(agents()[0]!.context).toBe("");
   });
 
   it("survives strict-mode double mounting with exactly one live client", async () => {

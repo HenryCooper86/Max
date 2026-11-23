@@ -373,16 +373,6 @@ export function mergeTranscript(
   return { list: [...settled, item], item };
 }
 
-/** Converts float samples in [-1, 1] to little-endian PCM16, clamping overshoot. */
-export function float32ToPcm16(input: Float32Array): Int16Array {
-  const out = new Int16Array(input.length);
-  for (let i = 0; i < input.length; i += 1) {
-    const sample = Math.max(-1, Math.min(1, input[i] ?? 0));
-    out[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-  }
-  return out;
-}
-
 /** Converts PCM16 samples to floats in [-1, 1). */
 export function pcm16ToFloat32(input: Int16Array): Float32Array {
   const out = new Float32Array(input.length);
@@ -449,7 +439,8 @@ export class PcmFramer {
         this.windowRemaining -= w;
         if (this.windowRemaining <= 1e-9) {
           const averaged = this.weight > 0 ? this.sum / this.weight : 0;
-          this.frame[this.fill] = float32ToPcm16(Float32Array.of(averaged))[0] ?? 0;
+          const sample = Math.max(-1, Math.min(1, averaged));
+          this.frame[this.fill] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
           this.fill += 1;
           this.windowRemaining = this.ratio;
           this.sum = 0;

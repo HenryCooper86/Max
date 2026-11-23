@@ -191,7 +191,6 @@ describe("agent voice as a media stream", () => {
   beforeEach(() => {
     FakeAudioElement.instances = [];
     vi.stubGlobal("Audio", FakeAudioElement);
-    vi.stubGlobal("AudioWorkletNode", class {});
   });
   afterEach(() => void vi.unstubAllGlobals());
 
@@ -280,6 +279,70 @@ describe("agent voice as a media stream", () => {
     for (const g of gains) expect(g.gain.calls).toEqual([]);
   });
 
+  it("detaches the state listener when an owned microphone context closes", async () => {
+    const { context } = streamContext();
+    const remove = vi.spyOn(context, "removeEventListener");
+    const close = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        constructor() {
+          return Object.assign(context, { close });
+        }
+      }
+    );
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: async () => ({
+          getTracks: () => [],
+          getAudioTracks: () => []
+        })
+      }
+    });
+    const audio = createBrowserAudio({ onPlayingChange: () => undefined });
+    await audio.startMic(() => undefined);
+    audio.releaseMic();
+    expect(close).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledOnce();
+    audio.close();
+    expect(remove).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the microphone muted when permission arrives after mute", async () => {
+    const { audio } = setup();
+    const pending = Promise.withResolvers<MediaStream>();
+    const track = { enabled: true, stop: vi.fn() };
+    const media = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: () => pending.promise } });
+    const opening = audio.startMic(() => undefined);
+    audio.setMicEnabled(false);
+    pending.resolve(media);
+    await opening;
+    expect(track.enabled).toBe(false);
+    audio.setMicEnabled(true);
+    expect(track.enabled).toBe(true);
+    audio.releaseMic();
+  });
+
+  it("shares the new microphone request after a canceled permission request rejects", async () => {
+    const { audio } = setup();
+    const old = Promise.withResolvers<MediaStream>();
+    const next = Promise.withResolvers<MediaStream>();
+    const getUserMedia = vi.fn().mockReturnValueOnce(old.promise).mockReturnValue(next.promise);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const canceled = audio.startMic(() => undefined);
+    audio.releaseMic();
+    const opening = audio.startMic(() => undefined);
+    old.reject(new Error("denied"));
+    await expect(canceled).rejects.toThrow("denied");
+    const again = audio.startMic(() => undefined);
+    expect(again).toBe(opening);
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    next.resolve({ getTracks: () => [], getAudioTracks: () => [] } as unknown as MediaStream);
+    await opening;
+    audio.releaseMic();
+  });
+
   it("micTrack() is the microphone's first audio track once the microphone is open, and undefined before", async () => {
     const { audio } = setup();
     const track = { stop: vi.fn(), enabled: true };
@@ -289,6 +352,7 @@ describe("agent voice as a media stream", () => {
     await audio.startMic(() => undefined);
     expect(audio.micTrack!()).toBe(track);
     audio.releaseMic();
+    expect(track.stop).toHaveBeenCalledOnce();
     expect(audio.micTrack!()).toBeUndefined();
   });
 });

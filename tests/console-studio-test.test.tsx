@@ -2,7 +2,7 @@ import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { VoiceAgent, type VoiceAgentEvents } from "../sdk/src/index";
+import { VoiceAgent, VoiceAgentError, type VoiceAgentEvents } from "../sdk/src/index";
 import { DEFAULT_STUDIO } from "../shared/cloud-studio";
 import { LanguageProvider } from "../src/components/LanguageToggle";
 import { ApiError, type Project } from "../src/console/api";
@@ -248,6 +248,57 @@ describe("a running Studio test", () => {
       ["owner", "p1", "draft-new", undefined],
       ["owner", "p1", "draft-new", undefined]
     ]);
+  });
+
+  it("loads the site's own capture worklet, which its Content-Security-Policy allows", async () => {
+    let workletUrl: string | undefined;
+    vi.spyOn(VoiceAgent.prototype, "start").mockImplementation(async function (this: VoiceAgent) {
+      workletUrl = (this as unknown as { options: { workletUrl?: string } }).options.workletUrl;
+    });
+    const base = props({}, true);
+    const page = await mount({
+      ...base,
+      prepareTest: vi.fn().mockResolvedValue({ expectedLiveRevision: "r1", language: "" })
+    });
+    await act(async () => page.findByProps({ children: "保存并开始" }).props.onClick());
+    expect(workletUrl).toBe("/pcm-worklet.js");
+  });
+
+  it.each([
+    ["NotAllowedError", "麦克风被挡住了"],
+    ["NotFoundError", "没有找到可用的麦克风"],
+    ["OverconstrainedError", "没有找到可用的麦克风"],
+    ["NotReadableError", "可能正被其他应用占用"],
+    ["AbortError", "可能正被其他应用占用"],
+    ["SecurityError", "麦克风启动失败"],
+    ["TypeError", "麦克风启动失败"]
+  ])("explains a microphone that failed with %s", async (name, expected) => {
+    const cause = new DOMException("from the browser", name);
+    vi.spyOn(VoiceAgent.prototype, "start").mockRejectedValue(
+      new VoiceAgentError("microphone", "Could not open the microphone", { cause })
+    );
+    const base = props({}, true);
+    const page = await mount({
+      ...base,
+      prepareTest: vi.fn().mockResolvedValue({ expectedLiveRevision: "r1", language: "" })
+    });
+    await act(async () => page.findByProps({ children: "保存并开始" }).props.onClick());
+    const alert = page.findByProps({ role: "alert" });
+    expect(alert.props.children).toContain(expected);
+    if (name !== "NotAllowedError") expect(alert.props.children).not.toContain("被挡住");
+  });
+
+  it("does not call a microphone failure with no browser error blocked", async () => {
+    vi.spyOn(VoiceAgent.prototype, "start").mockRejectedValue(
+      new VoiceAgentError("microphone", "This browser cannot access a microphone")
+    );
+    const base = props({}, true);
+    const page = await mount({
+      ...base,
+      prepareTest: vi.fn().mockResolvedValue({ expectedLiveRevision: "r1", language: "" })
+    });
+    await act(async () => page.findByProps({ children: "保存并开始" }).props.onClick());
+    expect(page.findByProps({ role: "alert" }).props.children).toContain("麦克风启动失败");
   });
 
   it("keeps live tests pinned and refreshes after the relay rejects a stale revision", async () => {

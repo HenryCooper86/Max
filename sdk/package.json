@@ -28,6 +28,7 @@
       "default": "./widget.js"
     },
     "./voice-agent.iife.js": "./voice-agent.iife.js",
+    "./pcm-worklet.js": "./pcm-worklet.js",
     "./package.json": "./package.json"
   },
   "peerDependencies": {

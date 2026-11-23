@@ -36,14 +36,38 @@ function statusText(say: Say, status: VoiceAgentStatus, started: boolean, muted:
   }
 }
 
+/** What to do about a microphone that did not open, from the browser's own error name. */
+function microphoneErrorText(say: Say, cause: unknown): string {
+  const name = cause && typeof cause === "object" && "name" in cause ? cause.name : "";
+  switch (name) {
+    case "NotAllowedError":
+      return say(
+        "麦克风被挡住了。请点地址栏左边的锁形图标，把麦克风设为“允许”，然后再试一次。如果已经允许，请检查电脑的麦克风隐私设置。",
+        "The microphone is blocked. Click the lock icon next to the address bar, set Microphone to Allow, then try again. If it is already allowed, check your computer's microphone privacy settings."
+      );
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return say(
+        "没有找到可用的麦克风。请连接麦克风后再试一次。",
+        "No microphone was found. Connect one, then try again."
+      );
+    case "NotReadableError":
+    case "AbortError":
+      return say(
+        "麦克风打不开，可能正被其他应用占用。请关闭那个应用后再试一次。",
+        "The microphone could not be opened. Another app may be using it. Close that app, then try again."
+      );
+    default:
+      return say(
+        "麦克风启动失败。请刷新页面后再试一次。",
+        "The microphone could not start. Reload the page and try again."
+      );
+  }
+}
+
 function errorText(say: Say, error: unknown): string {
   const message = error instanceof Error ? error.message : "";
-  if (error instanceof VoiceAgentError && error.code === "microphone") {
-    return say(
-      "麦克风被挡住了。请点地址栏左边的锁形图标，把麦克风设为“允许”，然后再试一次。",
-      "The microphone is blocked. Click the lock icon next to the address bar, set Microphone to Allow, then try again."
-    );
-  }
+  if (error instanceof VoiceAgentError && error.code === "microphone") return microphoneErrorText(say, error.cause);
   if (error instanceof VoiceAgentError && error.code === "token") {
     return message || say("无法开始测试。", "Could not start the test.");
   }
@@ -220,6 +244,8 @@ export function TestTab({
     let ready = false;
     const agent = new VoiceAgent({
       url: origin,
+      // The site's CSP refuses blob: scripts, so capture loads the worklet the site serves itself.
+      workletUrl: "/pcm-worklet.js",
       token: async () => {
         try {
           return (await session.api.testSession(session.token, project.id, draftRevision, expectedLiveRevision)).token;

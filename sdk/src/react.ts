@@ -81,7 +81,7 @@ function connectionKey(options: VoiceAgentOptions): string {
  * descriptions and parameters); the old one is destroyed, which ends any
  * running conversation. A token function, tool handlers and `context` are read
  * live, so inline closures are safe and never restart the client. `audioContext`
- * is read when the client is created.
+ * and `workletUrl` are read when the client is created.
  */
 export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
   const latest = useRef(options);

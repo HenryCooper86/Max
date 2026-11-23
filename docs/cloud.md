@@ -37,6 +37,14 @@ invitations**: add an optional note (who it is for), generate the link, and send
 (`https://<relay>/console?invite=cinv_…`) creates one account and expires after 7 days; unused links can be revoked
 there. Logging in needs no invitation. To let anyone sign up instead, set `CLOUD_SIGNUP=open`.
 
+## Studio activation metrics
+
+In **Admin → Overview → Studio activation**, operators can see how many projects created in the last 30 days
+have reached their first successful website conversation, as a count and a percentage. The rolling cohort includes
+all customer projects on the relay, even if later deleted. The median uses only projects that reached the milestone
+and measures elapsed time from creation. With no new projects, the rate is undefined. With no successes, the median
+is undefined. These figures use the installation milestone described below and survive transcript expiry.
+
 ## The Studio
 
 Each project opens in a Studio in the console, built so someone new to voice agents gets from nothing to an agent on

@@ -267,6 +267,23 @@ describe("AdminOverview (administration home)", () => {
     expect(onOpenAudit).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { newProjects: 3, activatedProjects: 1, medianTimeMs: 90_000, expected: ["33.3%", "1.5分钟"] },
+    { newProjects: 2, activatedProjects: 0, medianTimeMs: null, expected: ["0%", "—"] },
+    { newProjects: 0, activatedProjects: 0, medianTimeMs: null, expected: ["过去 30 天没有新建项目。"] }
+  ])("renders activation for $activatedProjects of $newProjects new projects", async ({ expected, ...metrics }) => {
+    vi.mocked(adminAccountApi.fetchOverview).mockResolvedValueOnce(
+      success({
+        ...accountOverview(),
+        studioActivation: { windowDays: 30, ...metrics }
+      })
+    );
+    await mountOverview();
+    const panel = renderer!.root.findByProps({ "aria-labelledby": "studio-activation-heading" });
+    for (const value of expected) expect(text(panel).replaceAll(" ", "")).toContain(value.replaceAll(" ", ""));
+    if (!metrics.newProjects) expect(text(panel)).not.toContain("%");
+  });
+
   it("routes an explicit 401 to authentication expiry instead of a healthy zero", async () => {
     const onAuthenticationExpired = vi.fn();
     vi.mocked(adminAccountApi.fetchOverview).mockResolvedValueOnce(failure("unauthorized", "会话已过期。"));

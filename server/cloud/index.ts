@@ -11,6 +11,7 @@ import { draftRevisionProject } from "./revisions";
 import { decryptModelKey, hashToken } from "./secrets";
 import { liveProject, liveProjectByKeyHash, readStudioLiveRevision } from "./store";
 
+export { studioActivation } from "./store";
 export { cloudEnabled } from "./context";
 export { registerCloudPaymentRoutes, registerCloudRoutes, registerEmbedRoutes } from "./routes";
 export { conversationRecorder, pruneOldConversations } from "./conversations";

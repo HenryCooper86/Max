@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { adminAccountApi, type AdminOverview as AccountOverviewData, type AuthUser } from "../../lib/auth";
 import { useLanguage } from "../LanguageToggle";
 import { localized, type Language } from "../../lib/i18n";
+import { StudioActivationPanel } from "./StudioActivationPanel";
 import { adminRoleLabel, formatAdminRelativeTime } from "./admin-model";
 
 const INVITE_EXPIRING_SOON_MS = 2 * 24 * 60 * 60 * 1000;
@@ -36,8 +37,8 @@ function formatInviteExpiry(timestamp: number, language: Language) {
 }
 
 /**
- * Administration home. Accounts and system audit only: counts and summaries
- * come straight from the relay's account overview (users and invites). This
+ * Administration home. Accounts, system audit, and Studio activation
+ * come from the relay's admin overview. This
  * surface deliberately has no dependency on testing snapshots, sessions,
  * release gates, latency, case coverage or testing policies — those live in
  * the Testing workspace.
@@ -181,6 +182,10 @@ export function AdminOverview({
               {localized(language, "可用邀请", "Usable invites")}
             </span>
           </div>
+
+          {overview.studioActivation !== undefined && (
+            <StudioActivationPanel metrics={overview.studioActivation} language={language} />
+          )}
 
           <div className="testingDecisionGrid adminWorkGrid">
             <section

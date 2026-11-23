@@ -30,6 +30,7 @@ export type UserMemorySummary = {
   };
 };
 
+import type { StudioActivation } from "../../shared/cloud-studio";
 import { relayAuthToken } from "./persistence";
 import { requestJson, type ApiResult } from "./api-client";
 import { readStoredLanguage } from "./i18n";
@@ -169,7 +170,7 @@ export async function changePasswordAccount(
 }
 
 export type InviteInfo = { code: string; createdAt: number; expiresAt: number; createdBy: string };
-export type AdminOverview = { users: AuthUser[]; invites: InviteInfo[] };
+export type AdminOverview = { users: AuthUser[]; invites: InviteInfo[]; studioActivation?: StudioActivation | null };
 
 function adminHeaders(): Record<string, string> {
   const token = authToken();
@@ -186,7 +187,12 @@ export type AdminAccountApi = {
 
 async function fetchOverview(): Promise<ApiResult<AdminOverview>> {
   const result = await requestJson<{ ok: true } & AdminOverview>("/auth/admin/overview", { headers: adminHeaders() });
-  return result.ok ? { ok: true, data: { users: result.data.users, invites: result.data.invites } } : result;
+  return result.ok
+    ? {
+        ok: true,
+        data: { users: result.data.users, invites: result.data.invites, studioActivation: result.data.studioActivation }
+      }
+    : result;
 }
 
 async function createInvite(): Promise<ApiResult<InviteInfo>> {

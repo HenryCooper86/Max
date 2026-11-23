@@ -66,6 +66,7 @@ import {
   cloudEnabled,
   createCloudInvite,
   listCloudInvites,
+  studioActivation,
   revokeCloudInvite,
   admitCloudSession,
   CLOUD_CHECK_INTERVAL_MS,
@@ -986,7 +987,16 @@ function requireAdmin(req: express.Request, res: express.Response) {
 
 app.get("/auth/admin/overview", (req, res) => {
   if (!requireAdmin(req, res)) return;
-  res.json({ ok: true, users: listUsers(), invites: listInvites() });
+  let activation: ReturnType<typeof studioActivation> | null | undefined;
+  if (cloudEnabled()) {
+    try {
+      activation = studioActivation(Date.now());
+    } catch (error) {
+      log.error("could not load Studio activation metrics", { error: String(error) });
+      activation = null;
+    }
+  }
+  res.json({ ok: true, users: listUsers(), invites: listInvites(), studioActivation: activation });
 });
 
 app.post("/auth/admin/invites", (req, res) => {

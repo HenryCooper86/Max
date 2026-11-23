@@ -4,6 +4,7 @@
 // two writes that move money (booking a session, crediting a paid order) each
 // run in one BEGIN IMMEDIATE transaction, idempotent on UNIQUE(kind, ref).
 
+import type { StudioActivation } from "../../shared/cloud-studio";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -145,6 +146,7 @@ function database(): DatabaseSync {
         created_at INTEGER NOT NULL,
         deleted_at INTEGER NULL
       );
+      CREATE INDEX IF NOT EXISTS idx_projects_created ON projects(created_at);
       CREATE INDEX IF NOT EXISTS idx_projects_customer ON projects(customer_id, deleted_at, created_at);
       CREATE TABLE IF NOT EXISTS ledger (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -401,6 +403,27 @@ export function markWebsiteConversation(projectId: string, at: number): void {
        AND (first_website_conversation_at IS NULL OR first_website_conversation_at > ?)`
     )
     .run(at, projectId, at);
+}
+
+/** Keep deleted projects in their creation cohort so abandonment stays visible. */
+export function studioActivation(at: number): StudioActivation {
+  const windowDays = 30;
+  const metrics = database()
+    .prepare(
+      `WITH cohort AS (
+         SELECT CASE WHEN first_website_conversation_at BETWEEN created_at AND $at
+                     THEN first_website_conversation_at - created_at END AS elapsed
+         FROM projects WHERE created_at BETWEEN $start AND $at
+       ), ranked AS (
+         SELECT elapsed, ROW_NUMBER() OVER (ORDER BY elapsed) AS position, COUNT(*) OVER () AS n
+         FROM cohort WHERE elapsed IS NOT NULL
+       )
+       SELECT COUNT(*) AS newProjects, COUNT(elapsed) AS activatedProjects,
+              (SELECT AVG(elapsed) FROM ranked WHERE position BETWEEN (n + 1) / 2 AND (n + 2) / 2) AS medianTimeMs
+       FROM cohort`
+    )
+    .get({ $start: at - windowDays * 86_400_000, $at: at }) as Omit<StudioActivation, "windowDays">;
+  return { windowDays, ...metrics };
 }
 
 export function liveProjects(customerId: string): ProjectRow[] {

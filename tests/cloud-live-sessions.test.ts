@@ -17,7 +17,14 @@ import {
 } from "../server/cloud";
 import { setCloudClock, setCloudInstanceId } from "../server/cloud/context";
 import { cloudCounters } from "../server/cloud/counters";
-import { createProject, listProjects, patchProject, rotateProjectKey, signup } from "../server/cloud/customers";
+import {
+  createProject,
+  deleteProject,
+  listProjects,
+  patchProject,
+  rotateProjectKey,
+  signup
+} from "../server/cloud/customers";
 import {
   CLOUD_CHECK_INTERVAL_MS,
   admitCloudSession,
@@ -27,7 +34,13 @@ import {
 } from "../server/cloud/live";
 import { saveStudioDraft, studioRelease } from "../server/cloud/revisions";
 import { mintEmbedSession, mintTestSession, resetCloudSessionLimits, spendEmbedTokens } from "../server/cloud/sessions";
-import { adjustBalance, liveSessionRows, resetCloudDatabase } from "../server/cloud/store";
+import {
+  adjustBalance,
+  liveSessionRows,
+  markWebsiteConversation,
+  resetCloudDatabase,
+  studioActivation
+} from "../server/cloud/store";
 import { createLogger } from "../server/logger";
 import type { EngineConfig, EngineEvents, VoiceEngine } from "../server/providers/live/engine";
 import { createLiveProvider } from "../server/providers/live/session";
@@ -217,6 +230,7 @@ it("marks only the first answered website turn, even with transcript storage off
     session.close();
   }
   expect(project().firstWebsiteConversationAt).toBeNull();
+  expect(studioActivation(clock)).toMatchObject({ newProjects: 1, activatedProjects: 0, medianTimeMs: null });
   const website = openCloudSession("website", embedGrant, "visitor", SITE);
   website.observe({ type: "status", state: "ready" });
   website.observe(utterance("agent")); // Greeting.
@@ -239,6 +253,33 @@ it("marks only the first answered website turn, even with transcript storage off
   browser.observe(utterance("rider"));
   browser.observe(utterance("agent"));
   expect(listProjects(sdk.customerId)[0]!.firstWebsiteConversationAt).toBe(clock);
+  expect(studioActivation(clock)).toMatchObject({ newProjects: 2, activatedProjects: 2, medianTimeMs: 0 });
+});
+
+it("measures the rolling creation cohort, retaining deleted projects and taking the median only among successes", async () => {
+  const cutoff = START - 30 * 86_400_000;
+  clock = cutoff - 1;
+  const older = await setup();
+  markWebsiteConversation(older.projectId, START);
+  expect(studioActivation(START)).toEqual({ windowDays: 30, newProjects: 0, activatedProjects: 0, medianTimeMs: null });
+
+  clock = cutoff;
+  const earliest = await setup();
+  markWebsiteConversation(earliest.projectId, clock + 1_000);
+  expect(deleteProject(earliest.customerId, earliest.projectId).ok).toBe(true);
+
+  clock = START - 10_000;
+  const second = await setup();
+  markWebsiteConversation(second.projectId, clock + 3_000);
+  const third = await setup();
+  clock = START;
+  await setup(); // Created at the upper boundary, still waiting.
+  clock++;
+  await setup(); // A later creation is outside the reporting snapshot.
+
+  expect(studioActivation(START)).toMatchObject({ newProjects: 4, activatedProjects: 2, medianTimeMs: 2_000 });
+  markWebsiteConversation(third.projectId, START);
+  expect(studioActivation(START)).toMatchObject({ newProjects: 4, activatedProjects: 3, medianTimeMs: 3_000 });
 });
 
 it("recognizes a website audio answer before the transcript arrives", async () => {

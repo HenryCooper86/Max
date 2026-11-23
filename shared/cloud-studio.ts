@@ -6,6 +6,13 @@
 
 import { analysisConfigFrom, type AnalysisConfig, type AnalysisField } from "./analysis";
 
+export type StudioActivation = {
+  windowDays: number;
+  newProjects: number;
+  activatedProjects: number;
+  medianTimeMs: number | null;
+};
+
 export type CloudBackend = "openai" | "gemini" | "grok";
 
 export type VoiceOption = { id: string; label: string; note: { zh: string; en: string } };

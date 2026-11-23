@@ -90,7 +90,7 @@ class AuthClient(
             }
 
             override fun onResponse(call: Call, response: Response) {
-                val parsed = runCatching { JSONObject(response.body?.string() ?: "") }.getOrNull()
+                val parsed = runCatching { JSONObject(response.body.string()) }.getOrNull()
                 response.close()
                 val login = parsed?.takeIf { it.optBoolean("ok") }?.let { payload ->
                     val token = payload.optString("token")

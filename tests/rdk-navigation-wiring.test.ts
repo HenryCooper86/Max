@@ -432,7 +432,7 @@ describe("routeAgentNavigationEvent", () => {
   });
 });
 
-describe.sequential("start navigation lifecycle wiring", () => {
+describe("start navigation lifecycle wiring", () => {
   it("keeps relay PCM rankless and gives navigation the live shared ADAS priority gate", () => {
     const handlers = fixtures.relayHandlers!;
     const active = fixtures.controllers.at(-1)!;

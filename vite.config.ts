@@ -52,6 +52,11 @@ export default defineConfig({
     // but credential validation still runs before that socket is created.
     // Keep the unit suite self-contained without weakening production checks.
     setupFiles: ["./tests/setup.ts"],
+    // Vitest 5 flipped the default to clearMocks: true. This suite was written
+    // against the old default (false): tests/rdk-navigation-wiring.test.ts
+    // reads mock calls accumulated by earlier tests in the same file. Keep the
+    // behaviour the tests were written for.
+    clearMocks: false,
     // Git worktrees are full checkouts of another branch sitting inside this
     // one. Vitest walks them, so their copy of tests/ ran alongside the real
     // suite: measured 2026-08-11, .claude/worktrees/nav-ios-plan-b supplied

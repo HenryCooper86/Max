@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-export type NativeLong = string | number;
+type NativeLong = string | number;
 export type WarningClipIdentity = {
   threat: string;
   text: string;

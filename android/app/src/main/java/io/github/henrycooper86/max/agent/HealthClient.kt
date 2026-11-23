@@ -35,7 +35,7 @@ class HealthClient(
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = Unit
             override fun onResponse(call: Call, response: Response) {
-                val body = response.use { if (it.isSuccessful) it.body?.string() else null }
+                val body = response.use { if (it.isSuccessful) it.body.string() else null }
                 val info = body?.let(::parseHealth) ?: return
                 deliver { onResult(info) }
             }
@@ -60,7 +60,7 @@ class HealthClient(
             override fun onResponse(call: Call, response: Response) {
                 val bitmap = response.use { r ->
                     if (!r.isSuccessful || logoFormat(r.header("Content-Type")) != LogoFormat.PNG) return@use null
-                    val body = r.body ?: return@use null
+                    val body = r.body
                     if (body.contentLength() > MAX_LOGO_BYTES) return@use null
                     val bytes = body.source().let { src -> src.request(MAX_LOGO_BYTES + 1); src.buffer.readByteArray() }
                     if (bytes.size > MAX_LOGO_BYTES) null else decodeLogo(bytes)

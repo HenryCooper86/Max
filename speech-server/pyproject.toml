@@ -25,7 +25,7 @@ dependencies = [
     "jaconv==0.5.0",
     "mojimoji==0.0.13",
     "unidic-lite==1.0.8",
-    "sherpa-onnx==2.0.2",
+    "sherpa-onnx==2.0.3",
     # Tokenizer of the MOSS-TTS-Nano CPU cloning engine (engines/moss_onnx.py).
     "sentencepiece==0.2.3",
     "faster-whisper==1.2.1",

@@ -12,6 +12,7 @@ import { BACKENDS, BUILT_IN_EQUALIZER, DEVICES, deviceLogoUrl, findDevice } from
 import { localized } from "../lib/i18n";
 import { APP_PATH, BUILD_PATH, REPOSITORY_URL } from "../lib/routes";
 import { useOnScreen, useScrollReveal, useSectionMood, useTyped } from "./motion";
+import { StudioSection } from "./StudioSection";
 import { VoiceStage } from "./VoiceStage";
 import { Mascot, mascotMoodFor } from "../components/Mascot";
 import { useScriptedDemo } from "../lib/scripted-demo";
@@ -82,7 +83,11 @@ function Hero({
             <a className="siteTextLink" href="#demo">
               {say("看演示", "Watch the demo")}
             </a>
-          ) : null}
+          ) : (
+            <a className="siteTextLink" href="#studio">
+              {say("了解 Studio", "Explore Studio")}
+            </a>
+          )}
         </div>
       </div>
       <div className="heroLens" aria-hidden="true">
@@ -441,6 +446,7 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
         <Mascot className="siteBird" mood={mood} followCursor restOver="a, button, input, select, .siteHeader" />
       )}
       <Demo />
+      <StudioSection />
       <Devices />
       <Backends />
       <VoiceStage />

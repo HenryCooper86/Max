@@ -5,6 +5,7 @@ import { LanguageProvider } from "../src/components/LanguageToggle";
 import { LandingPage } from "../src/landing/LandingPage";
 import { PricingPage } from "../src/landing/PricingPage";
 import { CLOUD_PRICE_PER_MINUTE_USD, CONTACT_EMAIL, PLANS } from "../src/lib/pricing";
+import { findTemplate } from "../src/lib/agent-templates";
 import { DEVICES } from "../src/lib/device-catalog";
 import { REPOSITORY_URL, resolveRoute } from "../src/lib/routes";
 import { demoFrame, scriptForDevice, scriptLength } from "../src/lib/scripted-demo";
@@ -94,6 +95,17 @@ describe("landing page", () => {
       expect(html).toContain(`id="${id}"`);
     }
     expect(html).toContain("npm run setup");
+  });
+
+  it("lets visitors open the Studio support sample and continue to the Cloud console", () => {
+    const html = render(false);
+    const sample = findTemplate("support")!.sample;
+    expect(html).toContain('href="#studio"');
+    expect(html).toContain('id="studio"');
+    expect(html).toContain(`<summary>${sample.question.zh}</summary>`);
+    expect(html).toContain(sample.tool!.result.zh);
+    expect(html).toContain(sample.reply.zh);
+    expect(html).toContain('href="/console"');
   });
 
   it("presents Max Speech as self-hosted, with its consent and hardware limits", () => {

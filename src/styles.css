@@ -9046,6 +9046,57 @@ button.opsCard:disabled {
   font-size: var(--fs-15);
 }
 
+/* Studio walkthrough */
+.siteStudioLayout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  align-items: start;
+  gap: clamp(24px, 5vw, 64px);
+}
+
+.siteStudioSample {
+  min-width: 0;
+  padding: clamp(20px, 3vw, 36px);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
+
+.siteStudioSample summary {
+  padding: 16px 0;
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.siteStudioSample dl {
+  margin: 0;
+  border-top: var(--line-w) solid var(--line);
+}
+
+.siteStudioSample dt {
+  margin: 16px 0 4px;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.siteStudioSample dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
+.siteStudioWorkflow {
+  display: grid;
+  gap: 24px;
+}
+
+.siteStudioWorkflow p {
+  margin: 8px 0 0;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
 /* How it works: a real sequence, so it is numbered. */
 .howSteps {
   display: grid;

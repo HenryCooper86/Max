@@ -4,6 +4,7 @@
  * suggests tools (each needs only the address of the server that runs it).
  * Everything stays editable.
  */
+import { SUPPORT_SAMPLE } from "./support-sample";
 import type { StudioParameter } from "../../shared/cloud-studio";
 
 type Text = { zh: string; en: string };
@@ -94,14 +95,7 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
       en: "Shipping: [times and costs]\nReturns: [policy]\nRefunds: [how long]\nWarranty: [terms]\nOpening hours for people: [hours]\nFixes for common problems:\n- [problem]: [fix]",
       zh: "配送：[时间和费用]\n退货：[政策]\n退款：[多久到账]\n保修：[条款]\n人工客服时间：[时间]\n常见问题的解决办法：\n- [问题]：[办法]"
     },
-    sample: {
-      question: { zh: "能帮我查一下订单 A-1042 到哪了吗？", en: "Where is my order A-1042?" },
-      tool: {
-        call: 'check_order({ "orderId": "A-1042" })',
-        result: { zh: "已发货 · 预计周五送达", en: "Shipped · Estimated delivery Friday" }
-      },
-      reply: { zh: "您的包裹已发出，预计周五送达。", en: "Your package has shipped and should arrive on Friday." }
-    },
+    sample: SUPPORT_SAMPLE,
     tools: [
       {
         name: "check_order",

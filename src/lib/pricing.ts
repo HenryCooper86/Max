@@ -71,8 +71,8 @@ export const PLANS: readonly Plan[] = [
     },
     features: [
       {
-        zh: "工作室：模板、声音、知识、工具、在浏览器里测试",
-        en: "A Studio: templates, voices, knowledge, tools, test in the browser"
+        zh: "Studio 草稿测试、版本对比、发布与恢复",
+        en: "Studio draft testing, revision comparisons, publishing and restore"
       },
       {
         zh: "一行代码嵌入网站，不用写后端",
@@ -127,6 +127,13 @@ export const PRICING_FAQ: readonly Question[] = [
     answer: {
       zh: "语音会话连接着的时间，按秒计费。一次 90 秒的会话算 1.5 分钟。",
       en: "The time a voice session is connected, billed by the second. A 90-second session counts as 1.5 minutes."
+    }
+  },
+  {
+    question: { zh: "Studio 测试会占用分钟数吗？", en: "Which Studio tests use minutes?" },
+    answer: {
+      zh: "模板的示例对话在本地运行，不占用分钟数。连接模型进行的草稿测试和重放测试都会计入账户用量，并受项目每月分钟数上限约束。重放时，工具使用你提供的模拟结果。",
+      en: "Template samples run locally and use no minutes. Live draft tests and saved conversation replays use your model, count toward account minutes, and follow the project’s monthly limit. Replays use the tool responses you supply."
     }
   },
   {

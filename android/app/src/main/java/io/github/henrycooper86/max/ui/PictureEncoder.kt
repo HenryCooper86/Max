@@ -8,9 +8,9 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
-import android.media.ExifInterface
 import android.net.Uri
 import android.util.Base64
+import androidx.exifinterface.media.ExifInterface
 import io.github.henrycooper86.max.agent.DEFAULT_IMAGE_MAX_SIDE
 import io.github.henrycooper86.max.agent.encodeImageForInput
 import java.io.ByteArrayOutputStream

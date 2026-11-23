@@ -21,7 +21,7 @@ import java.io.IOException
  * Talks to the relay's /auth endpoints so riders sign in with username and
  * password instead of pasting a session token. The auth base URL is derived
  * from the relay WebSocket URL (ws→http, wss→https, path dropped), and the
- * self-signed trust toggle applies here exactly as it does to the socket.
+ * device-installed CA toggle applies here exactly as it does to the socket.
  * The Android counterpart of ios/.../Agent/AuthClient.swift.
  */
 class AuthClient(

@@ -14,7 +14,7 @@ import java.io.IOException
 
 /**
  * Best-effort GET /health against the relay (same base-URL derivation and
- * debug-only self-signed trust as [AuthClient]). Failures are silent: the
+ * debug-only trust for device-installed CAs as [AuthClient]). Failures are silent: the
  * callback simply never fires, so branding and voice defaults stay in place.
  */
 class HealthClient(

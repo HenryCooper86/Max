@@ -7,6 +7,8 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
@@ -85,13 +87,22 @@ class HealthClientTest {
     }
 
     @Test
-    fun `the self-signed toggle is ignored outside debug builds`() {
-        assertFalse(HealthClient(debugBuild = false, deliver = { it() }).clientFor(allowSelfSignedTls = true).trustsAnyServer())
+    fun `a release client ignores the development trust preference`() {
+        val client = HealthClient(debugBuild = false, deliver = { it() })
+        val original = client.clientFor(false)
+        assertSame(original, client.clientFor(true))
+        original.assertRejectsUninstalledRelay()
     }
 
     @Test
-    fun `a debug build honours the self-signed toggle`() {
+    fun `switching the debug trust preference replaces the cached client`() {
         assumeTrue(BuildConfig.DEBUG)
-        assertTrue(HealthClient(debugBuild = true, deliver = { it() }).clientFor(allowSelfSignedTls = true).trustsAnyServer())
+        val client = HealthClient(debugBuild = true, deliver = { it() })
+        val original = client.clientFor(false)
+        val configured = client.clientFor(true)
+        assertNotSame(original, configured)
+        assertSame(configured, client.clientFor(true))
+        assertNotSame(configured, client.clientFor(false))
+        configured.assertRejectsUninstalledRelay()
     }
 }

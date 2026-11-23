@@ -407,7 +407,8 @@ The iOS app picks its default relay by environment: the simulator uses `ws://loc
 while a physical device connects to `wss://<MAX_RELAY_HOST>/agent`, where `MAX_RELAY_HOST` comes from
 `ios/Config/Secrets.xcconfig` (copy it from `Secrets.xcconfig.example`; until you set it the app falls back to
 a `relay.example.com` placeholder that does not exist). Point it at your own relay. If your relay
-uses a self-signed certificate, Debug builds can enable the self-signed test option. Release builds on both
+uses a private test CA, install the CA on the Android test device and enable **Trust device-installed CAs** in Debug.
+The Android relay certificate must match the host in the URL. iOS Debug has its own self-signed test option. Release builds on both
 platforms enforce normal certificate/hostname validation, hide the exception toggle, and Android
 also blocks cleartext traffic. A release build therefore requires a trusted certificate and domain.
 
@@ -1044,7 +1045,7 @@ on a developer machine.
 | Native app says 需要登录 (HTTP 401) | Accounts are active on the relay: open 设置 → 账号 in the app and sign in with your web-platform username/password (the settings sheet opens automatically on 401). Pasting a token from the web HUD's 复制令牌（App 用） into 认证令牌 still works as a fallback. |
 | Doubao session starts but no voice  | Confirm `DOUBAO_API_KEY` or legacy credentials, resource ID, realtime model, and voice IDs.                                                                                                                                                                        |
 | Weather does not appear             | Grant location permission or set `DEFAULT_RIDER_LAT` / `DEFAULT_RIDER_LON` in `.env`.                                                                                                                                                                              |
-| Self-signed relay fails mobile      | Use a Debug build and enable its test-only certificate toggle. Release builds intentionally require a trusted certificate and hostname.                                                                                                                            |
+| Self-signed relay fails mobile      | On Android, install the test CA and enable device-installed CAs in Debug. On iOS, enable the Debug test-certificate option.                                                                                                                                        |
 | WebSocket test fails with `EPERM`   | The test binds `127.0.0.1`; rerun in an environment that permits local loopback listeners.                                                                                                                                                                         |
 
 ## Next Steps

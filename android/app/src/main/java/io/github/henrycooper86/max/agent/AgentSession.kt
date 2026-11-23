@@ -413,8 +413,8 @@ class AgentSession(
 
     /**
      * Activates hands-free: route audio, resolve location, open the relay, and
-     * start the mic. `allowSelfSignedTls` opts into trusting the test server's
-     * self-signed certificate for wss:// URLs. A non-empty `authToken` is sent
+     * start the mic. `allowSelfSignedTls` allows debug builds to trust device-installed
+     * CAs for wss:// URLs. A non-empty `authToken` is sent
      * as the relay's `token` query parameter (server/auth.ts).
      */
     fun start(

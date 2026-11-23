@@ -243,7 +243,7 @@ enum class Str(val zh: String, val en: String) {
     SERVER_LOCKED("结束免提后可修改服务器地址。", "End hands-free to change the server address."),
     RELAY_FIELD("语音中继地址（ws:// 或 wss://）", "Voice relay address (ws:// or wss://)"),
     TOKEN_FIELD("认证令牌（网页「复制令牌」获取）", "Auth token (from “Copy token” on the web)"),
-    TRUST_SELF("信任自签名证书（仅调试）", "Trust self-signed certificate (debug only)"),
+    TRUST_SELF("信任设备已安装的 CA（仅调试）", "Trust device-installed CAs (debug only)"),
     QA_GROUP("QA 任务归因", "QA task attribution"),
     QA_HELP("从网页管理台的 Release runs 复制任务标识。下一次会话会按构建、平台和任务进入发布证据矩阵。", "Copy the task identifiers from Release runs in the web admin console. The next session is recorded in the release evidence matrix by build, platform and task."),
     RUN_ID("Run ID（可选）", "Run ID (optional)"),

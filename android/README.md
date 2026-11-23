@@ -210,7 +210,7 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
   `AcousticEchoCanceler` / `NoiseSuppressor`, so the agent's voice is not fed back into the
   mic (the Android analogue of the web's `getUserMedia({ echoCancellation })`). See _Audio
   notes_ below for a known built-in-speaker limitation.
-- `wss://` support with a debug-only "信任自签名证书" toggle for a self-signed test relay;
+- `wss://` support with a debug-only toggle for the installed CA of a test relay;
   release builds require trusted TLS and block cleartext
 - Keystore-backed AES-GCM storage for relay/login tokens, including migration from older preferences
 - Release-run/test-case/assignment attribution with explicit Android platform and stamped git commit
@@ -274,9 +274,9 @@ When changing shared web/server behavior, update Android at the same time:
 ## Connecting to your own TLS relay
 
 Run the relay on a host you control and enter its address, for example
-`wss://relay.example.com/agent`. If that host uses a self-signed certificate (a test server), use
-a **Debug** build and switch on 信任自签名证书 (Trust self-signed certificate). Release builds
-intentionally omit this option and require a trusted certificate.
+`wss://relay.example.com/agent`. For a private test relay, install its CA certificate in Android’s trusted credentials on the test device.
+In a **Debug** build, enable **Trust device-installed CAs**. The relay certificate must cover the hostname
+or IP address in the URL. Release builds use the default Android trust policy.
 
 ## Troubleshooting
 
@@ -288,7 +288,7 @@ intentionally omit this option and require a trusted certificate.
 | Mic does not start                   | Grant microphone permission. A phone call pauses hands-free until it ends (the HUD says so).   |
 | "Another app is playing audio"       | An app kept taking audio focus back. Max still listens and lowers that app only to speak.      |
 | Bluetooth headset is ignored         | Grant Bluetooth permission on Android 12+ and confirm the headset supports HFP/SCO.            |
-| Test server TLS fails                | Use a Debug build and enable its self-signed certificate toggle. Release requires trusted TLS. |
+| Test server TLS fails                | Check the relay hostname, install its CA on Android, and enable device-installed CAs in Debug. |
 | Build fails with Java version errors | Use Android Studio's JBR as `JAVA_HOME`; do not build with Homebrew Java 25+.                  |
 
 ## Audio notes

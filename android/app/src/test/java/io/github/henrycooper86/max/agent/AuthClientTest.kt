@@ -7,8 +7,9 @@ import io.github.henrycooper86.max.ui.Str
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -108,16 +109,22 @@ class AuthClientTest {
     }
 
     @Test
-    fun `the self-signed toggle is ignored outside debug builds`() {
-        assertFalse(AuthClient(debugBuild = false, deliver = { it() }).clientFor(allowSelfSignedTls = true).trustsAnyServer())
-        assertFalse(AuthClient(debugBuild = true, deliver = { it() }).clientFor(allowSelfSignedTls = false).trustsAnyServer())
+    fun `a release client ignores the development trust preference`() {
+        val client = AuthClient(debugBuild = false, deliver = { it() })
+        val original = client.clientFor(false)
+        assertSame(original, client.clientFor(true))
+        original.assertRejectsUninstalledRelay()
     }
 
     @Test
-    fun `a debug build honours the self-signed toggle and can turn it off again`() {
+    fun `switching the debug trust preference replaces the cached client`() {
         assumeTrue(BuildConfig.DEBUG)
-        val debug = AuthClient(debugBuild = true, deliver = { it() })
-        assertTrue(debug.clientFor(allowSelfSignedTls = true).trustsAnyServer())
-        assertFalse(debug.clientFor(allowSelfSignedTls = false).trustsAnyServer())
+        val client = AuthClient(debugBuild = true, deliver = { it() })
+        val original = client.clientFor(false)
+        val configured = client.clientFor(true)
+        assertNotSame(original, configured)
+        assertSame(configured, client.clientFor(true))
+        assertNotSame(configured, client.clientFor(false))
+        configured.assertRejectsUninstalledRelay()
     }
 }

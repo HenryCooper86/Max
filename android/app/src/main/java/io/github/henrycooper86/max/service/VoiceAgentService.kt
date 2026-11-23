@@ -11,6 +11,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -55,7 +56,7 @@ class VoiceAgentService : Service() {
                 val open = PendingIntent.getActivity(this@VoiceAgentService, 40, Intent(this@VoiceAgentService, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
                 val cancel = PendingIntent.getService(this@VoiceAgentService, 41, Intent(this@VoiceAgentService, VoiceAgentService::class.java).setAction("crash.cancel"), PendingIntent.FLAG_IMMUTABLE)
                 val notification = NotificationCompat.Builder(this@VoiceAgentService, "crash_alert")
-                    .setSmallIcon(R.drawable.ic_launcher_foreground).setContentTitle(tr(Str.NOTIF_CRASH_TITLE))
+                    .setSmallIcon(R.drawable.ic_stat_voice).setContentTitle(tr(Str.NOTIF_CRASH_TITLE))
                     .setContentText(state.message ?: tr(Str.NOTIF_CRASH_TEXT, "n" to state.remaining))
                     .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setCategory(NotificationCompat.CATEGORY_ALARM)
                     .addAction(0, tr(Str.NOTIF_CRASH_CANCEL), cancel).build()
@@ -87,17 +88,17 @@ class VoiceAgentService : Service() {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(tr(Str.NOTIF_TITLE, "name" to io.github.henrycooper86.max.ui.AssistantBranding.name))
             .setContentText(tr(Str.NOTIF_TEXT))
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_voice)
             .setContentIntent(openApp)
             .setOngoing(true)
             .build()
 
-        // ServiceCompat ignores the type on API levels that don't support it.
+        // Android 10 accepts service-type flags, but the microphone type starts at Android 11.
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
             notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
         )
         return START_NOT_STICKY
     }

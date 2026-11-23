@@ -137,7 +137,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var authToken by mutableStateOf(secureTokens.read(KEY_AUTH_TOKEN))
         private set
 
-    /** Trust the test relay's self-signed certificate for wss:// (prototype only). */
+    /** Trust device-installed CAs for test relays in debug builds. */
     var allowSelfSigned by mutableStateOf(BuildConfig.DEBUG && prefs.getBoolean(KEY_ALLOW_SELF_SIGNED, false))
         private set
 
@@ -507,7 +507,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Developer mode reveals the test settings (relay URL, self-signed trust,
+     * Developer mode reveals the test settings (relay URL, device-installed CAs,
      * demo scenarios, telemetry, raw status, log export). Toggled by
      * long-pressing the Max logo; persisted so demos survive relaunch.
      */

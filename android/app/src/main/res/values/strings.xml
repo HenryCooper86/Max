@@ -4,10 +4,6 @@
      matches AppLanguage.fromLocale, which picks Chinese only for zh locales. -->
 <resources>
     <string name="app_name">Max helmet assistant</string>
-    <string name="notification_channel_name">Hands-free voice session</string>
-    <!-- %1$s = assistant name (runtime-branded, default "Max"). -->
-    <string name="notification_title">%1$s hands-free voice is running</string>
-    <string name="notification_text">Listening to your voice</string>
     <!-- Shown in Settings > Notification access for the QQ Music media-session bridge. -->
     <string name="music_access_label">Max music control</string>
 </resources>

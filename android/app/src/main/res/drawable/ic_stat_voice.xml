@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar icon: Android tints the opaque rim and waveform. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:pathData="M6.5,7 H17.5 A5,5 0 0 1 17.5,17 H6.5 A5,5 0 0 1 6.5,7 Z" />
+    <!-- Waveform. -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.25"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M4.5,12 H8 L9.5,9.5 L11.25,14.5 L13,8.75 L14.75,15.25 L16.25,12 H19.5" />
+</vector>

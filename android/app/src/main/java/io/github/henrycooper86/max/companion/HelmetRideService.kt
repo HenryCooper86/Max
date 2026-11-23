@@ -41,7 +41,7 @@ class HelmetRideService : Service(), LocationListener {
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("helmet_ride", tr(Str.NOTIF_RIDE_CHANNEL), NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 31, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 32, Intent(this, HelmetRideService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE)
-        val notification = NotificationCompat.Builder(this, "helmet_ride").setSmallIcon(R.drawable.ic_launcher_foreground)
+        val notification = NotificationCompat.Builder(this, "helmet_ride").setSmallIcon(R.drawable.ic_stat_voice)
             .setContentTitle(tr(Str.NOTIF_RIDE_TITLE, "name" to AssistantBranding.name)).setContentText(tr(Str.NOTIF_RIDE_TEXT)).setContentIntent(open).setOngoing(true)
             .addAction(0, tr(Str.NOTIF_RIDE_STOP), stop).build()
         try {

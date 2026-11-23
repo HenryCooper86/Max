@@ -36,7 +36,7 @@ class SecureTokenStore(private val preferences: SharedPreferences) {
             preferences.edit().remove(preferenceKey).apply()
             return ""
         }
-        if (write(preferenceKey, legacy)) preferences.edit().remove(preferenceKey).apply()
+        write(preferenceKey, legacy)
         return legacy
     }
 

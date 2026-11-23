@@ -4,37 +4,40 @@ import android.os.Handler
 import android.os.Looper
 import io.github.henrycooper86.max.BuildConfig
 import okhttp3.OkHttpClient
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
+import java.io.IOException
+import java.security.GeneralSecurityException
+import java.security.KeyStore
 import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
-/** The test relay's self-signed certificate may be trusted only in debug builds, and only when the rider opts in. */
+/** Trust device-installed CAs only when the rider opts in on a debug build. */
 fun selfSignedTrustAllowed(debugBuild: Boolean, requested: Boolean): Boolean = debugBuild && requested
 
-/**
- * One OkHttp client for every relay connection (WebSocket, /auth, /health), so
- * the debug-only trust-all path exists once. A release build passes
- * debugBuild = false, which can never install the trust-all manager or
- * hostname verifier, whatever stale preferences ask for.
- */
-fun relayHttpClient(
+/** The opt-in adds device-installed CAs for local test relays. OkHttp always verifies the hostname. */
+internal fun relayHttpClient(
     allowSelfSigned: Boolean,
     debugBuild: Boolean = BuildConfig.DEBUG,
+    installedCaStore: () -> KeyStore = { KeyStore.getInstance("AndroidCAStore").apply { load(null) } },
     configure: OkHttpClient.Builder.() -> Unit = {}
 ): OkHttpClient {
     val builder = OkHttpClient.Builder().apply(configure)
     if (BuildConfig.DEBUG && selfSignedTrustAllowed(debugBuild, allowSelfSigned)) {
-        // BuildConfig.DEBUG is a compile-time constant: R8 or not, the release
-        // build carries no reachable path into this block.
-        val trustAll = object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
-            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        // Without an accessible device store, keep the normal application TLS policy.
+        val store = try {
+            installedCaStore()
+        } catch (_: GeneralSecurityException) {
+            null
+        } catch (_: IOException) {
+            null
         }
-        val sslContext = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trustAll), SecureRandom()) }
-        builder.sslSocketFactory(sslContext.socketFactory, trustAll)
-        builder.hostnameVerifier { _, _ -> true }
+        if (store != null) {
+            val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            factory.init(store)
+            val trust = factory.trustManagers.filterIsInstance<X509TrustManager>().single()
+            val tls = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
+            builder.sslSocketFactory(tls.socketFactory, trust)
+        }
     }
     return builder.build()
 }

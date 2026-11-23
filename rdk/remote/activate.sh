@@ -320,8 +320,6 @@ activate() {
   restart_and_prove strict
   test "$before" = "$(sha256sum "$DEVICE_ID" | cut -d' ' -f1)"
   check_identity
-  # Proven, but without a relay session: reported as exit 3, never rolled back.
-  if [ "$RELAY_STATE" != ready ]; then return 3; fi
 }
 
 preflight() {
@@ -370,7 +368,12 @@ main() {
   set +e
   (
     set -e
+    # Reserve exit 3 for a completed proof. An inactive systemd unit also
+    # exits 3, and any failed command during activation must trigger rollback.
+    trap 'exit 1' EXIT
     activate
+    trap - EXIT
+    if [ "$RELAY_STATE" != ready ]; then exit 3; fi
   )
   status=$?
   if [ "$status" -eq 3 ]; then

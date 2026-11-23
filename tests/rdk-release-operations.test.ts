@@ -1039,7 +1039,11 @@ function fakeBoard(options: {
     "find",
     'args=(); for a in "$@"; do [ "$a" = -readable ] || args+=("$a"); done; exec /usr/bin/find "${args[@]}"'
   );
-  shim("sleep", "exit 0");
+  // Advance the fake board clock so the settle loop does not spin on real time.
+  const clock = join(state, "clock");
+  writeFileSync(clock, "0\n");
+  shim("date", `if [ "$1" = +%s ]; then cat '${clock}'; else exec /bin/date "$@"; fi`);
+  shim("sleep", `read -r now < '${clock}'; echo $((now + $1)) > '${clock}'`);
   // Mode, owner and group flags are irrelevant to a sandbox owned by the tester.
   shim(
     "install",
@@ -1051,7 +1055,6 @@ function fakeBoard(options: {
       'for f in "${args[@]}"; do if [ -d "$dest" ]; then cp "$f" "$dest/"; else cp "$f" "$dest"; fi; done'
     ].join("\n")
   );
-  const counter = (service: string) => join(state, `${service}.invocation`);
   shim(
     "systemctl",
     [
@@ -1071,8 +1074,6 @@ function fakeBoard(options: {
       `if [ -e '${root}/BROKEN' ]; then echo 'relay unreachable'; else echo '[relay] session ready'; fi`
     ].join("\n")
   );
-  // `systemctl show -p InvocationID --value X`: the unit is the fifth argument.
-  void counter;
 
   const activateArgs = [
     join(repositoryRoot, "rdk/remote/activate.sh"),
@@ -1104,9 +1105,9 @@ function fakeBoard(options: {
             "activate-under-closed-channel",
             ...activateArgs
           ],
-          { encoding: "utf8", env: runEnv }
+          { encoding: "utf8", env: runEnv, timeout: 15_000 }
         )
-      : spawnSync("bash", activateArgs, { encoding: "utf8", env: runEnv });
+      : spawnSync("bash", activateArgs, { encoding: "utf8", env: runEnv, timeout: 15_000 });
   };
   const logFile = `${root}.activate-${sha}.log`;
   const statusFile = `${root}.activate-${sha}.status`;
@@ -1136,7 +1137,8 @@ function fakeBoard(options: {
   };
 }
 
-describe("rdk/remote/activate.sh on a fake board", () => {
+// A failed proof polls systemd 60 times, and rollback can require a second proof.
+describe("rdk/remote/activate.sh on a fake board", { timeout: 20_000 }, () => {
   it("swaps in the new release, installs its units and drop-ins, restarts once and keeps the previous release", () => {
     const board = fakeBoard({ newReleaseBroken: false });
     const result = board.run();
@@ -1174,6 +1176,15 @@ describe("rdk/remote/activate.sh on a fake board", () => {
     // One restart pair for the attempt, one for the rollback.
     expect(board.restarts()).toEqual(["max-vision", "max-agent", "max-vision", "max-agent"]);
     expect(board.read(board.deviceIdFile)).toBe("rdk-fixture\n");
+  });
+
+  it("rolls back an inactive vision service even when the relay connected", () => {
+    const board = fakeBoard({ newReleaseBroken: true });
+    writeFileSync(join(board.stage, "RELAY_DOWN"), "[relay] session ready\n");
+    const result = board.run();
+    expect(result.status).toBe(1);
+    expect(board.status()).toBe(`rolled-back ${board.sha}`);
+    expect(board.read(join(board.root, "RELEASE"))).toBe("old\n");
   });
 
   it("restores a previous release's own drop-ins on rollback", () => {

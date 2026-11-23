@@ -114,10 +114,10 @@ android {
 
 dependencies {
     // The maintained AMap artifact bundles location/search; we use map APIs only.
-    implementation("com.amap.api:3dmap-location-search:11.2.100_loc11.2.100_sea9.8.1")
-    implementation("androidx.camera:camera-camera2:1.4.2")
-    implementation("androidx.camera:camera-lifecycle:1.4.2")
-    implementation("androidx.camera:camera-video:1.4.2")
+    implementation("com.amap.api:3dmap-location-search:11.3.100_loc11.3.101_sea9.8.1")
+    implementation("androidx.camera:camera-camera2:1.7.0")
+    implementation("androidx.camera:camera-lifecycle:1.7.0")
+    implementation("androidx.camera:camera-video:1.7.0")
     implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -132,7 +132,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     // Test-only: the unit-test android.jar's org.json.* classes are throwing
     // stubs (Robolectric-less JVM unit tests get "not mocked" RuntimeExceptions
     // on JSONObject.put/optString/... ). This shadows those stubs with the real

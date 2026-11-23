@@ -2386,6 +2386,9 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     // No session is left to call a tool: the MCP servers the relay runs itself are stopped with it.
     closeServerTools();
     usageMeter.flush();
+    // What the sessions left to be written on this machine is written now, before anything is waited for on
+    // the network: a process manager that allows a stop only a second or two must not cut these short.
+    await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);
     // A project's conversation is saved, analysed and sent when its socket has closed, and a client can be
     // slow to answer the close: a short wait for it, then the socket is cut, so that none ends after the
     // wait below and is left out of it.
@@ -2397,6 +2400,7 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     await Promise.all([conversations.drain(3_000), projectWebhooks.drain(3_000), projectTraces.drain(3_000)]);
     await recordings?.close();
     await campaigns.close();
+    // And once more, for what the waits above still wrote.
     await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);
     closeTestingStore();
     await serverClosed;

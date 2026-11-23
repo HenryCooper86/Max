@@ -3,12 +3,15 @@
 // limits that keep a public embed from draining its owner's balance.
 import { randomBytes } from "node:crypto";
 import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIVE_CAPABILITIES } from "../shared/agent";
 import { chargeSession, cloudSessionEnded, recoverCloudSessions, remainingSeconds } from "../server/cloud";
 import { setCloudClock, setCloudInstanceId } from "../server/cloud/context";
 import { cloudCounters } from "../server/cloud/counters";
-import { createProject, patchProject, rotateProjectKey, signup } from "../server/cloud/customers";
+import { createProject, listProjects, patchProject, rotateProjectKey, signup } from "../server/cloud/customers";
 import {
   CLOUD_CHECK_INTERVAL_MS,
   admitCloudSession,
@@ -79,6 +82,109 @@ async function setup(options: { embed?: boolean } = {}) {
     embedGrant: { ...grant, source: "embed" as const }
   };
 }
+
+it("marks only the first answered website turn, even with transcript storage off", async () => {
+  const { customerId, projectId, grant, embedGrant } = await setup({ embed: true });
+  const project = () => listProjects(customerId)[0]!;
+  patchProject(customerId, projectId, { studio: { ...project().studio, keepConversations: false } });
+  const utterance = (speaker: "rider" | "agent", final = true, text = "hello") => ({
+    type: "transcript",
+    speaker,
+    final,
+    text
+  });
+  for (const [source, origin] of [
+    ["test", SITE],
+    ["api", undefined],
+    ["api", "null"]
+  ] as const) {
+    const session = openCloudSession("excluded", { ...grant, source }, "visitor", origin);
+    session.observe(utterance("rider"));
+    session.observe(utterance("agent"));
+    session.close();
+  }
+  expect(project().firstWebsiteConversationAt).toBeNull();
+  const website = openCloudSession("website", embedGrant, "visitor", SITE);
+  website.observe({ type: "status", state: "ready" });
+  website.observe(utterance("agent")); // Greeting.
+  website.observe(utterance("rider", false));
+  website.observe(utterance("agent"));
+  website.observe(utterance("rider"));
+  website.observe(utterance("agent", false));
+  website.observe(utterance("agent", true, "  "));
+  website.observe(utterance("agent"), false);
+  expect(project().firstWebsiteConversationAt).toBeNull();
+  website.observe(utterance("agent"));
+  expect(project().firstWebsiteConversationAt).toBe(START);
+  clock += 1000;
+  const other = openCloudSession("another", embedGrant, "another visitor", SITE);
+  other.observe(utterance("rider"));
+  other.observe(utterance("agent"));
+  expect(project().firstWebsiteConversationAt).toBe(START);
+  const sdk = await setup();
+  const browser = openCloudSession("sdk", { ...sdk.grant, source: "api" }, "visitor", SITE);
+  browser.observe(utterance("rider"));
+  browser.observe(utterance("agent"));
+  expect(listProjects(sdk.customerId)[0]!.firstWebsiteConversationAt).toBe(clock);
+});
+
+it("recognizes a website audio answer before the transcript arrives", async () => {
+  const { customerId, embedGrant } = await setup();
+  const live = openCloudSession("audio", embedGrant, "visitor", SITE);
+  live.observe({ type: "metric", latencyMs: -1 });
+  expect(listProjects(customerId)[0]!.firstWebsiteConversationAt).toBeNull();
+  live.observe({ type: "metric", latencyMs: 250 });
+  expect(listProjects(customerId)[0]!.firstWebsiteConversationAt).toBe(START);
+});
+
+it("recovers only confirmed website conversations from an older database and survives transcript deletion", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "max-website-"));
+  const file = path.join(dir, "cloud.sqlite");
+  try {
+    resetCloudDatabase(file);
+    const { customerId, projectId } = await setup();
+    resetCloudDatabase(file);
+    const old = new DatabaseSync(file);
+    try {
+      old.exec("ALTER TABLE projects DROP COLUMN first_website_conversation_at");
+      const insert = old.prepare(
+        "INSERT INTO conversations (id, customer_id, project_id, started_at, ended_at, seconds, source, turns) VALUES (?, ?, ?, 0, ?, 1, ?, ?)"
+      );
+      const exchanges = [
+        ["test", ["user", "agent"]],
+        ["api", ["user", "agent"]],
+        ["embed", ["agent", "user"]],
+        ["embed", ["user", "tool"]],
+        ["embed", ["user", "agent"]],
+        ["embed", ["user", "agent"]]
+      ] as const;
+      exchanges.forEach(([source, speakers], i) =>
+        insert.run(
+          String(i),
+          customerId,
+          projectId,
+          i + 1,
+          source,
+          JSON.stringify(speakers.map((speaker) => ({ speaker, text: "hello" })))
+        )
+      );
+    } finally {
+      old.close();
+    }
+    expect(listProjects(customerId)[0]!.firstWebsiteConversationAt).toBe(5);
+    resetCloudDatabase(file);
+    const db = new DatabaseSync(file);
+    try {
+      db.exec("DELETE FROM conversations");
+    } finally {
+      db.close();
+    }
+    expect(listProjects(customerId)[0]!.firstWebsiteConversationAt).toBe(5);
+  } finally {
+    resetCloudDatabase(":memory:");
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 /** Credits balance by hand, as scripts/cloud-credit.ts does: 1 fen buys 4 seconds. */
 function creditSeconds(customerId: string, seconds: number): void {

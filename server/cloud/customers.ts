@@ -66,6 +66,7 @@ export type PublicProject = {
   hasWebhookSecret: boolean;
   /** The owner's limit on this project's minutes per calendar month (UTC); null for none. */
   monthlyMinutesCap: number | null;
+  firstWebsiteConversationAt: number | null;
   /** Whether conversation analysis runs with the project's own model key, and not on a model the operator named. */
   analysisOnOwnKey: boolean;
   createdAt: number;
@@ -258,6 +259,7 @@ function publicProject(row: ProjectRow): PublicProject {
     publicId: row.public_id ?? "",
     hasWebhookSecret: Boolean(row.webhook_secret_enc),
     monthlyMinutesCap: row.monthly_minutes_cap ?? null,
+    firstWebsiteConversationAt: row.first_website_conversation_at,
     analysisOnOwnKey: analysisUsesProjectKey(),
     createdAt: row.created_at
   };
@@ -359,6 +361,7 @@ export function createProject(
     webhook_secret_enc: needsSigningSecret(studio.value) ? (newWebhookSecret(id) ?? null) : null,
     traces_headers_enc: null,
     monthly_minutes_cap: null,
+    first_website_conversation_at: null,
     created_at: now(),
     deleted_at: null
   };

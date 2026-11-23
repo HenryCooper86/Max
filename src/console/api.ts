@@ -30,6 +30,7 @@ export type Project = {
   hasWebhookSecret: boolean;
   /** The owner's limit on this project's minutes per month; null (or absent, from an older relay) for none. */
   monthlyMinutesCap?: number | null;
+  firstWebsiteConversationAt?: number | null;
   /** False when conversation analysis runs on a model the service's operator named, not with the project's key. */
   analysisOnOwnKey?: boolean;
   createdAt: number;

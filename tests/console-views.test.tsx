@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { act, useState } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -118,6 +119,121 @@ describe("overview pieces", () => {
     // Getting started: the key is in, testing and installing are next.
     expect(studio).toContain("和它说说话");
     expect(studio).not.toContain("confirm(");
+  });
+
+  it("uses the relay's installation milestone and supports keyboard tab selection and cancellation", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const enabled = { ...project, studio: { ...project.studio, publicEmbed: { enabled: true, origins: [] } } };
+    const render = (item: Project) =>
+      act(async () =>
+        root.render(
+          <Studio
+            session={{ api, token: "t", fail: String }}
+            project={item}
+            origin="https://max.example"
+            onChanged={() => {}}
+            onKeyRotated={() => {}}
+            onDeleted={() => {}}
+          />
+        )
+      );
+    const installation = () => host.querySelector("ol li:last-child")!;
+    const selected = () => host.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
+    const key = (key: string) =>
+      act(async () => {
+        selected().dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      });
+    const cancel = (event: Event) => event.preventDefault();
+    try {
+      localStorage.setItem("max-cloud:installed:p1", "1");
+      await render(enabled);
+      expect(installation().classList.contains("done")).toBe(false);
+      localStorage.removeItem("max-cloud:installed:p1");
+      await act(async () => host.querySelector<HTMLButtonElement>("#cxs-p1-tab-install")!.click());
+      const snippet = host.querySelector<HTMLButtonElement>(".cxsInstallCodeHead button")!;
+      await act(async () => snippet.click());
+      expect(await navigator.clipboard.readText()).toContain("voice-agent.iife.js");
+      expect(localStorage.getItem("max-cloud:installed:p1")).toBeNull();
+      expect(installation().classList.contains("done")).toBe(false);
+      await act(async () => host.querySelector<HTMLButtonElement>("#cxs-p1-tab-agent")!.click());
+      await render({ ...enabled, firstWebsiteConversationAt: 123 });
+      expect(installation().classList.contains("done")).toBe(true);
+      selected().focus();
+      expect(host.querySelectorAll('[role="tab"][tabindex="0"]')).toHaveLength(1);
+      await key("ArrowLeft");
+      expect(selected().id).toBe("cxs-p1-tab-settings");
+      expect(document.activeElement).toBe(selected());
+      await key("ArrowRight");
+      expect(selected().id).toBe("cxs-p1-tab-agent");
+      await key("ArrowRight");
+      expect(selected().id).toBe("cxs-p1-tab-knowledge");
+      await key("End");
+      expect(selected().id).toBe("cxs-p1-tab-settings");
+      window.addEventListener("admin:beforesection", cancel);
+      await key("Home");
+      expect(selected().id).toBe("cxs-p1-tab-settings");
+      expect(document.activeElement).toBe(selected());
+      window.removeEventListener("admin:beforesection", cancel);
+      await key("Home");
+      expect(selected().id).toBe("cxs-p1-tab-agent");
+    } finally {
+      window.removeEventListener("admin:beforesection", cancel);
+      await act(async () => root.unmount());
+      host.remove();
+      localStorage.clear();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refreshes the open project's milestone without overwriting settings or an edit in progress", async () => {
+    const pending = { ...project, firstWebsiteConversationAt: null };
+    const listProjects = vi
+      .fn()
+      .mockResolvedValueOnce({ projects: [pending] })
+      .mockResolvedValueOnce({
+        projects: [{ ...project, name: "Stale project name", firstWebsiteConversationAt: 42 }]
+      });
+    const session = { api: { ...api, listProjects }, token: "t", fail: String };
+    function Dashboard() {
+      const [projects, setProjects] = useState<Project[] | null>([pending]);
+      return (
+        <ProjectsSection
+          session={session}
+          projects={projects}
+          setProjects={setProjects}
+          error=""
+          onRetry={() => {}}
+          origin="https://max.example"
+          onMoney={() => {}}
+        />
+      );
+    }
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(<Dashboard />);
+      });
+      const page = renderer!.root;
+      await act(async () => page.findByProps({ "aria-expanded": false }).props.onClick());
+      await act(async () => page.findByProps({ id: "cxs-p1-tab-settings" }).props.onClick());
+      const field = () => page.findByProps({ id: "cxs-p1-name" }).props;
+      await act(async () => field().onChange({ target: { value: "Unsaved draft" } }));
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(page.findByType(Studio).props.project).toMatchObject({ name: "Demo", firstWebsiteConversationAt: 42 });
+      expect(field().value).toBe("Unsaved draft");
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(listProjects).toHaveBeenCalledTimes(2);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps drafts across tabs and asks before closing an edited project", async () => {

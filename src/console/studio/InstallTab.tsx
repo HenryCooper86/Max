@@ -4,7 +4,7 @@ import { STUDIO_LIMITS, normalizeOrigin, type WidgetPosition } from "../../../sh
 import { CopyButton } from "../CopyButton";
 import { useSay } from "../hooks";
 import { FRAMEWORKS, frameworkSnippets, mintTokenCurl, publicEmbedSnippet, type Framework } from "./install-snippets";
-import { rememberStep, type StudioTabProps } from "./types";
+import type { StudioTabProps } from "./types";
 
 const FRAMEWORK_LABELS: Record<Framework, string> = {
   html: "HTML + JS",
@@ -24,7 +24,6 @@ export function InstallTab(props: StudioTabProps) {
   const embed = draft.studio.publicEmbed;
   const widget = draft.studio.widget;
   const savedOn = project.studio.publicEmbed.enabled;
-  const installed = () => rememberStep(project.id, "installed");
 
   const setOrigins = (origins: string[]) => updateStudio({ publicEmbed: { ...embed, origins } });
   const setWidget = (patch: Partial<typeof widget>) => updateStudio({ widget: { ...widget, ...patch } });
@@ -59,9 +58,7 @@ export function InstallTab(props: StudioTabProps) {
     <>
       <div className="cxsInstallCodeHead">
         <span>{title}</span>
-        <span onClickCapture={installed}>
-          <CopyButton text={text} />
-        </span>
+        <CopyButton text={text} />
       </div>
       <pre className="cxsInstallCode" tabIndex={0}>
         <code>{text}</code>

@@ -1,5 +1,5 @@
 import { mayLeaveSection } from "../lib/section-leave";
-import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { useLanguage } from "../components/LanguageToggle";
 import { AGENT_TEMPLATES, findTemplate, type AgentTemplate } from "../lib/agent-templates";
 import type { Language } from "../lib/i18n";
@@ -165,6 +165,45 @@ export function ProjectsSection({
   const say = useSay();
   const [open, setOpen] = useState<{ id: string; tab: StudioTab } | null>(null);
   const [revealed, setRevealed] = useState<{ name: string; apiKey: string } | null>(null);
+
+  const openProject = projects?.find((p) => p.id === open?.id);
+  const waitingForWebsite =
+    openProject?.hasModelKey && openProject.firstWebsiteConversationAt === null ? openProject.id : undefined;
+  const { api, token } = session;
+  useEffect(() => {
+    if (!waitingForWebsite) return;
+    let active = true;
+    let checking = false;
+    async function refreshMilestone() {
+      if (checking || document.visibilityState === "hidden") return;
+      checking = true;
+      try {
+        const result = await api.listProjects(token);
+        const firstWebsiteConversationAt = result.projects.find(
+          (p) => p.id === waitingForWebsite
+        )?.firstWebsiteConversationAt;
+        if (active && firstWebsiteConversationAt != null) {
+          // An in-flight read must never replace a newer project save or an open draft.
+          setProjects(
+            (current) =>
+              current?.map((p) => (p.id === waitingForWebsite ? { ...p, firstWebsiteConversationAt } : p)) ?? null
+          );
+        }
+      } catch {
+        // Progress can be refreshed on the next check.
+      } finally {
+        checking = false;
+      }
+    }
+    void refreshMilestone();
+    const timer = window.setInterval(refreshMilestone, 30_000);
+    window.addEventListener("focus", refreshMilestone);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshMilestone);
+    };
+  }, [waitingForWebsite, api, token, setProjects]);
 
   const replace = (project: Project) =>
     setProjects((current) => current?.map((p) => (p.id === project.id ? project : p)) ?? null);

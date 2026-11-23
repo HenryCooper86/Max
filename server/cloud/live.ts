@@ -11,7 +11,7 @@
 // ready or while it reconnects, "closed" once it has given up, and any other
 // state (ready, listening, thinking, speaking, ...) while it is connected.
 
-import { USAGE_LIMIT_CLOSE_CODE } from "../../shared/agent";
+import { USAGE_LIMIT_CLOSE_CODE, type AgentEvent } from "../../shared/agent";
 import { monthOf } from "./billing";
 import {
   cloudSessionAlive,
@@ -23,7 +23,7 @@ import {
 import { countCloud } from "./counters";
 import { cloudEnabled, now } from "./context";
 import { createLogger } from "../logger";
-import { liveProjectByKeyHash, projectMinutesCap, projectSecondsIn } from "./store";
+import { liveProjectByKeyHash, markWebsiteConversation, projectMinutesCap, projectSecondsIn } from "./store";
 
 const log = createLogger("cloud");
 
@@ -204,7 +204,12 @@ export type LiveCloudSession = {
 };
 
 /** Starts tracking an admitted session; its row in live_sessions is written now. */
-export function openCloudSession(sessionId: string, grant: CloudSessionGrant, address: string): LiveCloudSession {
+export function openCloudSession(
+  sessionId: string,
+  grant: CloudSessionGrant,
+  address: string,
+  origin?: string
+): LiveCloudSession {
   const session: Running = {
     sessionId,
     grant: { ...grant },
@@ -214,6 +219,19 @@ export function openCloudSession(sessionId: string, grant: CloudSessionGrant, ad
   };
   running.set(sessionId, session);
   cloudSessionStarted({ sessionId, customerId: grant.customerId, projectId: grant.projectId });
+  // The widget has its own grant; the SDK can also run in a browser using a server-minted token.
+  let trackingWebsite = grant.source !== "test" && (session.embed || /^https?:\/\//i.test(origin ?? ""));
+  let visitorSpoke = false;
+  let answeredAt: number | undefined;
+  function recordWebsiteAnswer() {
+    if (!trackingWebsite || answeredAt === undefined) return;
+    try {
+      markWebsiteConversation(grant.projectId, answeredAt);
+      trackingWebsite = false;
+    } catch (error) {
+      log.warn("website conversation milestone could not be saved", { sessionId, message: String(error) });
+    }
+  }
   let refused = false;
   let closedSeconds: number | undefined;
 
@@ -224,7 +242,32 @@ export function openCloudSession(sessionId: string, grant: CloudSessionGrant, ad
 
   return {
     observe(event, upstreamUsable) {
-      if (closedSeconds === undefined) session.clock.observe(event, now(), upstreamUsable);
+      if (closedSeconds !== undefined) return;
+      const at = now();
+      session.clock.observe(event, at, upstreamUsable);
+      if (!trackingWebsite || answeredAt !== undefined) return;
+      const payload = event as Partial<AgentEvent> | null;
+      if (payload?.type === "status" && payload.state === "closed") visitorSpoke = false;
+      if (upstreamUsable === false) return;
+      // Cloud voice providers send this metric with the first audio answering a visitor,
+      // including when recognition has not delivered the visitor's final words yet.
+      if (
+        payload?.type === "metric" &&
+        typeof payload.latencyMs === "number" &&
+        Number.isFinite(payload.latencyMs) &&
+        payload.latencyMs >= 0
+      ) {
+        answeredAt = at;
+      } else if (
+        payload?.type === "transcript" &&
+        payload.final === true &&
+        typeof payload.text === "string" &&
+        payload.text.trim()
+      ) {
+        if (payload.speaker === "rider") visitorSpoke = true;
+        if (visitorSpoke && payload.speaker === "agent") answeredAt = at;
+      }
+      recordWebsiteAnswer();
     },
     seconds() {
       return closedSeconds ?? session.clock.seconds(now());
@@ -232,6 +275,7 @@ export function openCloudSession(sessionId: string, grant: CloudSessionGrant, ad
     check() {
       if (refused || closedSeconds !== undefined) return undefined;
       const at = now();
+      recordWebsiteAnswer();
       const restored = cloudSessionAlive(
         { sessionId, customerId: grant.customerId, projectId: grant.projectId },
         session.clock.seconds(at)
@@ -258,6 +302,7 @@ export function openCloudSession(sessionId: string, grant: CloudSessionGrant, ad
     },
     close(endedAt = now()) {
       if (closedSeconds !== undefined) return closedSeconds;
+      recordWebsiteAnswer();
       session.clock.stop(endedAt);
       closedSeconds = session.clock.seconds(endedAt);
       running.delete(sessionId);

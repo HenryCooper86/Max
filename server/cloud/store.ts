@@ -43,6 +43,7 @@ export type ProjectRow = {
   traces_headers_enc: string | null;
   /** The owner's limit on this project's minutes per calendar month (UTC); null for none. */
   monthly_minutes_cap: number | null;
+  first_website_conversation_at: number | null;
   created_at: number;
   deleted_at: number | null;
 };
@@ -218,6 +219,23 @@ function database(): DatabaseSync {
     if (!projectColumns.has("monthly_minutes_cap")) {
       db.exec("ALTER TABLE projects ADD COLUMN monthly_minutes_cap INTEGER NULL");
     }
+    if (!projectColumns.has("first_website_conversation_at")) {
+      // Older API sessions did not record their origin. Only retained embed exchanges prove a website install.
+      db.exec(`
+        BEGIN IMMEDIATE;
+        ALTER TABLE projects ADD COLUMN first_website_conversation_at INTEGER;
+        UPDATE projects SET first_website_conversation_at = (
+          SELECT MIN(c.ended_at) FROM conversations c
+          WHERE c.project_id = projects.id AND c.source = 'embed' AND (
+            SELECT MIN(CASE WHEN turn.value ->> 'speaker' = 'user' THEN turn.key END)
+                 < MAX(CASE WHEN turn.value ->> 'speaker' = 'agent' THEN turn.key END)
+            FROM json_each(CASE WHEN json_valid(c.turns) THEN c.turns ELSE '[]' END) AS turn
+            WHERE CASE WHEN turn.type = 'object' THEN trim(turn.value ->> 'text') <> '' ELSE 0 END
+          )
+        ) WHERE deleted_at IS NULL;
+        COMMIT;
+      `);
+    }
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_public_id ON projects(public_id)");
     // A project's minutes this month, read by its spend limit every few seconds while it talks.
     db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_project_month ON ledger(project_id, kind, month)");
@@ -343,6 +361,16 @@ export function insertProject(row: ProjectRow, limit: number): boolean {
     );
     return true;
   });
+}
+
+/** The first answered website conversation outlives transcript retention and project edits. */
+export function markWebsiteConversation(projectId: string, at: number): void {
+  database()
+    .prepare(
+      `UPDATE projects SET first_website_conversation_at = ? WHERE id = ? AND deleted_at IS NULL
+       AND (first_website_conversation_at IS NULL OR first_website_conversation_at > ?)`
+    )
+    .run(at, projectId, at);
 }
 
 export function liveProjects(customerId: string): ProjectRow[] {

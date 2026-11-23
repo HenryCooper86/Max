@@ -5,7 +5,7 @@ import type { VoiceAgentStatus } from "../../../sdk/src/index";
 import { useSay } from "../hooks";
 import { applyAgentEvent, EMPTY_TEST_STATE, formatElapsed } from "./test-helpers";
 import type { TimelineEntry } from "./test-helpers";
-import { rememberStep } from "./types";
+import { rememberStudioTest } from "./types";
 import type { StudioTabProps } from "./types";
 
 type Say = (zh: string, en: string) => string;
@@ -161,7 +161,7 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
           setConnectedAt((current) => current ?? Date.now());
           if (!testedRef.current) {
             testedRef.current = true;
-            rememberStep(project.id, "tested");
+            rememberStudioTest(project.id);
           }
         }
       }),

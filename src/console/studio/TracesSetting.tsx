@@ -16,22 +16,31 @@ function hostOf(address: string): string {
  * Where each conversation is traced: the address of the project's own OpenTelemetry collector, the headers it
  * wants (a secret: only ever typed in, never shown), whether what was said goes with it, and a test.
  */
-export function TracesSetting({ session, project, draft, update, updateStudio, onProjectChanged }: StudioTabProps) {
+export function TracesSetting({
+  session,
+  project,
+  savedProject = project,
+  release,
+  releaseBusy,
+  draft,
+  update,
+  updateStudio
+}: StudioTabProps) {
   const say = useSay();
   const traces: StudioTraces = draft.studio.traces ?? DEFAULT_TRACES;
-  const saved = (project.studio.traces ?? DEFAULT_TRACES).endpoint;
+  const saved = (savedProject.studio.traces ?? DEFAULT_TRACES).endpoint;
   const endpoint = traces.endpoint;
   const unsaved = endpoint.trim() !== saved;
   const problem = endpoint.trim() ? toolUrlProblem(endpoint.trim()) : undefined;
-  const hasHeaders = project.hasTracesHeaders === true;
+  const hasHeaders = savedProject.hasTracesHeaders === true && !draft.removeTracesHeaders;
   // The relay removes saved headers when the traces go to another host: one collector's key is not sent to the next.
   const headersLeft =
     hasHeaders && unsaved && !(draft.tracesHeaders ?? "") && hostOf(endpoint.trim()) !== hostOf(saved);
   const [testing, setTesting] = useState(false);
-  const [removing, setRemoving] = useState(false);
+  const revision = release?.draft?.id ?? release?.liveRevision;
   // Each with the endpoint it is about: what is known of one says nothing of the next.
   const [tested, setTested] = useState<{ of: string; result: TracesTestResult } | null>(null);
-  const [status, setStatus] = useState("");
+
   const [error, setError] = useState("");
   const alive = useRef(true);
   useEffect(() => {
@@ -40,7 +49,7 @@ export function TracesSetting({ session, project, draft, update, updateStudio, o
       alive.current = false;
     };
   }, []);
-  const result = tested?.of === saved ? tested.result : null;
+  const result = tested?.of === (revision ?? saved) ? tested.result : null;
   const id = (suffix: string) => `cxsTraces-${project.id}-${suffix}`;
 
   async function test() {
@@ -48,29 +57,16 @@ export function TracesSetting({ session, project, draft, update, updateStudio, o
     setTested(null);
     setError("");
     try {
-      const answer = await session.api.testTraces(session.token, project.id);
-      if (alive.current) setTested({ of: saved, result: answer });
+      const answer = await session.api.testTraces(
+        session.token,
+        project.id,
+        ...(revision ? ([revision] as const) : [])
+      );
+      if (alive.current) setTested({ of: revision ?? saved, result: answer });
     } catch (caught) {
       if (alive.current) setError(session.fail(caught));
     } finally {
       if (alive.current) setTesting(false);
-    }
-  }
-
-  async function removeHeaders() {
-    setRemoving(true);
-    setStatus("");
-    setError("");
-    try {
-      const answer = await session.api.updateProject(session.token, project.id, { tracesHeaders: "" });
-      if (!alive.current) return;
-      onProjectChanged(answer.project);
-      update({ tracesHeaders: "" });
-      setStatus(say("请求头已移除。", "Headers removed."));
-    } catch (caught) {
-      if (alive.current) setError(session.fail(caught));
-    } finally {
-      if (alive.current) setRemoving(false);
     }
   }
 
@@ -120,14 +116,13 @@ export function TracesSetting({ session, project, draft, update, updateStudio, o
             placeholder={hasHeaders ? say("•••• 已保存", "•••• saved") : "Authorization=Basic%20abc123,x-team=prod"}
             aria-describedby={id("headers-hint")}
             value={draft.tracesHeaders ?? ""}
-            onChange={(event) => update({ tracesHeaders: event.target.value })}
+            onChange={(event) => update({ tracesHeaders: event.target.value, removeTracesHeaders: false })}
           />
           {hasHeaders ? (
             <button
               type="button"
               className="siteButton secondary small"
-              disabled={removing}
-              onClick={() => void removeHeaders()}
+              onClick={() => update({ tracesHeaders: "", removeTracesHeaders: true })}
             >
               {say("移除", "Remove")}
             </button>
@@ -169,7 +164,7 @@ export function TracesSetting({ session, project, draft, update, updateStudio, o
       ) : null}
       {unsaved && !problem ? (
         <p className="cxWarn" role="status">
-          {say("请保存以生效", "Save to apply")}
+          {say("请发布以生效", "Publish to apply")}
         </p>
       ) : null}
       {saved ? (
@@ -178,7 +173,9 @@ export function TracesSetting({ session, project, draft, update, updateStudio, o
             type="button"
             className="siteButton secondary small"
             onClick={() => void test()}
-            disabled={testing || unsaved || (draft.tracesHeaders ?? "") !== ""}
+            disabled={
+              releaseBusy || testing || unsaved || draft.removeTracesHeaders || (draft.tracesHeaders ?? "") !== ""
+            }
             aria-busy={testing}
           >
             {testing ? say("发送中…", "Sending…") : say("发送测试追踪", "Send test trace")}
@@ -193,7 +190,9 @@ export function TracesSetting({ session, project, draft, update, updateStudio, o
               : say(`测试没有送达：${result.error}`, `The test did not arrive: ${result.error}`)}
           </p>
         ) : null}
-        {status ? <p className="cxMuted">{status}</p> : null}
+        {draft.removeTracesHeaders ? (
+          <p className="cxMuted">{say("发布后将移除请求头。", "Publishing will remove the headers.")}</p>
+        ) : null}
       </div>
       <p className="cxError" role="alert">
         {error}

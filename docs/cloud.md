@@ -59,13 +59,12 @@ their website in a few minutes, without writing a backend:
   say when one hands over to another. It is the relay's [flow builder](conversations.md#flows) and the
   same [agents and handoffs](conversations.md#several-agents-and-handing-over), with the project's tools as the
   only tools: values asked of the user, a fixed sentence, a tool called by rule and a branch on its answer all work
-  as they do there. The project's instructions and knowledge are what every step starts from. A flow is saved with
-  its own button and checked when saved: a step cannot call, by rule, a tool the project does not have, and a tool
-  cannot be removed while a step calls it that way. Saving the other settings leaves the flow as it is; over the API
-  that is a `PATCH` whose `studio` has no `flow`, and the flow itself is read and saved at
-  `/cloud/api/projects/:id/flow` as `{ "steps": [...] }`.
-- **Test.** Talk to the agent in the browser (or type), with its tools running, before anyone else does. Test minutes
-  count like any others.
+  as they do there. The project's instructions and knowledge are what every step starts from. Choose **Apply to draft** on the canvas before testing or saving. Studio validates the flow with the tools
+  in that draft, so a step cannot automatically call a tool that was removed.
+- **Test.** Start a voice or text session from the Test tab. Starting with unsaved edits saves the draft first.
+  The test runs the selected revision and its actual tools, including webhook calls that may change data at the
+  destination. Test minutes count toward the project's balance and live spending limit. Studio revision tests
+  skip conversation history, memory, post-call analysis, conversation webhooks, and trace export.
 - **Install.** The one-line embed (below), the widget's label, colour and side, and copyable code for a backend in
   plain JavaScript, React, Next.js, Express or Flask.
   The Studio installation checklist completes when the relay observes a visitor get an answer through the widget or browser SDK.
@@ -97,6 +96,27 @@ their website in a few minutes, without writing a backend:
   `studio.traces` (`{ "endpoint", "content" }`, left as it is by a `PATCH` whose `studio` has no `traces`) and the
   write-only `tracesHeaders`; the project says `hasTracesHeaders`, and `POST /cloud/api/projects/:id/traces-test`
   sends the test.
+
+### Testing, publishing, and restoring a revision
+
+Saving a draft leaves the website and backend on the current live revision. Studio shows the live and draft IDs
+and a comparison of the changed settings. Model keys and trace headers are masked. A draft becomes eligible to
+publish when its test reaches provider readiness. Editing and saving it again creates a new revision that needs
+its own test. **Publish** switches new live conversations to the exact tested revision.
+
+**Restore previous revision** reactivates the preceding live configuration under a fresh revision ID. It also
+discards the current draft. Studio asks for confirmation and refuses stale publish or restore requests. The
+project keeps one saved draft and one rollback revision. Billing limits, project access keys, signing keys, and
+the website installation checklist stay with the project. Removing the model key in Settings takes effect
+immediately and clears the saved draft and rollback revision.
+
+Authenticated Studio clients read `GET /cloud/api/projects/:id/release`, save with `PUT .../draft` and start a
+test with `POST .../test-session`. A draft save includes `baseRevision`, `draftRevision` (null for the first
+draft), and `patch`. A test takes the draft's `revision`, or `expectedLiveRevision` to preview the current live
+configuration. Publishing sends both `baseRevision` and the tested `revision` to `POST .../publish`. Restoring
+sends the current `baseRevision`, the previous `revision` and the displayed `draftRevision` to `POST .../restore`.
+A material configuration change through the existing live project PATCH or flow PUT advances the live revision
+and invalidates the open draft. Reload Studio to see the new state after a conflict.
 
 ### Who pays for an analysis
 
@@ -176,7 +196,7 @@ projects' conversations: they are their customers', and go only to the collector
 ### The one-line embed (no backend)
 
 In **Install**, turn on "Let the websites below use this agent directly", list the websites (`https://shop.example.com`,
-plus `http://localhost:5173` while developing), save, and paste:
+plus `http://localhost:5173` while developing), test and publish, then paste:
 
 ```html
 <script src="https://<relay>/sdk/voice-agent.iife.js" data-relay="https://<relay>" data-project="pub_…"></script>
@@ -200,7 +220,7 @@ off unless set; we suggest it to anyone who turns the public embed on.
 ### With their own backend
 
 1. Open the invitation link, create an account, and create a project. The project key (`mpk_…`) is shown once.
-2. Choose a backend, paste a model key, set the assistant up in the Studio.
+2. Choose a backend, paste a model key, configure the assistant in Studio, test it, and publish the draft.
 3. From their own backend, mint a short-lived session token with the project key:
 
    ```bash

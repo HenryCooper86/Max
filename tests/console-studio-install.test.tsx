@@ -84,7 +84,7 @@ describe("InstallTab", () => {
     const html = renderToStaticMarkup(createElement(LanguageProvider, null, createElement(InstallTab, props)));
     expect(html).toContain("最简单：粘贴一行代码");
     expect(html).toContain(PUBLIC_ID);
-    expect(html).toContain("先保存才会生效。");
+    expect(html).toContain("发布后网站设置才会生效。");
     expect(html).toContain('role="tablist"');
     expect(html).toContain("http://localhost:5173");
   });

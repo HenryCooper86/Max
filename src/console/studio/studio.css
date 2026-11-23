@@ -326,3 +326,72 @@
   background: var(--accent-soft);
   color: var(--text);
 }
+
+.cxsRelease {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface-2);
+  font-size: var(--fs-13);
+}
+
+.cxsReleaseBar,
+.cxsReleaseStatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.cxsReleaseBar {
+  justify-content: space-between;
+}
+
+.cxsReleaseStatus code {
+  overflow-wrap: anywhere;
+}
+
+.cxsRelease summary {
+  margin-top: 8px;
+  cursor: pointer;
+}
+
+.cxsReleaseChanges > div {
+  padding: 8px 0;
+  border-top: var(--line-w) solid var(--line-strong);
+}
+
+.cxsReleaseChanges dt {
+  font-weight: 600;
+}
+
+.cxsReleaseChanges dd {
+  margin: 4px 0 0;
+}
+
+.cxsReleaseCompare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  gap: 8px;
+}
+
+.cxsReleaseCompare > div {
+  min-width: 0;
+  padding: 8px;
+  background: var(--surface-3);
+  border-radius: var(--radius-card);
+}
+
+.cxsReleaseCompare pre {
+  max-height: 160px;
+  overflow: auto;
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cxsReleasePrivateChanges {
+  margin: 4px 0 0;
+  padding-inline-start: 20px;
+}

@@ -4,10 +4,12 @@
 
 import type { ProjectStudio } from "../../shared/cloud-studio";
 import { createLogger } from "../logger";
+import type { CloudProjectGrant } from "../session-tokens";
 import { cloudEnabled, cloudSecretKey, cloudSecretKeys } from "./context";
 import { projectStudio, projectTracesHeaders, projectWebhookSecret } from "./customers";
+import { draftRevisionProject } from "./revisions";
 import { decryptModelKey, hashToken } from "./secrets";
-import { liveProject, liveProjectByKeyHash } from "./store";
+import { liveProject, liveProjectByKeyHash, readStudioLiveRevision } from "./store";
 
 export { cloudEnabled } from "./context";
 export { registerCloudPaymentRoutes, registerCloudRoutes, registerEmbedRoutes } from "./routes";
@@ -75,9 +77,18 @@ export function projectKeyValid(projectId: string, keyHash: string): boolean {
 }
 
 /** What a session of this project runs with; undefined when the project is gone or has no model key. */
-export function projectRuntime(projectId: string): ProjectRuntime | undefined {
+export function projectRuntime(projectId: string, grant?: CloudProjectGrant): ProjectRuntime | undefined {
   if (!cloudSecretKey() || typeof projectId !== "string") return undefined;
-  const project = liveProject(projectId);
+  if (grant && grant.projectId !== projectId) return undefined;
+  const revision = grant?.source === "test" ? grant.testRevision : undefined;
+  const liveRevision = grant?.source === "test" ? grant.testLiveRevision : undefined;
+  const project =
+    revision !== undefined && grant
+      ? draftRevisionProject(grant.customerId, projectId, revision)
+      : liveRevision !== undefined && grant
+        ? readStudioLiveRevision(projectId, grant.customerId, liveRevision)
+        : liveProject(projectId, grant?.customerId);
+  if ((revision ?? liveRevision) !== undefined && project?.key_hash !== grant?.keyHash) return undefined;
   if (!project?.model_key_enc) return undefined;
   const modelKey = decryptModelKey(project.model_key_enc, cloudSecretKeys(), project.id);
   if (modelKey === undefined) {

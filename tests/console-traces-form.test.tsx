@@ -90,7 +90,7 @@ describe("the traces setting", () => {
     expect(page.text()).toContain("must start with https://");
     await page.change("cxsTraces-p1-endpoint", COLLECTOR);
     expect(page.input("cxsTraces-p1-endpoint")!.props["aria-invalid"]).toBeUndefined();
-    expect(page.text()).toContain("Save to apply");
+    expect(page.text()).toContain("Publish to apply");
     // No test for an address that is not saved.
     expect(page.button("Send test trace")).toBeUndefined();
   });
@@ -128,9 +128,10 @@ describe("the traces setting", () => {
     expect(draftChanged(kept.draft(), { hasTracesHeaders: true, studio: DEFAULT_STUDIO } as never)).toBe(true);
     await kept.change("cxsTraces-p1-headers", "");
     await kept.press("Remove");
-    expect(api.updateProject).toHaveBeenCalledWith("t", "p1", { tracesHeaders: "" });
-    expect(kept.changed).toEqual([{ id: "p1", hasTracesHeaders: false }]);
-    expect(kept.text()).toContain("Headers removed.");
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(patchFromDraft(kept.draft()).tracesHeaders).toBe("");
+    expect(kept.changed).toEqual([]);
+    expect(kept.text()).toContain("Publishing will remove the headers.");
   });
 
   it("shows the result of the test in words", async () => {

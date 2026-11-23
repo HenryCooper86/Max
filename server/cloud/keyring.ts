@@ -94,7 +94,7 @@ export function reencryptStoredSecrets(options: { beforeWrite?: () => void } = {
         continue;
       }
       options.beforeWrite?.();
-      if (replaceProjectSecret(row.id, column, stored, encryptModelKey(plain, current, scope))) {
+      if (replaceProjectSecret(row.id, column, stored, encryptModelKey(plain, current, scope), row.revisionId)) {
         outcome.reencrypted += 1;
       } else {
         outcome.skipped += 1;

@@ -1,10 +1,10 @@
 import { MAX_MONTHLY_MINUTES_CAP } from "../../../shared/cloud-studio";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Project } from "../api";
 import { useSay } from "../hooks";
 import { minutesCapFromDraft, type StudioTabProps } from "./types";
 
-type Confirm = "none" | "rotate" | "delete";
+type Confirm = "none" | "rotate" | "delete" | "removeModelKey";
 
 /** Studio → Settings: the project's name, its monthly minutes limit, its API key and deleting it. */
 export function SettingsTab({
@@ -12,6 +12,9 @@ export function SettingsTab({
   project,
   draft,
   update,
+  onProjectChanged,
+  release,
+  refreshRelease,
   onKeyRotated,
   onDeleted
 }: StudioTabProps & {
@@ -24,7 +27,11 @@ export function SettingsTab({
   const [busy, setBusy] = useState(false);
   const id = `cxs-${project.id}-name`;
   const capId = `cxs-${project.id}-minutes-cap`;
-  const capInvalid = minutesCapFromDraft(draft.monthlyMinutesCap) === undefined;
+  const liveCap = project.monthlyMinutesCap?.toString() ?? "";
+  const [cap, setCap] = useState(liveCap);
+  useEffect(() => setCap(liveCap), [liveCap]);
+  const minutes = minutesCapFromDraft(cap);
+  const capInvalid = minutes === undefined;
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -55,8 +62,8 @@ export function SettingsTab({
           placeholder={say("不限", "No limit")}
           aria-invalid={capInvalid ? true : undefined}
           aria-describedby={`${capId}-hint`}
-          value={draft.monthlyMinutesCap}
-          onChange={(e) => update({ monthlyMinutesCap: e.target.value })}
+          value={cap}
+          onChange={(e) => setCap(e.target.value)}
         />
         <small id={`${capId}-hint`}>
           {say(
@@ -65,6 +72,20 @@ export function SettingsTab({
           )}
         </small>
       </label>
+      <button
+        type="button"
+        className="siteButton secondary small"
+        disabled={busy || capInvalid || minutes === (project.monthlyMinutesCap ?? null)}
+        onClick={() =>
+          void run(async () => {
+            if (minutes === undefined) return;
+            const answer = await session.api.updateProject(session.token, project.id, { monthlyMinutesCap: minutes });
+            onProjectChanged(answer.project);
+          })
+        }
+      >
+        {say("立即应用上限", "Apply limit now")}
+      </button>
       {capInvalid ? (
         <p className="cxError" role="alert">
           {say(
@@ -90,6 +111,11 @@ export function SettingsTab({
             <button type="button" className="siteButton secondary small" onClick={() => setConfirm("rotate")}>
               {say("更换项目密钥", "Rotate key")}
             </button>
+            {project.hasModelKey || release?.draft?.project.hasModelKey || release?.previousRevision ? (
+              <button type="button" className="siteButton secondary small" onClick={() => setConfirm("removeModelKey")}>
+                {say("移除模型密钥", "Remove model key")}
+              </button>
+            ) : null}
             <button type="button" className="siteButton secondary small" onClick={() => setConfirm("delete")}>
               {say("删除项目", "Delete project")}
             </button>
@@ -97,12 +123,17 @@ export function SettingsTab({
         ) : (
           <div role="group" aria-label={say("确认", "Confirm")}>
             <p>
-              {confirm === "rotate"
-                ? say("旧密钥会立刻失效。确定要更换吗？", "The old key stops working immediately. Rotate it?")
-                : say(
-                    "项目、它的对话记录和密钥都会被删除。确定吗？",
-                    "This deletes the project, its conversations and its key. Delete it?"
-                  )}
+              {confirm === "removeModelKey"
+                ? say(
+                    "立即移除已保存的模型密钥？新对话将无法开始，已保存的草稿及回退版本将被清除。",
+                    "Remove the stored model key now? New conversations will stop working. The saved draft and rollback revision will be discarded."
+                  )
+                : confirm === "rotate"
+                  ? say("旧密钥会立刻失效。确定要更换吗？", "The old key stops working immediately. Rotate it?")
+                  : say(
+                      "项目、它的对话记录和密钥都会被删除。确定吗？",
+                      "This deletes the project, its conversations and its key. Delete it?"
+                    )}
             </p>
             <div className="cxRow">
               <button
@@ -111,7 +142,12 @@ export function SettingsTab({
                 disabled={busy}
                 onClick={() =>
                   void run(async () => {
-                    if (confirm === "rotate") {
+                    if (confirm === "removeModelKey") {
+                      const result = await session.api.updateProject(session.token, project.id, { modelKey: "" });
+                      setConfirm("none");
+                      onProjectChanged(result.project);
+                      await refreshRelease();
+                    } else if (confirm === "rotate") {
                       const result = await session.api.rotateKey(session.token, project.id);
                       setConfirm("none");
                       onKeyRotated(result.project, result.apiKey);
@@ -122,7 +158,11 @@ export function SettingsTab({
                   })
                 }
               >
-                {confirm === "rotate" ? say("是，更换", "Yes, rotate") : say("是，删除", "Yes, delete")}
+                {confirm === "removeModelKey"
+                  ? say("是，移除密钥", "Yes, remove key")
+                  : confirm === "rotate"
+                    ? say("是，更换", "Yes, rotate")
+                    : say("是，删除", "Yes, delete")}
               </button>
               <button type="button" className="siteButton quiet small" onClick={() => setConfirm("none")}>
                 {say("取消", "Cancel")}

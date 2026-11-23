@@ -284,7 +284,7 @@ export function AnalysisSetting({ project, draft, updateStudio }: StudioTabProps
             )}
           </p>
         ) : null}
-        {unsaved && !problem ? <p className="cxWarn">{say("请保存以生效", "Save to apply")}</p> : null}
+        {unsaved && !problem ? <p className="cxWarn">{say("请发布以生效", "Publish to apply")}</p> : null}
       </div>
     </div>
   );

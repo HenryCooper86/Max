@@ -21,6 +21,7 @@ import {
   liveProjects,
   deleteProjectConversations,
   replaceProjectKey,
+  revokeProjectModelKey,
   sessionCustomer,
   softDeleteProject,
   updateProject,
@@ -244,7 +245,7 @@ export function projectStudio(row: Pick<ProjectRow, "studio" | "backend">): Proj
   return parsed.value ?? structuredClone(DEFAULT_STUDIO);
 }
 
-function publicProject(row: ProjectRow): PublicProject {
+export function publicProject(row: ProjectRow): PublicProject {
   return {
     id: row.id,
     name: row.name,
@@ -376,6 +377,21 @@ export function patchProject(
 ): Result<{ project: PublicProject }> {
   const current = liveProject(projectId, customerId);
   if (!current) return fail(404, "Project not found.");
+  const prepared = prepareProjectChanges(current, body);
+  if (!prepared.ok) return prepared;
+  const changes = prepared.value;
+  const updated =
+    changes.model_key_enc === null
+      ? revokeProjectModelKey(projectId, customerId, changes, newId("rev_"))
+      : updateProject(projectId, customerId, changes);
+  if (!updated) return fail(404, "Project not found.");
+  const row = liveProject(projectId, customerId);
+  if (!row) return fail(404, "Project not found.");
+  return { ok: true, value: { project: publicProject(row) } };
+}
+
+export function prepareProjectChanges(current: ProjectRow, body: Record<string, unknown>): Result<ProjectChanges> {
+  const projectId = current.id;
   const changes: ProjectChanges = {};
   const fields = [
     ["name", { field: "Name", max: LIMITS.name, required: body.name !== undefined }],
@@ -401,10 +417,7 @@ export function patchProject(
   const backend = changes.backend ?? current.backend;
   if (body.studio !== undefined || backend !== current.backend) {
     const sent = body.studio !== undefined ? body.studio : projectStudio(current);
-    // A save of the settings that says nothing of the flow leaves the flow as it is: the flow has a save of
-    // its own, and a Studio opened before that one must not put an older flow back, or none.
-    // The same for the analysis and the traces settings: a client that does not know of them (an older console, a script
-    // that sets one thing) must not switch a project's analysis off by saving something else.
+    // Older clients omit flow, analysis, and tracing. Preserve those settings on partial updates.
     const stored = projectStudio(current);
     const record =
       sent && typeof sent === "object" && !Array.isArray(sent) ? (sent as Record<string, unknown>) : undefined;
@@ -489,10 +502,7 @@ export function patchProject(
     const after = (JSON.parse(changes.studio) as ProjectStudio).traces.endpoint;
     if (host(before) !== host(after)) changes.traces_headers_enc = null;
   }
-  if (!updateProject(projectId, customerId, changes)) return fail(404, "Project not found.");
-  const row = liveProject(projectId, customerId);
-  if (!row) return fail(404, "Project not found.");
-  return { ok: true, value: { project: publicProject(row) } };
+  return { ok: true, value: changes };
 }
 
 export function rotateProjectKey(

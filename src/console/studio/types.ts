@@ -1,5 +1,5 @@
 import { MAX_MONTHLY_MINUTES_CAP } from "../../../shared/cloud-studio";
-import type { Backend, Project, ProjectStudio } from "../api";
+import type { Backend, Project, ProjectStudio, StudioRelease } from "../api";
 import type { Session } from "../hooks";
 
 export type StudioTab = "agent" | "knowledge" | "tools" | "flow" | "test" | "install" | "history" | "settings";
@@ -11,19 +11,22 @@ export type StudioDraft = {
   modelKey: string;
   /** The trace collector's headers: "" unless the person typed new ones (the saved ones are never shown). */
   tracesHeaders: string;
+  removeTracesHeaders?: boolean;
   assistantName: string;
   instructions: string;
   greeting: string;
   studio: ProjectStudio;
-  /** As typed: whole minutes, or "" for no limit. */
-  monthlyMinutesCap: string;
 };
 
 /** What every Studio tab receives. */
 export type StudioTabProps = {
   session: Session;
-  /** The project as last saved on the server. */
+  /** The live project, used for operational controls. */
   project: Project;
+  /** The saved draft configuration, or the live configuration when no draft exists. */
+  savedProject: Project;
+  release: StudioRelease | null;
+  releaseBusy: boolean;
   draft: StudioDraft;
   update: (patch: Partial<StudioDraft>) => void;
   updateStudio: (patch: Partial<ProjectStudio>) => void;
@@ -31,6 +34,8 @@ export type StudioTabProps = {
   dirty: boolean;
   /** Saves the draft; resolves true when it was saved. */
   save: () => Promise<boolean>;
+  prepareTest: () => Promise<{ draftRevision?: string; expectedLiveRevision?: string; language: string } | null>;
+  refreshRelease: () => Promise<void>;
   /** The relay's address for snippets, like https://max.bionicloud.net. */
   origin: string;
   goTo: (tab: StudioTab) => void;
@@ -47,8 +52,7 @@ export function draftFromProject(project: Project): StudioDraft {
     assistantName: project.assistantName,
     instructions: project.instructions,
     greeting: project.greeting,
-    studio: structuredClone(project.studio),
-    monthlyMinutesCap: project.monthlyMinutesCap ? String(project.monthlyMinutesCap) : ""
+    studio: structuredClone(project.studio)
   };
 }
 
@@ -66,7 +70,14 @@ export function draftChanged(draft: StudioDraft, project: Project): boolean {
   return (
     Boolean(draft.modelKey) ||
     Boolean(draft.tracesHeaders) ||
-    JSON.stringify({ ...draft, modelKey: "", tracesHeaders: "" }) !== JSON.stringify(saved)
+    Boolean(draft.removeTracesHeaders) ||
+    JSON.stringify({
+      ...draft,
+      modelKey: "",
+
+      tracesHeaders: "",
+      removeTracesHeaders: undefined
+    }) !== JSON.stringify(saved)
   );
 }
 

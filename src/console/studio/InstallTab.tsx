@@ -15,7 +15,7 @@ const FRAMEWORK_LABELS: Record<Framework, string> = {
 };
 
 export function InstallTab(props: StudioTabProps) {
-  const { project, draft, updateStudio, dirty, origin } = props;
+  const { project, draft, updateStudio, origin } = props;
   const say = useSay();
   const ids = useId();
   const [framework, setFramework] = useState<Framework>("html");
@@ -141,11 +141,11 @@ export function InstallTab(props: StudioTabProps) {
             )}
           </p>
         </div>
-        {dirty || !savedOn ? (
+        {JSON.stringify(embed) !== JSON.stringify(project.studio.publicEmbed) || !savedOn ? (
           <p className="cxWarn" role="status">
-            {embed.enabled || dirty
-              ? say("先保存才会生效。", "Save to turn this on.")
-              : say("先开启并保存才会生效。", "Turn it on and save to make it work.")}
+            {embed.enabled || savedOn
+              ? say("发布后网站设置才会生效。", "Publish to apply these website settings.")
+              : say("先开启并发布才会生效。", "Turn it on and publish to enable the embed.")}
           </p>
         ) : null}
         {block(say("粘贴到你网页的 </body> 之前", "Paste before </body> on your page"), snippet)}

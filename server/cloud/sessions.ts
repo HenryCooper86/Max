@@ -14,8 +14,9 @@ import { cloudSessionTokens } from "../session-tokens";
 import { now } from "./context";
 import { projectStudio, type Result } from "./customers";
 import { projectLimitRefusal } from "./live";
+import { draftRevisionProject } from "./revisions";
 import { hashToken } from "./secrets";
-import { liveProject, liveProjectByPublicId } from "./store";
+import { liveProject, liveProjectByPublicId, readStudioLiveRevision } from "./store";
 
 const TEST_TTL_SECONDS = 300;
 const EMBED_TTL_SECONDS = 120;
@@ -51,9 +52,24 @@ export function resetCloudSessionLimits(): void {
 
 type Minted = { token: string; expiresAt: number };
 
-export function mintTestSession(customerId: string, projectId: string): Result<Minted> {
-  const row = typeof projectId === "string" ? liveProject(projectId, customerId) : undefined;
-  if (!row) return { ok: false, status: 404, error: "Project not found." };
+export function mintTestSession(
+  customerId: string,
+  projectId: string,
+  revision?: string,
+  expectedLiveRevision?: string
+): Result<Minted> {
+  if (revision !== undefined && expectedLiveRevision !== undefined) {
+    return { ok: false, status: 400, error: "Choose either a draft or a live revision to preview." };
+  }
+  const live = typeof projectId === "string" ? liveProject(projectId, customerId) : undefined;
+  if (!live) return { ok: false, status: 404, error: "Project not found." };
+  const row =
+    revision !== undefined
+      ? draftRevisionProject(customerId, projectId, revision)
+      : expectedLiveRevision !== undefined
+        ? readStudioLiveRevision(projectId, customerId, expectedLiveRevision, { requireNoDraft: true })
+        : live;
+  if (!row) return { ok: false, status: 409, error: "The Studio revision changed. Refresh and start a new test." };
   if (!row.model_key_enc) {
     return { ok: false, status: 409, error: "Add your model key and save before testing." };
   }
@@ -69,7 +85,14 @@ export function mintTestSession(customerId: string, projectId: string): Result<M
   }
   const minted = cloudSessionTokens.mint(
     { ttlSeconds: TEST_TTL_SECONDS },
-    { projectId: row.id, customerId, keyHash: row.key_hash, source: "test" }
+    {
+      projectId: live.id,
+      customerId,
+      keyHash: row.key_hash,
+      source: "test",
+      ...(revision === undefined ? {} : { testRevision: revision }),
+      ...(expectedLiveRevision === undefined ? {} : { testLiveRevision: expectedLiveRevision })
+    }
   );
   if (!minted.ok) return { ok: false, status: 400, error: minted.error };
   return { ok: true, value: { token: minted.token, expiresAt: minted.expiresAt } };

@@ -2,7 +2,6 @@
 // the bearer token (when the endpoint needs one) and an optional fetch, so
 // tests can inject both.
 
-import type { FlowStep } from "../lib/flow";
 import type { AnalysisResult } from "../../shared/analysis";
 import type { ProjectStudio } from "../../shared/cloud-studio";
 
@@ -35,6 +34,13 @@ export type Project = {
   analysisOnOwnKey?: boolean;
   createdAt: number;
 };
+export type StudioRelease = {
+  project: Project;
+  liveRevision: string;
+  previousRevision: string | null;
+  draft: { id: string; project: Project; tested: boolean; changedFields: string[] } | null;
+};
+
 export type ProjectPatch = Partial<{
   name: string;
   backend: Backend;
@@ -84,8 +90,6 @@ export type Conversation = ConversationSummary & {
   turns: ConversationTurn[];
   analysis?: ConversationAnalysis;
 };
-/** A project's flow as the flow builder edits it: the steps, the starting step first, and the tools a step can name. */
-export type ProjectFlow = { ok: true; steps: FlowStep[]; tools: string[]; problems: string[] };
 /** How the last delivery of a conversation to the project's server went. */
 export type WebhookDelivery = { at: number; ok: boolean; attempts: number; status?: number; error?: string };
 export type WebhookTestResult = { ok: boolean; status?: number; error?: string; ms: number };
@@ -188,23 +192,53 @@ export function createCloudApi(fetcher?: FetchLike) {
       send<{ project: Project; apiKey: string }>(token, "POST", `/projects/${id(projectId)}/rotate-key`),
     deleteProject: (token: string, projectId: string) =>
       send<{ ok: true }>(token, "DELETE", `/projects/${id(projectId)}`),
-    testSession: (token: string, projectId: string) =>
-      send<{ token: string; expiresAt: number }>(token, "POST", `/projects/${id(projectId)}/test-session`),
-    testTool: (token: string, projectId: string, name: string, args: Record<string, unknown>) =>
-      send<ToolTestResult>(token, "POST", `/projects/${id(projectId)}/tools/test`, { name, arguments: args }),
+    studioRelease: (token: string, projectId: string) =>
+      get<StudioRelease>(token, `/projects/${id(projectId)}/release`),
+    saveStudioDraft: (
+      token: string,
+      projectId: string,
+      input: { baseRevision: string; draftRevision: string | null; patch: ProjectPatch }
+    ) => send<StudioRelease>(token, "PUT", `/projects/${id(projectId)}/draft`, input),
+    publishStudioRevision: (token: string, projectId: string, input: { baseRevision: string; revision: string }) =>
+      send<StudioRelease>(token, "POST", `/projects/${id(projectId)}/publish`, input),
+    restoreStudioRevision: (
+      token: string,
+      projectId: string,
+      input: { baseRevision: string; revision: string; draftRevision?: string | null }
+    ) => send<StudioRelease>(token, "POST", `/projects/${id(projectId)}/restore`, input),
+    testSession: (token: string, projectId: string, revision?: string, expectedLiveRevision?: string) =>
+      send<{ token: string; expiresAt: number }>(
+        token,
+        "POST",
+        `/projects/${id(projectId)}/test-session`,
+        expectedLiveRevision !== undefined
+          ? { expectedLiveRevision, revision }
+          : revision === undefined
+            ? undefined
+            : { revision }
+      ),
+    testTool: (token: string, projectId: string, name: string, args: Record<string, unknown>, revision?: string) =>
+      send<ToolTestResult>(token, "POST", `/projects/${id(projectId)}/tools/test`, { name, arguments: args, revision }),
     webhookSecret: (token: string, projectId: string) =>
       get<{ secret: string }>(token, `/projects/${id(projectId)}/webhook-secret`),
     rotateWebhookSecret: (token: string, projectId: string) =>
       send<{ secret: string }>(token, "POST", `/projects/${id(projectId)}/webhook-secret/rotate`),
-    projectFlow: (token: string, projectId: string) => get<ProjectFlow>(token, `/projects/${id(projectId)}/flow`),
-    saveProjectFlow: (token: string, projectId: string, steps: FlowStep[]) =>
-      send<ProjectFlow & { project: Project }>(token, "PUT", `/projects/${id(projectId)}/flow`, { steps }),
     conversationWebhook: (token: string, projectId: string) =>
       get<{ url: string; last: WebhookDelivery | null }>(token, `/projects/${id(projectId)}/conversation-webhook`),
-    testConversationWebhook: (token: string, projectId: string) =>
-      send<WebhookTestResult>(token, "POST", `/projects/${id(projectId)}/conversation-webhook/test`),
-    testTraces: (token: string, projectId: string) =>
-      send<TracesTestResult>(token, "POST", `/projects/${id(projectId)}/traces-test`),
+    testConversationWebhook: (token: string, projectId: string, revision?: string) =>
+      send<WebhookTestResult>(
+        token,
+        "POST",
+        `/projects/${id(projectId)}/conversation-webhook/test`,
+        revision === undefined ? undefined : { revision }
+      ),
+    testTraces: (token: string, projectId: string, revision?: string) =>
+      send<TracesTestResult>(
+        token,
+        "POST",
+        `/projects/${id(projectId)}/traces-test`,
+        revision === undefined ? undefined : { revision }
+      ),
     conversations: (token: string, projectId: string) =>
       get<{ conversations: ConversationSummary[] }>(token, `/projects/${id(projectId)}/conversations`),
     conversation: (token: string, conversationId: string) =>

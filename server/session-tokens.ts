@@ -20,6 +20,8 @@ import { randomBytes } from "node:crypto";
  */
 
 export const SESSION_TOKEN_PREFIX = "vst_";
+// The longer prefix lets open relays recognize an expired test credential.
+export const STUDIO_TEST_TOKEN_PREFIX = `${SESSION_TOKEN_PREFIX}studio_rev_`;
 export const DEFAULT_TOKEN_TTL_SECONDS = 600;
 export const MIN_TOKEN_TTL_SECONDS = 30;
 export const MAX_TOKEN_TTL_SECONDS = 3600;
@@ -41,11 +43,15 @@ type MintRequest = { ttlSeconds?: unknown; userId?: unknown; context?: unknown }
 /** The Max Cloud project a token runs as, and where the session was started:
  *  "api" (the project key minted it), "test" (the console's Test panel) or
  *  "embed" (the public widget on an allowed website). */
-type CloudProjectGrant = {
+export type CloudProjectGrant = {
   projectId: string;
   customerId: string;
   keyHash: string;
   source?: "api" | "test" | "embed";
+  /** The immutable draft selected by the signed-in console owner. */
+  testRevision?: string;
+  /** Studio's confirmed live revision when there is no draft. */
+  testLiveRevision?: string;
   /** Embed tokens: the website that asked for it, the only Origin it opens a session from. */
   origin?: string;
 };
@@ -106,6 +112,10 @@ export function createSessionTokenStore(
       ) {
         return { ok: false, error: `context must be a string of at most ${maxContext} characters` };
       }
+      const preview = project?.testRevision ?? project?.testLiveRevision;
+      if (preview !== undefined && project?.source !== "test") {
+        return { ok: false, error: "Only Studio test grants may specify a revision." };
+      }
       const at = now();
       prune(at);
       if (project && limits.perProject) {
@@ -122,7 +132,8 @@ export function createSessionTokenStore(
         if (oldest === undefined) break;
         tokens.delete(oldest);
       }
-      const token = `${SESSION_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
+      const prefix = preview === undefined ? SESSION_TOKEN_PREFIX : STUDIO_TEST_TOKEN_PREFIX;
+      const token = `${prefix}${randomBytes(32).toString("base64url")}`;
       const expiresAt = at + ttl * 1000;
       tokens.set(token, {
         expiresAt,

@@ -13,6 +13,9 @@ import { resetAuthRateLimit } from "../server/auth";
 import { config } from "../server/runtime-config";
 import {
   chargeSession,
+  openCloudSession,
+  projectRuntime,
+  projectWebhooks,
   projectForApiKey,
   registerCloudPaymentRoutes,
   registerCloudRoutes,
@@ -21,6 +24,8 @@ import {
 import { setCloudClock, setCloudPaymentProviders } from "../server/cloud/context";
 import type { PaidOrder, PaymentProvider } from "../server/cloud/payments";
 import { resetCloudDatabase } from "../server/cloud/store";
+
+import { cloudSessionTokens } from "../server/session-tokens";
 
 const KEY = randomBytes(32).toString("base64");
 const START = Date.UTC(2026, 10, 18, 12, 0, 0);
@@ -106,6 +111,111 @@ async function createProject(token: string, name = "Shop") {
   expect(response.status).toBe(201);
   return response.body as { project: { id: string; keyPrefix: string }; apiKey: string };
 }
+
+describe("Studio releases over HTTP", () => {
+  it("allows only the owner to save, test, publish and restore the exact revision", async () => {
+    await startApp();
+    const { token } = await signupCustomer();
+    const other = await signupCustomer();
+    const { project } = await createProject(token);
+    const root = `/cloud/api/projects/${project.id}`;
+    const post = (route: string, json: Record<string, unknown>) => call("POST", root + route, { token, json });
+    for (const [method, path] of [
+      ["GET", "/release"],
+      ["PUT", "/draft"],
+      ["POST", "/test-session"],
+      ["POST", "/publish"],
+      ["POST", "/restore"]
+    ] as const) {
+      expect((await call(method, root + path)).status).toBe(401);
+      expect(
+        (
+          await call(method, root + path, {
+            token: other.token,
+            json: method === "GET" ? undefined : { revision: "rev_other" }
+          })
+        ).status
+      ).toBe(404);
+    }
+    const initial = await call("GET", root + "/release", { token });
+    expect(initial).toMatchObject({ status: 200, body: { draft: null, previousRevision: null } });
+    const baseRevision = initial.body.liveRevision as string;
+    const webhook = "https://events.example.com/draft";
+    const patch = {
+      greeting: "First draft",
+      modelKey: "fake-studio-private-key",
+      studio: { conversationWebhook: webhook }
+    };
+    const saved = await call("PUT", root + "/draft", { token, json: { baseRevision, draftRevision: null, patch } });
+    expect(saved).toMatchObject({
+      status: 200,
+      body: {
+        project: { greeting: "", hasModelKey: false },
+        draft: { tested: false, project: { greeting: patch.greeting, hasModelKey: true } }
+      }
+    });
+    const first = (saved.body.draft as { id: string }).id;
+    const attempt = await post("/test-session", { revision: first });
+    expect(attempt.status).toBe(201);
+    const oldGrant = cloudSessionTokens.grant(attempt.body.token as string)!.project!;
+    expect(oldGrant.testRevision).toBe(first);
+    expect(projectRuntime(project.id, oldGrant)?.greeting).toBe(patch.greeting);
+    expect(projectRuntime(project.id)).toBeUndefined();
+    expect((await post("/publish", { baseRevision, revision: first })).status).toBe(409);
+    const next = await call("PUT", root + "/draft", {
+      token,
+      json: { baseRevision, draftRevision: first, patch: { greeting: "Second draft" } }
+    });
+    expect(next.status).toBe(200);
+    const revision = (next.body.draft as { id: string }).id;
+    expect(projectRuntime(project.id, oldGrant)).toBeUndefined();
+    expect((await post("/test-session", { revision: first })).status).toBe(409);
+    expect((await post("/test-session", { revision: null })).status).toBe(400);
+    expect((await post("/publish", { baseRevision, revision: first })).status).toBe(409);
+    const probe = vi.spyOn(projectWebhooks, "test").mockResolvedValue({ ok: true, ms: 1, status: 200 });
+    try {
+      expect((await post("/conversation-webhook/test", { revision: first })).status).toBe(404);
+      expect((await post("/conversation-webhook/test", {})).status).toBe(400);
+      expect(probe).not.toHaveBeenCalled();
+      expect((await post("/conversation-webhook/test", { revision })).status).toBe(200);
+      expect(probe).toHaveBeenCalledWith(expect.objectContaining({ projectId: project.id, url: webhook }));
+    } finally {
+      probe.mockRestore();
+    }
+
+    const minted = await post("/test-session", { revision });
+    expect(minted.status).toBe(201);
+    const grant = cloudSessionTokens.grant(minted.body.token as string)!.project!;
+    const session = openCloudSession("studio-http", grant, "console");
+    session.observe({ type: "status", state: "ready" }, true);
+    session.close();
+    expect(await post("/publish", { baseRevision, revision })).toMatchObject({
+      status: 200,
+      body: {
+        draft: null,
+        previousRevision: baseRevision,
+        liveRevision: revision,
+        project: { greeting: "Second draft" }
+      }
+    });
+    expect(projectRuntime(project.id)?.greeting).toBe("Second draft");
+    const liveProbe = vi.spyOn(projectWebhooks, "test").mockResolvedValue({ ok: true, ms: 1, status: 200 });
+    try {
+      expect((await post("/conversation-webhook/test", { revision: baseRevision })).status).toBe(404);
+      expect((await post("/conversation-webhook/test", { revision })).status).toBe(200);
+      expect(liveProbe).toHaveBeenCalledOnce();
+      expect(liveProbe).toHaveBeenCalledWith(expect.objectContaining({ url: webhook }));
+    } finally {
+      liveProbe.mockRestore();
+    }
+    expect(await post("/restore", { baseRevision: revision, revision: baseRevision })).toMatchObject({
+      status: 200,
+      body: { draft: null, project: { greeting: "", hasModelKey: false } }
+    });
+    expect(projectRuntime(project.id)).toBeUndefined();
+    expect(seenBodies.join(" ")).not.toContain(patch.modelKey);
+  });
+});
 
 describe("a project's flow over HTTP", () => {
   it("is read and saved as the flow builder draws it, by its owner alone", async () => {

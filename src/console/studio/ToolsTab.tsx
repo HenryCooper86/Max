@@ -79,7 +79,14 @@ function ToolTest({ tool, props, saved }: { tool: StudioTool; props: StudioTabPr
     }
     setState({ busy: true });
     try {
-      const result = await session.api.testTool(session.token, project.id, tool.name, args);
+      const revision = props.release?.draft?.id ?? props.release?.liveRevision;
+      const result = await session.api.testTool(
+        session.token,
+        project.id,
+        tool.name,
+        args,
+        ...(revision ? ([revision] as const) : [])
+      );
       setState(
         result.ok
           ? { busy: false, ok: true, text: truncateJson(result.result), ms: result.ms }
@@ -127,7 +134,7 @@ function ToolTest({ tool, props, saved }: { tool: StudioTool; props: StudioTabPr
             <button
               type="button"
               className="siteButton secondary small"
-              disabled={state.busy}
+              disabled={state.busy || props.releaseBusy}
               onClick={() => void run()}
             >
               {state.busy ? say("发送中…", "Sending…") : say("发送测试", "Send test")}
@@ -251,7 +258,7 @@ function ToolCard({
   const say = useSay();
   const [confirm, setConfirm] = useState(false);
   const problem = tool.url.trim() ? toolUrlProblem(tool.url.trim()) : undefined;
-  const saved = savedUnchanged(tool, props.project.studio.tools);
+  const saved = savedUnchanged(tool, (props.savedProject ?? props.project).studio.tools);
   const id = `cxsTool${index}`;
   const patchParameter = (at: number, patch: Partial<StudioParameter>) =>
     onChange({ ...tool, parameters: tool.parameters.map((item, i) => (i === at ? { ...item, ...patch } : item)) });
@@ -315,7 +322,7 @@ function ToolCard({
           </button>
         </div>
       </div>
-      <ToolTest tool={tool} props={props} saved={saved} />
+      <ToolTest key={props.release?.draft?.id ?? props.release?.liveRevision} tool={tool} props={props} saved={saved} />
       <div className="cxsToolsActions">
         {confirm ? (
           <>
@@ -523,7 +530,9 @@ export function ToolsTab(props: StudioTabProps) {
         </span>
       </div>
       {props.dirty ? (
-        <p className="cxMuted">{say("改动要保存后才会生效。", "Changes take effect after you save.")}</p>
+        <p className="cxMuted">
+          {say("发布后访客会使用新工具。", "Publish to make these tools available to visitors.")}
+        </p>
       ) : null}
 
       {/* A project that only sends its conversations has a secret too, and needs to see it. */}

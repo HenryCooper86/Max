@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { Project, ProjectPatch, ProjectStudio } from "../api";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ApiError, type Project, type ProjectPatch, type ProjectStudio, type StudioRelease } from "../api";
 import { useSay, type Session } from "../hooks";
 import { AgentTab } from "./AgentTab";
 import { mayLeaveSection, SECTION_LEAVE_EVENT } from "../../lib/section-leave";
@@ -7,13 +7,13 @@ import { FlowTab } from "./FlowTab";
 import { HistoryTab } from "./HistoryTab";
 import { InstallTab } from "./InstallTab";
 import { KnowledgeTab } from "./KnowledgeTab";
+import { ReleasePanel } from "./ReleasePanel";
 import { SettingsTab } from "./SettingsTab";
 import { TestTab } from "./TestTab";
 import { ToolsTab } from "./ToolsTab";
 import {
   draftChanged,
   draftFromProject,
-  minutesCapFromDraft,
   studioTestDone,
   type StudioDraft,
   type StudioTab,
@@ -32,22 +32,21 @@ const TABS: { id: StudioTab; zh: string; en: string }[] = [
   { id: "settings", zh: "设置", en: "Settings" }
 ];
 
-/** What a save sends: everything the Studio edits, the model key only when typed, and the minutes
- *  limit only when it is a whole number or empty (Settings says when it is not). */
+/** Save the edited configuration and any explicitly changed credentials. */
 export function patchFromDraft(draft: StudioDraft): ProjectPatch {
-  const cap = minutesCapFromDraft(draft.monthlyMinutesCap);
-  // The flow has a save of its own (the Flow tab): this one says nothing of it, and the relay leaves it as it is.
-  const studio: ProjectPatch["studio"] = { ...draft.studio, flow: undefined };
   return {
     name: draft.name,
     backend: draft.backend,
     assistantName: draft.assistantName,
     instructions: draft.instructions,
     greeting: draft.greeting,
-    studio,
-    ...(cap !== undefined ? { monthlyMinutesCap: cap } : {}),
+    studio: draft.studio,
     ...(draft.modelKey.trim() ? { modelKey: draft.modelKey.trim() } : {}),
-    ...(draft.tracesHeaders.trim() ? { tracesHeaders: draft.tracesHeaders.trim() } : {})
+    ...(draft.removeTracesHeaders
+      ? { tracesHeaders: "" }
+      : draft.tracesHeaders.trim()
+        ? { tracesHeaders: draft.tracesHeaders.trim() }
+        : {})
   };
 }
 
@@ -113,11 +112,19 @@ export function Studio({
     [tab]
   );
   const [draft, setDraft] = useState<StudioDraft>(() => draftFromProject(project));
+  const [release, setRelease] = useState<StudioRelease | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [savedNote, setSavedNote] = useState("");
-  const dirty = useMemo(() => draftChanged(draft, project), [draft, project]);
-
+  const [conflict, setConflict] = useState(false);
+  const inFlight = useRef(false);
+  const refreshQueued = useRef(false);
+  const readRelease = useRef<() => Promise<void>>(async () => {});
+  const liveProject = release?.project ?? project;
+  const savedProject = release?.draft?.project ?? liveProject;
+  const dirty = useMemo(() => draftChanged(draft, savedProject), [draft, savedProject]);
+  const latest = useRef({ savedProject, onChanged, fail: session.fail });
+  latest.current = { savedProject, onChanged, fail: session.fail };
   useEffect(() => {
     if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
@@ -147,36 +154,170 @@ export function Studio({
     []
   );
 
-  const save = useCallback(async (): Promise<boolean> => {
-    if (saving) return false;
-    if (minutesCapFromDraft(draft.monthlyMinutesCap) === undefined) {
-      setSaveError(say("请检查设置中的每月分钟上限。", "Check the monthly minutes limit in Settings."));
-      return false;
+  const { api, token } = session;
+
+  const acceptRelease = useCallback((next: StudioRelease, preserveEdits: boolean) => {
+    const previous = latest.current.savedProject;
+    const saved = next.draft?.project ?? next.project;
+    setDraft((current) => {
+      const updated = draftFromProject(saved);
+      if (!preserveEdits) return updated;
+      const baseline = draftFromProject(previous);
+      for (const key of ["name", "backend", "assistantName", "instructions", "greeting"] as const) {
+        if (current[key] !== baseline[key]) Object.assign(updated, { [key]: current[key] });
+      }
+      for (const key of Object.keys(baseline.studio) as (keyof ProjectStudio)[]) {
+        if (JSON.stringify(current.studio[key]) !== JSON.stringify(baseline.studio[key])) {
+          Object.assign(updated.studio, { [key]: current.studio[key] });
+        }
+      }
+      updated.modelKey = current.modelKey;
+      updated.tracesHeaders = current.tracesHeaders;
+      updated.removeTracesHeaders = current.removeTracesHeaders;
+      return updated;
+    });
+    setRelease(next);
+    latest.current.onChanged(next.project);
+  }, []);
+
+  const reportReleaseError = useCallback(
+    (error: unknown) => {
+      const stale = error instanceof ApiError && error.status === 409;
+      if (stale) setConflict(true);
+      setSaveError(
+        stale
+          ? say(
+              "版本已更改。刷新版本状态以保留并检查你的编辑。",
+              "The revision changed. Refresh versions to keep and review your edits."
+            )
+          : latest.current.fail(error)
+      );
+    },
+    [say]
+  );
+
+  const finishOperation = useCallback(() => {
+    inFlight.current = false;
+    if (refreshQueued.current) {
+      refreshQueued.current = false;
+      void readRelease.current();
+    } else {
+      setSaving(false);
     }
+  }, []);
+
+  const refreshRelease = useCallback(async () => {
+    if (inFlight.current) {
+      refreshQueued.current = true;
+      return;
+    }
+    inFlight.current = true;
+    setSaving(true);
+    try {
+      const next = await api.studioRelease(token, project.id);
+      acceptRelease(next, true);
+      setConflict(false);
+      setSaveError("");
+    } catch (error) {
+      reportReleaseError(error);
+    } finally {
+      finishOperation();
+    }
+  }, [acceptRelease, api, finishOperation, project.id, reportReleaseError, token]);
+
+  readRelease.current = refreshRelease;
+  useEffect(() => {
+    void readRelease.current();
+    return () => {
+      refreshQueued.current = false;
+    };
+  }, [api, project.id, token]);
+
+  const saveDraft = async (): Promise<StudioRelease | null> => {
+    if (!release || conflict || inFlight.current) return null;
+    if (!dirty) return release;
+    if (tab === "flow" && !mayLeaveSection()) return null;
+    inFlight.current = true;
     setSaving(true);
     setSaveError("");
     try {
-      const result = await session.api.updateProject(session.token, project.id, patchFromDraft(draft));
-      onChanged(result.project);
-      setDraft(draftFromProject(result.project));
-      setSavedNote(say("已保存。", "Saved."));
-      return true;
+      const next = await api.saveStudioDraft(token, project.id, {
+        baseRevision: release.liveRevision,
+        draftRevision: release.draft?.id ?? null,
+        patch: patchFromDraft(draft)
+      });
+      acceptRelease(next, false);
+      setSavedNote(say("草稿已保存。", "Draft saved."));
+      return next;
     } catch (error) {
-      setSaveError(session.fail(error));
-      return false;
+      reportReleaseError(error);
+      return null;
     } finally {
-      setSaving(false);
+      finishOperation();
     }
-  }, [draft, onChanged, project.id, saving, say, session]);
+  };
+
+  const prepareTest: StudioTabProps["prepareTest"] = async () => {
+    const next = await saveDraft();
+    if (!next) return null;
+    return {
+      ...(next.draft ? { draftRevision: next.draft.id } : { expectedLiveRevision: next.liveRevision }),
+      language: (next.draft?.project ?? next.project).studio.language
+    };
+  };
+
+  const changeLive = async (action: "publish" | "restore") => {
+    if (!release || inFlight.current || conflict || (action === "publish" && dirty)) return;
+    const revision = action === "publish" ? release.draft?.id : release.previousRevision;
+    if (!revision || (action === "publish" && !release.draft?.tested)) return;
+    if (tab === "flow" && !mayLeaveSection()) return;
+    if (action === "restore") {
+      const message =
+        release.draft || dirty
+          ? say(
+              "恢复上一发布版本？这会丢弃当前草稿及未保存的编辑，并影响新开启的线上对话。",
+              "Restore the previous release? This discards the current draft and unsaved edits and affects new live conversations."
+            )
+          : say(
+              "将上一发布版本恢复为线上版本？这会影响新开启的线上对话。",
+              "Restore the previous release? This will affect new live conversations."
+            );
+      if (!window.confirm(message)) return;
+    }
+    inFlight.current = true;
+    setSaving(true);
+    setSaveError("");
+    try {
+      const request = { baseRevision: release.liveRevision, revision };
+      const next =
+        action === "publish"
+          ? await api.publishStudioRevision(token, project.id, request)
+          : await api.restoreStudioRevision(token, project.id, {
+              ...request,
+              draftRevision: release.draft?.id ?? null
+            });
+      acceptRelease(next, false);
+      setSavedNote(action === "publish" ? say("已发布。", "Published.") : say("已恢复。", "Restored."));
+    } catch (error) {
+      reportReleaseError(error);
+    } finally {
+      finishOperation();
+    }
+  };
 
   const tabProps: StudioTabProps = {
     session,
     project,
+    savedProject,
+    release,
+    releaseBusy: saving || conflict || !release,
     draft,
     update,
     updateStudio,
     dirty,
-    save,
+    save: async () => Boolean(await saveDraft()),
+    prepareTest,
+    refreshRelease,
     origin,
     goTo: setTab,
     onProjectChanged: onChanged
@@ -207,7 +348,23 @@ export function Studio({
 
   return (
     <div className="cxsStudio">
-      <Checklist project={project} goTo={setTab} />
+      <Checklist
+        project={{
+          ...savedProject,
+          firstWebsiteConversationAt: project.firstWebsiteConversationAt ?? liveProject.firstWebsiteConversationAt
+        }}
+        goTo={setTab}
+      />
+      <ReleasePanel
+        release={release}
+        dirty={dirty}
+        busy={saving}
+        conflict={conflict}
+        refresh={refreshRelease}
+        publish={() => void changeLive("publish")}
+        restore={() => void changeLive("restore")}
+        goToTest={() => setTab("test")}
+      />
       <div className="cxsTabs" role="tablist" aria-label={say("工作室", "Studio")}>
         {TABS.map((item, index) => (
           <button
@@ -254,7 +411,7 @@ export function Studio({
                 className="siteButton quiet small"
                 disabled={saving}
                 onClick={() => {
-                  setDraft(draftFromProject(project));
+                  setDraft(draftFromProject(savedProject));
                   setSaveError("");
                 }}
               >
@@ -263,10 +420,10 @@ export function Studio({
               <button
                 type="button"
                 className="siteButton small"
-                disabled={saving || !dirty}
-                onClick={() => void save()}
+                disabled={saving || !dirty || !release || conflict}
+                onClick={() => void saveDraft()}
               >
-                {saving ? say("正在保存…", "Saving…") : say("保存", "Save")}
+                {saving ? say("正在保存…", "Saving…") : say("保存草稿", "Save draft")}
               </button>
             </div>
           </>

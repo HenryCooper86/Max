@@ -23,7 +23,15 @@ import {
 import { countCloud } from "./counters";
 import { cloudEnabled, now } from "./context";
 import { createLogger } from "../logger";
-import { liveProjectByKeyHash, markWebsiteConversation, projectMinutesCap, projectSecondsIn } from "./store";
+import type { CloudProjectGrant } from "../session-tokens";
+import { draftRevisionProject, markStudioRevisionTested } from "./revisions";
+import {
+  liveProjectByKeyHash,
+  markWebsiteConversation,
+  projectMinutesCap,
+  projectSecondsIn,
+  readStudioLiveRevision
+} from "./store";
 
 const log = createLogger("cloud");
 
@@ -44,16 +52,13 @@ const BALANCE_MESSAGE = "Your Max Cloud balance is used up. Top up in the consol
 const LIMIT_MESSAGE =
   "This Max Cloud agent has used its minutes for this month. Its owner can raise the limit in the console.";
 const REVOKED_MESSAGE = "This Max Cloud project key was rotated or the project was deleted.";
+const PREVIEW_UNAVAILABLE: CloudRefusal = {
+  code: 1008,
+  message: "This Studio revision is unavailable. Refresh the console and start a new test.",
+  reason: "Studio revision unavailable"
+};
 
 export type CloudRefusal = { code: number; message: string; reason: string };
-
-/** What a session token says about the session (server/session-tokens.ts). */
-export type CloudSessionGrant = {
-  projectId: string;
-  customerId: string;
-  keyHash: string;
-  source?: "api" | "test" | "embed";
-};
 
 /** Seconds a session could talk: runs while the upstream is connected. */
 class BillableClock {
@@ -87,7 +92,7 @@ class BillableClock {
 
 type Running = {
   sessionId: string;
-  grant: CloudSessionGrant;
+  grant: CloudProjectGrant;
   embed: boolean;
   address: string;
   clock: BillableClock;
@@ -146,7 +151,7 @@ export function projectLimitRefusal(projectId: string, at = now()): CloudRefusal
  * undefined when it may. When the balance cannot be read the session is
  * refused: nobody talks on money that could not be checked.
  */
-export function admitCloudSession(grant: CloudSessionGrant, address: string): CloudRefusal | undefined {
+export function admitCloudSession(grant: CloudProjectGrant, address: string): CloudRefusal | undefined {
   try {
     return admission(grant, address);
   } catch (error) {
@@ -157,7 +162,7 @@ export function admitCloudSession(grant: CloudSessionGrant, address: string): Cl
   }
 }
 
-function admission(grant: CloudSessionGrant, address: string): CloudRefusal | undefined {
+function admission(grant: CloudProjectGrant, address: string): CloudRefusal | undefined {
   const at = now();
   const customerSessions = sessionsOf((session) => session.grant.customerId === grant.customerId);
   if (customerSessions.length >= SESSIONS_PER_CUSTOMER) {
@@ -194,7 +199,7 @@ function admission(grant: CloudSessionGrant, address: string): CloudRefusal | un
 
 export type LiveCloudSession = {
   /** Every event the voice provider sends the client: its status drives the billed time. */
-  observe(event: unknown, upstreamUsable?: boolean): void;
+  observe(event: unknown, upstreamUsable?: boolean): CloudRefusal | undefined;
   /** Billable seconds so far. */
   seconds(): number;
   /** The periodic check: checkpoints the session and says why it must end, once. */
@@ -206,7 +211,7 @@ export type LiveCloudSession = {
 /** Starts tracking an admitted session; its row in live_sessions is written now. */
 export function openCloudSession(
   sessionId: string,
-  grant: CloudSessionGrant,
+  grant: CloudProjectGrant,
   address: string,
   origin?: string
 ): LiveCloudSession {
@@ -232,21 +237,55 @@ export function openCloudSession(
       log.warn("website conversation milestone could not be saved", { sessionId, message: String(error) });
     }
   }
+  const testRevision = grant.source === "test" ? grant.testRevision : undefined;
+  const testLiveRevision = grant.source === "test" ? grant.testLiveRevision : undefined;
+  const preview = (testRevision ?? testLiveRevision) !== undefined;
+  let previewUpstreamReady = false;
   let refused = false;
   let closedSeconds: number | undefined;
 
   const refuse = (refusal: CloudRefusal): CloudRefusal => {
     refused = true;
+    if (preview) session.clock.stop(now());
     return refusal;
   };
 
   return {
     observe(event, upstreamUsable) {
-      if (closedSeconds !== undefined) return;
+      if (refused || closedSeconds !== undefined) return;
       const at = now();
+      const payload = event as Partial<AgentEvent> | null;
+      if (preview && payload?.type === "status") {
+        if (payload.state === "connecting" || payload.state === "closed") previewUpstreamReady = false;
+        if (
+          !previewUpstreamReady &&
+          upstreamUsable === true &&
+          (payload.state === "ready" || payload.state === "listening")
+        ) {
+          // The provider reports readiness only after connecting. Bind the proof to
+          // the revision and key in one store write, including after reconnects.
+          try {
+            const valid =
+              testRevision !== undefined
+                ? markStudioRevisionTested(grant.customerId, grant.projectId, testRevision, grant.keyHash)
+                : testLiveRevision !== undefined &&
+                  readStudioLiveRevision(grant.projectId, grant.customerId, testLiveRevision)?.key_hash ===
+                    grant.keyHash;
+            if (!valid) return refuse(PREVIEW_UNAVAILABLE);
+          } catch (error) {
+            log.warn("Studio test could not be recorded", { sessionId, message: String(error) });
+            return refuse({
+              code: 1013,
+              message: "Max Cloud is busy. Try again in a moment.",
+              reason: "cloud store unavailable"
+            });
+          }
+          previewUpstreamReady = true;
+        }
+        upstreamUsable = previewUpstreamReady && upstreamUsable === true;
+      }
       session.clock.observe(event, at, upstreamUsable);
       if (!trackingWebsite || answeredAt !== undefined) return;
-      const payload = event as Partial<AgentEvent> | null;
       if (payload?.type === "status" && payload.state === "closed") visitorSpoke = false;
       if (upstreamUsable === false) return;
       // Cloud voice providers send this metric with the first audio answering a visitor,
@@ -286,17 +325,30 @@ export function openCloudSession(
           countCloud("max_cloud_sessions_killed_key_rotation_total");
           return refuse({ code: 1008, message: REVOKED_MESSAGE, reason: "project revoked" });
         }
+        if (
+          testRevision !== undefined &&
+          draftRevisionProject(grant.customerId, grant.projectId, testRevision)?.key_hash !== grant.keyHash
+        ) {
+          return refuse(PREVIEW_UNAVAILABLE);
+        }
+        if (
+          testLiveRevision !== undefined &&
+          readStudioLiveRevision(grant.projectId, grant.customerId, testLiveRevision)?.key_hash !== grant.keyHash
+        ) {
+          return refuse(PREVIEW_UNAVAILABLE);
+        }
         const limit = projectLimitRefusal(grant.projectId, at);
         if (limit) return refuse(limit);
         if (customerSecondsLeft(grant.customerId, at) <= 0) {
           return refuse({ code: USAGE_LIMIT_CLOSE_CODE, message: BALANCE_MESSAGE, reason: "balance used up" });
         }
       } catch (error) {
-        // A running conversation is not cut off by a database hiccup; the next check reads it again.
+        // The next check can retry for production conversations. Studio previews require a valid revision.
         log.warn("cloud session check skipped: the store could not be read", {
           sessionId,
           message: error instanceof Error ? error.message : String(error)
         });
+        if (preview) return refuse(PREVIEW_UNAVAILABLE);
       }
       return undefined;
     },

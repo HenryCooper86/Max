@@ -127,16 +127,16 @@ describe("HistoryTab", () => {
     const saved = render("https://shop.example.com/hook", "https://shop.example.com/hook");
     expect(saved).toContain("发送测试请求");
     expect(saved).toContain("查看签名密钥");
-    expect(saved).not.toContain("请保存以生效");
+    expect(saved).not.toContain("请发布以生效");
     // Changed and not saved: the test would go to the old address, so it waits.
     const changed = render("https://shop.example.com/hook", "https://shop.example.com/other");
-    expect(changed).toContain("请保存以生效");
+    expect(changed).toContain("请发布以生效");
     expect(changed).toMatch(/<button[^>]*disabled=""[^>]*>发送测试请求/);
     // An address Max will not call is said to be one before it is saved.
     const wrong = render("", "http://10.0.0.5/hook");
     expect(wrong).toContain("这个地址不能用");
     expect(wrong).toContain('aria-invalid="true"');
-    expect(wrong).not.toContain("请保存以生效");
+    expect(wrong).not.toContain("请发布以生效");
   });
 });
 
@@ -170,7 +170,7 @@ describe("what conversations are analysed for", () => {
     // The project's own vendor, by name.
     expect(off).toContain("你自己的 Google 密钥");
     expect(off).not.toContain("cxsAnalysisCriteria");
-    expect(off).not.toContain("请保存以生效");
+    expect(off).not.toContain("请发布以生效");
     // On a relay whose operator runs the analysis model, it does not say the customer pays.
     const operated = { ...project, analysisOnOwnKey: false } as unknown as Project;
     const told = renderToStaticMarkup(
@@ -210,7 +210,7 @@ describe("what conversations are analysed for", () => {
     expect(on).toContain("The order status was given.");
     expect(on).toContain('value="topic"');
     expect(on).toContain('value="orders, returns"');
-    expect(on).toContain("请保存以生效");
+    expect(on).toContain("请发布以生效");
     expect(on).not.toContain("现在还不能保存");
     // Nothing chosen.
     expect(render({ enabled: true, summary: false }, { keepConversations: true })).toContain("没有要找的内容");
@@ -220,7 +220,7 @@ describe("what conversations are analysed for", () => {
       { keepConversations: true }
     );
     expect(short).toContain("field topic: enum needs 2 to 20 options");
-    expect(short).not.toContain("请保存以生效");
+    expect(short).not.toContain("请发布以生效");
     // On, with no history and no server: the result would be thrown away.
     expect(render({ enabled: true }, { keepConversations: false, conversationWebhook: "" })).toContain(
       "结果没有地方可去"

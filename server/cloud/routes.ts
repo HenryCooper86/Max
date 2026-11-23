@@ -31,8 +31,15 @@ import {
   signup,
   type Result
 } from "./customers";
+import {
+  draftRevisionProject,
+  studioRelease,
+  saveStudioDraft,
+  publishStudioRevision,
+  restoreStudioRevision
+} from "./revisions";
 import { mintEmbedSession, mintTestSession } from "./sessions";
-import { liveProject } from "./store";
+import { liveProject, readStudioLiveRevision } from "./store";
 import { testProjectTool } from "./tools";
 import { customerFunds, ledgerEntries, usageSummary, type CustomerRow } from "./store";
 import { creditAccepted, creditPaidOrder, createTopup, readOrder, topupStatus, validOrderId } from "./topups";
@@ -193,16 +200,54 @@ export function registerCloudRoutes(app: express.Express): void {
     "/projects/:id",
     handle((req, res) => send(res, deleteProject(customerOf(res).id, param(req, "id"))))
   );
+  api.get(
+    "/projects/:id/release",
+    handle((req, res) => send(res, studioRelease(customerOf(res).id, param(req, "id"))))
+  );
+  api.put(
+    "/projects/:id/draft",
+    handle((req, res) => send(res, saveStudioDraft(customerOf(res).id, param(req, "id"), body(req))))
+  );
+  api.post(
+    "/projects/:id/publish",
+    handle((req, res) => send(res, publishStudioRevision(customerOf(res).id, param(req, "id"), body(req))))
+  );
+  api.post(
+    "/projects/:id/restore",
+    handle((req, res) => send(res, restoreStudioRevision(customerOf(res).id, param(req, "id"), body(req))))
+  );
+
+  function projectForProbe(req: Request, res: Response) {
+    const revision = body(req).revision;
+    const projectId = param(req, "id");
+    const owner = customerOf(res).id;
+    if (revision === undefined) return liveProject(projectId, owner);
+    return typeof revision === "string"
+      ? (draftRevisionProject(owner, projectId, revision) ?? readStudioLiveRevision(projectId, owner, revision))
+      : undefined;
+  }
+
   // The console's Test panel: a short-lived session token for the owner.
   api.post(
     "/projects/:id/test-session",
-    handle((req, res) => send(res, mintTestSession(customerOf(res).id, param(req, "id")), 201))
+    handle((req, res) => {
+      const { revision, expectedLiveRevision } = body(req);
+      if (
+        (revision !== undefined && (typeof revision !== "string" || !revision)) ||
+        (expectedLiveRevision !== undefined &&
+          (typeof expectedLiveRevision !== "string" || !expectedLiveRevision || revision !== undefined))
+      ) {
+        res.status(400).json({ ok: false, error: "Provide one valid revision ID." });
+        return;
+      }
+      send(res, mintTestSession(customerOf(res).id, param(req, "id"), revision, expectedLiveRevision), 201);
+    })
   );
   // "Send test request" for one saved tool, with sample arguments.
   api.post(
     "/projects/:id/tools/test",
     handle(async (req, res) => {
-      const row = liveProject(param(req, "id"), customerOf(res).id);
+      const row = projectForProbe(req, res);
       if (!row) {
         res.status(404).json({ ok: false, error: "Project not found." });
         return;
@@ -285,7 +330,7 @@ export function registerCloudRoutes(app: express.Express): void {
   api.post(
     "/projects/:id/conversation-webhook/test",
     handle(async (req, res) => {
-      const row = liveProject(param(req, "id"), customerOf(res).id);
+      const row = projectForProbe(req, res);
       if (!row) {
         res.status(404).json({ ok: false, error: "Project not found." });
         return;
@@ -306,7 +351,7 @@ export function registerCloudRoutes(app: express.Express): void {
   api.post(
     "/projects/:id/traces-test",
     handle(async (req, res) => {
-      const row = liveProject(param(req, "id"), customerOf(res).id);
+      const row = projectForProbe(req, res);
       if (!row) {
         res.status(404).json({ ok: false, error: "Project not found." });
         return;

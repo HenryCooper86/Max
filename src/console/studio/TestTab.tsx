@@ -2,6 +2,7 @@ import "./test-tab.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { VoiceAgent, VoiceAgentError } from "../../../sdk/src/index";
 import type { VoiceAgentStatus } from "../../../sdk/src/index";
+import { ApiError } from "../api";
 import { useSay } from "../hooks";
 import { applyAgentEvent, EMPTY_TEST_STATE, formatElapsed } from "./test-helpers";
 import type { TimelineEntry } from "./test-helpers";
@@ -87,11 +88,23 @@ function TimelineRow({ entry, say }: { entry: TimelineEntry; say: Say }) {
   );
 }
 
-export function TestTab({ session, project, draft, dirty, save, origin, goTo }: StudioTabProps) {
+export function TestTab({
+  session,
+  project,
+  savedProject,
+  draft,
+  dirty,
+  release,
+  releaseBusy,
+  prepareTest,
+  refreshRelease,
+  origin,
+  goTo
+}: StudioTabProps) {
   const say = useSay();
   const agentRef = useRef<VoiceAgent | undefined>(undefined);
   const offRef = useRef<Array<() => void>>([]);
-  const testedRef = useRef(false);
+  const [testTarget, setTestTarget] = useState<{ draftRevision?: string; expectedLiveRevision?: string }>();
   const [state, setState] = useState(EMPTY_TEST_STATE);
   const [status, setStatus] = useState<VoiceAgentStatus>("idle");
   const [started, setStarted] = useState(false);
@@ -103,7 +116,7 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
   const [saving, setSaving] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
-  const release = useCallback(() => {
+  const releaseAgent = useCallback(() => {
     offRef.current.forEach((off) => off());
     offRef.current = [];
     agentRef.current?.destroy();
@@ -115,9 +128,9 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
     mounted.current = true;
     return () => {
       mounted.current = false;
-      release();
+      releaseAgent();
     };
-  }, [release]);
+  }, [releaseAgent]);
 
   const live = started && status !== "idle" && status !== "closed" && status !== "error";
   const active = live && status !== "connecting";
@@ -134,22 +147,37 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
   }, [state]);
 
   const stop = useCallback(() => {
-    release();
+    releaseAgent();
     setStatus("closed");
     setMuted(false);
     setConnectedAt(undefined);
-  }, [release]);
+    void refreshRelease();
+  }, [releaseAgent, refreshRelease]);
 
-  const start = useCallback(async () => {
-    release();
+  const start = async () => {
+    setSaving(true);
+    const target = await prepareTest().finally(() => {
+      if (mounted.current) setSaving(false);
+    });
+    if (!mounted.current || !target) return;
+    releaseAgent();
     setError("");
     setState(EMPTY_TEST_STATE);
     setMuted(false);
     setConnectedAt(undefined);
-    const language = draft.studio.language || undefined;
+    const { language, draftRevision, expectedLiveRevision } = target;
+    setTestTarget({ draftRevision, expectedLiveRevision });
+    let ready = false;
     const agent = new VoiceAgent({
       url: origin,
-      token: async () => (await session.api.testSession(session.token, project.id)).token,
+      token: async () => {
+        try {
+          return (await session.api.testSession(session.token, project.id, draftRevision, expectedLiveRevision)).token;
+        } catch (problem) {
+          if (problem instanceof ApiError && problem.status === 409) void refreshRelease();
+          throw problem;
+        }
+      },
       ...(language ? { language } : {})
     });
     agentRef.current = agent;
@@ -159,9 +187,10 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
         setMuted(agent.muted);
         if (next === "ready" || next === "listening") {
           setConnectedAt((current) => current ?? Date.now());
-          if (!testedRef.current) {
-            testedRef.current = true;
+          if (!ready) {
+            ready = true;
             rememberStudioTest(project.id);
+            void refreshRelease();
           }
         }
       }),
@@ -181,15 +210,6 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
     } catch (problem) {
       if (agentRef.current === agent) setError(errorText(say, problem));
     }
-  }, [release, draft.studio.language, origin, session, project.id, say]);
-
-  const saveAndStart = async () => {
-    setSaving(true);
-    try {
-      if ((await save()) && mounted.current) await start();
-    } finally {
-      if (mounted.current) setSaving(false);
-    }
   };
 
   const send = (event: React.FormEvent) => {
@@ -205,7 +225,7 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
     setMuted(agent.muted);
   };
 
-  if (!project.hasModelKey) {
+  if (!live && !savedProject.hasModelKey && !draft.modelKey.trim()) {
     return (
       <div className="cxsTest">
         <p className="cxStatus">
@@ -228,21 +248,31 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
     <div className="cxsTest">
       {dirty ? (
         <div className="cxWarn" role="status">
-          <p>
-            {say(
-              "你有没保存的修改。测试用的是已保存的版本。",
-              "You have unsaved changes; the test uses the saved version."
-            )}
-          </p>
+          <p>{say("开始测试时会先保存草稿。", "Starting a test saves your draft first.")}</p>
           <button
             type="button"
             className="siteButton small"
-            disabled={saving || live}
-            onClick={() => void saveAndStart()}
+            disabled={saving || releaseBusy || live}
+            onClick={() => void start()}
           >
             {say("保存并开始", "Save and start")}
           </button>
         </div>
+      ) : null}
+
+      {release || testTarget ? (
+        <p className="cxsTestNote">
+          {live && testTarget
+            ? testTarget.draftRevision
+              ? say(`测试草稿版本 ${testTarget.draftRevision}`, `Testing draft revision ${testTarget.draftRevision}`)
+              : say(
+                  `测试线上版本 ${testTarget.expectedLiveRevision}`,
+                  `Testing live revision ${testTarget.expectedLiveRevision}`
+                )
+            : release?.draft || dirty
+              ? say("使用草稿进行测试", "Test the draft")
+              : say("使用线上版本进行测试", "Test the live version")}
+        </p>
       ) : null}
 
       <div className="cxsTestStage">
@@ -252,7 +282,7 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
           aria-pressed={live}
           aria-label={micLabel}
           title={micLabel}
-          disabled={saving}
+          disabled={!live && (saving || releaseBusy || dirty)}
           onClick={() => (live ? stop() : void start())}
         >
           <span aria-hidden="true">{live ? "■" : "🎤"}</span>
@@ -325,12 +355,15 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
       </form>
 
       <p className="cxsTestNote">
-        {say("测试的分钟数会算进你的免费分钟。", "Test minutes count toward your free minutes.")}
+        {say(
+          "测试会使用账户分钟数，并计入项目的每月上限。",
+          "Tests use account minutes and count toward the project’s monthly limit."
+        )}
       </p>
       <p className="cxsTestNote">
         {say(
-          "在你自己网页里运行的工具（客户端工具）在这里不会运行；服务器工具会运行。",
-          "Tools that run in your own web page (client tools) don't run here; server tools do."
+          "测试会调用配置的服务器工具。请使用测试数据，工具可能会在目标系统中创建或修改记录。网页中的客户端工具只能在你的网站上运行。",
+          "Tests call the configured server tools. Use test data since those calls can create or update records. Client tools run only on your own website."
         )}
       </p>
     </div>

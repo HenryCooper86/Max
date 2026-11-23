@@ -16,7 +16,7 @@ import {
   testingStatsAuthorized
 } from "../server/auth";
 import { config } from "../server/config";
-import { sessionTokens } from "../server/session-tokens";
+import { cloudSessionTokens, sessionTokens } from "../server/session-tokens";
 
 function fakeRequest(
   options: {
@@ -65,6 +65,36 @@ describe("authorizeUpgrade", () => {
     config.relayAuthToken = "";
     config.allowedOrigins = [];
     expect(authorizeUpgrade(fakeRequest())).toEqual({ ok: true });
+  });
+
+  it("rejects an invalid Studio draft token even on an open relay", () => {
+    config.relayAuthToken = "";
+    config.allowedOrigins = [];
+    const request = fakeRequest({ url: "/agent?token=vst_studio_rev_invalid" });
+    expect(authorizeUpgrade(request)).toMatchObject({ ok: false, code: 401 });
+  });
+
+  it("requires the Studio draft token to stay valid when another credential is presented", () => {
+    config.relayAuthToken = "relay-token";
+    config.allowedOrigins = [];
+    const grant = cloudSessionTokens.mint(
+      {},
+      {
+        source: "test",
+        projectId: "p",
+        customerId: "c",
+        keyHash: "hash",
+        testRevision: "draft"
+      }
+    );
+    if (!grant.ok) throw new Error(grant.error);
+    const request = fakeRequest({
+      url: `/agent?token=${grant.token}`,
+      authorization: "Bearer relay-token"
+    });
+    expect(authorizeUpgrade(request)).toEqual({ ok: true });
+    cloudSessionTokens.revoke(grant.token);
+    expect(authorizeUpgrade(request)).toMatchObject({ ok: false, code: 401 });
   });
 
   it("requires the shared token when configured", () => {

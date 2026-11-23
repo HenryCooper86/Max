@@ -39,6 +39,7 @@ import { useLanguage } from "../LanguageToggle";
 const DEFAULT_API = { fetchStudioFlow, saveStudioFlow };
 
 type Props = {
+  draftMode?: boolean;
   onAuthenticationExpired: () => void;
   /** Injected in tests. */
   api?: typeof DEFAULT_API;
@@ -411,7 +412,7 @@ function StepName({
  * for each handover and the condition written on it. What is drawn here is the
  * `agents` key of the assistant config.
  */
-export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Props) {
+export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API, draftMode = false }: Props) {
   const { language } = useLanguage();
   const say = useCallback((zh: string, en: string) => localized(language, zh, en), [language]);
   const [steps, setSteps] = useState<FlowStep[] | null>(null);
@@ -664,7 +665,9 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
     setShowProblems(false);
     setStatus({
       kind: "saved",
-      message: say("流程已保存。新的会话会立即使用。", "Flow saved. New sessions use it from now on.")
+      message: draftMode
+        ? say("已应用到草稿。", "Flow applied to the draft.")
+        : say("流程已保存。新的会话会立即使用。", "Flow saved. New sessions use it from now on.")
     });
   };
 
@@ -784,8 +787,8 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
       </h3>
       <p className="flowNote">
         {say(
-          "每一步有自己的指令和可用的工具；箭头决定对话可以从哪一步走到哪一步、在什么情况下走。每次对话都从“开始”出发。只有“开始”一步时，助手就是一个整体，不分步骤。保存后新的会话立即生效。",
-          "Each step has its own instructions and the tools it may use. The arrows say where a conversation can go from a step, and when. Every conversation begins at Start. With Start alone, the assistant works as one, without steps. New sessions use a saved flow straight away."
+          "每一步有自己的指令和可用的工具；箭头决定对话可以从哪一步走到哪一步、在什么情况下走。每次对话都从“开始”出发。只有“开始”一步时，助手就是一个整体，不分步骤。",
+          "Each step has its own instructions and the tools it may use. The arrows say where a conversation can go from a step, and when. Every conversation begins at Start. With Start alone, the assistant works as one, without steps."
         )}
       </p>
       {skipped.length > 0 ? (
@@ -820,7 +823,11 @@ export function FlowBuilder({ onAuthenticationExpired, api = DEFAULT_API }: Prop
           </button>
           <button type="button" className="studioButton primary" disabled={!dirty || busy} onClick={() => void save()}>
             <FloppyDisk size={16} aria-hidden="true" />{" "}
-            {busy ? say("保存中…", "Saving…") : say("保存流程", "Save the flow")}
+            {busy
+              ? say("保存中…", "Saving…")
+              : draftMode
+                ? say("应用到草稿", "Apply to draft")
+                : say("保存流程", "Save the flow")}
           </button>
         </span>
       </div>

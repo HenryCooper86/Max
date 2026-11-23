@@ -8,7 +8,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIVE_CAPABILITIES } from "../shared/agent";
-import { chargeSession, cloudSessionEnded, recoverCloudSessions, remainingSeconds } from "../server/cloud";
+import {
+  chargeSession,
+  cloudSessionEnded,
+  projectRuntime,
+  recoverCloudSessions,
+  remainingSeconds
+} from "../server/cloud";
 import { setCloudClock, setCloudInstanceId } from "../server/cloud/context";
 import { cloudCounters } from "../server/cloud/counters";
 import { createProject, listProjects, patchProject, rotateProjectKey, signup } from "../server/cloud/customers";
@@ -19,6 +25,7 @@ import {
   projectLimitRefusal,
   resetLiveCloudSessions
 } from "../server/cloud/live";
+import { saveStudioDraft, studioRelease } from "../server/cloud/revisions";
 import { mintEmbedSession, mintTestSession, resetCloudSessionLimits, spendEmbedTokens } from "../server/cloud/sessions";
 import { adjustBalance, liveSessionRows, resetCloudDatabase } from "../server/cloud/store";
 import { createLogger } from "../server/logger";
@@ -82,6 +89,112 @@ async function setup(options: { embed?: boolean } = {}) {
     embedGrant: { ...grant, source: "embed" as const }
   };
 }
+
+function draft(customerId: string, projectId: string, greeting: string) {
+  const release = studioRelease(customerId, projectId);
+  if (!release.ok) throw new Error(release.error);
+  const result = saveStudioDraft(customerId, projectId, {
+    baseRevision: release.value.liveRevision,
+    draftRevision: release.value.draft?.id ?? null,
+    patch: { greeting }
+  });
+  if (!result.ok) throw new Error(result.error);
+  return result.value.draft!;
+}
+
+it("resolves the draft only for its test token and refuses that token after replacement", async () => {
+  const { customerId, projectId } = await setup();
+  const initial = draft(customerId, projectId, "First draft greeting");
+  const minted = mintTestSession(customerId, projectId, initial.id);
+  if (!minted.ok) throw new Error(minted.error);
+  const grant = cloudSessionTokens.grant(minted.value.token)!.project!;
+  expect(projectRuntime(projectId, grant)?.greeting).toBe("First draft greeting");
+  expect(projectRuntime(projectId)?.greeting).toBeUndefined();
+
+  draft(customerId, projectId, "Replacement draft");
+  expect(projectRuntime(projectId, grant)).toBeUndefined();
+});
+
+it("records a draft test when the connected upstream is ready", async () => {
+  const { customerId, projectId } = await setup();
+  const initial = draft(customerId, projectId, "Draft greeting");
+  const minted = mintTestSession(customerId, projectId, initial.id);
+  if (!minted.ok) throw new Error(minted.error);
+  const grant = cloudSessionTokens.grant(minted.value.token)!.project!;
+  const tested = () => {
+    const result = studioRelease(customerId, projectId);
+    if (!result.ok) throw new Error(result.error);
+    return result.value.draft?.tested;
+  };
+
+  expect(tested()).toBe(false);
+  const session = openCloudSession("draft", grant, "console");
+  session.observe({ type: "session.started" }, false);
+  session.observe({ type: "status", state: "ready" }, false);
+  expect(tested()).toBe(false);
+  session.observe({ type: "status", state: "ready" }, true);
+  expect(tested()).toBe(true);
+  clock += 2_000;
+  expect(session.close()).toBe(2);
+});
+
+it("refuses readiness for a revision grant if the project's key rotated during startup", async () => {
+  const { customerId, projectId } = await setup();
+  const initial = draft(customerId, projectId, "Draft greeting");
+  const minted = mintTestSession(customerId, projectId, initial.id);
+  if (!minted.ok) throw new Error(minted.error);
+  const grant = cloudSessionTokens.grant(minted.value.token)!.project!;
+  const session = openCloudSession("draft", grant, "console");
+  expect(rotateProjectKey(customerId, projectId).ok).toBe(true);
+  expect(projectRuntime(projectId, grant)).toBeUndefined();
+  expect(session.observe({ type: "status", state: "ready" }, true)).toMatchObject({ code: 1008 });
+  clock += 2_000;
+  expect(session.close()).toBe(0);
+});
+
+it("stops a draft test whose revision is replaced while its upstream reconnects", async () => {
+  const { customerId, projectId } = await setup();
+  const initial = draft(customerId, projectId, "Draft greeting");
+  const minted = mintTestSession(customerId, projectId, initial.id);
+  if (!minted.ok) throw new Error(minted.error);
+  const grant = cloudSessionTokens.grant(minted.value.token)!.project!;
+  const session = openCloudSession("draft", grant, "console");
+  session.observe({ type: "status", state: "ready" }, true);
+  clock += 2_000;
+  session.observe({ type: "status", state: "connecting" }, false);
+  draft(customerId, projectId, "Replacement draft");
+  expect(session.observe({ type: "status", state: "listening" }, true)).toMatchObject({ code: 1008 });
+  clock += 2_000;
+  expect(session.close()).toBe(2);
+});
+
+it("pins a no-draft preview to the live revision confirmed by Studio", async () => {
+  const { customerId, projectId } = await setup();
+  const release = studioRelease(customerId, projectId);
+  if (!release.ok) throw new Error(release.error);
+  const revision = release.value.liveRevision;
+  const mint = (expected: string) => mintTestSession(customerId, projectId, undefined, expected);
+  expect(mint("other-revision")).toMatchObject({ ok: false, status: 409 });
+  const minted = mint(revision);
+  if (!minted.ok) throw new Error(minted.error);
+  const grant = cloudSessionTokens.grant(minted.value.token)!.project!;
+  expect(projectRuntime(projectId, grant)?.modelKey).toBe("sk-test");
+  const session = openCloudSession("live-preview", grant, "console");
+  expect(patchProject(customerId, projectId, { greeting: "Changed while connecting" }).ok).toBe(true);
+  expect(projectRuntime(projectId, grant)).toBeUndefined();
+  expect(session.observe({ type: "status", state: "ready" }, true)).toMatchObject({ code: 1008 });
+});
+
+it("refuses a no-draft preview if a draft already exists", async () => {
+  const { customerId, projectId } = await setup();
+  draft(customerId, projectId, "Draft greeting");
+  const release = studioRelease(customerId, projectId);
+  if (!release.ok) throw new Error(release.error);
+  expect(mintTestSession(customerId, projectId, undefined, release.value.liveRevision)).toMatchObject({
+    ok: false,
+    status: 409
+  });
+});
 
 it("marks only the first answered website turn, even with transcript storage off", async () => {
   const { customerId, projectId, grant, embedGrant } = await setup({ embed: true });

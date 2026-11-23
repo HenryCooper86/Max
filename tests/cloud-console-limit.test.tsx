@@ -10,8 +10,8 @@ import { LanguageProvider } from "../src/components/LanguageToggle";
 import { createCloudApi, type Project } from "../src/console/api";
 import { InstallTab } from "../src/console/studio/InstallTab";
 import { SettingsTab } from "../src/console/studio/SettingsTab";
-import { patchFromDraft, Studio } from "../src/console/studio/Studio";
-import { draftChanged, draftFromProject, type StudioTabProps } from "../src/console/studio/types";
+import { patchFromDraft } from "../src/console/studio/Studio";
+import { minutesCapFromDraft, draftFromProject, type StudioTabProps } from "../src/console/studio/types";
 
 const wrap = (node: React.ReactNode) => renderToStaticMarkup(<LanguageProvider>{node}</LanguageProvider>);
 const api = createCloudApi(async () => new Response("{}"));
@@ -36,6 +36,11 @@ function props(saved: Project): StudioTabProps {
   return {
     session: { api, token: "t", fail: () => "" },
     project: saved,
+    savedProject: saved,
+    release: null,
+    releaseBusy: false,
+    prepareTest: async () => null,
+    refreshRelease: async () => {},
     draft: draftFromProject(saved),
     update: () => undefined,
     updateStudio: () => undefined,
@@ -48,67 +53,51 @@ function props(saved: Project): StudioTabProps {
 }
 
 describe("the monthly minutes limit", () => {
-  it("is edited as text and saved as whole minutes, or null for none", () => {
-    const draft = draftFromProject(project);
-    expect(draft.monthlyMinutesCap).toBe("500");
-    expect(draftChanged(draft, project)).toBe(false);
-    expect(patchFromDraft(draft).monthlyMinutesCap).toBe(500);
-    expect(draftChanged({ ...draft, monthlyMinutesCap: "800" }, project)).toBe(true);
-    expect(patchFromDraft({ ...draft, monthlyMinutesCap: " 800 " }).monthlyMinutesCap).toBe(800);
-    expect(patchFromDraft({ ...draft, monthlyMinutesCap: "" }).monthlyMinutesCap).toBeNull();
-    // Not a whole number: left out, so a save never clears the limit by accident.
-    expect(patchFromDraft({ ...draft, monthlyMinutesCap: "1.5" })).not.toHaveProperty("monthlyMinutesCap");
-    expect(patchFromDraft({ ...draft, monthlyMinutesCap: "lots" })).not.toHaveProperty("monthlyMinutesCap");
+  it("validates whole minutes independently of the release configuration", () => {
+    expect(patchFromDraft(draftFromProject(project))).not.toHaveProperty("monthlyMinutesCap");
+    expect(minutesCapFromDraft("")).toBeNull();
+    expect(minutesCapFromDraft(" 800 ")).toBe(800);
+    expect(minutesCapFromDraft("250000")).toBe(250000);
+    for (const value of ["250001", "lots", "0", "1.5"]) expect(minutesCapFromDraft(value)).toBeUndefined();
   });
 
-  it("accepts the relay's maximum and rejects a higher limit", () => {
-    const draft = draftFromProject(project);
-    expect(patchFromDraft({ ...draft, monthlyMinutesCap: "250000" }).monthlyMinutesCap).toBe(250000);
-    expect(patchFromDraft({ ...draft, monthlyMinutesCap: "250001" })).not.toHaveProperty("monthlyMinutesCap");
-  });
-
-  it("keeps an invalid limit in the editor when Save is pressed", async () => {
+  it("applies a valid cap immediately without saving a draft", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const pending = Promise.withResolvers<{ project: Project }>();
     const updateProject = vi.fn(() => pending.promise);
+    const onProjectChanged = vi.fn();
+    const options = props(project);
     let renderer: ReactTestRenderer | undefined;
     try {
       await act(async () => {
         renderer = create(
-          <Studio
-            session={{ api: { ...api, updateProject }, token: "t", fail: String }}
-            project={project}
-            initialTab="settings"
-            origin="https://max.example"
-            onChanged={() => undefined}
-            onKeyRotated={() => undefined}
-            onDeleted={() => undefined}
-          />
+          <LanguageProvider>
+            <SettingsTab
+              {...options}
+              session={{ api: { ...api, updateProject }, token: "t", fail: String }}
+              onProjectChanged={onProjectChanged}
+              onKeyRotated={() => undefined}
+              onDeleted={() => undefined}
+            />
+          </LanguageProvider>
         );
       });
       const cap = () => renderer!.root.findByProps({ id: "cxs-p1-minutes-cap" });
+      const apply = () => renderer!.root.findByProps({ children: "立即应用上限" });
       await act(async () => cap().props.onChange({ target: { value: "1.5" } }));
-      const save = renderer!.root.findByProps({ children: "保存" });
-      if (!save.props.disabled) await act(async () => save.props.onClick());
+      expect(apply().props.disabled).toBe(true);
       expect(updateProject).not.toHaveBeenCalled();
-      expect(cap().props.value).toBe("1.5");
-
       await act(async () => cap().props.onChange({ target: { value: "600" } }));
-      await act(async () => renderer!.root.findByProps({ children: "保存" }).props.onClick());
-      expect(updateProject).toHaveBeenCalledOnce();
-      expect(renderer!.root.findByProps({ role: "tabpanel" }).props.inert).toBe(true);
-      await act(async () => pending.resolve({ project: { ...project, monthlyMinutesCap: 600 } }));
-      expect(renderer!.root.findByProps({ role: "tabpanel" }).props.inert).toBeFalsy();
+      await act(async () => apply().props.onClick());
+      expect(updateProject).toHaveBeenCalledWith("t", "p1", { monthlyMinutesCap: 600 });
+      expect(apply().props.disabled).toBe(true);
+      const updated = { ...project, monthlyMinutesCap: 600 };
+      await act(async () => pending.resolve({ project: updated }));
+      expect(onProjectChanged).toHaveBeenCalledWith(updated);
     } finally {
       await act(async () => renderer?.unmount());
       vi.unstubAllGlobals();
     }
-  });
-
-  it("reads a relay that does not know about limits as having none", () => {
-    const older: Project = { ...project };
-    delete older.monthlyMinutesCap;
-    expect(draftFromProject(older).monthlyMinutesCap).toBe("");
   });
 
   it("has its own field in Settings", () => {
@@ -124,4 +113,42 @@ describe("the monthly minutes limit", () => {
     expect(html).not.toContain("同时最多 5 场对话");
     expect(html).toContain("每月分钟上限");
   });
+});
+
+it("requires explicit confirmation to remove stored model keys and refreshes the release controls", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const updated = { ...project, hasModelKey: false };
+  const updateProject = vi.fn(async () => ({ project: updated }));
+  const onProjectChanged = vi.fn();
+  const refreshRelease = vi.fn(async () => {});
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      renderer = create(
+        <LanguageProvider>
+          <SettingsTab
+            {...props(project)}
+            session={{ api: { ...api, updateProject }, token: "t", fail: String }}
+            onProjectChanged={onProjectChanged}
+            refreshRelease={refreshRelease}
+            onKeyRotated={() => undefined}
+            onDeleted={() => undefined}
+          />
+        </LanguageProvider>
+      );
+    });
+    const press = (children: string) => act(async () => renderer!.root.findByProps({ children }).props.onClick());
+    await press("移除模型密钥");
+    expect(updateProject).not.toHaveBeenCalled();
+    expect(JSON.stringify(renderer!.toJSON())).toContain("回退版本将被清除");
+    await press("取消");
+    await press("移除模型密钥");
+    await press("是，移除密钥");
+    expect(updateProject).toHaveBeenCalledWith("t", "p1", { modelKey: "" });
+    expect(onProjectChanged).toHaveBeenCalledWith(updated);
+    expect(refreshRelease).toHaveBeenCalledOnce();
+  } finally {
+    await act(async () => renderer?.unmount());
+    vi.unstubAllGlobals();
+  }
 });

@@ -23,6 +23,7 @@ export function cloudConversationEnded(
     customerId: string;
     projectId: string;
     source: string;
+    testRevision?: string;
     sessionId: string;
     seconds: number;
     endedAt: number;
@@ -33,6 +34,7 @@ export function cloudConversationEnded(
   webhooks: Pick<typeof projectWebhooks, "ended"> = projectWebhooks,
   analyse: typeof analyseProjectConversation = analyseProjectConversation
 ): void {
+  if (input.source === "test" && input.testRevision !== undefined) return;
   // Each on its own: a history that cannot be written does not hold the webhook back, nor the other way round.
   let savedId: string | undefined;
   if (input.keep) {

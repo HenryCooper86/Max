@@ -5,7 +5,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { LanguageProvider } from "../src/components/LanguageToggle";
-import { ApiError, createCloudApi, type Me, type Project } from "../src/console/api";
+import { ApiError, createCloudApi, type Me, type Project, type StudioRelease } from "../src/console/api";
 import { AuthCard } from "../src/console/AuthCard";
 import { BalanceCard } from "../src/console/BalanceCard";
 import { ConsoleApp, NotEnabled } from "../src/console/ConsoleApp";
@@ -13,6 +13,7 @@ import { KeyReveal } from "../src/console/KeyReveal";
 import { ProjectsSection, startFromTemplate } from "../src/console/ProjectsSection";
 import { writeInstructions } from "../src/console/studio/AgentTab";
 import { appendKnowledge } from "../src/console/studio/KnowledgeTab";
+import { ReleasePanel } from "../src/console/studio/ReleasePanel";
 import { patchFromDraft, Studio } from "../src/console/studio/Studio";
 import { draftChanged, draftFromProject } from "../src/console/studio/types";
 import { AGENT_TEMPLATES } from "../src/lib/agent-templates";
@@ -22,7 +23,6 @@ import { PricingPage } from "../src/landing/PricingPage";
 import { INVITE_REQUEST_URL, PLANS, PRICING_FAQ } from "../src/lib/pricing";
 
 const wrap = (node: React.ReactNode) => renderToStaticMarkup(<LanguageProvider>{node}</LanguageProvider>);
-const api = createCloudApi(async () => new Response("{}"));
 
 const project: Project = {
   id: "p1",
@@ -38,6 +38,14 @@ const project: Project = {
   hasWebhookSecret: false,
   createdAt: 1
 };
+
+const release = (live: Project): StudioRelease => ({
+  project: live,
+  liveRevision: "live-1",
+  previousRevision: null,
+  draft: null
+});
+const api = createCloudApi(async (path) => Response.json(path.endsWith("/release") ? release(project) : {}));
 
 describe("logged-out view", () => {
   const html = wrap(<AuthCard api={api} onSignedIn={() => undefined} />);
@@ -126,11 +134,12 @@ describe("overview pieces", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
     const enabled = { ...project, studio: { ...project.studio, publicEmbed: { enabled: true, origins: [] } } };
+    const studioApi = { ...api, studioRelease: async () => release(enabled) };
     const render = (item: Project) =>
       act(async () =>
         root.render(
           <Studio
-            session={{ api, token: "t", fail: String }}
+            session={{ api: studioApi, token: "t", fail: String }}
             project={item}
             origin="https://max.example"
             onChanged={() => {}}
@@ -195,7 +204,11 @@ describe("overview pieces", () => {
       .mockResolvedValueOnce({
         projects: [{ ...project, name: "Stale project name", firstWebsiteConversationAt: 42 }]
       });
-    const session = { api: { ...api, listProjects }, token: "t", fail: String };
+    const session = {
+      api: { ...api, listProjects, studioRelease: async () => release(pending) },
+      token: "t",
+      fail: String
+    };
     function Dashboard() {
       const [projects, setProjects] = useState<Project[] | null>([pending]);
       return (
@@ -276,12 +289,243 @@ describe("overview pieces", () => {
     }
   });
 
+  it("shows flow and same-host endpoint changes without exposing private values", () => {
+    const live = {
+      ...project,
+      studio: {
+        ...project.studio,
+        conversationWebhook: "https://sample.test/live-path?token=secret-1",
+        flow: [
+          {
+            id: "main",
+            description: "Old description",
+            onStart: { call: { tool: "welcome", arguments: { key: "secret-2" } } }
+          }
+        ]
+      }
+    };
+    const saved = {
+      ...live,
+      studio: {
+        ...live.studio,
+        conversationWebhook: "https://sample.test/draft-path?token=secret-3",
+        flow: [
+          {
+            id: "main",
+            description: "New description",
+            onStart: { call: { tool: "welcome", arguments: { key: "secret-4" } } }
+          }
+        ]
+      }
+    };
+    const html = wrap(
+      <ReleasePanel
+        release={{
+          ...release(live),
+          draft: {
+            id: "draft-2",
+            project: saved,
+            tested: false,
+            changedFields: ["studio.flow", "studio.conversationWebhook"]
+          }
+        }}
+        dirty={false}
+        busy={false}
+        conflict={false}
+        refresh={async () => {}}
+        publish={() => {}}
+        restore={() => {}}
+        goToTest={() => {}}
+      />
+    );
+    expect(html).toContain("Old description");
+    expect(html).toContain("New description");
+    expect(html).toContain("启动时的工具参数已更改");
+    expect(html).toContain("端点地址已更改，主机相同");
+    expect(html).toContain("sample.test");
+    expect(html).not.toMatch(/secret-|live-path|draft-path/);
+  });
+
+  it("reviews saved changes, publishes the tested revision, and confirms restoring", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    vi.stubGlobal("confirm", confirm);
+    const saved = { ...project, instructions: "New agent instructions" };
+    const initial: StudioRelease = {
+      ...release(project),
+      draft: { id: "draft-2", project: saved, tested: false, changedFields: ["instructions", "modelKey"] }
+    };
+    const published: StudioRelease = {
+      project: saved,
+      liveRevision: "draft-2",
+      previousRevision: "live-1",
+      draft: null
+    };
+    const studioRelease = vi
+      .fn()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue({
+        ...initial,
+        draft: { ...initial.draft, tested: true }
+      });
+    const publishStudioRevision = vi.fn().mockResolvedValue(published);
+    const restoreStudioRevision = vi.fn().mockResolvedValue(release(project));
+    const onChanged = vi.fn();
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <LanguageProvider>
+            <Studio
+              session={{
+                api: { ...api, studioRelease, publishStudioRevision, restoreStudioRevision },
+                token: "t",
+                fail: String
+              }}
+              project={project}
+              origin="https://max.example"
+              onChanged={onChanged}
+              onKeyRotated={() => {}}
+              onDeleted={() => {}}
+            />
+          </LanguageProvider>
+        );
+      });
+      const button = (label: string) => renderer!.root.findByProps({ children: label });
+      const output = JSON.stringify(renderer!.toJSON());
+      expect(output).toContain("Be brief");
+      expect(output).toContain("New agent instructions");
+      expect(output).toContain("密钥配置已更改");
+      expect(button("发布已测试草稿").props.disabled).toBe(true);
+      await act(async () => button("刷新版本").props.onClick());
+      expect(button("发布已测试草稿").props.disabled).toBe(false);
+      await act(async () => button("发布已测试草稿").props.onClick());
+      expect(publishStudioRevision).toHaveBeenCalledWith("t", "p1", { baseRevision: "live-1", revision: "draft-2" });
+      expect(onChanged).toHaveBeenLastCalledWith(saved);
+      await act(async () => button("恢复上一版本").props.onClick());
+      expect(restoreStudioRevision).not.toHaveBeenCalled();
+      await act(async () => button("恢复上一版本").props.onClick());
+      expect(restoreStudioRevision).toHaveBeenCalledWith("t", "p1", {
+        baseRevision: "draft-2",
+        revision: "live-1",
+        draftRevision: null
+      });
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("submits the reviewed draft ID on restore and preserves edits when it is stale", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const confirm = vi.fn().mockReturnValue(true);
+    vi.stubGlobal("confirm", confirm);
+    const restoreStudioRevision = vi.fn().mockRejectedValue(new ApiError("request", "stale", 409));
+    const studioRelease = vi.fn().mockResolvedValue({
+      ...release(project),
+      previousRevision: "previous",
+      draft: {
+        id: "draft-1",
+        project: { ...project, assistantName: "Saved name" },
+        tested: false,
+        changedFields: ["assistantName"]
+      }
+    });
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <LanguageProvider>
+            <Studio
+              session={{ api: { ...api, studioRelease, restoreStudioRevision }, token: "t", fail: String }}
+              project={project}
+              origin="https://max.example"
+              onChanged={() => {}}
+              onKeyRotated={() => {}}
+              onDeleted={() => {}}
+            />
+          </LanguageProvider>
+        );
+      });
+      const name = () => renderer!.root.findByProps({ id: "cxs-p1-assistant" });
+      const button = () => renderer!.root.findByProps({ children: "恢复上一版本" });
+      await act(async () => name().props.onChange({ target: { value: "Unsaved name" } }));
+      await act(async () => button().props.onClick());
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining("丢弃当前草稿及未保存的编辑"));
+      expect(restoreStudioRevision).toHaveBeenCalledWith("t", "p1", {
+        baseRevision: "live-1",
+        draftRevision: "draft-1",
+        revision: "previous"
+      });
+      expect(name().props.value).toBe("Unsaved name");
+      expect(button().props.disabled).toBe(true);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps local edits and adopts unrelated server changes when refreshing a conflict", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const existing = { ...project, assistantName: "Saved draft name" };
+    const newer = { ...existing, greeting: "Changed in another tab" };
+    const studioRelease = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...release(project),
+        draft: { project: existing, id: "draft-1", changedFields: ["assistantName"], tested: false }
+      })
+      .mockResolvedValue({
+        ...release(project),
+        draft: { project: newer, id: "draft-2", changedFields: ["assistantName", "greeting"], tested: false }
+      });
+    const saveStudioDraft = vi.fn().mockRejectedValue(new ApiError("request", "stale", 409));
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <LanguageProvider>
+            <Studio
+              session={{ api: { ...api, studioRelease, saveStudioDraft }, token: "t", fail: String }}
+              project={project}
+              origin="https://max.example"
+              onChanged={() => {}}
+              onKeyRotated={() => {}}
+              onDeleted={() => {}}
+            />
+          </LanguageProvider>
+        );
+      });
+      const button = (label: string) => renderer!.root.findByProps({ children: label });
+      const name = () => renderer!.root.findByProps({ id: "cxs-p1-assistant" });
+      expect(name().props.value).toBe("Saved draft name");
+      await act(async () => name().props.onChange({ target: { value: "Local name" } }));
+      await act(async () => button("保存草稿").props.onClick());
+      expect(button("保存草稿").props.disabled).toBe(true);
+      await act(async () => button("刷新版本").props.onClick());
+      expect(button("保存草稿").props.disabled).toBe(false);
+      expect(name().props.value).toBe("Local name");
+      await act(async () => button("保存草稿").props.onClick());
+      expect(saveStudioDraft).toHaveBeenLastCalledWith("t", "p1", {
+        baseRevision: "live-1",
+        draftRevision: "draft-2",
+        patch: expect.objectContaining({ assistantName: "Local name", greeting: "Changed in another tab" })
+      });
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("saves only what changed, and the model key only when typed", () => {
     const draft = draftFromProject(project);
     expect(draftChanged(draft, project)).toBe(false);
     expect(draftChanged({ ...draft, studio: { ...draft.studio, voice: "Puck" } }, project)).toBe(true);
     expect(draftChanged({ ...draft, modelKey: "sk-new" }, project)).toBe(true);
     expect(patchFromDraft(draft)).not.toHaveProperty("modelKey");
+    expect(patchFromDraft({ ...draft, studio: { ...draft.studio, flow: [{ id: "main" }] } }).studio?.flow).toEqual([
+      { id: "main" }
+    ]);
     expect(patchFromDraft({ ...draft, modelKey: " sk-new " }).modelKey).toBe("sk-new");
   });
 

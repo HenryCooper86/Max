@@ -620,6 +620,30 @@ describe("projects with Studio settings", () => {
     expect(again.ok && again.value.conversations.find((one) => one.id === quietId)).not.toHaveProperty("answerMs");
   });
 
+  it("keeps a revision test transcript out of project history and the live webhook", async () => {
+    const owner = await customer();
+    const created = project(owner);
+    patch(owner, created.id, { studio: { conversationWebhook: "https://shop.example.com/hook" } });
+    const recorder = conversationRecorder(() => clock);
+    recorder.event({ type: "transcript", turnId: "t1", speaker: "rider", text: "Draft rehearsal", final: true });
+    const ended = vi.fn();
+    const input = {
+      customerId: owner,
+      projectId: created.id,
+      source: "test",
+      testRevision: "revision-1",
+      sessionId: "s",
+      seconds: 2,
+      endedAt: clock,
+      keep: true,
+      recorder
+    };
+    cloudConversationEnded(input, { ended });
+    expect(ended).not.toHaveBeenCalled();
+    const listed = listConversations(owner, created.id);
+    expect(listed.ok && listed.value.conversations).toEqual([]);
+  });
+
   it("keeps conversations, newest first, and deletes them with the project", async () => {
     const owner = await customer();
     const created = project(owner);
@@ -692,6 +716,16 @@ describe("session tokens without the project key", () => {
       projectId: created.id,
       customerId: owner,
       source: "test"
+    });
+  });
+
+  it("refuses a revision test token for an unknown draft even when the live project has a key", async () => {
+    const owner = await customer();
+    const created = project(owner);
+    patch(owner, created.id, { modelKey: "sk-live" });
+    expect(mintTestSession(owner, created.id, "unknown")).toMatchObject({
+      ok: false,
+      status: 409
     });
   });
 

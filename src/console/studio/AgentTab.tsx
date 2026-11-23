@@ -156,27 +156,12 @@ function InstructionWriter({ onWrite }: { onWrite: (text: string, mode: "replace
 }
 
 /** Studio → Agent: who the agent is, how it sounds and what it is told. */
-export function AgentTab({ session, project, draft, update, updateStudio, onProjectChanged }: StudioTabProps) {
+export function AgentTab({ project, savedProject = project, draft, update, updateStudio }: StudioTabProps) {
   const say = useSay();
-  const [keyStatus, setKeyStatus] = useState("");
-  const [busy, setBusy] = useState(false);
+  const hasKey = savedProject.hasModelKey;
   const backend = BACKENDS.find((option) => option.id === draft.backend) ?? BACKENDS[0]!;
   const voices = CLOUD_VOICES[draft.backend];
   const field = (suffix: string) => `cxs-${project.id}-${suffix}`;
-
-  const removeKey = async () => {
-    setBusy(true);
-    try {
-      const result = await session.api.updateProject(session.token, project.id, { modelKey: "" });
-      onProjectChanged(result.project);
-      update({ modelKey: "" });
-      setKeyStatus(say("模型密钥已移除。", "Model key removed."));
-    } catch (error) {
-      setKeyStatus(session.fail(error));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <div className="cxsPanel">
@@ -240,40 +225,25 @@ export function AgentTab({ session, project, draft, update, updateStudio, onProj
               type="password"
               autoComplete="off"
               maxLength={400}
-              placeholder={
-                project.hasModelKey ? say("•••• 已保存", "•••• saved") : say(backend.keyHint.zh, backend.keyHint.en)
-              }
+              placeholder={hasKey ? say("•••• 已保存", "•••• saved") : say(backend.keyHint.zh, backend.keyHint.en)}
               aria-describedby={field("key-hint")}
               value={draft.modelKey}
               onChange={(event) => update({ modelKey: event.target.value })}
             />
-            {project.hasModelKey ? (
-              <button
-                type="button"
-                className="siteButton secondary small"
-                disabled={busy}
-                onClick={() => void removeKey()}
-              >
-                {say("移除", "Remove")}
-              </button>
-            ) : null}
           </div>
           <small id={field("key-hint")}>
-            {project.hasModelKey
+            {hasKey
               ? say(
                   "留空表示不改。保存后加密存放，不会再显示。",
                   "Leave empty to keep it. It is stored encrypted and never shown again."
                 )
               : say("还没有？", "Don't have one? ")}
-            {project.hasModelKey ? null : (
+            {hasKey ? null : (
               <a className="siteTextLink" href={backend.keyUrl} target="_blank" rel="noreferrer noopener">
                 {say(`在${backend.provider}创建密钥`, `Get a key from ${backend.provider}`)}
               </a>
             )}
           </small>
-          <span className="cxStatus" aria-live="polite">
-            {keyStatus}
-          </span>
         </div>
       </div>
 

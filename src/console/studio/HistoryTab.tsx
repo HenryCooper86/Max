@@ -127,18 +127,28 @@ export function deliveryLine(
 }
 
 /** Where each conversation is sent when it ends: the address, a test request, and how the last delivery went. */
-function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioTabProps) {
+function WebhookSetting({
+  session,
+  project,
+  savedProject = project,
+  release,
+  releaseBusy,
+  draft,
+  updateStudio,
+  goTo
+}: StudioTabProps) {
   const say = useSay();
   const { language } = useLanguage();
   const url = draft.studio.conversationWebhook ?? "";
-  const saved = project.studio.conversationWebhook ?? "";
+  const saved = savedProject.studio.conversationWebhook ?? "";
   const unsaved = url.trim() !== saved;
   const problem = url.trim() ? toolUrlProblem(url.trim()) : undefined;
   // Each with the address it is about: what is known of one address says nothing of the next.
   const [last, setLast] = useState<{ of: string; delivery: WebhookDelivery | null } | null>(null);
   const [testing, setTesting] = useState(false);
   const [tested, setTested] = useState<{ of: string; result: WebhookTestResult } | null>(null);
-  const result = tested?.of === saved ? tested.result : null;
+  const revision = release?.draft?.id ?? release?.liveRevision;
+  const result = tested?.of === (revision ?? saved) ? tested.result : null;
   const delivery = last?.of === saved ? last.delivery : null;
   const [error, setError] = useState("");
   const alive = useRef(true);
@@ -152,7 +162,7 @@ function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioT
       api
         .conversationWebhook(token, project.id)
         .then((answer) => {
-          if (alive.current) setLast({ of: saved, delivery: answer.last });
+          if (alive.current && answer.url === saved) setLast({ of: saved, delivery: answer.last });
         })
         // The address works without this line: an older relay has no such route.
         .catch(() => undefined);
@@ -167,8 +177,12 @@ function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioT
     setTested(null);
     setError("");
     try {
-      const answer = await session.api.testConversationWebhook(session.token, project.id);
-      if (alive.current) setTested({ of: saved, result: answer });
+      const answer = await session.api.testConversationWebhook(
+        session.token,
+        project.id,
+        ...(revision ? ([revision] as const) : [])
+      );
+      if (alive.current) setTested({ of: revision ?? saved, result: answer });
     } catch (caught) {
       if (alive.current) setError(session.fail(caught));
     } finally {
@@ -208,7 +222,7 @@ function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioT
       ) : null}
       {unsaved && !problem ? (
         <p className="cxWarn" role="status">
-          {say("请保存以生效", "Save to apply")}
+          {say("请发布以生效", "Publish to apply")}
         </p>
       ) : null}
       {saved ? (
@@ -217,7 +231,7 @@ function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioT
             type="button"
             className="siteButton secondary small"
             onClick={() => void test()}
-            disabled={testing || unsaved}
+            disabled={releaseBusy || testing || unsaved}
             aria-busy={testing}
           >
             {testing ? say("发送中…", "Sending…") : say("发送测试请求", "Send test request")}
@@ -253,7 +267,7 @@ function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioT
 }
 
 export function HistoryTab(props: StudioTabProps) {
-  const { session, project, draft, updateStudio, dirty, goTo } = props;
+  const { session, project, draft, updateStudio, goTo } = props;
   const say = useSay();
   const { language } = useLanguage();
   const [list, setList] = useState<ConversationSummary[] | null>(null);
@@ -311,7 +325,7 @@ export function HistoryTab(props: StudioTabProps) {
   }
 
   const keep = draft.studio.keepConversations;
-  const needsSave = dirty && keep !== project.studio.keepConversations;
+  const needsSave = keep !== project.studio.keepConversations;
 
   const setting = (
     <div className="cxsHistorySetting">
@@ -325,13 +339,13 @@ export function HistoryTab(props: StudioTabProps) {
       </label>
       <p className="cxMuted">
         {say(
-          "点“保存”后生效。关闭后不再保存新的对话；已有的会在 30 天后过期，或在删除项目时一并删除。只保存最终文字和工具结果。",
-          "Takes effect after you Save. Turning it off stops saving new ones; existing ones expire after 30 days or when the project is deleted. Only final text and tool results are kept."
+          "发布后生效。关闭后不再保存新的对话；已有的会在 30 天后过期，或在删除项目时一并删除。只保存最终文字和工具结果。",
+          "Takes effect when you publish. Turning it off stops saving new ones; existing ones expire after 30 days or when the project is deleted. Only final text and tool results are kept."
         )}
       </p>
       {needsSave ? (
         <p className="cxWarn" role="status">
-          {say("请保存以生效", "Save to apply")}
+          {say("请发布以生效", "Publish to apply")}
         </p>
       ) : null}
     </div>

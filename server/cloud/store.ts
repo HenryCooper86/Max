@@ -236,6 +236,27 @@ function database(): DatabaseSync {
         COMMIT;
       `);
     }
+    if (!projectColumns.has("studio_revision")) db.exec("ALTER TABLE projects ADD COLUMN studio_revision TEXT");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS studio_snapshots (
+        project_id TEXT NOT NULL REFERENCES projects(id), role TEXT NOT NULL CHECK(role IN ('draft','previous')),
+        revision TEXT NOT NULL, config TEXT NOT NULL, model_key_enc TEXT, traces_headers_enc TEXT,
+        tested INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(project_id, role)
+      );
+      CREATE TEMP TRIGGER IF NOT EXISTS studio_live_revision BEFORE UPDATE OF studio_revision ON projects
+      WHEN OLD.studio_revision IS NOT NULL AND OLD.studio_revision IS NOT NEW.studio_revision
+      BEGIN
+        DELETE FROM studio_snapshots WHERE project_id = OLD.id;
+        INSERT INTO studio_snapshots(project_id,role,revision,config,model_key_enc,traces_headers_enc)
+        VALUES(OLD.id,'previous',OLD.studio_revision,json_object(
+          'name',OLD.name,'backend',OLD.backend,'assistant_name',OLD.assistant_name,'instructions',OLD.instructions,
+          'greeting',OLD.greeting,'studio',OLD.studio
+        ),OLD.model_key_enc,OLD.traces_headers_enc);
+      END;
+      CREATE TEMP TRIGGER IF NOT EXISTS studio_project_deleted AFTER UPDATE OF deleted_at ON projects
+      WHEN NEW.deleted_at IS NOT NULL
+      BEGIN DELETE FROM studio_snapshots WHERE project_id = OLD.id; END;
+    `);
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_public_id ON projects(public_id)");
     // A project's minutes this month, read by its spend limit every few seconds while it talks.
     db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_project_month ON ledger(project_id, kind, month)");
@@ -260,7 +281,7 @@ function database(): DatabaseSync {
 }
 
 /** Runs `work` (synchronous) in one BEGIN IMMEDIATE transaction. */
-function immediate<T>(work: (db: DatabaseSync) => T): T {
+export function immediate<T>(work: (db: DatabaseSync) => T): T {
   const db = database();
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -397,6 +418,40 @@ export function liveProjectByKeyHash(keyHash: string): ProjectRow | undefined {
     ProjectRow | undefined;
 }
 
+/** A live preview stays pinned to the version the owner saw when starting it. */
+export function readStudioLiveRevision(
+  projectId: string,
+  customerId: string,
+  expectedRevision: string,
+  options?: { requireNoDraft?: boolean }
+): ProjectRow | undefined {
+  return database()
+    .prepare(
+      `
+    SELECT p.* FROM projects p WHERE p.id=? AND p.customer_id=? AND p.deleted_at IS NULL AND p.studio_revision=?
+      AND (?=0 OR NOT EXISTS(SELECT 1 FROM studio_snapshots s WHERE s.project_id=p.id AND s.role='draft'))
+  `
+    )
+    .get(projectId, customerId, expectedRevision, options?.requireNoDraft ? 1 : 0) as ProjectRow | undefined;
+}
+
+/** Read a pinned draft and the project's current identity together, including on relay checkpoints. */
+export function readStudioDraft(projectId: string, customerId: string, revision: string): ProjectRow | undefined {
+  const row = database()
+    .prepare(
+      `
+    SELECT p.*, s.config AS draft_config, s.model_key_enc AS draft_model_key, s.traces_headers_enc AS draft_headers
+    FROM projects p JOIN studio_snapshots s ON s.project_id = p.id AND s.role = 'draft'
+    WHERE p.id = ? AND p.customer_id = ? AND p.deleted_at IS NULL AND s.revision = ?
+  `
+    )
+    .get(projectId, customerId, revision) as
+    (ProjectRow & { draft_config: string; draft_model_key: string | null; draft_headers: string | null }) | undefined;
+  if (!row) return undefined;
+  const { draft_config, draft_model_key, draft_headers, ...live } = row;
+  return { ...live, ...JSON.parse(draft_config), model_key_enc: draft_model_key, traces_headers_enc: draft_headers };
+}
+
 export type ProjectChanges = Partial<
   Pick<
     ProjectRow,
@@ -429,15 +484,47 @@ const PROJECT_COLUMNS = [
 ] as const;
 
 /** Applies changes to a live project of `customerId`; false when there is no such project. */
-export function updateProject(projectId: string, customerId: string, changes: ProjectChanges): boolean {
+export function updateProject(
+  projectId: string,
+  customerId: string,
+  changes: ProjectChanges,
+  studioRevision?: string
+): boolean {
   const columns = PROJECT_COLUMNS.filter((column) => changes[column] !== undefined);
   if (!columns.length) return Boolean(liveProject(projectId, customerId));
-  const assignments = columns.map((column) => `${column} = ?`).join(", ");
+  const assignments = columns.map((column) => `${column} = ?`);
+  const versioned = columns.filter(
+    (column) => column !== "webhook_secret_enc" && column !== "public_id" && column !== "monthly_minutes_cap"
+  );
   const values = columns.map((column) => changes[column] ?? null);
+  if (studioRevision) {
+    assignments.push("studio_revision = ?");
+    values.push(studioRevision);
+  } else if (versioned.length) {
+    const changed = versioned.map((column) => `${column} IS NOT ?`).join(" OR ");
+    assignments.push(`studio_revision = CASE WHEN studio_revision IS NOT NULL AND (${changed})
+      THEN 'rev_' || lower(hex(randomblob(16))) ELSE studio_revision END`);
+    values.push(...versioned.map((column) => changes[column] ?? null));
+  }
   const result = database()
-    .prepare(`UPDATE projects SET ${assignments} WHERE id = ? AND customer_id = ? AND deleted_at IS NULL`)
+    .prepare(`UPDATE projects SET ${assignments.join(", ")} WHERE id = ? AND customer_id = ? AND deleted_at IS NULL`)
     .run(...values, projectId, customerId);
   return result.changes === 1;
+}
+
+/** An explicit credential removal also revokes every Studio copy that could restore it. */
+export function revokeProjectModelKey(
+  projectId: string,
+  customerId: string,
+  changes: ProjectChanges,
+  nextRevision: string
+): boolean {
+  return immediate((db) => {
+    if (!updateProject(projectId, customerId, { ...changes, model_key_enc: null }, nextRevision)) return false;
+    // Advancing live normally retains its predecessor. Remove that recovery path as part of the same write.
+    db.prepare("DELETE FROM studio_snapshots WHERE project_id = ?").run(projectId);
+    return true;
+  });
 }
 
 export function replaceProjectKey(projectId: string, customerId: string, keyHash: string, keyPrefix: string): boolean {
@@ -848,18 +935,24 @@ export function projectSecondsIn(projectId: string, month: string): number {
 export type EncryptedSecretColumn = "model_key_enc" | "webhook_secret_enc" | "traces_headers_enc";
 
 /** Every live project's encrypted secrets, for checking and re-encrypting them under a new key. */
-export function projectSecrets(): Pick<
-  ProjectRow,
-  "id" | "model_key_enc" | "webhook_secret_enc" | "traces_headers_enc"
->[] {
+type ProjectSecrets = Pick<ProjectRow, "id" | "model_key_enc" | "webhook_secret_enc" | "traces_headers_enc"> & {
+  revisionId?: string;
+};
+
+export function projectSecrets(): ProjectSecrets[] {
   return database()
     .prepare(
-      `SELECT id, model_key_enc, webhook_secret_enc, traces_headers_enc FROM projects
-       WHERE deleted_at IS NULL
-         AND (model_key_enc IS NOT NULL OR webhook_secret_enc IS NOT NULL OR traces_headers_enc IS NOT NULL)
-       ORDER BY id`
+      `
+    SELECT id, model_key_enc, webhook_secret_enc, traces_headers_enc, NULL AS revisionId FROM projects
+    WHERE deleted_at IS NULL AND (model_key_enc IS NOT NULL OR webhook_secret_enc IS NOT NULL OR traces_headers_enc IS NOT NULL)
+    UNION ALL
+    SELECT s.project_id, s.model_key_enc, NULL, s.traces_headers_enc, s.revision FROM studio_snapshots s
+    JOIN projects p ON p.id=s.project_id WHERE p.deleted_at IS NULL
+      AND (s.model_key_enc IS NOT NULL OR s.traces_headers_enc IS NOT NULL)
+    ORDER BY id
+  `
     )
-    .all() as Pick<ProjectRow, "id" | "model_key_enc" | "webhook_secret_enc" | "traces_headers_enc">[];
+    .all() as ProjectSecrets[];
 }
 
 /** Replaces one encrypted secret only if it is still `from`, so a key the customer saved meanwhile is never undone. */
@@ -867,8 +960,20 @@ export function replaceProjectSecret(
   projectId: string,
   column: EncryptedSecretColumn,
   from: string,
-  to: string
+  to: string,
+  revisionId?: string
 ): boolean {
+  if (revisionId) {
+    if (column === "webhook_secret_enc") return false;
+    return (
+      database()
+        .prepare(
+          `UPDATE studio_snapshots SET ${column} = ?
+      WHERE project_id = ? AND revision = ? AND ${column} = ?`
+        )
+        .run(to, projectId, revisionId, from).changes === 1
+    );
+  }
   const result = database()
     .prepare(`UPDATE projects SET ${column} = ? WHERE id = ? AND ${column} = ?`)
     .run(to, projectId, from);

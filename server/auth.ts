@@ -15,7 +15,7 @@ import { authActive, sessionUser, type PublicUser } from "./accounts";
 // for /ready, and importing it back would make the two modules a cycle.
 import { config } from "./runtime-config";
 import { createLogger } from "./logger";
-import { cloudSessionTokens, sessionTokens } from "./session-tokens";
+import { cloudSessionTokens, sessionTokens, STUDIO_TEST_TOKEN_PREFIX } from "./session-tokens";
 
 export type UpgradeDecision = { ok: true } | { ok: false; code: number; reason: string };
 export type AccountUpgradeDecision =
@@ -615,9 +615,19 @@ export function reauthorizeUpgrade(request: IncomingMessage, before: UpgradeIden
 /** Origin and credentials: everything {@link authorizeUpgrade} checks but the rate limit. */
 function credentialDecision(request: IncomingMessage): UpgradeDecision {
   // The grant the session will run with: the same choice the connection handler makes.
-  const cloudProject = presentedTokens(request)
+  const tokens = presentedTokens(request);
+  const cloudProject = tokens
     .map((provided) => sessionTokens.grant(provided) ?? cloudSessionTokens.grant(provided))
     .find((grant) => grant !== undefined)?.project;
+  const draftToken = tokens.find((token) => token.startsWith(STUDIO_TEST_TOKEN_PREFIX));
+  if (
+    draftToken &&
+    (cloudProject?.source !== "test" ||
+      (cloudProject.testRevision ?? cloudProject.testLiveRevision) === undefined ||
+      !cloudSessionTokens.grant(draftToken))
+  ) {
+    return { ok: false, code: 401, reason: "Studio test token expired or invalid" };
+  }
   if (cloudProject) {
     // Max Cloud sessions run on customers' own websites, so the relay's own
     // allowlist does not apply. A token the public embed minted works only
@@ -643,7 +653,6 @@ function credentialDecision(request: IncomingMessage): UpgradeDecision {
   if (config.relayAuthToken || authActive()) {
     // `?token=` (browsers cannot set headers on a WebSocket) or, for native
     // clients that can, `Authorization: Bearer`, which keeps it out of URLs and logs.
-    const tokens = presentedTokens(request);
     const accepted = tokens.some(
       (provided) =>
         (config.relayAuthToken ? tokenMatches(provided, config.relayAuthToken) : false) ||

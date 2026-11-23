@@ -39,7 +39,7 @@ import {
 import { buildHealth, config, describeConfig, readinessIssues, readinessWarnings, validateConfig } from "./config";
 import { metricsResponse, registerMetricsSource } from "./prometheus";
 import { cloudCounters } from "./cloud/counters";
-import { cloudSessionTokens, sessionTokens } from "./session-tokens";
+import { cloudSessionTokens, sessionTokens, STUDIO_TEST_TOKEN_PREFIX } from "./session-tokens";
 import { closeServerTools, installServerTools, serverTools as installedServerTools } from "./tools/registry";
 import { createConversationLifecycle } from "./conversation-lifecycle";
 import { createRecordings, recordingSettingsFromEnv } from "./recording";
@@ -1961,7 +1961,8 @@ wss.on("connection", (client, request) => {
   const region = clientRegionHint(request);
   const authenticatedSession = requestSession(request) ?? undefined;
   const authenticatedUser = authenticatedSession?.user;
-  const tokenGrant = presentedTokens(request)
+  const presented = presentedTokens(request);
+  const tokenGrant = presented
     .map((token) => sessionTokens.grant(token) ?? cloudSessionTokens.grant(token))
     .find((grant) => grant !== undefined);
   if (authenticatedSession) {
@@ -1976,7 +1977,9 @@ wss.on("connection", (client, request) => {
   // persona, is billed to its customer, and is nobody else's business: no
   // relay tools, no QA recording.
   const cloudProject = tokenGrant?.project;
-  const runtime = cloudProject && cloudEnabled() ? projectRuntime(cloudProject.projectId) : undefined;
+  const testRevision =
+    cloudProject?.source === "test" ? (cloudProject.testRevision ?? cloudProject.testLiveRevision) : undefined;
+  const runtime = cloudProject && cloudEnabled() ? projectRuntime(cloudProject.projectId, cloudProject) : undefined;
   const refuse = (code: number, message: string, reason: string) => {
     sessionLog.info("connection refused", { reason });
     if (client.readyState === WebSocket.OPEN) {
@@ -1984,8 +1987,13 @@ wss.on("connection", (client, request) => {
       client.close(code, reason);
     }
   };
+  if (testRevision === undefined && presented.some((token) => token.startsWith(STUDIO_TEST_TOKEN_PREFIX))) {
+    unregisterAuthenticatedConnection(client);
+    refuse(1008, "Studio test token expired or invalid.", "Studio test token invalid");
+    return;
+  }
   // A public-embed token opens one session (server/cloud/sessions.ts); the SDK fetches a new one to reconnect.
-  if (!spendEmbedTokens(presentedTokens(request))) {
+  if (!spendEmbedTokens(presented)) {
     unregisterAuthenticatedConnection(client);
     refuse(1008, "This conversation token was already used. Start the conversation again.", "embed token reused");
     return;
@@ -1994,9 +2002,11 @@ wss.on("connection", (client, request) => {
     unregisterAuthenticatedConnection(client);
     refuse(
       1008,
-      runtime
-        ? "This Max Cloud project key was rotated or the project was deleted."
-        : "This Max Cloud project is not ready: add a model key in the console.",
+      testRevision !== undefined
+        ? "This Studio revision is unavailable. Refresh the console and start a new test."
+        : runtime
+          ? "This Max Cloud project key was rotated or the project was deleted."
+          : "This Max Cloud project is not ready: add a model key in the console.",
       "project not ready"
     );
     return;
@@ -2028,19 +2038,22 @@ wss.on("connection", (client, request) => {
   // The project's conversation history, when the customer keeps one.
   // Or sends each one to their own server. (What is said is collected for no other reason.)
   const recorder =
-    runtime?.studio.keepConversations || runtime?.studio.conversationWebhook ? conversationRecorder() : undefined;
+    testRevision === undefined && (runtime?.studio.keepConversations || runtime?.studio.conversationWebhook)
+      ? conversationRecorder()
+      : undefined;
   // Traces to the project's own collector, when it names one: its conversations, not the relay owner's.
-  const tracer = runtime
-    ? projectTraces.open({
-        projectId: runtime.projectId,
-        name: runtime.name,
-        sessionId: usageSessionId,
-        backend: runtime.backend,
-        traces: runtime.studio.traces,
-        ...(runtime.tracesHeaders ? { headers: runtime.tracesHeaders } : {}),
-        ...(runtime.tracesHeadersUnreadable ? { headersUnreadable: true } : {})
-      })
-    : undefined;
+  const tracer =
+    runtime && testRevision === undefined
+      ? projectTraces.open({
+          projectId: runtime.projectId,
+          name: runtime.name,
+          sessionId: usageSessionId,
+          backend: runtime.backend,
+          traces: runtime.studio.traces,
+          ...(runtime.tracesHeaders ? { headers: runtime.tracesHeaders } : {}),
+          ...(runtime.tracesHeadersUnreadable ? { headersUnreadable: true } : {})
+        })
+      : undefined;
   // Billed only while the voice model can talk, checkpointed and checked every few seconds.
   const cloudSession = cloudProject
     ? openCloudSession(usageSessionId, cloudProject, address, request.headers.origin)
@@ -2114,17 +2127,28 @@ wss.on("connection", (client, request) => {
     sessionLog,
     address,
     region,
-    authenticatedUser,
+    testRevision === undefined ? authenticatedUser : undefined,
     {
       deviceRegistrationAuthorized:
         !cloudProject && (relayTokenPresented(request) || (!config.relayAuthToken && !authActive())),
       privateSession: Boolean(cloudProject),
       noiseSuppression: noiseSuppression.mode === "on",
       ...(recording ? { recording } : {}),
-      ...(cloudProject ? { resumeScope: `cloud:${cloudProject.projectId}` } : {}),
+      ...(cloudProject
+        ? {
+            resumeScope:
+              testRevision === undefined
+                ? `cloud:${cloudProject.projectId}`
+                : `cloud:${cloudProject.projectId}:test:${cloudProject.testRevision === undefined ? "live" : "draft"}:${testRevision}:${cloudProject.keyHash}`
+          }
+        : {}),
       ...(tokenGrant ? { tokenGrant: { userId: tokenGrant.userId, context: tokenGrant.context } } : {}),
       onServerEvent: (payload) => {
-        cloudSession?.observe(payload, sessionProvider?.upstreamUsable?.());
+        const refusal = cloudSession?.observe(payload, sessionProvider?.upstreamUsable?.());
+        if (refusal) {
+          refuse(refusal.code, refusal.message, refusal.reason);
+          return;
+        }
         recorder?.event(payload);
         tracer?.event(payload);
         observer?.event(payload);
@@ -2166,6 +2190,7 @@ wss.on("connection", (client, request) => {
         customerId: cloudProject.customerId,
         projectId: cloudProject.projectId,
         source: cloudProject.source ?? "api",
+        testRevision,
         sessionId: usageSessionId,
         seconds: usage?.seconds ?? 0,
         endedAt,

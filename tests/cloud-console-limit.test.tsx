@@ -1,13 +1,16 @@
+// @vitest-environment happy-dom
 // The console side of a project's monthly minutes limit: the Settings field,
 // what a save sends, and the embed copy that points owners to it.
+import { act } from "react";
+import { create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_STUDIO } from "../shared/cloud-studio";
 import { LanguageProvider } from "../src/components/LanguageToggle";
 import { createCloudApi, type Project } from "../src/console/api";
 import { InstallTab } from "../src/console/studio/InstallTab";
 import { SettingsTab } from "../src/console/studio/SettingsTab";
-import { patchFromDraft } from "../src/console/studio/Studio";
+import { patchFromDraft, Studio } from "../src/console/studio/Studio";
 import { draftChanged, draftFromProject, type StudioTabProps } from "../src/console/studio/types";
 
 const wrap = (node: React.ReactNode) => renderToStaticMarkup(<LanguageProvider>{node}</LanguageProvider>);
@@ -58,6 +61,50 @@ describe("the monthly minutes limit", () => {
     expect(patchFromDraft({ ...draft, monthlyMinutesCap: "lots" })).not.toHaveProperty("monthlyMinutesCap");
   });
 
+  it("accepts the relay's maximum and rejects a higher limit", () => {
+    const draft = draftFromProject(project);
+    expect(patchFromDraft({ ...draft, monthlyMinutesCap: "250000" }).monthlyMinutesCap).toBe(250000);
+    expect(patchFromDraft({ ...draft, monthlyMinutesCap: "250001" })).not.toHaveProperty("monthlyMinutesCap");
+  });
+
+  it("keeps an invalid limit in the editor when Save is pressed", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const pending = Promise.withResolvers<{ project: Project }>();
+    const updateProject = vi.fn(() => pending.promise);
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <Studio
+            session={{ api: { ...api, updateProject }, token: "t", fail: String }}
+            project={project}
+            initialTab="settings"
+            origin="https://max.example"
+            onChanged={() => undefined}
+            onKeyRotated={() => undefined}
+            onDeleted={() => undefined}
+          />
+        );
+      });
+      const cap = () => renderer!.root.findByProps({ id: "cxs-p1-minutes-cap" });
+      await act(async () => cap().props.onChange({ target: { value: "1.5" } }));
+      const save = renderer!.root.findByProps({ children: "保存" });
+      if (!save.props.disabled) await act(async () => save.props.onClick());
+      expect(updateProject).not.toHaveBeenCalled();
+      expect(cap().props.value).toBe("1.5");
+
+      await act(async () => cap().props.onChange({ target: { value: "600" } }));
+      await act(async () => renderer!.root.findByProps({ children: "保存" }).props.onClick());
+      expect(updateProject).toHaveBeenCalledOnce();
+      expect(renderer!.root.findByProps({ role: "tabpanel" }).props.inert).toBe(true);
+      await act(async () => pending.resolve({ project: { ...project, monthlyMinutesCap: 600 } }));
+      expect(renderer!.root.findByProps({ role: "tabpanel" }).props.inert).toBeFalsy();
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reads a relay that does not know about limits as having none", () => {
     const older: Project = { ...project };
     delete older.monthlyMinutesCap;
@@ -67,7 +114,7 @@ describe("the monthly minutes limit", () => {
   it("has its own field in Settings", () => {
     const html = wrap(<SettingsTab {...props(project)} onKeyRotated={() => undefined} onDeleted={() => undefined} />);
     expect(html).toContain("每月分钟上限");
-    expect(html).toContain('type="number"');
+    expect(html).toContain('inputMode="numeric"');
     expect(html).toContain('value="500"');
   });
 

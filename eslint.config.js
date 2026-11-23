@@ -7,6 +7,8 @@ export default tseslint.config(
     ignores: [
       "dist/**",
       "node_modules/**",
+      "**/.claude/worktrees/**",
+      "**/.worktrees/**",
       "android/**/build/**",
       "ios/build/**",
       "public/pcm-worklet.js",

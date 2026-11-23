@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import type { Project, ProjectPatch, ProjectStudio } from "../api";
 import { useSay, type Session } from "../hooks";
 import { AgentTab } from "./AgentTab";
-import { mayLeaveSection } from "../../lib/section-leave";
+import { mayLeaveSection, SECTION_LEAVE_EVENT } from "../../lib/section-leave";
 import { FlowTab } from "./FlowTab";
 import { HistoryTab } from "./HistoryTab";
 import { InstallTab } from "./InstallTab";
@@ -118,9 +118,19 @@ export function Studio({
   useEffect(() => {
     if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    const onLeave = (event: Event) => {
+      if ((event as CustomEvent).detail !== "project" || event.defaultPrevented) return;
+      if (!window.confirm(say("放弃这个项目未保存的更改？", "Discard the unsaved changes to this project?"))) {
+        event.preventDefault();
+      }
+    };
     window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+    window.addEventListener(SECTION_LEAVE_EVENT, onLeave);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      window.removeEventListener(SECTION_LEAVE_EVENT, onLeave);
+    };
+  }, [dirty, say]);
 
   useEffect(() => {
     if (!savedNote) return;
@@ -135,6 +145,11 @@ export function Studio({
   );
 
   const save = useCallback(async (): Promise<boolean> => {
+    if (saving) return false;
+    if (minutesCapFromDraft(draft.monthlyMinutesCap) === undefined) {
+      setSaveError(say("请检查设置中的每月分钟上限。", "Check the monthly minutes limit in Settings."));
+      return false;
+    }
     setSaving(true);
     setSaveError("");
     try {
@@ -149,7 +164,7 @@ export function Studio({
     } finally {
       setSaving(false);
     }
-  }, [draft, onChanged, project.id, say, session]);
+  }, [draft, onChanged, project.id, saving, say, session]);
 
   const tabProps: StudioTabProps = {
     session,
@@ -184,7 +199,13 @@ export function Studio({
           </button>
         ))}
       </div>
-      <div role="tabpanel" id={`${tabId(tab)}-panel`} aria-labelledby={tabId(tab)}>
+      <div
+        role="tabpanel"
+        id={`${tabId(tab)}-panel`}
+        aria-labelledby={tabId(tab)}
+        inert={saving && tab !== "test"}
+        aria-busy={saving}
+      >
         {tab === "agent" ? <AgentTab {...tabProps} /> : null}
         {tab === "knowledge" ? <KnowledgeTab {...tabProps} /> : null}
         {tab === "tools" ? <ToolsTab {...tabProps} /> : null}

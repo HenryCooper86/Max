@@ -1,3 +1,4 @@
+import { MAX_MONTHLY_MINUTES_CAP } from "../../../shared/cloud-studio";
 import type { Backend, Project, ProjectStudio } from "../api";
 import type { Session } from "../hooks";
 
@@ -55,7 +56,8 @@ export function draftFromProject(project: Project): StudioDraft {
 export function minutesCapFromDraft(typed: string): number | null | undefined {
   const text = typed.trim();
   if (!text) return null;
-  return /^\d{1,7}$/.test(text) && Number(text) > 0 ? Number(text) : undefined;
+  const minutes = Number(text);
+  return /^\d+$/.test(text) && minutes >= 1 && minutes <= MAX_MONTHLY_MINUTES_CAP ? minutes : undefined;
 }
 
 /** True when the draft has changes worth saving. */

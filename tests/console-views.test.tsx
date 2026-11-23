@@ -1,10 +1,13 @@
+// @vitest-environment happy-dom
+import { act } from "react";
+import { create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LanguageProvider } from "../src/components/LanguageToggle";
-import { createCloudApi, type Me, type Project } from "../src/console/api";
+import { ApiError, createCloudApi, type Me, type Project } from "../src/console/api";
 import { AuthCard } from "../src/console/AuthCard";
 import { BalanceCard } from "../src/console/BalanceCard";
-import { NotEnabled } from "../src/console/ConsoleApp";
+import { ConsoleApp, NotEnabled } from "../src/console/ConsoleApp";
 import { KeyReveal } from "../src/console/KeyReveal";
 import { ProjectsSection, startFromTemplate } from "../src/console/ProjectsSection";
 import { writeInstructions } from "../src/console/studio/AgentTab";
@@ -47,6 +50,45 @@ describe("logged-out view", () => {
   });
 });
 
+it("ignores availability and authorization failures from an earlier console session", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const check = Promise.withResolvers<Response>();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url.endsWith("/packs")) return check.promise;
+      const body = url.endsWith("/projects")
+        ? { projects: [] }
+        : url.endsWith("/usage")
+          ? { minutes: 0, projects: [], chargedFen: 0, freeSecondsUsed: 0 }
+          : url.endsWith("/me")
+            ? { customer: { email: "user@example.com" }, balance: { fen: 0, freeSecondsLeft: 0 } }
+            : { entries: [] };
+      return Response.json(body);
+    })
+  );
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      renderer = create(<ConsoleApp />);
+    });
+    const page = renderer!.root;
+    await act(async () => page.findByType(AuthCard).props.onSignedIn("first"));
+    const first = page.findByType(ProjectsSection).props.session;
+    const logout = page.findByProps({ children: "退出登录" });
+    await act(async () => logout.props.onClick());
+    await act(async () => page.findByType(AuthCard).props.onSignedIn("second"));
+    await act(async () => first.fail(new ApiError("unauthorized", "expired", 401)));
+    expect(page.findAllByType(ProjectsSection)).toHaveLength(1);
+    await act(async () => check.resolve(Response.json({}, { status: 503 })));
+    expect(page.findByType(ProjectsSection).props.session.token).toBe("second");
+  } finally {
+    await act(async () => renderer?.unmount());
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  }
+});
+
 describe("overview pieces", () => {
   it("shows the balance and free minutes", () => {
     const me: Me = {
@@ -76,6 +118,46 @@ describe("overview pieces", () => {
     // Getting started: the key is in, testing and installing are next.
     expect(studio).toContain("和它说说话");
     expect(studio).not.toContain("confirm(");
+  });
+
+  it("keeps drafts across tabs and asks before closing an edited project", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <ProjectsSection
+            session={{ api, token: "t", fail: String }}
+            projects={[project]}
+            error=""
+            onRetry={() => undefined}
+            setProjects={() => undefined}
+            origin="https://max.example"
+            onMoney={() => undefined}
+          />
+        );
+      });
+      const page = renderer!.root;
+      const click = (props: Record<string, unknown>) => act(async () => page.findByProps(props).props.onClick());
+      await click({ "aria-expanded": false });
+      await click({ id: "cxs-p1-tab-settings" });
+      await act(async () => page.findByProps({ id: "cxs-p1-name" }).props.onChange({ target: { value: "New name" } }));
+      await click({ id: "cxs-p1-tab-knowledge" });
+      expect(confirm).not.toHaveBeenCalled();
+      await click({ "aria-expanded": true });
+      expect(confirm).toHaveBeenCalledOnce();
+      await click({ id: "cxs-p1-tab-settings" });
+      expect(page.findByProps({ id: "cxs-p1-name" }).props.value).toBe("New name");
+      confirm.mockReturnValue(true);
+      await click({ "aria-expanded": true });
+      expect(page.findAllByProps({ role: "tabpanel" })).toHaveLength(0);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("saves only what changed, and the model key only when typed", () => {
@@ -121,6 +203,8 @@ describe("overview pieces", () => {
       <ProjectsSection
         session={{ api, token: "t", fail: () => "" }}
         projects={[project]}
+        error=""
+        onRetry={() => undefined}
         setProjects={() => undefined}
         origin="https://max.example"
         onMoney={() => undefined}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "../components/LanguageToggle";
 import { localized } from "../lib/i18n";
 import { type CloudApi, type LedgerEntry, type Me, type Project, type Usage } from "./api";
@@ -14,78 +14,61 @@ export function useSay() {
  *  page on 503, and returns a message to show inline otherwise. */
 export type Session = { api: CloudApi; token: string; fail: (error: unknown) => string };
 
-export type ConsoleData = {
-  me: Me | null;
-  projects: Project[] | null;
-  usage: Usage | null;
-  ledger: LedgerEntry[] | null;
-  loadError: string;
-  refreshMe: () => Promise<void>;
-  refreshProjects: () => Promise<void>;
-  /** Balance, usage and ledger after money moved. */
-  refreshMoney: () => Promise<void>;
-  setProjects: (projects: Project[]) => void;
-};
-
-export function useConsoleData({ api, token, fail }: Session): ConsoleData {
+export function useConsoleData({ api, token, fail }: Session) {
   const [me, setMe] = useState<Me | null>(null);
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [ledger, setLedger] = useState<LedgerEntry[] | null>(null);
-  const [loadError, setLoadError] = useState("");
-  const alive = useRef(true);
+  const [projectsError, setProjectsError] = useState("");
+  const [moneyError, setMoneyError] = useState("");
+  const [projectsVersion, setProjectsVersion] = useState(0);
+  const [moneyVersion, setMoneyVersion] = useState(0);
+
   useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
-
-  const guard = useCallback(
-    async (work: () => Promise<void>) => {
-      try {
-        await work();
-        if (alive.current) setLoadError("");
-      } catch (error) {
-        const message = fail(error);
-        if (alive.current) setLoadError(message);
+    let active = true;
+    api.listProjects(token).then(
+      (result) => {
+        if (!active) return;
+        setProjects(result.projects);
+        setProjectsError("");
+      },
+      (error) => {
+        if (active) setProjectsError(fail(error));
       }
-    },
-    [fail]
-  );
+    );
+    return () => {
+      active = false;
+    };
+  }, [api, token, fail, projectsVersion]);
 
-  const refreshMe = useCallback(
-    () =>
-      guard(async () => {
-        const next = await api.me(token);
-        if (alive.current) setMe(next);
-      }),
-    [api, token, guard]
-  );
-  const refreshProjects = useCallback(
-    () =>
-      guard(async () => {
-        const next = await api.listProjects(token);
-        if (alive.current) setProjects(next.projects);
-      }),
-    [api, token, guard]
-  );
-  const refreshMoney = useCallback(
-    () =>
-      guard(async () => {
-        const [nextMe, nextUsage, nextLedger] = await Promise.all([api.me(token), api.usage(token), api.ledger(token)]);
-        if (!alive.current) return;
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.me(token), api.usage(token), api.ledger(token)]).then(
+      ([nextMe, nextUsage, nextLedger]) => {
+        if (!active) return;
         setMe(nextMe);
         setUsage(nextUsage);
         setLedger(nextLedger.entries);
-      }),
-    [api, token, guard]
-  );
+        setMoneyError("");
+      },
+      (error) => {
+        if (active) setMoneyError(fail(error));
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [api, token, fail, moneyVersion]);
 
-  useEffect(() => {
-    void refreshProjects();
-    void refreshMoney();
-  }, [refreshProjects, refreshMoney]);
-
-  return { me, projects, usage, ledger, loadError, refreshMe, refreshProjects, refreshMoney, setProjects };
+  return {
+    me,
+    projects,
+    usage,
+    ledger,
+    setProjects,
+    projectsError,
+    moneyError,
+    refreshProjects: () => setProjectsVersion((version) => version + 1),
+    refreshMoney: () => setMoneyVersion((version) => version + 1)
+  };
 }

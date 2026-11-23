@@ -1,6 +1,8 @@
-import { createElement } from "react";
+import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { create, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { VoiceAgent, type VoiceAgentEvents } from "../sdk/src/index";
 import { DEFAULT_STUDIO } from "../shared/cloud-studio";
 import { LanguageProvider } from "../src/components/LanguageToggle";
 import type { Project } from "../src/console/api";
@@ -102,5 +104,56 @@ describe("TestTab", () => {
   });
   it("offers Save and start when dirty", () => {
     expect(render(props({}, true))).toContain("保存并开始");
+  });
+});
+
+describe("a running Studio test", () => {
+  let renderer: ReactTestRenderer | undefined;
+
+  async function mount(p: StudioTabProps) {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    await act(async () => {
+      renderer = create(<TestTab {...p} />);
+    });
+    return renderer!.root;
+  }
+
+  afterEach(async () => {
+    await act(async () => renderer?.unmount());
+    renderer = undefined;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not reopen the microphone after leaving during Save and start", async () => {
+    const pending = Promise.withResolvers<boolean>();
+    const start = vi.spyOn(VoiceAgent.prototype, "start").mockResolvedValue();
+    const page = await mount({ ...props({}, true), save: () => pending.promise });
+    await act(async () => page.findByProps({ children: "保存并开始" }).props.onClick());
+    await act(async () => renderer?.unmount());
+    renderer = undefined;
+    await act(async () => pending.resolve(true));
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("keeps cleared transcript lines out of the next SDK update", async () => {
+    let deliver!: (event: VoiceAgentEvents["transcript"]) => void;
+    vi.spyOn(VoiceAgent.prototype, "start").mockResolvedValue();
+    vi.spyOn(VoiceAgent.prototype, "on").mockImplementation((type, callback) => {
+      if (type === "transcript") deliver = callback as typeof deliver;
+      return () => undefined;
+    });
+    const page = await mount(props({}));
+    await act(async () => page.findByProps({ className: "cxsTestMic" }).props.onClick());
+    const first = item("a", "user", "first line", false);
+    const next = item("b", "agent", "next line", true);
+    await act(async () => deliver({ transcript: [first], item: first }));
+    await act(async () => page.findByProps({ children: "清空" }).props.onClick());
+    const settled = { ...first, final: true };
+    await act(async () => deliver({ transcript: [settled], item: settled }));
+    await act(async () => deliver({ transcript: [settled, next], item: next }));
+    const output = JSON.stringify(renderer!.toJSON());
+    expect(output).toContain("next line");
+    expect(output).not.toContain("first line");
   });
 });

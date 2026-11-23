@@ -13,7 +13,7 @@ export type TimelineEntry =
       at: number;
     };
 
-export type TestState = { entries: TimelineEntry[] };
+export type TestState = { entries: TimelineEntry[]; hiddenLines: number };
 
 export type AgentEvent =
   | { type: "transcript"; transcript: readonly TranscriptItem[] }
@@ -24,44 +24,31 @@ export type AgentEvent =
     }
   | { type: "clear" };
 
-export const EMPTY_TEST_STATE: TestState = { entries: [] };
+export const EMPTY_TEST_STATE: TestState = { entries: [], hiddenLines: 0 };
 
 /**
  * Folds an SDK event into what the screen shows. Spoken lines are replaced in
  * place by id (a partial line becomes a final one); tool lines keep their spot.
  */
 export function applyAgentEvent(state: TestState, event: AgentEvent): TestState {
-  if (event.type === "clear") return EMPTY_TEST_STATE;
+  if (event.type === "clear") {
+    const visibleLines = state.entries.filter((entry) => entry.kind === "say").length;
+    return { entries: [], hiddenLines: state.hiddenLines + visibleLines };
+  }
+
+  // A Map retains the order of speech and tool calls as existing lines are updated.
+  const entries = new Map(state.entries.map((entry) => [entry.id, entry]));
   if (event.type === "toolactivity") {
     const id = `tool:${event.event.callId}`;
-    const next: TimelineEntry = {
-      kind: "tool",
-      id,
-      name: event.event.name,
-      state: event.event.state,
-      at: event.at,
-      ...(event.event.durationMs !== undefined ? { durationMs: event.event.durationMs } : {}),
-      ...(event.event.error ? { error: event.event.error } : {})
-    };
-    const index = state.entries.findIndex((entry) => entry.id === id);
-    if (index < 0) return { entries: [...state.entries, next] };
-    return { entries: state.entries.map((entry, i) => (i === index ? next : entry)) };
+    entries.set(id, { ...event.event, kind: "tool", id, at: event.at });
+  } else {
+    // The SDK includes the full transcript, including lines cleared from this view.
+    for (const item of event.transcript.slice(state.hiddenLines)) {
+      const id = `say:${item.id}`;
+      entries.set(id, { ...item, kind: "say", id });
+    }
   }
-  const entries = [...state.entries];
-  for (const item of event.transcript) {
-    const say: TimelineEntry = {
-      kind: "say",
-      id: `say:${item.id}`,
-      role: item.role,
-      text: item.text,
-      final: item.final,
-      at: item.at
-    };
-    const index = entries.findIndex((entry) => entry.id === say.id);
-    if (index < 0) entries.push(say);
-    else entries[index] = say;
-  }
-  return { entries };
+  return { entries: [...entries.values()], hiddenLines: state.hiddenLines };
 }
 
 /** 83 seconds becomes "01:23". */

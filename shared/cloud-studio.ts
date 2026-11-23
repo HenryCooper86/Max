@@ -60,6 +60,9 @@ export const CLOUD_LANGUAGES: readonly { code: string; label: { zh: string; en: 
   { code: "ru", label: { zh: "俄语", en: "Russian" } }
 ];
 
+/** A month has at most 44,640 minutes; five sessions at once use five times that. */
+export const MAX_MONTHLY_MINUTES_CAP = 250_000;
+
 export const STUDIO_LIMITS = {
   knowledge: 20_000,
   tools: 10,

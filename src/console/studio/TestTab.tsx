@@ -110,7 +110,14 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
     agentRef.current = undefined;
   }, []);
 
-  useEffect(() => release, [release]);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      release();
+    };
+  }, [release]);
 
   const live = started && status !== "idle" && status !== "closed" && status !== "error";
   const active = live && status !== "connecting";
@@ -179,9 +186,9 @@ export function TestTab({ session, project, draft, dirty, save, origin, goTo }: 
   const saveAndStart = async () => {
     setSaving(true);
     try {
-      if (await save()) await start();
+      if ((await save()) && mounted.current) await start();
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   };
 

@@ -1,5 +1,5 @@
 import { mayLeaveSection } from "../lib/section-leave";
-import { useState, type FormEvent } from "react";
+import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { useLanguage } from "../components/LanguageToggle";
 import { AGENT_TEMPLATES, findTemplate, type AgentTemplate } from "../lib/agent-templates";
 import type { Language } from "../lib/i18n";
@@ -149,12 +149,16 @@ export function ProjectsSection({
   session,
   projects,
   setProjects,
+  error,
+  onRetry,
   origin,
   onMoney
 }: {
   session: Session;
   projects: Project[] | null;
-  setProjects: (projects: Project[]) => void;
+  setProjects: Dispatch<SetStateAction<Project[] | null>>;
+  error: string;
+  onRetry: () => void;
   origin: string;
   onMoney: () => void;
 }) {
@@ -162,25 +166,35 @@ export function ProjectsSection({
   const [open, setOpen] = useState<{ id: string; tab: StudioTab } | null>(null);
   const [revealed, setRevealed] = useState<{ name: string; apiKey: string } | null>(null);
 
-  const replace = (project: Project) => setProjects((projects ?? []).map((p) => (p.id === project.id ? project : p)));
+  const replace = (project: Project) =>
+    setProjects((current) => current?.map((p) => (p.id === project.id ? project : p)) ?? null);
 
   return (
     <section className="cxSection" id="projects" aria-labelledby="cx-projects">
       <div className="cxRow spread">
         <h2 id="cx-projects">{say("你的助手", "Your agents")}</h2>
-        <NewProject
-          session={session}
-          onCreated={(project, apiKey) => {
-            setProjects([project, ...(projects ?? [])]);
-            setRevealed({ name: project.name, apiKey });
-            setOpen({ id: project.id, tab: "agent" });
-          }}
-        />
+        {projects && (
+          <NewProject
+            session={session}
+            onCreated={(project, apiKey) => {
+              setProjects((current) => [project, ...(current ?? [])]);
+              setRevealed({ name: project.name, apiKey });
+              if (mayLeaveSection("project")) setOpen({ id: project.id, tab: "agent" });
+            }}
+          />
+        )}
       </div>
       {revealed ? (
         <KeyReveal projectName={revealed.name} apiKey={revealed.apiKey} onDismiss={() => setRevealed(null)} />
       ) : null}
-      {!projects ? (
+      {error ? (
+        <div role="alert">
+          <p className="cxError">{error}</p>
+          <button type="button" className="siteButton secondary small" onClick={onRetry}>
+            {say("重试", "Retry")}
+          </button>
+        </div>
+      ) : !projects ? (
         <p className="cxMuted">…</p>
       ) : projects.length === 0 ? (
         <p className="cxMuted">
@@ -207,7 +221,8 @@ export function ProjectsSection({
                     aria-controls={`cx-panel-${project.id}`}
                     onClick={() => {
                       // A flow with unsaved changes is asked before its Studio closes or another opens.
-                      if (open === null || mayLeaveSection()) setOpen(isOpen ? null : { id: project.id, tab: "agent" });
+                      if (open === null || mayLeaveSection("project"))
+                        setOpen(isOpen ? null : { id: project.id, tab: "agent" });
                     }}
                   >
                     {isOpen ? say("收起", "Close") : say("打开工作室", "Open studio")}
@@ -226,8 +241,8 @@ export function ProjectsSection({
                         setRevealed({ name: next.name, apiKey });
                       }}
                       onDeleted={(gone) => {
-                        setProjects((projects ?? []).filter((p) => p.id !== gone.id));
-                        setOpen(null);
+                        setProjects((current) => current?.filter((p) => p.id !== gone.id) ?? null);
+                        setOpen((current) => (current?.id === gone.id ? null : current));
                         onMoney();
                       }}
                     />

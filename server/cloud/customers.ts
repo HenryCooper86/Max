@@ -3,7 +3,7 @@
 // tokens, never accepted by the staff gates and vice versa.
 
 import { randomBytes } from "node:crypto";
-import { DEFAULT_STUDIO, parseStudio, type ProjectStudio } from "../../shared/cloud-studio";
+import { DEFAULT_STUDIO, MAX_MONTHLY_MINUTES_CAP, parseStudio, type ProjectStudio } from "../../shared/cloud-studio";
 import { createLogger } from "../logger";
 import { analysisUsesProjectKey } from "./analysis";
 import { cloudSecretKey, cloudSecretKeys, now } from "./context";
@@ -77,8 +77,6 @@ const MAX_PASSWORD_LENGTH = 200;
 const MAX_EMAIL_LENGTH = 254;
 const MAX_PROJECTS = 20;
 const LIMITS = { name: 60, assistantName: 24, instructions: 8000, greeting: 300, modelKey: 400 } as const;
-/** A month has at most 44,640 minutes; five sessions at once use five times that. */
-const MAX_MONTHLY_MINUTES_CAP = 250_000;
 const BACKENDS: readonly Backend[] = ["openai", "gemini", "grok"];
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
 const WRONG_LOGIN = "Wrong email or password";

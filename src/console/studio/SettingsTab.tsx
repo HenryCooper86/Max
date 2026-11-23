@@ -1,3 +1,4 @@
+import { MAX_MONTHLY_MINUTES_CAP } from "../../../shared/cloud-studio";
 import { useState } from "react";
 import type { Project } from "../api";
 import { useSay } from "../hooks";
@@ -49,10 +50,8 @@ export function SettingsTab({
         <span>{say("每月分钟上限", "Monthly minutes limit")}</span>
         <input
           id={capId}
-          type="number"
+          type="text"
           inputMode="numeric"
-          min={1}
-          step={1}
           placeholder={say("不限", "No limit")}
           aria-invalid={capInvalid ? true : undefined}
           aria-describedby={`${capId}-hint`}
@@ -69,8 +68,8 @@ export function SettingsTab({
       {capInvalid ? (
         <p className="cxError" role="alert">
           {say(
-            "请填写整数分钟，例如 500；不限请留空。",
-            "Enter whole minutes, like 500, or leave it empty for no limit."
+            `请填写 1 至 ${MAX_MONTHLY_MINUTES_CAP.toLocaleString("zh-CN")} 之间的整数分钟；不限请留空。`,
+            `Enter a whole number from 1 to ${MAX_MONTHLY_MINUTES_CAP.toLocaleString("en-US")}, or leave it empty for no limit.`
           )}
         </p>
       ) : null}

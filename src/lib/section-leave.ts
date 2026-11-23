@@ -6,6 +6,6 @@
 export const SECTION_LEAVE_EVENT = "admin:beforesection";
 
 /** Asks whatever is open whether it can be left. False: it wants to stay. */
-export function mayLeaveSection(): boolean {
-  return window.dispatchEvent(new Event(SECTION_LEAVE_EVENT, { cancelable: true }));
+export function mayLeaveSection(scope: "section" | "project" = "section"): boolean {
+  return window.dispatchEvent(new CustomEvent(SECTION_LEAVE_EVENT, { cancelable: true, detail: scope }));
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LanguageProvider, LanguageToggle } from "../components/LanguageToggle";
 import { CONTACT_EMAIL, contactUrl } from "../lib/pricing";
 import { PRICING_PATH, REPOSITORY_URL } from "../lib/routes";
@@ -66,22 +66,29 @@ function Dashboard({ session }: { session: Session }) {
   return (
     <div className="cxStack">
       <p className="cxError" aria-live="polite">
-        {data.loadError}
+        {data.moneyError}
       </p>
+      {data.moneyError && (
+        <button type="button" className="siteButton secondary small" onClick={data.refreshMoney}>
+          {say("重试", "Retry")}
+        </button>
+      )}
       <BalanceCard me={data.me} onTopUp={() => setTopUp(true)} />
       <ProjectsSection
         session={session}
         projects={data.projects}
+        error={data.projectsError}
+        onRetry={data.refreshProjects}
         setProjects={data.setProjects}
         origin={origin}
-        onMoney={() => void data.refreshMoney()}
+        onMoney={data.refreshMoney}
       />
       <UsageSection usage={data.usage} />
       <ActivitySection entries={data.ledger} />
       {data.me ? (
         <p className="cxMuted">{say(`已登录：${data.me.customer.email}`, `Signed in as ${data.me.customer.email}`)}</p>
       ) : null}
-      {topUp ? <TopUpDialog session={session} onClose={closeTopUp} onPaid={() => void data.refreshMoney()} /> : null}
+      {topUp ? <TopUpDialog session={session} onClose={closeTopUp} onPaid={data.refreshMoney} /> : null}
     </div>
   );
 }
@@ -106,6 +113,13 @@ function Console() {
   const api = useMemo(() => createCloudApi(), []);
   const [token, setToken] = useState<string | null>(() => readToken());
   const [unavailable, setUnavailable] = useState(false);
+  const activeToken = useRef(token);
+  const changeToken = useCallback((next: string | null) => {
+    activeToken.current = next;
+    storeToken(next);
+    setToken(next);
+    setUnavailable(false);
+  }, []);
 
   useEffect(() => {
     document.title = say("控制台 · Max Cloud", "Console · Max Cloud");
@@ -114,31 +128,32 @@ function Console() {
   // Logged out: ask once whether Max Cloud is on at all.
   useEffect(() => {
     if (token) return;
+    let active = true;
     api.packs(null).catch((error) => {
-      if (error instanceof ApiError && error.kind === "unavailable") setUnavailable(true);
+      if (active && !activeToken.current && error instanceof ApiError && error.kind === "unavailable")
+        setUnavailable(true);
     });
+    return () => {
+      active = false;
+    };
   }, [api, token]);
-
-  const signOut = useCallback(() => {
-    storeToken(null);
-    setToken(null);
-  }, []);
 
   const fail = useCallback(
     (error: unknown): string => {
       if (error instanceof ApiError) {
-        if (error.kind === "unauthorized") signOut();
+        if (token !== activeToken.current) return error.message;
+        if (error.kind === "unauthorized") changeToken(null);
         else if (error.kind === "unavailable") setUnavailable(true);
         return error.message;
       }
       return "Something went wrong. Try again.";
     },
-    [signOut]
+    [token, changeToken]
   );
 
   const logout = () => {
     const current = token;
-    signOut();
+    changeToken(null);
     if (current) void api.logout(current).catch(() => undefined);
   };
 
@@ -157,10 +172,9 @@ function Console() {
             api={api}
             invite={inviteFromLocation(window.location.search)}
             onSignedIn={(next) => {
-              storeToken(next);
+              changeToken(next);
               // The invitation is used up: keep it out of the address bar and history.
               if (window.location.search) window.history.replaceState(null, "", window.location.pathname);
-              setToken(next);
             }}
           />
         )}

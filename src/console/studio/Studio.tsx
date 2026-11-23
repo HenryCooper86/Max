@@ -14,7 +14,7 @@ import {
   draftChanged,
   draftFromProject,
   minutesCapFromDraft,
-  stepDone,
+  studioTestDone,
   type StudioDraft,
   type StudioTab,
   type StudioTabProps
@@ -56,11 +56,11 @@ function Checklist({ project, goTo }: { project: Project; goTo: (tab: StudioTab)
   const say = useSay();
   const steps: { done: boolean; tab: StudioTab; title: ReactNode }[] = [
     { done: project.hasModelKey, tab: "agent", title: say("填写模型密钥", "Add your model key") },
-    { done: stepDone(project.id, "tested"), tab: "test", title: say("和它说说话", "Talk to it") },
+    { done: studioTestDone(project.id), tab: "test", title: say("和它说说话", "Talk to it") },
     {
-      done: stepDone(project.id, "installed") || project.studio.publicEmbed.enabled,
+      done: project.firstWebsiteConversationAt != null,
       tab: "install",
-      title: say("放到你的网站上", "Put it on your site")
+      title: say("在网站上完成一次对话", "Have a conversation on your site")
     }
   ];
   if (steps.every((step) => step.done)) return null;
@@ -105,7 +105,10 @@ export function Studio({
   // The flow has unsaved changes of its own, apart from the draft: it is asked before its tab gives way.
   const setTab = useCallback(
     (next: StudioTab) => {
-      if (next !== tab && mayLeaveSection()) showTab(next);
+      if (next === tab) return true;
+      if (!mayLeaveSection()) return false;
+      showTab(next);
+      return true;
     },
     [tab]
   );
@@ -180,17 +183,41 @@ export function Studio({
   };
   const tabId = (id: StudioTab) => `cxs-${project.id}-tab-${id}`;
 
+  const onTabKey = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let next: StudioTab;
+    switch (event.key) {
+      case "ArrowRight":
+        next = TABS[(index + 1) % TABS.length]!.id;
+        break;
+      case "ArrowLeft":
+        next = TABS[(index + TABS.length - 1) % TABS.length]!.id;
+        break;
+      case "Home":
+        next = TABS[0]!.id;
+        break;
+      case "End":
+        next = TABS[TABS.length - 1]!.id;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    if (setTab(next)) document.getElementById(tabId(next))?.focus();
+  };
+
   return (
     <div className="cxsStudio">
       <Checklist project={project} goTo={setTab} />
       <div className="cxsTabs" role="tablist" aria-label={say("工作室", "Studio")}>
-        {TABS.map((item) => (
+        {TABS.map((item, index) => (
           <button
             key={item.id}
             id={tabId(item.id)}
             type="button"
             role="tab"
             aria-selected={tab === item.id}
+            tabIndex={tab === item.id ? 0 : -1}
+            onKeyDown={(event) => onTabKey(event, index)}
             aria-controls={`${tabId(item.id)}-panel`}
             className={tab === item.id ? "active" : undefined}
             onClick={() => setTab(item.id)}

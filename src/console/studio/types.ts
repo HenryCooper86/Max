@@ -71,17 +71,17 @@ export function draftChanged(draft: StudioDraft, project: Project): boolean {
 }
 
 /** Per-browser memory of onboarding steps the server cannot know about. */
-export function rememberStep(projectId: string, step: "tested" | "installed"): void {
+export function rememberStudioTest(projectId: string): void {
   try {
-    window.localStorage.setItem(`max-cloud:${step}:${projectId}`, "1");
+    window.localStorage.setItem(`max-cloud:tested:${projectId}`, "1");
   } catch {
     /* private mode: the checklist just forgets */
   }
 }
 
-export function stepDone(projectId: string, step: "tested" | "installed"): boolean {
+export function studioTestDone(projectId: string): boolean {
   try {
-    return window.localStorage.getItem(`max-cloud:${step}:${projectId}`) === "1";
+    return window.localStorage.getItem(`max-cloud:tested:${projectId}`) === "1";
   } catch {
     return false;
   }

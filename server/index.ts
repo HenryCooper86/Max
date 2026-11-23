@@ -2042,7 +2042,9 @@ wss.on("connection", (client, request) => {
       })
     : undefined;
   // Billed only while the voice model can talk, checkpointed and checked every few seconds.
-  const cloudSession = cloudProject ? openCloudSession(usageSessionId, cloudProject, address) : undefined;
+  const cloudSession = cloudProject
+    ? openCloudSession(usageSessionId, cloudProject, address, request.headers.origin)
+    : undefined;
   const usageCheck = cloudSession
     ? setInterval(() => {
         const refusal = cloudSession.check();

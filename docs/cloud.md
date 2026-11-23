@@ -68,6 +68,8 @@ their website in a few minutes, without writing a backend:
   count like any others.
 - **Install.** The one-line embed (below), the widget's label, colour and side, and copyable code for a backend in
   plain JavaScript, React, Next.js, Express or Flask.
+  The Studio installation checklist completes when the relay observes a visitor get an answer through the widget or browser SDK.
+  It keeps the first verified time on the project even when transcript storage is off. Studio tests are tracked separately.
 - **Conversations.** What was said in each session (final transcript lines and tool outcomes, never audio), kept 30
   days and deleted with the project. Each answer shows how long the visitor waited for it to begin, each
   conversation the median of those times, and the tab the median over the conversations listed: the first thing to

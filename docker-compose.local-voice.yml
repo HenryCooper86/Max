@@ -120,7 +120,7 @@ services:
   # Chat model: any open-weight model Ollama can run.
   ollama:
     # Pinned so the runtime does not change under you on `docker compose pull`. This is the release the
-    # local stack was last tested with; Dependabot proposes newer ones.
+    # local stack was last tested with; update it by hand.
     image: ollama/ollama:0.40.17
     ports:
       - "127.0.0.1:11434:11434"

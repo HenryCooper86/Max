@@ -4,6 +4,8 @@
  * console (which edits it), so both agree on what is valid.
  */
 
+import { analysisConfigFrom, type AnalysisConfig, type AnalysisField } from "./analysis";
+
 export type CloudBackend = "openai" | "gemini" | "grok";
 
 export type VoiceOption = { id: string; label: string; note: { zh: string; en: string } };
@@ -67,7 +69,9 @@ export const STUDIO_LIMITS = {
   enumValues: 12,
   origins: 10,
   label: 40,
-  url: 500
+  url: 500,
+  flowSteps: 12,
+  flowChars: 60_000
 } as const;
 
 type StudioParameterType = "string" | "number" | "boolean";
@@ -91,6 +95,36 @@ export type StudioTool = {
 
 export type WidgetPosition = "bottom-right" | "bottom-left";
 
+/**
+ * What each conversation of a project is analysed for when it ends. `enabled` is apart from the rest so that
+ * turning the analysis off does not lose the fields that were written.
+ */
+export type StudioAnalysis = {
+  enabled: boolean;
+  summary: boolean;
+  sentiment: boolean;
+  /** What a successful conversation is, in the owner's words; "" for no pass or fail. */
+  successCriteria: string;
+  fields: AnalysisField[];
+};
+
+export const DEFAULT_ANALYSIS: StudioAnalysis = {
+  enabled: false,
+  summary: true,
+  sentiment: false,
+  successCriteria: "",
+  fields: []
+};
+
+/**
+ * Where the project's conversations are traced: the full URL of an OpenTelemetry (OTLP/HTTP) traces endpoint of
+ * the customer's own collector, or "" for nowhere. The collector's request headers are a secret of their own and
+ * are not part of this. `content`: whether what was said is put on the spans.
+ */
+export type StudioTraces = { endpoint: string; content: boolean };
+
+export const DEFAULT_TRACES: StudioTraces = { endpoint: "", content: false };
+
 export type ProjectStudio = {
   /** The template the project started from, for reference only. */
   template: string;
@@ -107,6 +141,21 @@ export type ProjectStudio = {
   /** Keep transcripts of conversations for 30 days. Off unless the customer turns it on
    *  (new projects made in the console start with it on, and say so). */
   keepConversations: boolean;
+  /**
+   * Where each conversation is sent when it ends: an https address of the customer's own server, or "" for
+   * nowhere. Signed with the project's signing secret, like its tools.
+   */
+  conversationWebhook: string;
+  /**
+   * The agent's flow: the steps a conversation can be handed between, each with its own instructions and
+   * tools, as the relay's `agents` (docs/conversations.md). Empty: one agent. The relay checks it when the
+   * project is saved (server/cloud/flow.ts); here it is only a list of steps of a bounded size.
+   */
+  flow: Record<string, unknown>[];
+  /** What each conversation is analysed for when it ends (server/cloud/analysis.ts). */
+  analysis: StudioAnalysis;
+  /** Where each conversation is traced (server/cloud/traces.ts). */
+  traces: StudioTraces;
 };
 
 export const DEFAULT_STUDIO: ProjectStudio = {
@@ -117,7 +166,11 @@ export const DEFAULT_STUDIO: ProjectStudio = {
   tools: [],
   publicEmbed: { enabled: false, origins: [] },
   widget: { label: "", accent: "", position: "bottom-right" },
-  keepConversations: false
+  keepConversations: false,
+  conversationWebhook: "",
+  flow: [],
+  analysis: DEFAULT_ANALYSIS,
+  traces: DEFAULT_TRACES
 };
 
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
@@ -299,6 +352,60 @@ function tool(raw: unknown, index: number): Outcome<StudioTool> {
  * Validates a whole Studio object (what the console sends, or what is
  * stored). Missing fields take their defaults; anything present must be valid.
  */
+/** A project's analysis settings, by the rules of the relay's own (shared/analysis.ts). Absent: off. */
+function parseAnalysis(raw: unknown): { value: StudioAnalysis } | { error: string } {
+  if (raw === undefined || raw === null) return { value: { ...DEFAULT_ANALYSIS, fields: [] } };
+  if (!isRecord(raw)) return { error: "The analysis settings must be an object." };
+  const criteria = raw.successCriteria === undefined ? "" : raw.successCriteria;
+  const parsed = analysisConfigFrom({
+    ...(raw.summary !== undefined ? { summary: raw.summary } : {}),
+    ...(raw.sentiment !== undefined ? { sentiment: raw.sentiment } : {}),
+    successCriteria: criteria,
+    ...(raw.fields !== undefined ? { fields: raw.fields } : {})
+  });
+  if (!parsed.config) {
+    // The parser speaks of the key in assistant.config.json; here it is a form.
+    return { error: `Analysis: ${(parsed.problem ?? "not understood").replace(/^analysis[. ]?/, "")}.` };
+  }
+  const config = parsed.config;
+  const value: StudioAnalysis = {
+    enabled: raw.enabled === true,
+    summary: config.summary,
+    sentiment: config.sentiment,
+    successCriteria: config.successCriteria ?? "",
+    fields: config.fields
+  };
+  if (value.enabled && !value.summary && !value.sentiment && !value.successCriteria && value.fields.length === 0) {
+    return {
+      error: "Analysis is on with nothing to look for: choose a summary, a sentiment, a success rule or a field."
+    };
+  }
+  return { value };
+}
+
+/** A project's trace settings. Absent (a project saved before there were any): off. */
+function parseTraces(raw: unknown): { value: StudioTraces } | { error: string } {
+  if (raw === undefined || raw === null) return { value: { ...DEFAULT_TRACES } };
+  if (!isRecord(raw)) return { error: "The traces settings must be an object." };
+  const endpoint = text(raw.endpoint, "The traces endpoint", STUDIO_LIMITS.url);
+  if (endpoint.error !== undefined) return { error: endpoint.error };
+  const problem = endpoint.value ? toolUrlProblem(endpoint.value) : undefined;
+  if (problem) return { error: `The traces endpoint's address ${problem}` };
+  return { value: { endpoint: endpoint.value, content: raw.content === true } };
+}
+
+/** The analysis to run for a project's conversations, or none when it is off. */
+export function studioAnalysisConfig(studio: Pick<ProjectStudio, "analysis">): AnalysisConfig | undefined {
+  const analysis = studio.analysis;
+  if (!analysis?.enabled) return undefined;
+  return {
+    summary: analysis.summary,
+    sentiment: analysis.sentiment,
+    ...(analysis.successCriteria ? { successCriteria: analysis.successCriteria } : {}),
+    fields: analysis.fields
+  };
+}
+
 export function parseStudio(raw: unknown, backend: CloudBackend): Outcome<ProjectStudio> {
   if (raw === undefined || raw === null) return { value: structuredClone(DEFAULT_STUDIO) };
   if (!isRecord(raw)) return { error: "Studio settings are not valid." };
@@ -358,6 +465,26 @@ export function parseStudio(raw: unknown, backend: CloudBackend): Outcome<Projec
     return { error: "Position must be bottom-right or bottom-left." };
   }
 
+  const webhook = text(raw.conversationWebhook, "Conversation webhook", STUDIO_LIMITS.url);
+  if (webhook.error !== undefined) return { error: webhook.error };
+  const webhookProblem = webhook.value ? toolUrlProblem(webhook.value) : undefined;
+  if (webhookProblem) return { error: `The conversation webhook's address ${webhookProblem}` };
+
+  const rawFlow = raw.flow ?? [];
+  if (!Array.isArray(rawFlow) || rawFlow.some((step) => !isRecord(step))) {
+    return { error: "The flow must be a list of steps." };
+  }
+  if (rawFlow.length > STUDIO_LIMITS.flowSteps)
+    return { error: `A flow has at most ${STUDIO_LIMITS.flowSteps} steps.` };
+  const flowText = JSON.stringify(rawFlow);
+  if (flowText.length > STUDIO_LIMITS.flowChars) return { error: "The flow is too long." };
+
+  const analysis = parseAnalysis(raw.analysis);
+  if ("error" in analysis) return { error: analysis.error };
+
+  const traces = parseTraces(raw.traces);
+  if ("error" in traces) return { error: traces.error };
+
   return {
     value: {
       template: template.value,
@@ -367,7 +494,11 @@ export function parseStudio(raw: unknown, backend: CloudBackend): Outcome<Projec
       tools,
       publicEmbed: { enabled, origins },
       widget: { label: label.value, accent: accent.value.toLowerCase(), position },
-      keepConversations: raw.keepConversations === true
+      keepConversations: raw.keepConversations === true,
+      conversationWebhook: webhook.value,
+      flow: JSON.parse(flowText) as Record<string, unknown>[],
+      analysis: analysis.value,
+      traces: traces.value
     }
   };
 }

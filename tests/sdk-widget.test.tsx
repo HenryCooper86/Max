@@ -46,7 +46,31 @@ vi.mock("../sdk/src/client", async (importOriginal) => {
     stop() {
       this.calls.push("stop");
       this.muted = false;
+      this.stopVideo();
       this.setStatus("idle");
+    }
+    videoSource: string | undefined;
+    videoStream: MediaStream | undefined;
+    /** What the next startVideo does: the user's no, when it is an Error. */
+    videoError: Error | undefined;
+    /** Holds a startVideo back, as the browser's question to the user does. */
+    videoGate: Promise<void> | undefined;
+    videos: string[] = [];
+    async startVideo(source: string) {
+      this.videos.push(source);
+      if (this.videoGate) await this.videoGate;
+      if (this.videoError) throw this.videoError;
+      this.stopVideo();
+      this.videoSource = source;
+      this.videoStream = new MediaStream();
+      this.emit("video", { active: true, source });
+      return this.videoStream;
+    }
+    stopVideo() {
+      if (!this.videoSource) return;
+      this.videoSource = undefined;
+      this.videoStream = undefined;
+      this.emit("video", { active: false });
     }
     mute() {
       this.muted = true;
@@ -57,6 +81,18 @@ vi.mock("../sdk/src/client", async (importOriginal) => {
     sendText(text: string) {
       this.calls.push(`text:${text}`);
       return true;
+    }
+    capabilities: { imageInput?: boolean; videoInput?: boolean } | undefined;
+    /** What the next sendImage does: resolve to this, or reject when it is an Error. */
+    imageResult: boolean | Error = true;
+    images: Array<{ source: unknown; options: { text?: string; maxSide?: number } }> = [];
+    /** Holds a sendImage back, as encoding a large photo does, until the test lets it go. */
+    imageGate: Promise<void> | undefined;
+    async sendImage(source: unknown, options: { text?: string; maxSide?: number } = {}) {
+      this.images.push({ source, options });
+      if (this.imageGate) await this.imageGate;
+      if (this.imageResult instanceof Error) throw this.imageResult;
+      return this.imageResult;
     }
     resumeAudio() {
       this.calls.push("resumeAudio");
@@ -82,6 +118,15 @@ interface Fake {
   destroyed: boolean;
   calls: string[];
   startError: Error | undefined;
+  capabilities: { imageInput?: boolean; videoInput?: boolean } | undefined;
+  videoSource: string | undefined;
+  videoStream: MediaStream | undefined;
+  videoError: Error | undefined;
+  videoGate: Promise<void> | undefined;
+  videos: string[];
+  imageResult: boolean | Error;
+  imageGate: Promise<void> | undefined;
+  images: Array<{ source: unknown; options: { text?: string; maxSide?: number } }>;
   emit(type: string, payload?: unknown): void;
   setStatus(status: VoiceAgentStatus): void;
 }
@@ -139,6 +184,13 @@ describe("options from attributes", () => {
       backend: "doubao",
       context: "On the pricing page"
     });
+  });
+
+  it("passes transport=webrtc to the client, and ignores any other value", async () => {
+    await open(mount({ relay: "https://r.example.com", transport: "webrtc" }));
+    expect(lastAgent().options.transport).toBe("webrtc");
+    await open(mount({ relay: "https://r.example.com", transport: "udp" }));
+    expect(lastAgent().options).not.toHaveProperty("transport");
   });
 
   it("ignores a voice that is not female or male", async () => {
@@ -262,6 +314,391 @@ describe("lifecycle", () => {
     q<HTMLFormElement>(el, "form").dispatchEvent(new Event("submit", { cancelable: true }));
     expect(agent.calls).toContain("text:hello");
     expect(input.value).toBe("");
+  });
+});
+
+describe("showing a picture", () => {
+  const pictureButton = (el: Element) => q<HTMLButtonElement>(el, ".picture");
+  const photo = () => new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: "image/jpeg" });
+  /** Opens a conversation on a relay whose model sees pictures. */
+  async function openSeeing(el: VoiceAgentElement) {
+    const agent = await open(el);
+    agent.capabilities = { imageInput: true };
+    agent.setStatus("listening");
+    return agent;
+  }
+  function choose(el: Element, file: Blob) {
+    const input = q<HTMLInputElement>(el, ".file");
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    input.dispatchEvent(new Event("change"));
+  }
+
+  it("offers the button only when the page asks for it, in a conversation, with a model that sees pictures", async () => {
+    const plain = mount({ relay: "https://r.example.com" });
+    const agentOfPlain = await openSeeing(plain);
+    expect(agentOfPlain.capabilities?.imageInput).toBe(true);
+    expect(pictureButton(plain).hidden).toBe(true);
+    plain.remove();
+
+    const el = mount({ relay: "https://r.example.com", "image-input": "" });
+    expect(pictureButton(el).hidden).toBe(true);
+    const agent = await open(el);
+    // The relay has not said that its model sees pictures.
+    expect(pictureButton(el).hidden).toBe(true);
+    agent.capabilities = { imageInput: true };
+    agent.setStatus("listening");
+    expect(pictureButton(el).hidden).toBe(false);
+    expect(pictureButton(el).textContent).toBe("Show a picture");
+    fab(el).click();
+    await flush();
+    expect(pictureButton(el).hidden).toBe(true);
+  });
+
+  it("opens the file chooser, sends the chosen picture and shows it in the transcript", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "" });
+    const agent = await openSeeing(el);
+    const clicked = vi.spyOn(q<HTMLInputElement>(el, ".file"), "click").mockImplementation(() => {});
+    pictureButton(el).click();
+    expect(clicked).toHaveBeenCalledOnce();
+    const events: unknown[] = [];
+    el.addEventListener("voice-agent:image", (event) => events.push((event as CustomEvent).detail));
+    const file = photo();
+    choose(el, file);
+    await flush();
+    expect(agent.images).toEqual([{ source: file, options: {} }]);
+    const line = q<HTMLLIElement>(el, ".lines li[data-picture]");
+    expect(line.dataset.role).toBe("user");
+    const shown = line.querySelector("img");
+    // The picture itself where the browser can show one, and words for it either way.
+    expect(shown ? shown.alt : line.textContent).toBe("A picture you sent");
+    expect(events).toEqual([{ sent: true }]);
+    expect(note(el).textContent).toBe("");
+    // The chooser is cleared, so the same file can be chosen again.
+    expect(q<HTMLInputElement>(el, ".file").value).toBe("");
+  });
+
+  it("sends what is typed in the text box with the picture, and clears the box", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "", "text-input": "" });
+    const agent = await openSeeing(el);
+    const input = q<HTMLInputElement>(el, 'input[type="text"]');
+    input.value = "  What does this error mean?  ";
+    choose(el, photo());
+    await flush();
+    expect(agent.images[0]!.options).toEqual({ text: "What does this error mean?" });
+    expect(input.value).toBe("");
+    // Without a text box on the page nothing typed goes along.
+    const bare = mount({ relay: "https://r.example.com", "image-input": "" });
+    const other = await openSeeing(bare);
+    q<HTMLInputElement>(bare, 'input[type="text"]').value = "hidden";
+    choose(bare, photo());
+    await flush();
+    expect(other.images[0]!.options).toEqual({});
+  });
+
+  it("says so when the picture was not sent, keeps what was typed, and clears the note on the next one", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "", "text-input": "" });
+    const agent = await openSeeing(el);
+    const input = q<HTMLInputElement>(el, 'input[type="text"]');
+    input.value = "Look";
+    agent.imageResult = false;
+    choose(el, photo());
+    await flush();
+    expect(note(el).textContent).toBe("The picture was not sent. Wait a moment and try again.");
+    expect(input.value).toBe("Look");
+    expect(el.shadowRoot!.querySelectorAll(".lines li")).toHaveLength(0);
+    agent.imageResult = new VoiceAgentError("image", "Could not prepare the picture: not an image");
+    choose(el, photo());
+    await flush();
+    expect(note(el).textContent).toBe("This picture could not be used. Choose a JPEG or PNG photo or screenshot.");
+    agent.imageResult = true;
+    choose(el, photo());
+    await flush();
+    expect(note(el).textContent).toBe("");
+    expect(el.shadowRoot!.querySelectorAll(".lines li[data-picture]")).toHaveLength(1);
+  });
+
+  it("takes one picture at a time, and none without a conversation", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "" });
+    await expect(el.sendImage(photo())).resolves.toBe(false);
+    const agent = await openSeeing(el);
+    const first = el.sendImage(photo(), { text: "one", maxSide: 512 });
+    // While the first is being prepared the button is off and a second call sends nothing.
+    expect(pictureButton(el).getAttribute("aria-disabled")).toBe("true");
+    // Off, but not `disabled`: the keyboard's focus stays on it.
+    expect(pictureButton(el).disabled).toBe(false);
+    const clicked = vi.spyOn(q<HTMLInputElement>(el, ".file"), "click").mockImplementation(() => {});
+    pictureButton(el).click();
+    expect(clicked).not.toHaveBeenCalled();
+    await expect(el.sendImage(photo())).resolves.toBe(false);
+    await expect(first).resolves.toBe(true);
+    expect(pictureButton(el).getAttribute("aria-disabled")).toBe("false");
+    expect(agent.images.map((image) => image.options)).toEqual([{ text: "one", maxSide: 512 }]);
+  });
+
+  it("says whether a picture was sent in an event every time, also when nothing could be", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "" });
+    const events: unknown[] = [];
+    el.addEventListener("voice-agent:image", (event) => events.push((event as CustomEvent).detail));
+    // No conversation yet.
+    await el.sendImage(photo());
+    const agent = await openSeeing(el);
+    let release!: () => void;
+    agent.imageGate = new Promise((resolve) => (release = resolve));
+    const first = el.sendImage(photo());
+    // A second one while the first is being prepared.
+    await el.sendImage(photo());
+    release();
+    await first;
+    expect(events).toEqual([{ sent: false }, { sent: false }, { sent: true }]);
+  });
+
+  it("takes the typed words out of the box at once, so that Send cannot send them again", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "", "text-input": "" });
+    const agent = await openSeeing(el);
+    const input = q<HTMLInputElement>(el, 'input[type="text"]');
+    let release!: () => void;
+    agent.imageGate = new Promise((resolve) => (release = resolve));
+    input.value = "What is this?";
+    const sending = el.sendImage(photo());
+    expect(input.value).toBe("");
+    // The user presses Send while the picture is being prepared: there is nothing left to send.
+    q<HTMLFormElement>(el, "form").dispatchEvent(new Event("submit", { cancelable: true }));
+    expect(agent.calls.filter((call) => call.startsWith("text:"))).toEqual(["text:"]);
+    // What is typed meanwhile is the user's next message, and stays.
+    input.value = "And this?";
+    release();
+    await sending;
+    expect(agent.images[0]!.options).toEqual({ text: "What is this?" });
+    expect(input.value).toBe("And this?");
+  });
+
+  it("gives the words back when the picture did not go, unless something else was typed since", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "", "text-input": "" });
+    const agent = await openSeeing(el);
+    const input = q<HTMLInputElement>(el, 'input[type="text"]');
+    agent.imageResult = false;
+    let release!: () => void;
+    agent.imageGate = new Promise((resolve) => (release = resolve));
+    input.value = "Look";
+    const sending = el.sendImage(photo());
+    input.value = "Something newer";
+    release();
+    await sending;
+    expect(input.value).toBe("Something newer");
+  });
+
+  it("shows the notice over an older error, and drops it for a newer one, a new start or a closed panel", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "" });
+    const agent = await openSeeing(el);
+    agent.emit("error", new VoiceAgentError("relay", "Slow down"));
+    expect(note(el).textContent).toBe("The assistant reported a problem.");
+    agent.imageResult = false;
+    await el.sendImage(photo());
+    expect(note(el).textContent).toBe("The picture was not sent. Wait a moment and try again.");
+    agent.emit("error", new VoiceAgentError("audio", "No output"));
+    expect(note(el).textContent).toBe("Audio playback failed.");
+    await el.sendImage(photo());
+    expect(note(el).textContent).toBe("The picture was not sent. Wait a moment and try again.");
+    // Closing the panel ends the conversation; the next one starts with nothing to say about the last.
+    q<HTMLButtonElement>(el, ".close").click();
+    expect(note(el).textContent).not.toContain("picture");
+    await open(el);
+    expect(note(el).textContent).toBe("");
+  });
+
+  it("says nothing in a panel that is closed, and leaves a replaced session's picture out", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "" });
+    const agent = await openSeeing(el);
+    fab(el).click();
+    await flush();
+    agent.imageResult = false;
+    await expect(el.sendImage(photo())).resolves.toBe(false);
+    expect(note(el).textContent).toBe("");
+
+    // A picture still being prepared when the element leaves the page.
+    const other = mount({ relay: "https://r.example.com", "image-input": "" });
+    const second = await openSeeing(other);
+    let release!: () => void;
+    second.imageGate = new Promise((resolve) => (release = resolve));
+    const sending = other.sendImage(photo());
+    other.remove();
+    release();
+    await expect(sending).resolves.toBe(false);
+    expect(other.shadowRoot!.querySelectorAll(".lines li")).toHaveLength(0);
+  });
+
+  it("waits for a new session to say that it takes pictures, and follows the attribute", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "" });
+    const agent = await openSeeing(el);
+    expect(pictureButton(el).hidden).toBe(false);
+    // Reconnecting: what the last session said about pictures does not count for the next.
+    agent.setStatus("connecting");
+    expect(pictureButton(el).hidden).toBe(true);
+    agent.capabilities = {};
+    agent.setStatus("listening");
+    expect(pictureButton(el).hidden).toBe(true);
+    agent.capabilities = { imageInput: true };
+    agent.setStatus("listening");
+    expect(pictureButton(el).hidden).toBe(false);
+    el.removeAttribute("image-input");
+    expect(pictureButton(el).hidden).toBe(true);
+    el.setAttribute("image-input", "");
+    expect(pictureButton(el).hidden).toBe(false);
+  });
+
+  it("releases the pictures it shows when the element leaves the page", async () => {
+    const made = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:thumb-1");
+    const released = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const el = mount({ relay: "https://r.example.com", "image-input": "" });
+    await openSeeing(el);
+    await el.sendImage(photo());
+    expect(q<HTMLImageElement>(el, ".lines li[data-picture] img").getAttribute("src")).toBe("blob:thumb-1");
+    el.remove();
+    expect(released).toHaveBeenCalledWith("blob:thumb-1");
+    expect(el.shadowRoot!.querySelectorAll(".lines li")).toHaveLength(0);
+    made.mockRestore();
+    released.mockRestore();
+  });
+
+  it("shows a data URL as it is, and words in Chinese for a Chinese page", async () => {
+    const el = mount({ relay: "https://r.example.com", "image-input": "", language: "zh" });
+    await openSeeing(el);
+    expect(pictureButton(el).textContent).toBe("发送图片");
+    await el.sendImage("data:image/png;base64,iVBORw0KGgo=");
+    const shown = q<HTMLImageElement>(el, ".lines li[data-picture] img");
+    expect(shown.getAttribute("src")).toBe("data:image/png;base64,iVBORw0KGgo=");
+    expect(shown.alt).toBe("你发送的图片");
+  });
+});
+
+describe("showing the camera or the screen", () => {
+  const watch = (el: Element) => q<HTMLElement>(el, ".watch");
+  const camera = (el: Element) => q<HTMLButtonElement>(el, ".camera");
+  const screen = (el: Element) => q<HTMLButtonElement>(el, ".screen");
+  const preview = (el: Element) => q<HTMLVideoElement>(el, ".preview");
+
+  /** Opens a conversation on a relay whose model takes live video, in a browser that can share a screen. */
+  async function openWatching(el: VoiceAgentElement) {
+    vi.stubGlobal("navigator", { mediaDevices: { getDisplayMedia: () => undefined } });
+    const agent = await open(el);
+    agent.capabilities = { imageInput: true, videoInput: true };
+    agent.setStatus("listening");
+    return agent;
+  }
+
+  it("offers the buttons only when the page asks for them, in a conversation, with a model that takes video", async () => {
+    const plain = mount({ relay: "https://r.example.com", "image-input": "" });
+    await openWatching(plain);
+    expect(watch(plain).hidden).toBe(true);
+    plain.remove();
+    vi.unstubAllGlobals();
+
+    const el = mount({ relay: "https://r.example.com", "video-input": "" });
+    expect(watch(el).hidden).toBe(true);
+    const agent = await open(el);
+    agent.capabilities = { imageInput: true };
+    agent.setStatus("listening");
+    // Pictures alone are not video.
+    expect(watch(el).hidden).toBe(true);
+    agent.capabilities = { imageInput: true, videoInput: true };
+    agent.setStatus("listening");
+    expect(watch(el).hidden).toBe(false);
+    expect(camera(el).textContent).toBe("Show my camera");
+    expect(camera(el).getAttribute("aria-pressed")).toBe("false");
+    // This browser cannot share a screen: no button for it.
+    expect(screen(el).hidden).toBe(true);
+    expect(preview(el).hidden).toBe(true);
+  });
+
+  it("turns the camera on with a preview of what the assistant sees, and off again", async () => {
+    const el = mount({ relay: "https://r.example.com", "video-input": "" });
+    const agent = await openWatching(el);
+    const events: unknown[] = [];
+    el.addEventListener("voice-agent:video", (event) => events.push((event as CustomEvent).detail));
+    camera(el).click();
+    await flush();
+    expect(agent.videos).toEqual(["camera"]);
+    expect(camera(el).getAttribute("aria-pressed")).toBe("true");
+    expect(screen(el).getAttribute("aria-pressed")).toBe("false");
+    expect(preview(el).hidden).toBe(false);
+    expect(preview(el).srcObject).toBe(agent.videoStream);
+    expect(agent.videoStream).toBeInstanceOf(MediaStream);
+    expect(preview(el).getAttribute("aria-label")).toBe("What the assistant sees");
+    expect(events).toEqual([{ active: true, source: "camera" }]);
+    camera(el).click();
+    await flush();
+    expect(agent.videoSource).toBeUndefined();
+    expect(camera(el).getAttribute("aria-pressed")).toBe("false");
+    expect(preview(el).hidden).toBe(true);
+    expect(preview(el).srcObject).toBeNull();
+    expect(events.at(-1)).toEqual({ active: false });
+  });
+
+  it("goes from the camera to the screen, and stops when the user stops sharing in the browser", async () => {
+    const el = mount({ relay: "https://r.example.com", "video-input": "" });
+    const agent = await openWatching(el);
+    expect(screen(el).hidden).toBe(false);
+    expect(screen(el).textContent).toBe("Share my screen");
+    camera(el).click();
+    await flush();
+    screen(el).click();
+    await flush();
+    expect(agent.videos).toEqual(["camera", "screen"]);
+    expect(screen(el).getAttribute("aria-pressed")).toBe("true");
+    expect(camera(el).getAttribute("aria-pressed")).toBe("false");
+    expect(preview(el).srcObject).toBe(agent.videoStream);
+    // The browser's own "Stop sharing": the client says the video is off.
+    agent.stopVideo();
+    expect(screen(el).getAttribute("aria-pressed")).toBe("false");
+    expect(preview(el).hidden).toBe(true);
+  });
+
+  it("says so when the camera could not be opened, and takes that back at the next try", async () => {
+    const el = mount({ relay: "https://r.example.com", "video-input": "" });
+    const agent = await openWatching(el);
+    agent.videoError = new VoiceAgentError("video", "Could not open the camera: Permission denied");
+    camera(el).click();
+    await flush();
+    expect(note(el).textContent).toBe(
+      "The camera or the screen could not be opened. Allow it in the browser and try again."
+    );
+    expect(camera(el).getAttribute("aria-pressed")).toBe("false");
+    expect(preview(el).hidden).toBe(true);
+    agent.videoError = undefined;
+    camera(el).click();
+    await flush();
+    expect(note(el).textContent).toBe("");
+    expect(camera(el).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("asks the browser once while it is still asking the user", async () => {
+    const el = mount({ relay: "https://r.example.com", "video-input": "" });
+    const agent = await openWatching(el);
+    let answer!: () => void;
+    agent.videoGate = new Promise<void>((resolve) => (answer = resolve));
+    camera(el).click();
+    camera(el).click();
+    screen(el).click();
+    await flush();
+    expect(agent.videos).toEqual(["camera"]);
+    answer();
+    await flush();
+    expect(camera(el).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("takes the preview away with the conversation, and speaks Chinese", async () => {
+    const el = mount({ relay: "https://r.example.com", "video-input": "", language: "zh" });
+    const agent = await openWatching(el);
+    expect(camera(el).textContent).toBe("打开摄像头");
+    expect(screen(el).textContent).toBe("共享屏幕");
+    camera(el).click();
+    await flush();
+    expect(preview(el).hidden).toBe(false);
+    fab(el).click();
+    await flush();
+    expect(agent.calls).toContain("stop");
+    expect(preview(el).hidden).toBe(true);
+    expect(watch(el).hidden).toBe(true);
   });
 });
 

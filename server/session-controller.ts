@@ -5,7 +5,13 @@ import { localizeOutgoing } from "./relay-speech";
 import { normalizeEqualizer } from "./audio-eq";
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
-import { PROTOCOL_VERSION, type AudioPlan, type NavPromptEvent } from "../shared/agent";
+import {
+  IDLE_CLOSE_CODE,
+  MAX_IMAGE_BASE64_CHARS,
+  PROTOCOL_VERSION,
+  type AudioPlan,
+  type NavPromptEvent
+} from "../shared/agent";
 import { SilenceFiller, normalizeDeviceAudio, planAudio } from "./audio-contract";
 import { CLIENT_EVENT_TYPES } from "../shared/generated/agent-protocol";
 import { TESTING_PLATFORMS as CANONICAL_TESTING_PLATFORMS } from "../shared/testing";
@@ -26,8 +32,20 @@ import {
   recordTesterTtsFallback,
   recordTesterTurnFeedback
 } from "./metrics";
-import { recordUserMemoryEvent, userConversationMemory, userMemoryEnabled } from "./user-memory";
+import {
+  externalUserMemoryKey,
+  recordUserMemoryEvent,
+  summarizeUserMemory,
+  userConversationMemory,
+  userMemoryEnabled,
+  userMemorySummariesOn
+} from "./user-memory";
+import { redactText } from "./redact";
 import type { HelmetPeer } from "./companion-registry";
+import { isResumeId, resumeStore } from "./session-resume";
+import type { ToolDefinition } from "./tools";
+import { createNoiseSuppressor, type NoiseSuppressor } from "./noise-suppression";
+import { interruptsPlayback } from "./transcript-events";
 
 export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) => AgentProvider;
 
@@ -44,9 +62,91 @@ export type AgentSessionHooks = {
    *  in the relay's own QA evidence. Every QA recorder ignores a session that
    *  was never begun. */
   privateSession?: boolean;
+  /** Whose conversations this socket may resume, beyond its user id: a Max
+   *  Cloud project must never pick up another project's conversation. */
+  resumeScope?: string;
+  /** What only this session's channel provides: a phone call has no screen
+   *  and brings its own transfer tools. */
+  channel?: "web" | "phone";
+  sessionTools?: readonly ToolDefinition[];
+  /** Facts the channel itself vouches for (the caller's number), added to the
+   *  token's trusted context. */
+  trustedContext?: string;
+  /** Clean the microphone audio before any backend hears it (server/noise-suppression.ts). */
+  noiseSuppression?: boolean;
+  /** Where the conversation's audio is recorded (server/recording.ts). */
+  recording?: SessionRecording;
+  /** What plays the recorded conversation's audio: a phone call drops queued speech on fewer events. */
+  recordingClient?: "phone";
 };
 
+/** What a session tells a recording: the audio each way, and when the client dropped speech unplayed. */
+export type SessionRecording = {
+  user(pcm16k: Buffer): void;
+  agent(pcm24k: Buffer): void;
+  agentCleared(): void;
+};
+
+/**
+ * Lets a recording hear what the backend sends the client: the assistant's
+ * audio, and the events on which the client drops what it has not played.
+ * A recording must never cost a conversation anything, so nothing it throws
+ * gets out.
+ */
+function recordingTap(client: WebSocket, recording: SessionRecording, playedBy: "app" | "phone"): WebSocket {
+  return new Proxy(client, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      if (property !== "send") return (value as (...args: unknown[]) => unknown).bind(target);
+      return (data: unknown, ...rest: unknown[]) => {
+        try {
+          if (typeof data === "string") {
+            if (interruptsPlayback(data, playedBy)) recording.agentCleared();
+          } else if (target.readyState === target.OPEN) {
+            if (Buffer.isBuffer(data)) recording.agent(data);
+            else if (ArrayBuffer.isView(data)) {
+              recording.agent(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+            }
+          }
+        } catch {
+          /* the conversation goes on without it */
+        }
+        return (target.send as (...args: unknown[]) => unknown)(data, ...rest);
+      };
+    }
+  });
+}
+
 const MAX_TEXT_INPUT_CHARS = 2_000;
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const IMAGE_MAGIC = {
+  "image/jpeg": Buffer.from([0xff, 0xd8, 0xff]),
+  "image/png": Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+} as const;
+
+/** Throws unless `image` is base64 of a real JPEG or PNG matching `mimeType`. */
+function assertImage(
+  image: unknown,
+  mimeType: unknown,
+  event = "image.input"
+): asserts mimeType is keyof typeof IMAGE_MAGIC {
+  if (mimeType !== "image/jpeg" && mimeType !== "image/png") {
+    throw new Error(`Invalid ${event} mimeType: use image/jpeg or image/png`);
+  }
+  if (typeof image !== "string" || !image) throw new Error(`Invalid ${event} image`);
+  if (image.length > MAX_IMAGE_BASE64_CHARS) {
+    throw new Error(`${event} image is too large (at most ${MAX_IMAGE_BASE64_CHARS} base64 characters)`);
+  }
+  if (image.length % 4 !== 0 || !BASE64.test(image)) throw new Error(`Invalid ${event} image: not base64`);
+  const magic = IMAGE_MAGIC[mimeType];
+  // The first 12 base64 characters are the first 9 bytes, enough for both signatures.
+  const head = Buffer.from(image.slice(0, 12), "base64");
+  if (!head.subarray(0, magic.length).equals(magic)) {
+    throw new Error(`Invalid ${event} image: the bytes are not a ${mimeType === "image/png" ? "PNG" : "JPEG"}`);
+  }
+}
+
 /** Client events a private (Max Cloud) session may not send. */
 const PRIVATE_SESSION_REFUSED: ReadonlySet<string> = new Set([
   "nav.request",
@@ -534,6 +634,31 @@ export function parseClientEvent(data: RawData): ClientEvent {
     return { type: "text.input", text: value.text.trim() };
   }
 
+  if (value.type === "image.input") {
+    assertImage(value.image, value.mimeType);
+    if (value.text !== undefined && typeof value.text !== "string") throw new Error("Invalid image.input text");
+    if (value.text !== undefined && value.text.length > MAX_TEXT_INPUT_CHARS)
+      throw new Error("Invalid image.input text");
+    const text = value.text?.trim();
+    return {
+      type: "image.input",
+      image: value.image as string,
+      mimeType: value.mimeType as "image/jpeg" | "image/png",
+      ...(text ? { text } : {})
+    };
+  }
+
+  if (value.type === "video.frame") {
+    assertImage(value.image, value.mimeType, "video.frame");
+    return {
+      type: "video.frame",
+      image: value.image as string,
+      mimeType: value.mimeType as "image/jpeg" | "image/png"
+    };
+  }
+
+  if (value.type === "video.stop") return { type: "video.stop" };
+
   if (value.type === "tool.result") {
     if (typeof value.callId !== "string" || !value.callId || value.callId.length > MAX_TOOL_CALL_ID) {
       throw new Error("Invalid tool.result callId");
@@ -627,6 +752,9 @@ export function parseClientEvent(data: RawData): ClientEvent {
     if (value.context.trim()) value.context = value.context.trim();
     else delete value.context;
   }
+  // Dropped rather than rejected: a stale or mangled id only means the
+  // conversation starts fresh.
+  if (value.resume !== undefined && !isResumeId(value.resume)) delete value.resume;
 
   return value as ClientEvent;
 }
@@ -638,7 +766,11 @@ const SESSION_STARTED_PREFIX = '{"type":"session.started"';
  * itself. The protocol version and the audio plan are the relay's own facts,
  * so they are added to that one announcement here, once, for every backend.
  */
-function announcingRelayFacts(client: WebSocket, plan: () => AudioPlan | undefined): WebSocket {
+function announcingRelayFacts(
+  client: WebSocket,
+  plan: () => AudioPlan | undefined,
+  resume: () => string | undefined
+): WebSocket {
   return new Proxy(client, {
     get(target, property) {
       const value: unknown = Reflect.get(target, property, target);
@@ -647,11 +779,13 @@ function announcingRelayFacts(client: WebSocket, plan: () => AudioPlan | undefin
       return (data: unknown, ...rest: unknown[]) => {
         if (typeof data === "string" && data.startsWith(SESSION_STARTED_PREFIX)) {
           const audio = plan();
+          const resumeId = resume();
           try {
             data = JSON.stringify({
               ...(JSON.parse(data) as object),
               protocol: PROTOCOL_VERSION,
-              ...(audio ? { audio } : {})
+              ...(audio ? { audio } : {}),
+              ...(resumeId ? { resume: resumeId } : {})
             });
           } catch {
             /* send it as the backend wrote it */
@@ -663,6 +797,16 @@ function announcingRelayFacts(client: WebSocket, plan: () => AudioPlan | undefin
   });
 }
 
+/** A final transcript as durable memory may keep it: without the kinds of
+ *  personal data the assistant's owner asked never to store. */
+function withoutPersonalData(payload: unknown): unknown {
+  const kinds = assistant().redact;
+  if (kinds.length === 0 || typeof payload !== "object" || payload === null) return payload;
+  const event = payload as { type?: unknown; text?: unknown };
+  if (event.type !== "transcript" || typeof event.text !== "string") return payload;
+  return { ...event, text: redactText(event.text, kinds) };
+}
+
 export class AgentSessionController {
   private readonly relaySessionId = randomUUID();
   private readonly provider: AgentProvider;
@@ -670,8 +814,14 @@ export class AgentSessionController {
   private readonly navHandler: ReturnType<typeof createNavHandler>;
   private readonly navPromptHandler: (event: NavPromptEvent) => void;
   private audioPlan?: AudioPlan;
+  private resumeId?: string;
+  /** Where this session's turns are remembered, for a user named by a session token. */
+  private tokenUserMemoryKey?: string;
   private silenceFiller?: SilenceFiller;
+  private noiseSuppressor?: NoiseSuppressor;
   private sessionStartReceived = false;
+  /** Whether this connection was already told that the backend takes no video. */
+  private videoRefused = false;
   private providerStarted = false;
   private audioActive = false;
   private acceptingMessages = true;
@@ -690,17 +840,23 @@ export class AgentSessionController {
     private readonly hooks?: AgentSessionHooks
   ) {
     this.provider = providerFactory(
-      announcingRelayFacts(client, () => this.audioPlan),
+      announcingRelayFacts(
+        hooks?.recording ? recordingTap(client, hooks.recording, hooks.recordingClient ?? "app") : client,
+        () => this.audioPlan,
+        () => this.resumeId
+      ),
       {
         serverEvent: (payload, bytes) => {
           metrics.serverEvent(bytes);
           this.hooks?.onServerEvent?.(payload);
           recordTesterServerEvent(this.relaySessionId, payload, bytes);
-          if (this.authenticatedUser) recordUserMemoryEvent(this.authenticatedUser.id, payload);
+          const memoryKey = this.authenticatedUser?.id ?? this.tokenUserMemoryKey;
+          if (memoryKey) recordUserMemoryEvent(memoryKey, withoutPersonalData(payload));
           if (this.registeredDeviceId && isFinalRiderTranscript(payload)) {
             this.hooks?.onRiderUtterance?.(this.registeredDeviceId, payload.text);
           }
         },
+        relayEvent: (payload) => this.hooks?.onServerEvent?.(payload),
         serverAudio: (bytes) => {
           metrics.serverAudio(bytes);
           recordTesterServerAudio(this.relaySessionId, bytes);
@@ -757,7 +913,18 @@ export class AgentSessionController {
         if (chunk.byteLength > MAX_CLIENT_AUDIO_BYTES) throw new Error("Audio frame is too large");
         metrics.clientAudio(chunk.byteLength);
         recordTesterClientAudio(this.relaySessionId, chunk.byteLength);
-        await this.provider.sendAudio(chunk);
+        // Until the model has loaded, audio passes through as it came.
+        if (this.hooks?.noiseSuppression) this.noiseSuppressor ??= createNoiseSuppressor();
+        const audio = this.noiseSuppressor ? this.noiseSuppressor.process(chunk) : chunk;
+        if (audio.byteLength > 0) {
+          // What the backend heard, which is the cleaned audio when the relay cleans it.
+          try {
+            this.hooks?.recording?.user(audio);
+          } catch {
+            /* the conversation goes on without it */
+          }
+          await this.provider.sendAudio(audio);
+        }
         this.silenceFiller?.frame();
         return;
       }
@@ -805,7 +972,19 @@ export class AgentSessionController {
       }
       if (event.type === "session.start") {
         this.speechLanguage = sessionLanguage(event.language, assistant().languages);
-        const durableMemory = this.authenticatedUser ? userConversationMemory(this.authenticatedUser.id) : null;
+        const grant = this.hooks?.tokenGrant;
+        // A user your product names in a session token is remembered only when
+        // the assistant's owner asked for that. A Max Cloud project has its own
+        // settings and its own users: the relay's config says nothing for it.
+        const cloud = (this.hooks?.resumeScope ?? "").startsWith("cloud:");
+        this.tokenUserMemoryKey =
+          !this.authenticatedUser && grant?.userId && !cloud && assistant().conversation.rememberUsers
+            ? externalUserMemoryKey(grant.userId)
+            : undefined;
+        const memoryKey = this.authenticatedUser?.id ?? this.tokenUserMemoryKey;
+        const durableMemory = memoryKey ? userConversationMemory(memoryKey) : null;
+        // A summary written while summaries were on is not shown once they are off.
+        const earlier = userMemorySummariesOn() ? durableMemory?.summary?.text : undefined;
         // Once durable memory is enabled, the server is authoritative for a
         // login identity. A newly logged-in user must never inherit the
         // previous user's device-local snapshot merely because their own
@@ -813,13 +992,31 @@ export class AgentSessionController {
         // disabled, retain the original client-echoed restart behaviour.
         const providerEvent =
           this.authenticatedUser && userMemoryEnabled() ? { ...event, memory: durableMemory?.session } : event;
-        const grant = this.hooks?.tokenGrant;
+        const userId = this.authenticatedUser?.id ?? grant?.userId;
+        // A resume id only opens the conversation of the same user of the same
+        // deployment. Anonymous sessions have the id alone, which is unguessable.
+        const resumeOwner = `${this.hooks?.resumeScope ?? ""}\n${userId ?? ""}`;
+        const resumed = resumeStore.load(event.resume, resumeOwner);
+        const resumeId = resumed && event.resume ? event.resume : resumeStore.create(resumeOwner);
+        this.resumeId = resumeId;
+        if (resumed?.history.length)
+          this.log?.info("session resumes a conversation", { turns: resumed.history.length });
+        const trusted = [grant?.context, this.hooks?.trustedContext].filter(Boolean).join("\n");
         const providerContext: ProviderSessionContext = {
           sessionId: this.relaySessionId,
-          ...(this.authenticatedUser?.id || grant?.userId
-            ? { userId: this.authenticatedUser?.id ?? grant?.userId }
-            : {}),
-          ...(grant?.context ? { trustedContext: grant.context } : {}),
+          ...(userId ? { userId } : {}),
+          ...(trusted ? { trustedContext: trusted } : {}),
+          ...(this.hooks?.channel ? { channel: this.hooks.channel } : {}),
+          ...(this.hooks?.sessionTools ? { sessionTools: this.hooks.sessionTools } : {}),
+          ...(resumed ? { resume: resumed } : {}),
+          saveResume: (state) => resumeStore.save(resumeId, state),
+          // The provider has told the client why; the close is what frees the session.
+          endSession: (reason) => {
+            this.log?.info("session ended by the relay", { reason });
+            // The idle code: every client already treats it as final and does
+            // not reconnect, which a plain 1000 would invite.
+            this.terminate(IDLE_CLOSE_CODE, reason.slice(0, 100));
+          },
           // Live accessor, not a snapshot — see ProviderSessionContext's doc
           // comment. this.navHandler is already assigned by the time any
           // provider could actually call this (start() runs after the
@@ -827,12 +1024,14 @@ export class AgentSessionController {
           // relative construction order above.
           routeActive: () => this.navHandler.activeRoute() !== undefined,
           captureNavigationStop: () => this.navHandler.captureStop(),
-          ...(durableMemory && (durableMemory.turns.length || durableMemory.facts.length)
+          ...(durableMemory && (durableMemory.turns.length || durableMemory.facts.length || earlier)
             ? {
                 previousConversation: {
                   updatedAt: durableMemory.updatedAt,
-                  turns: durableMemory.turns,
-                  facts: durableMemory.facts
+                  // A resumed conversation already carries its own turns.
+                  turns: resumed ? [] : durableMemory.turns,
+                  facts: durableMemory.facts,
+                  ...(earlier ? { summary: earlier } : {})
                 }
               }
             : {})
@@ -930,6 +1129,25 @@ export class AgentSessionController {
           this.send({ type: "error", message: "This voice backend does not accept typed messages." });
         }
       }
+      if (event.type === "image.input") {
+        const accepted = this.provider.imageInput
+          ? await this.provider.imageInput({ data: event.image, mimeType: event.mimeType }, event.text)
+          : false;
+        if (accepted === false) {
+          this.send({ type: "error", message: "This voice backend does not take pictures." });
+        }
+      }
+      if (event.type === "video.frame") {
+        const accepted = this.provider.videoFrame
+          ? await this.provider.videoFrame({ data: event.image, mimeType: event.mimeType })
+          : false;
+        // Said once: a client that did not look at the capabilities sends a frame a second.
+        if (accepted === false && !this.videoRefused) {
+          this.videoRefused = true;
+          this.send({ type: "error", message: "This voice backend does not take video." });
+        }
+      }
+      if (event.type === "video.stop") await this.provider.videoStop?.();
       // The FIRST consumer of hazard.report (see parseClientEvent's "never
       // echo back" comment above): forwarded so the vision governor can gate
       // watching on a hazard the board already announced, never echoed to
@@ -973,6 +1191,11 @@ export class AgentSessionController {
           await pendingMessages;
           await this.provider.close();
         } finally {
+          // The conversation is over: what has left the user's window of turns is folded into their summary.
+          const memoryKey = this.authenticatedUser?.id ?? this.tokenUserMemoryKey;
+          if (memoryKey) void summarizeUserMemory(memoryKey);
+          this.noiseSuppressor?.close();
+          this.noiseSuppressor = undefined;
           const detachHelmet = this.detachHelmet;
           this.detachHelmet = undefined;
           try {

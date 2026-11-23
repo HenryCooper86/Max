@@ -48,6 +48,18 @@ vi.mock("../sdk/src/client", async (importOriginal) => {
     sendText() {
       return true;
     }
+    sendImage() {
+      return Promise.resolve(true);
+    }
+    videos: unknown[][] = [];
+    startVideo(...args: unknown[]) {
+      this.videos.push(args);
+      this.emit("video", { active: true, source: args[0] ?? "camera" });
+      return Promise.resolve({ id: "stream" });
+    }
+    stopVideo() {
+      this.emit("video", { active: false });
+    }
     setContext(text: string) {
       this.context = text;
     }
@@ -110,6 +122,25 @@ describe("useVoiceAgent", () => {
     expect(live()).toHaveLength(0);
   });
 
+  it("passes pictures to the client", async () => {
+    await render(base);
+    await expect(result.sendImage("data:image/png;base64,AAAA", { text: "hi" })).resolves.toBe(true);
+  });
+
+  it("passes live video to the client, and says what is being shown", async () => {
+    await render(base);
+    expect(result.video).toBeUndefined();
+    let stream: unknown;
+    await act(async () => {
+      stream = await result.startVideo("screen", { intervalMs: 2000 });
+    });
+    expect(stream).toEqual({ id: "stream" });
+    expect((live()[0] as unknown as { videos: unknown[][] }).videos).toEqual([["screen", { intervalMs: 2000 }]]);
+    expect(result.video).toBe("screen");
+    await act(async () => result.stopVideo());
+    expect(result.video).toBeUndefined();
+  });
+
   it("does not recreate the client for inline objects, functions and new handlers", async () => {
     const make = (n: number): VoiceAgentOptions => ({
       ...base,
@@ -147,6 +178,8 @@ describe("useVoiceAgent", () => {
     ["language", { language: "zh" }],
     ["voice", { voice: "male" }],
     ["backend", { backend: "doubao" }],
+    ["transport", { transport: "webrtc" }],
+    ["iceServers", { iceServers: [{ urls: "stun:stun.example.com" }] }],
     ["tools", { tools: [{ name: "b", description: "B", handler: () => 0 }] }]
   ] as Array<[string, Partial<VoiceAgentOptions>]>) {
     it(`recreates the client when ${name} changes`, async () => {

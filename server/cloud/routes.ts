@@ -8,6 +8,9 @@ import { checkAuthRateLimit, clientAddress, withLoginBackoff } from "../auth";
 import { createLogger } from "../logger";
 import { PACKS } from "./billing";
 import { cloudEnabled, cloudPaymentProvider, cloudPaymentProviders, now } from "./context";
+import { flowFrom } from "../flow";
+import { projectWebhooks } from "./conversation-webhook";
+import { projectTraces } from "./traces";
 import { listConversations, readConversation } from "./conversations";
 import {
   createProject,
@@ -17,7 +20,9 @@ import {
   login,
   logout,
   patchProject,
+  projectStudioReadable,
   projectStudio,
+  projectTracesHeaders,
   projectWebhookSecret,
   publicCustomer,
   revealWebhookSecret,
@@ -216,6 +221,111 @@ export function registerCloudRoutes(app: express.Express): void {
           args ? (input.arguments as Record<string, unknown>) : {}
         )
       );
+    })
+  );
+  // The flow builder: the project's flow as steps, the starting step first, and the tools a step can name.
+  const flowOf = (row: Parameters<typeof projectStudio>[0]) => {
+    const studio = projectStudio(row);
+    return { ok: true, ...flowFrom(studio.flow), tools: studio.tools.map((tool) => tool.name).sort() };
+  };
+  api.get(
+    "/projects/:id/flow",
+    handle((req, res) => {
+      const row = liveProject(param(req, "id"), customerOf(res).id);
+      if (!row) {
+        res.status(404).json({ error: "Project not found." });
+        return;
+      }
+      res.json(flowOf(row));
+    })
+  );
+  api.put(
+    "/projects/:id/flow",
+    handle((req, res) => {
+      const customer = customerOf(res);
+      const row = liveProject(param(req, "id"), customer.id);
+      if (!row) {
+        res.status(404).json({ error: "Project not found." });
+        return;
+      }
+      const steps = body(req).steps;
+      if (!Array.isArray(steps)) {
+        res.status(400).json({ error: "The flow must be a list of steps." });
+        return;
+      }
+      // What is stored is written back with the flow: not when it can no longer be read as it was saved.
+      if (!projectStudioReadable(row)) {
+        res.status(409).json({
+          error: "This project's settings have to be saved again in the Studio before its flow can be changed."
+        });
+        return;
+      }
+      // Saved like any other setting, with the rest of the project's settings as they are.
+      const saved = patchProject(customer.id, row.id, { studio: { ...projectStudio(row), flow: steps } });
+      if (!saved.ok) {
+        send(res, saved);
+        return;
+      }
+      const after = liveProject(row.id, customer.id);
+      res.json({ ...(after ? flowOf(after) : { ok: true, steps: [], problems: [], tools: [] }), ...saved.value });
+    })
+  );
+  // The conversation webhook: how the last delivery went, and one test request to the saved address.
+  api.get(
+    "/projects/:id/conversation-webhook",
+    handle((req, res) => {
+      const row = liveProject(param(req, "id"), customerOf(res).id);
+      if (!row) {
+        res.status(404).json({ error: "Project not found." });
+        return;
+      }
+      res.json({ url: projectStudio(row).conversationWebhook, last: projectWebhooks.last(row.id) ?? null });
+    })
+  );
+  api.post(
+    "/projects/:id/conversation-webhook/test",
+    handle(async (req, res) => {
+      const row = liveProject(param(req, "id"), customerOf(res).id);
+      if (!row) {
+        res.status(404).json({ ok: false, error: "Project not found." });
+        return;
+      }
+      const url = projectStudio(row).conversationWebhook;
+      if (!url) {
+        res.status(400).json({ ok: false, error: "Save the address first." });
+        return;
+      }
+      if (!checkAuthRateLimit(`project:${row.id}`, Date.now(), "tool-test")) {
+        res.status(429).json({ ok: false, error: "Too many test requests. Try again in a minute." });
+        return;
+      }
+      res.json(await projectWebhooks.test({ projectId: row.id, url, secret: projectWebhookSecret(row) }));
+    })
+  );
+  // The traces collector: one sample trace to the saved endpoint, with the saved headers.
+  api.post(
+    "/projects/:id/traces-test",
+    handle(async (req, res) => {
+      const row = liveProject(param(req, "id"), customerOf(res).id);
+      if (!row) {
+        res.status(404).json({ ok: false, error: "Project not found." });
+        return;
+      }
+      const endpoint = projectStudio(row).traces.endpoint;
+      if (!endpoint) {
+        res.status(400).json({ ok: false, error: "Save the endpoint first." });
+        return;
+      }
+      if (!checkAuthRateLimit(`project:${row.id}`, Date.now(), "tool-test")) {
+        res.status(429).json({ ok: false, error: "Too many test requests. Try again in a minute." });
+        return;
+      }
+      const { headers, unreadable } = projectTracesHeaders(row);
+      if (unreadable) {
+        res.json({ ok: false, error: "The saved headers cannot be read: enter them again and save." });
+        return;
+      }
+      res.json(await projectTraces.test({ name: row.name, endpoint, ...(headers ? { headers } : {}) }));
     })
   );
   api.get(

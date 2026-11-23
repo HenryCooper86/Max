@@ -52,6 +52,12 @@ export type EngineToolCall = {
 export type EngineEvents = {
   /** The wearer started talking. Fires for every new turn, including barge-in. */
   onSpeechStarted(): void;
+  /**
+   * The wearer's turn was taken to be over: the upstream's detection said so, or the relay's.
+   * Only for the clock: how long the answer takes is counted from here, where an engine can say
+   * it, and not from when the words of the turn were written down, which is often later.
+   */
+  onSpeechEnded?(): void;
   /** The wearer's words so far for the current turn (cumulative). */
   onRiderTranscript(text: string, final: boolean): void;
   onResponseStarted(): void;
@@ -67,10 +73,25 @@ export type EngineEvents = {
   /** The model wants a tool run. Answer with `sendToolResult`; the model
    *  continues its reply once every call it made has an answer. */
   onToolCall?(call: EngineToolCall): void;
+  /**
+   * For engines that make the speech themselves from the model's text. True
+   * when the session wants to read each piece of a reply before anyone hears
+   * or sees it: the engine then hands the text to `holdSpeech` sentence by
+   * sentence, and neither speaks it nor reports it with `onAgentText` until
+   * that resolves to true. False ends the reply: the session has stopped it.
+   */
+  holdsSpeech?(): boolean;
+  holdSpeech?(text: string): Promise<boolean>;
 };
+
+/** A picture for the model: base64 without a `data:` prefix, and its media type. */
+export type EngineImage = { data: string; mimeType: string };
 
 export type VoiceEngine = {
   readonly responseMode: EngineResponseMode;
+  /** True when the upstream ends the reply that asked for a tool and answers
+   *  the tool's result in a new one. Otherwise the same reply carries on. */
+  readonly answersToolsInNewReply?: boolean;
   /** Resolves once the upstream accepted the session; rejects with a message
    *  fit to show the person setting the kit up. */
   connect(config: EngineConfig, events: EngineEvents): Promise<void>;
@@ -83,6 +104,11 @@ export type VoiceEngine = {
   respond(): void;
   /** Stop the reply in progress, if the upstream allows it. */
   cancel(): void;
+  /**
+   * The user's turn that has just ended is not to be answered (a guardrail refused it). Only an
+   * engine that keeps a turn's answer waiting behind the reply under way has anything to forget.
+   */
+  forgetTurn?(): void;
   /** Speak this exact line (relay-composed confirmations and navigation). */
   say?(text: string): void;
   /** Replace the system instructions mid-session (fresh weather, location). */
@@ -91,8 +117,29 @@ export type VoiceEngine = {
   addContext?(text: string): void;
   /** Give the model a tool's result (text, usually JSON) and let it carry on. */
   sendToolResult?(callId: string, output: string): void;
+  /**
+   * Speak a line of the relay's own, in these words, while the model waits
+   * for the result of this tool call: inside the reply under way, after what
+   * the model has said and before what it says with the result. Only engines
+   * that make the speech themselves have it.
+   */
+  sayDuringTool?(callId: string, line: string): void;
   /** A turn the user typed: answer it as if it had been spoken. */
   sendText?(text: string): void;
+  /** A picture from the user. With `text` it is a typed turn with the picture
+   *  attached and the model answers it; without, the picture joins the
+   *  conversation and the model sees it with the next turn. Engines whose
+   *  upstream or model cannot see pictures omit this. */
+  sendImage?(image: EngineImage, text?: string): void;
+  /** The newest frame of the user's live video. It starts nothing: the model
+   *  sees it with the user's next turn, or as it arrives where the upstream
+   *  takes video itself. `undefined`: the video has stopped. Engines that
+   *  take pictures take these. */
+  sendVideoFrame?(image: EngineImage | undefined): void;
+  /** Replace the tools the model may call (the conversation moved to another
+   *  agent). Engines whose upstream fixes the tools at connect omit this; the
+   *  session then offers every tool up front and refuses the ones out of turn. */
+  updateTools?(tools: ToolSpec[]): void;
   close(): void;
 };
 

@@ -30,6 +30,28 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Headset
+import androidx.compose.material.icons.filled.Image
+import android.Manifest
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.net.Uri
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import io.github.henrycooper86.max.agent.ImageRefusal
+import io.github.henrycooper86.max.agent.imageInputReady
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -221,6 +243,8 @@ private fun AgentScreenContent(
             val recording by viewModel.camera.isRecording.collectAsStateWithLifecycle()
             val galleryRequest by viewModel.deviceActions.galleryRequest.collectAsStateWithLifecycle()
             LaunchedEffect(galleryRequest) { if (galleryRequest > 0) viewModel.showGallery = true }
+            val videoPreview by viewModel.videoPreview.collectAsStateWithLifecycle()
+            val videoNote by viewModel.videoNote.collectAsStateWithLifecycle()
             val name = viewModel.assistantName
             val alerts: @Composable () -> Unit = {
                 state.hazardAlert?.let { HazardBanner(it) }
@@ -234,7 +258,19 @@ private fun AgentScreenContent(
                 if (viewModel.showCaptions) CaptionsOverlay(
                     items = state.transcript, assistantName = name,
                     canFlag = state::canFlagTurn, onFlag = viewModel::flagTurn,
-                    typedInput = typedInputMode(state), onSend = viewModel::sendText
+                    typedInput = typedInputMode(state), onSend = viewModel::sendText,
+                    pictures = imageInputReady(state), onPicture = viewModel::sendPicture,
+                    video = if (state.capabilities.videoInput) VideoControls(
+                        active = state.videoActive,
+                        canStart = state.connection == ConnectionState.READY,
+                        front = viewModel.videoFront,
+                        preview = videoPreview,
+                        note = videoNote,
+                        onStart = viewModel::startVideo,
+                        onDenied = viewModel::videoPermissionDenied,
+                        onStop = viewModel::stopVideo,
+                        onSwitch = viewModel::switchVideoCamera
+                    ) else null
                 )
             }
             val visor: @Composable (Dp) -> Unit = { width ->
@@ -486,7 +522,10 @@ private fun CaptionsOverlay(
     canFlag: (TranscriptItem) -> Boolean = { false },
     onFlag: (TranscriptItem, String) -> Unit = { _, _ -> },
     typedInput: TypedInputMode = TypedInputMode.HIDDEN,
-    onSend: (String) -> Boolean = { false }
+    onSend: (String) -> Boolean = { false },
+    pictures: Boolean = false,
+    onPicture: (Uri, String, (ImageRefusal?) -> Unit) -> Unit = { _, _, _ -> },
+    video: VideoControls? = null
 ) {
     val c = Visor.colors
     val listState = rememberLazyListState()
@@ -522,17 +561,70 @@ private fun CaptionsOverlay(
                 }
             }
         }
-        if (typedInput != TypedInputMode.HIDDEN) TypedTurnField(typedInput, onSend)
+        if (typedInput != TypedInputMode.HIDDEN) TypedTurnField(typedInput, onSend, pictures, onPicture, video)
     }
 }
 
+/** The camera controls for a session that takes live video; null when it does not. */
+private class VideoControls(
+    val active: Boolean,
+    val canStart: Boolean,
+    val front: Boolean,
+    val preview: Bitmap?,
+    val note: Str?,
+    val onStart: () -> Unit,
+    val onDenied: () -> Unit,
+    val onStop: () -> Unit,
+    val onSwitch: () -> Unit
+)
+
 /** A typed turn for backends that accept text.input; disabled while the bike is moving. */
 @Composable
-private fun TypedTurnField(mode: TypedInputMode, onSend: (String) -> Boolean) {
+private fun TypedTurnField(
+    mode: TypedInputMode,
+    onSend: (String) -> Boolean,
+    pictures: Boolean,
+    onPicture: (Uri, String, (ImageRefusal?) -> Unit) -> Unit,
+    video: VideoControls?
+) {
     val c = Visor.colors
+    val context = LocalContext.current
+    // The camera permission is asked when the video is first turned on; a refusal is a note, not an error.
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) video?.onStart?.invoke() else video?.onDenied?.invoke()
+    }
     var draft by rememberSaveable { mutableStateOf("") }
     val ready = mode == TypedInputMode.READY
     val send = { if (ready && draft.isNotBlank() && onSend(draft)) draft = "" }
+    // What became of the last picture, said under the field until the next one. Not kept when the screen is
+    // made again (a new language, a new font size): a picture on its way then could not take "Sending…" away.
+    var pictureNote by remember { mutableStateOf<Str?>(null) }
+    var sendingPicture by remember { mutableStateOf(false) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            sendingPicture = true
+            pictureNote = Str.PICTURE_SENDING
+            // What is typed goes with the picture, as one turn. It leaves the field now, so that it cannot be
+            // sent a second time, and comes back if the picture does not go.
+            val words = draft
+            draft = ""
+            onPicture(uri, words) { refusal ->
+                sendingPicture = false
+                if (refusal != null && words.isNotBlank()) {
+                    draft = (if (draft.isBlank()) words else "$words $draft").take(MAX_TEXT_INPUT_CHARS)
+                }
+                pictureNote = when (refusal) {
+                    // With words the assistant answers at once: nothing more to say here.
+                    null -> if (words.isBlank()) Str.PICTURE_SENT else null
+                    ImageRefusal.NOT_READY -> Str.PICTURE_NOT_READY
+                    ImageRefusal.TOO_FAST -> Str.PICTURE_TOO_FAST
+                    ImageRefusal.TOO_MANY -> Str.PICTURE_TOO_MANY
+                    ImageRefusal.TOO_LARGE -> Str.PICTURE_UNREADABLE
+                }
+            }
+        }
+    }
+    Column(modifier = Modifier.fillMaxWidth()) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(VisorSpace.x2),
@@ -547,6 +639,41 @@ private fun TypedTurnField(mode: TypedInputMode, onSend: (String) -> Boolean) {
             keyboardActions = KeyboardActions(onSend = { send() }),
             modifier = Modifier.weight(1f)
         )
+        if (pictures) {
+            IconButton(
+                onClick = {
+                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                },
+                enabled = ready && !sendingPicture
+            ) {
+                Icon(
+                    Icons.Filled.Image,
+                    contentDescription = tr(Str.PICTURE_SHOW),
+                    tint = if (ready && !sendingPicture) c.textSecondary else c.textTertiary
+                )
+            }
+        }
+        if (video != null) {
+            // Like the field and the picture button, it is not turned on while the bike moves; off always works.
+            val usable = video.active || (video.canStart && ready)
+            IconButton(
+                onClick = {
+                    when {
+                        video.active -> video.onStop()
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED ->
+                            video.onStart()
+                        else -> cameraPermission.launch(Manifest.permission.CAMERA)
+                    }
+                },
+                enabled = usable
+            ) {
+                Icon(
+                    if (video.active) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
+                    contentDescription = tr(if (video.active) Str.VIDEO_STOP else Str.VIDEO_START),
+                    tint = if (video.active) c.accent else if (usable) c.textSecondary else c.textTertiary
+                )
+            }
+        }
         IconButton(onClick = send, enabled = ready && draft.isNotBlank()) {
             Icon(
                 Icons.AutoMirrored.Filled.Send,
@@ -554,6 +681,51 @@ private fun TypedTurnField(mode: TypedInputMode, onSend: (String) -> Boolean) {
                 tint = if (ready && draft.isNotBlank()) c.accent else c.textTertiary
             )
         }
+    }
+    if (video != null) {
+        if (video.active) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(VisorSpace.x2),
+                modifier = Modifier.padding(top = VisorSpace.x1).semantics { liveRegion = LiveRegionMode.Polite }
+            ) {
+                val preview = video.preview
+                Box(
+                    modifier = Modifier.size(width = 96.dp, height = 72.dp).clip(RoundedCornerShape(8.dp)).background(c.surface2),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (preview != null) Image(
+                        bitmap = preview.asImageBitmap(),
+                        contentDescription = tr(Str.LIVE_VIDEO_SEEN),
+                        contentScale = ContentScale.Crop,
+                        // The front camera shows as a mirror does; what is sent is not turned.
+                        modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = if (video.front) -1f else 1f }
+                    )
+                }
+                IconButton(onClick = video.onSwitch) {
+                    Icon(Icons.Filled.Cameraswitch, contentDescription = tr(Str.VIDEO_SWITCH), tint = c.textSecondary)
+                }
+                Text(tr(Str.VIDEO_ON), color = c.textSecondary, style = VisorType.caption, modifier = Modifier.weight(1f))
+            }
+        } else video.note?.let { note ->
+            Text(
+                tr(note),
+                color = c.textSecondary,
+                style = VisorType.caption,
+                modifier = Modifier.padding(top = VisorSpace.x1).semantics { liveRegion = LiveRegionMode.Polite }
+            )
+        }
+    }
+    pictureNote?.let { note ->
+        Text(
+            tr(note),
+            color = c.textSecondary,
+            style = VisorType.caption,
+            modifier = Modifier
+                .padding(top = VisorSpace.x1)
+                .semantics { liveRegion = LiveRegionMode.Polite }
+        )
+    }
     }
 }
 

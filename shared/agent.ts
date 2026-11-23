@@ -116,6 +116,14 @@ export type ProviderCapabilities = {
   tools?: boolean;
   /** The session accepts typed turns (`text.input`). */
   textInput?: boolean;
+  /** The session accepts pictures (`image.input`) and the model can see them.
+   *  Chat-model backends turn this on with a setting, because the relay cannot
+   *  tell whether a model is multimodal. */
+  imageInput?: boolean;
+  /** The session takes live video (`video.frame`): what a camera or a shared
+   *  screen shows, which the model sees with what the user says. On wherever
+   *  pictures are. */
+  videoInput?: boolean;
 };
 
 export type TesterStats = {
@@ -293,6 +301,10 @@ export type SessionStartEvent = {
   /** Facts from the host app the assistant should know this session
    *  ("the user is on the pricing page"). Treated as untrusted context. */
   context?: string;
+  /** The `resume` id of an earlier `session.started`, sent when reconnecting
+   *  so the conversation carries on where it stopped. Unknown or expired ids
+   *  are ignored and the session starts fresh. */
+  resume?: string;
 };
 
 /** A tool the client declares in `session.start` and executes itself. */
@@ -303,6 +315,10 @@ type ClientToolSpec = {
   description: string;
   /** JSON Schema for the arguments (an object schema). Omitted → no arguments. */
   parameters?: Record<string, unknown>;
+  /** The conversation does not wait for this tool: the model is told at once
+   *  that it has started, and its result is reported when it arrives (within
+   *  two minutes). */
+  background?: boolean;
 };
 
 /** Client → server: the answer to one `tool.call`. Exactly one per call. */
@@ -317,6 +333,40 @@ export type ToolResultEvent = {
 
 /** Client → server: a turn the user typed instead of spoke. */
 type TextInputEvent = { type: "text.input"; text: string };
+
+/** Client → server: a picture for the conversation's model, with optional words.
+ *  `image` is base64 without a `data:` prefix, JPEG or PNG, at most
+ *  `MAX_IMAGE_BASE64_CHARS` characters. Without `text` the picture waits for the
+ *  user's next turn instead of starting one. */
+type ImageInputEvent = {
+  type: "image.input";
+  image: string;
+  mimeType: "image/jpeg" | "image/png";
+  text?: string;
+};
+
+/** Client → server: one frame of live video, from a camera or a shared screen.
+ *  A picture by the rules of `image.input`, without words. The relay keeps the
+ *  newest frame only: the model sees it with the user's next turn (or, where
+ *  the backend takes video itself, as it arrives). Frames that come faster
+ *  than `MIN_VIDEO_FRAME_INTERVAL_MS` apart are dropped without an error. */
+type VideoFrameEvent = { type: "video.frame"; image: string; mimeType: "image/jpeg" | "image/png" };
+
+/** Client → server: the video has stopped. The relay forgets the last frame. */
+type VideoStopEvent = { type: "video.stop" };
+
+/** Shortest time between two video frames the relay takes. */
+export const MIN_VIDEO_FRAME_INTERVAL_MS = 500;
+/** A frame older than this is not what the user is showing any more. */
+export const VIDEO_FRAME_FRESH_MS = 10_000;
+
+/** Longest `image.input` picture, in base64 characters. Keeps the whole JSON
+ *  message under the relay's 256 KiB limit, which the WebRTC data channel shares. */
+export const MAX_IMAGE_BASE64_CHARS = 240_000;
+/** At most this many pictures in one session. */
+export const MAX_IMAGES_PER_SESSION = 50;
+/** Shortest time between two pictures; Gemini Live takes at most one frame a second. */
+export const MIN_IMAGE_INTERVAL_MS = 1_000;
 
 /** Server → client: run one of the client's own tools and answer with `tool.result`. */
 export type ToolCallEvent = {
@@ -337,6 +387,18 @@ export type ToolActivityEvent = {
   error?: string;
 };
 
+/** Server → client: the relay is ending the session. The last of the
+ *  assistant's speech has been sent; play it out, then expect the close. */
+type SessionEndedEvent = {
+  type: "session.ended";
+  /** `agent`: the assistant ended a finished conversation. `idle`: the user
+   *  stayed silent. `max_duration`: the time limit. */
+  reason: string;
+};
+
+/** Server → client: the conversation moved to another agent. */
+type AgentChangedEvent = { type: "agent.changed"; agent: string };
+
 /** Client → server: the outcome of one device command. Exactly one of these
  *  follows every command; the relay treats silence past its timeout as failure. */
 export type DeviceResultEvent = {
@@ -352,6 +414,9 @@ export type ClientEvent =
   | DeviceResultEvent
   | ToolResultEvent
   | TextInputEvent
+  | ImageInputEvent
+  | VideoFrameEvent
+  | VideoStopEvent
   // A hazard the embedded board detected and already announced. Upward only:
   // the board plays the audio itself from a local clip, so the relay must never
   // echo this back as `hazard.alert` — Max would speak the warning a second
@@ -554,6 +619,9 @@ export type AgentEvent =
       /** How the relay treats this session's audio; absent from relays older
        *  than the audio contract. */
       audio?: AudioPlan;
+      /** Send this back as `session.start.resume` when reconnecting, to carry
+       *  the conversation on. Absent from relays older than resumption. */
+      resume?: string;
     }
   | { type: "connection"; state: ConnectionState; detail: string }
   | { type: "status"; state: string; detail: string }
@@ -647,7 +715,9 @@ export type AgentEvent =
   | NavRouteEvent
   | NavErrorEvent
   | ToolCallEvent
-  | ToolActivityEvent;
+  | ToolActivityEvent
+  | SessionEndedEvent
+  | AgentChangedEvent;
 
 /** What kind of wearable this assistant lives in. Drives copy and artwork only. */
 export type AssistantDevice = "helmet" | "glasses" | "other";
@@ -810,7 +880,8 @@ export const MOCK_CAPABILITIES: ProviderCapabilities = {
   emergencyMode: true,
   tools: false,
   // The scripted ride takes no typed turns; the app demo (server/providers/app-demo.ts) does.
-  textInput: false
+  textInput: false,
+  imageInput: false
 };
 
 /** What every live backend offers: real synthesized audio on top of the demo's
@@ -825,7 +896,10 @@ export const LIVE_CAPABILITIES: ProviderCapabilities = {
   sessionMemory: true,
   emergencyMode: true,
   tools: true,
-  textInput: true
+  textInput: true,
+  // Backends turn this on where pictures reach a model that can see them
+  // (server/providers/catalog.ts); none does by default.
+  imageInput: false
 };
 
 /** The keyless demo of a software assistant (server/providers/app-demo.ts):

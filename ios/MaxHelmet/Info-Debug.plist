@@ -40,7 +40,7 @@
 		<string>_maxhelmet._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Max 需要使用相机，才能在你说出指令时拍照和录像。</string>
+	<string>Max 需要使用相机，才能在你说出指令时拍照和录像，并在你打开摄像头时让助手看到画面。</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Max 需要读取通讯录，才能在你说出名字时拨打电话或发送短信。</string>
 	<key>NSLocalNetworkUsageDescription</key>

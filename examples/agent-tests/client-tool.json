@@ -1,0 +1,27 @@
+{
+  "name": "demo: client tool answered by the test client",
+  "clientTools": [
+    {
+      "name": "show_product",
+      "description": "Scroll the shop page to a product and highlight it.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "product": { "type": "string", "enum": ["trail-runner-2", "summit-40-backpack", "storm-shell-jacket"] }
+        },
+        "required": ["product"]
+      },
+      "result": { "shown": true }
+    }
+  ],
+  "turns": [
+    {
+      "user": "show_product {\"product\": \"trail-runner-2\"}",
+      "expect": {
+        "toolCalled": "show_product",
+        "toolArgs": { "show_product": { "product": "trail-runner-2" } },
+        "replyContains": "shown"
+      }
+    }
+  ]
+}

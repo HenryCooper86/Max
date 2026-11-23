@@ -7,7 +7,8 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import dns from "node:dns";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAuthRateLimit } from "../server/auth";
 import { config } from "../server/runtime-config";
 import {
@@ -105,6 +106,171 @@ async function createProject(token: string, name = "Shop") {
   expect(response.status).toBe(201);
   return response.body as { project: { id: string; keyPrefix: string }; apiKey: string };
 }
+
+describe("a project's flow over HTTP", () => {
+  it("is read and saved as the flow builder draws it, by its owner alone", async () => {
+    await startApp();
+    const owner = await signupCustomer();
+    const { project } = await createProject(owner.token);
+    const route = `/cloud/api/projects/${project.id}/flow`;
+    const tool = {
+      name: "check_order",
+      description: "Look up an order's status by its number.",
+      url: "https://api.example.com/tools/order",
+      parameters: []
+    };
+    await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: owner.token,
+      json: { studio: { tools: [tool] } }
+    });
+    // One agent: the start alone, and the tools a step could be limited to.
+    expect((await call("GET", route, { token: owner.token })).body).toEqual({
+      ok: true,
+      steps: [{ id: "main" }],
+      problems: [],
+      tools: ["check_order"]
+    });
+    const steps = [
+      { id: "main", handoffs: [{ to: "refunds", when: "Money back." }], at: [40, 40] },
+      {
+        id: "refunds",
+        description: "Refunds.",
+        instructions: "Refund politely.",
+        tools: ["check_order"],
+        at: [440, 40]
+      }
+    ];
+    const saved = await call("PUT", route, { token: owner.token, json: { steps } });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({ ok: true, steps, tools: ["check_order"], problems: [] });
+    // The project comes back too, for the rest of the Studio: its other settings are as they were.
+    expect(saved.body.project.studio.flow).toEqual(steps);
+    expect(saved.body.project.studio.tools).toEqual([tool]);
+    expect((await call("GET", route, { token: owner.token })).body.steps).toEqual(steps);
+
+    // A request that names no steps changes nothing: it is not read as "no flow".
+    for (const json of [{}, { steps: "main" }, { flow: [] }]) {
+      expect(await call("PUT", route, { token: owner.token, json })).toMatchObject({
+        status: 400,
+        body: { error: "The flow must be a list of steps." }
+      });
+    }
+    // Nor does a save of the settings that says nothing of the flow.
+    const patched = await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: owner.token,
+      json: { studio: { tools: [tool], voice: "cedar" } }
+    });
+    expect(patched.body.project.studio).toMatchObject({ voice: "cedar", flow: steps });
+    const refused = await call("PUT", route, {
+      token: owner.token,
+      json: { steps: [{ id: "main", handoffs: [{ to: "nowhere" }] }] }
+    });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toContain("there is no agent nowhere to hand over to");
+    expect((await call("GET", route, { token: owner.token })).body.steps).toEqual(steps);
+
+    const other = await signupCustomer();
+    expect((await call("GET", route, { token: other.token })).status).toBe(404);
+    expect((await call("PUT", route, { token: other.token, json: { steps: [] } })).status).toBe(404);
+    expect((await call("GET", route)).status).toBe(401);
+    expect((await call("PUT", route, { json: { steps: [] } })).status).toBe(401);
+    expect((await call("GET", route, { token: owner.token })).body.steps).toEqual(steps);
+  });
+});
+
+describe("a project's conversation webhook over HTTP", () => {
+  it("tests the saved address, shows how the last delivery went, and is the owner's alone", async () => {
+    await startApp();
+    const owner = await signupCustomer();
+    const { project } = await createProject(owner.token);
+    const route = `/cloud/api/projects/${project.id}/conversation-webhook`;
+    // Nothing saved yet: nothing to test.
+    expect((await call("GET", route, { token: owner.token })).body).toEqual({ url: "", last: null });
+    expect(await call("POST", `${route}/test`, { token: owner.token })).toMatchObject({
+      status: 400,
+      body: { ok: false, error: "Save the address first." }
+    });
+    const saved = await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: owner.token,
+      json: { studio: { conversationWebhook: "https://hooks.example.com/max" } }
+    });
+    expect(saved.status).toBe(200);
+    expect((await call("GET", route, { token: owner.token })).body).toEqual({
+      url: "https://hooks.example.com/max",
+      last: null
+    });
+    // The request goes out by the rules of a tool call: a name that leads to a private address is refused.
+    const lookup = vi
+      .spyOn(dns, "lookup")
+      .mockImplementation(((
+        _host: string,
+        _options: unknown,
+        callback: (error: null, addresses: dns.LookupAddress[]) => void
+      ) => callback(null, [{ address: "127.0.0.1", family: 4 }])) as unknown as typeof dns.lookup);
+    const tested = await call("POST", `${route}/test`, { token: owner.token });
+    lookup.mockRestore();
+    expect(tested.status).toBe(200);
+    expect(tested.body).toMatchObject({ ok: false, error: "the address must be public, not a private one" });
+    // Another customer has no such project.
+    const other = await signupCustomer();
+    expect((await call("GET", route, { token: other.token })).status).toBe(404);
+    expect((await call("POST", `${route}/test`, { token: other.token })).status).toBe(404);
+    expect((await call("GET", route)).status).toBe(401);
+  });
+});
+
+describe("a project's traces collector over HTTP", () => {
+  it("keeps its headers secret, and tests the saved endpoint for its owner alone", async () => {
+    await startApp();
+    const owner = await signupCustomer();
+    const { project } = await createProject(owner.token);
+    const route = `/cloud/api/projects/${project.id}/traces-test`;
+    // Nothing saved yet: nothing to test.
+    expect(await call("POST", route, { token: owner.token })).toMatchObject({
+      status: 400,
+      body: { ok: false, error: "Save the endpoint first." }
+    });
+    const secret = "x-api-key=sk-lf-very-secret-value";
+    const saved = await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: owner.token,
+      json: {
+        studio: { traces: { endpoint: "https://collector.example.com/v1/traces", content: false } },
+        tracesHeaders: secret
+      }
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.project).toMatchObject({
+      hasTracesHeaders: true,
+      studio: { traces: { endpoint: "https://collector.example.com/v1/traces", content: false } }
+    });
+    expect((await call("GET", "/cloud/api/projects", { token: owner.token })).body.projects).toMatchObject([
+      { hasTracesHeaders: true }
+    ]);
+    const refused = await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: owner.token,
+      json: { tracesHeaders: "host=evil.example.com" }
+    });
+    expect(refused).toMatchObject({ status: 400, body: { error: "The host header cannot be set here." } });
+    // The request goes out by the rules of a tool call: a name that leads to a private address is refused.
+    const lookup = vi
+      .spyOn(dns, "lookup")
+      .mockImplementation(((
+        _host: string,
+        _options: unknown,
+        callback: (error: null, addresses: dns.LookupAddress[]) => void
+      ) => callback(null, [{ address: "127.0.0.1", family: 4 }])) as unknown as typeof dns.lookup);
+    const tested = await call("POST", route, { token: owner.token });
+    lookup.mockRestore();
+    expect(tested.status).toBe(200);
+    expect(tested.body).toEqual({ ok: false, error: "the address must be public, not a private one" });
+    // Another customer has no such project.
+    const other = await signupCustomer();
+    expect((await call("POST", route, { token: other.token })).status).toBe(404);
+    expect((await call("POST", route)).status).toBe(401);
+    // Nothing the server said held the headers.
+    expect(seenBodies.join("\n")).not.toContain("sk-lf-very-secret-value");
+  });
+});
 
 // These suites exercise accounts, projects and money; signup by invitation has
 // its own tests (tests/cloud-invites.test.ts).
@@ -280,6 +446,7 @@ describe("projects", () => {
       keyPrefix: created.apiKey.slice(0, 8),
       backend: "openai",
       hasModelKey: false,
+      hasTracesHeaders: false,
       assistantName: "",
       instructions: "",
       greeting: "",
@@ -287,6 +454,7 @@ describe("projects", () => {
       publicId: expect.stringMatching(/^pub_[0-9a-f]{24}$/),
       hasWebhookSecret: false,
       monthlyMinutesCap: null,
+      analysisOnOwnKey: true,
       createdAt: START
     });
     const id = created.project.id;

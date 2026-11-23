@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
 import type { Logger } from "../logger";
-import { resolveVoiceProviderId, voiceProvider, type VoiceProviderId } from "./catalog";
+import { resolveVoiceProviderId, voiceCapabilities, voiceProvider, type VoiceProviderId } from "./catalog";
 import { createDoubaoProvider } from "./doubao";
 import { createGeminiLiveEngine } from "./live/gemini-live";
 import { createRealtimeEngine, grokDialect, localRealtimeDialect, openAiDialect } from "./live/openai-realtime";
@@ -15,7 +15,7 @@ import type { AgentProvider, ProviderTelemetry, SessionStartEvent } from "./type
 
 function liveBackend(id: VoiceProviderId, createEngine: LiveBackend["createEngine"]): LiveBackend {
   const entry = voiceProvider(id);
-  return { id, label: entry.label, capabilities: entry.capabilities, createEngine };
+  return { id, label: entry.label, capabilities: voiceCapabilities(id), createEngine };
 }
 
 /** What one session runs with instead of the relay's own settings: a Max
@@ -74,28 +74,32 @@ export function createVoiceProvider(
         client,
         liveBackend(id, (engineLog) => createPipelineEngine(engineLog)),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "local":
       return createLiveProvider(
         client,
         liveBackend(id, (engineLog) => createPipelineEngine(engineLog, localPipelineSettings())),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "local-realtime":
       return createLiveProvider(
         client,
         liveBackend(id, (engineLog) => createRealtimeEngine(localRealtimeDialect(), engineLog)),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "max-speech":
       return createLiveProvider(
         client,
         liveBackend(id, (engineLog) => createMaxSpeechEngine(engineLog)),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "mock":
       // A software assistant gets a demo of its own: the scripted ride makes
@@ -148,6 +152,9 @@ export function createSelectableProvider(create: (requested: string | undefined)
     speakNavLine: (text) => chosen?.speakNavLine?.(text),
     speakNavPrompt: (speech) => chosen?.speakNavPrompt?.(speech),
     textInput: async (text) => (chosen?.textInput ? chosen.textInput(text) : false),
+    imageInput: async (image, text) => (chosen?.imageInput ? chosen.imageInput(image, text) : false),
+    videoFrame: async (image) => (chosen?.videoFrame ? chosen.videoFrame(image) : false),
+    videoStop: async () => chosen?.videoStop?.(),
     toolResult: async (event) => chosen?.toolResult?.(event)
   };
 }

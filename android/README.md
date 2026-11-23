@@ -176,6 +176,26 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 - Typed turns: when the backend reports `capabilities.textInput`, the captions panel shows a text
   field that sends `text.input`. It is locked at 5 km/h and above (phone GPS speed), and usable
   when speed is unknown.
+- Pictures: when the backend also reports `capabilities.imageInput`, the field has a picture button.
+  It opens the system photo picker (no storage permission), turns the photo upright by its EXIF
+  data, scales it to 1024 pixels on its longer side and sends it as `image.input`, a JPEG that fits
+  the relay's limit (quality and then size are lowered until it does, like the web SDK's
+  `sendImage`). What is typed in the field goes with the picture as one turn; with nothing typed
+  the assistant sees the picture with the next thing said. The relay's limits (one picture a
+  second, 50 per connection) are kept on the phone too, so the reason is shown at once.
+- Live video: when the backend reports `capabilities.videoInput`, the field has a camera button.
+  The first time it is turned on the app asks for the camera permission; a refusal shows a short
+  note. While on, CameraX's image analysis (the front camera first, with a control to switch to the
+  back one) hands frames to a background thread, which keeps the newest, turns it upright by the
+  sensor's orientation and sends it as `video.frame` about once a second: a JPEG of at most 768
+  pixels on its longer side, at quality 60 and then 45 if it does not fit (a frame that still does
+  not fit is skipped). Frames do not use up the 50 pictures of `image.input`, and none goes less
+  than 500 ms after the last. A small preview shows what the assistant is shown. `video.stop` is
+  sent when the user turns it off, the conversation ends or the app goes to the background. A lost
+  connection turns the camera off too (it is not left on with nobody to show), as does a
+  `session.started` without `videoInput`. Like the field, the camera is not turned on while the bike
+  is moving; turning it off always works. One camera is used at a time: live video is not turned on
+  during a recording, and a photo or a recording asked for by voice ends it.
 - Tool activity: `tool.activity` events show as a short status line ("Using get weather…"). The
   app declares no client tools, so an unexpected `tool.call` is answered at once with an
   `unknown tool` error, as the protocol requires.

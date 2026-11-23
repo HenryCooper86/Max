@@ -253,6 +253,7 @@ def test_full_listening_turn(build, engines):
     final = msgs[-1]
     assert final["text"].startswith("final ") and final["text"] != "final 0"
     assert set(final["ms"]) == {"turn", "stt"}
+    assert final["reason"] == "turn"
     # audio time: smart-turn is asked after 7 quiet frames (224 ms), plus the (instant) check
     assert 224 <= final["ms"]["turn"] < 224 + 400
     stream = engines["stt_stream"].streams[0]
@@ -306,7 +307,7 @@ def test_blip_gives_an_empty_final(build):
         open_session(ws)
         say(ws, loud_frames=2, quiet_frames=10)
         msgs = recv_until(ws, "transcript.final")
-    assert msgs[-1]["text"] == ""
+    assert msgs[-1]["text"] == "" and msgs[-1]["reason"] == "blip"
 
 
 def test_turn_end_forces_the_final(build, engines):
@@ -978,6 +979,7 @@ def test_an_engine_failure_mid_turn_still_closes_the_turn(build, engines):
         msgs = recv_until(ws, "transcript.final")
     assert [m["type"] for m in msgs if isinstance(m, dict)][-2:] == ["error", "transcript.final"]
     assert msgs[-1]["text"] == "" and msgs[-1]["ms"] == {"turn": 0, "stt": 0}
+    assert msgs[-1]["reason"] == "dropped"
 
 
 def test_reconfigure_mid_turn_closes_the_turn(build):

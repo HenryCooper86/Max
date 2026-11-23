@@ -21,6 +21,7 @@
     "cloud:reencrypt": "tsx scripts/cloud-reencrypt.ts",
     "check:sdk": "tsc -p sdk/tsconfig.json --noEmit",
     "generate:protocol": "tsx scripts/generate-agent-protocol.ts",
+    "agent:test": "tsx scripts/agent-test/cli.ts",
     "check:protocol": "tsx scripts/generate-agent-protocol.ts --check",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "eslint .",
@@ -70,5 +71,10 @@
     "typescript-eslint": "^8.65.0",
     "vite": "^8.1.5",
     "vitest": "^4.1.10"
+  },
+  "optionalDependencies": {
+    "@jitsi/rnnoise-wasm": "^0.2.1",
+    "opusscript": "^0.1.1",
+    "werift": "^0.28.0"
   }
 }

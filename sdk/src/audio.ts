@@ -41,6 +41,12 @@ export interface AudioIO {
   clearPlayback(): void;
   /** Current meter levels, 0..1. */
   levels(): { mic: number; output: number };
+  /** The open microphone's track, for a transport that sends it as media (WebRTC). */
+  micTrack?(): MediaStreamTrack | undefined;
+  /** Plays the agent's voice from a media stream (WebRTC) until {@link stopStream}. */
+  playStream?(stream: MediaStream): void;
+  /** Stops playing that stream. A stream that is no longer the current one is ignored. */
+  stopStream?(stream: MediaStream): void;
   /** Resumes suspended audio. Call from a user gesture. Resolves to whether audio is running. */
   resume(): Promise<boolean>;
   /** Releases everything. */
@@ -121,6 +127,12 @@ registerProcessor("pcm-capture", PcmCaptureProcessor);
 `;
 
 const PLAYBACK_GAIN = 2;
+/** A stream counts as the agent speaking above this level, and until it has been quiet this long. */
+const STREAM_SPEECH_LEVEL = 0.004;
+const STREAM_QUIET_MS = 350;
+const STREAM_POLL_MS = 50;
+/** On barge-in the browser still holds a moment of speech; it is muted for this long. */
+const STREAM_MUTE_SECONDS = 0.15;
 const LOCALES: Record<string, string> = { zh: "zh-CN", en: "en-US" };
 
 type WorkletMessage = { type: "frame"; pcm: ArrayBuffer } | { type: "level"; value: number };
@@ -145,8 +157,23 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
   let speaking = false;
   let playing = false;
 
+  // The agent's voice as a media stream (WebRTC), instead of PCM chunks.
+  let remote:
+    | {
+        stream: MediaStream;
+        source: MediaStreamAudioSourceNode;
+        mute: GainNode;
+        meter: AnalyserNode;
+        samples: Float32Array<ArrayBuffer>;
+        element: HTMLAudioElement | undefined;
+        timer: ReturnType<typeof setInterval>;
+        level: number;
+      }
+    | undefined;
+  let streamSpeaking = false;
+
   const setPlaying = () => {
-    const next = sources.length > 0 || speaking;
+    const next = sources.length > 0 || speaking || streamSpeaking;
     if (next === playing) return;
     playing = next;
     options.onPlayingChange(next);
@@ -371,9 +398,81 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
       setPlaying();
     },
     speak,
+    micTrack() {
+      return stream?.getAudioTracks()[0];
+    },
+    playStream(next) {
+      this.stopStream!(remote?.stream ?? next);
+      const ctx = ensurePlayContext();
+      const source = ctx.createMediaStreamSource(next);
+      const mute = ctx.createGain();
+      // Measured before the mute and the limiter: what the relay is sending.
+      const meter = ctx.createAnalyser();
+      meter.fftSize = 512;
+      source.connect(meter);
+      source.connect(mute);
+      mute.connect(gain!);
+      // Chrome delivers a remote stream to Web Audio only while a media
+      // element is also playing it. The element stays muted: the sound comes
+      // from the graph, with the same gain and limiter as PCM playback.
+      let element: HTMLAudioElement | undefined;
+      if (typeof Audio === "function") {
+        element = new Audio();
+        element.muted = true;
+        element.srcObject = next;
+        void element.play().catch(() => undefined);
+      }
+      if (ctx.state === "suspended") {
+        void ctx.resume().catch(() => undefined);
+        setTimeout(() => {
+          if (ctx.state === "suspended") setBlocked(true);
+        }, 1000);
+      }
+      const samples = new Float32Array(meter.fftSize);
+      let lastLoudAt = 0;
+      const timer = setInterval(() => {
+        if (!remote || remote.stream !== next) return;
+        meter.getFloatTimeDomainData(samples);
+        const loudness = rms(samples);
+        remote.level = meterLevel(loudness);
+        const now = Date.now();
+        if (loudness >= STREAM_SPEECH_LEVEL) lastLoudAt = now;
+        const active = now - lastLoudAt < STREAM_QUIET_MS;
+        if (active !== streamSpeaking) {
+          streamSpeaking = active;
+          setPlaying();
+        }
+      }, STREAM_POLL_MS);
+      remote = { stream: next, source, mute, meter, samples, element, timer, level: 0 };
+    },
+    stopStream(ended) {
+      if (!remote || remote.stream !== ended) return;
+      clearInterval(remote.timer);
+      for (const node of [remote.source, remote.mute, remote.meter]) {
+        try {
+          node.disconnect();
+        } catch {
+          /* already detached */
+        }
+      }
+      if (remote.element) {
+        remote.element.pause();
+        remote.element.srcObject = null;
+      }
+      remote = undefined;
+      streamSpeaking = false;
+      setPlaying();
+    },
     clearPlayback() {
       if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
       speaking = false;
+      if (remote && playContext) {
+        // The relay stops sending; this covers what the browser already holds.
+        const now = playContext.currentTime;
+        remote.mute.gain.cancelScheduledValues(now);
+        remote.mute.gain.setValueAtTime(0, now);
+        remote.mute.gain.setValueAtTime(1, now + STREAM_MUTE_SECONDS);
+      }
       for (const source of sources) {
         try {
           source.onended = null;
@@ -391,11 +490,12 @@ export function createBrowserAudio(options: BrowserAudioOptions): AudioIO {
       if (analyser && analyserBuffer && sources.length > 0) {
         analyser.getFloatTimeDomainData(analyserBuffer);
         output = meterLevel(rms(analyserBuffer));
-      }
+      } else if (remote && streamSpeaking) output = remote.level;
       return { mic: micLevel, output };
     },
     close() {
       this.releaseMic();
+      if (remote) this.stopStream!(remote.stream);
       if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
       sources = [];
       speaking = false;

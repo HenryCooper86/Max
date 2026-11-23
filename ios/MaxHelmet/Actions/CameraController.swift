@@ -42,6 +42,9 @@ final class CameraController: DeviceActionHandler {
     private let capturePolicy: () -> CapturePolicy
 
     private var recording = false
+    /// Called before the camera is taken for a photo or a recording: live video,
+    /// which has a capture session of its own, lets go of it first.
+    var willUseCamera: () -> Void = {}
     private var autoStopTask: Task<Void, Never>?
     private var operationGeneration = 0
     private var startingRecording = false
@@ -106,6 +109,7 @@ final class CameraController: DeviceActionHandler {
         guard !Task.isCancelled, generation == operationGeneration else { return .failed("capture.cancelled") }
         guard store.hasSpace() else { return .denied("storage.full") }
         do {
+            willUseCamera()
             let data = try await session.capturePhoto()
             _ = try store.addPhoto(data)
             return .ok
@@ -127,6 +131,7 @@ final class CameraController: DeviceActionHandler {
         recording = true
         lastRecordingResult = .ok
         do {
+            willUseCamera()
             try await session.startRecording(to: store.newVideoURL())
             guard recording else { return lastRecordingResult }
             if Task.isCancelled || generation != operationGeneration {

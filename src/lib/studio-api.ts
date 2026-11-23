@@ -4,6 +4,7 @@
 
 import type { AssistantSummary, VoiceEqualizerOptions, VoiceProviderSummary } from "../../shared/agent";
 import { requestJson, type ApiResult } from "./api-client";
+import type { FlowStep } from "./flow";
 import { credentialToken } from "./utils";
 
 type StudioDevice = {
@@ -57,6 +58,62 @@ export function uploadStudioLogo(file: Blob): Promise<ApiResult<StudioState>> {
 
 export function removeStudioLogo(): Promise<ApiResult<StudioState>> {
   return requestJson<StudioState>("/auth/admin/studio/logo", { method: "DELETE", headers: authHeaders() });
+}
+
+// ---- The flow: the assistant's agents as steps and arrows --------------------
+
+export type StudioFlow = {
+  ok: true;
+  /** The steps, the starting step first. */
+  steps: FlowStep[];
+  /** The relay's own tools by name, for limiting a step to some of them. */
+  tools: string[];
+  /** What the relay skipped in the stored config, if anything. */
+  problems: string[];
+};
+
+export function fetchStudioFlow(): Promise<ApiResult<StudioFlow>> {
+  return requestJson<StudioFlow>("/auth/admin/studio/flow", { headers: authHeaders() });
+}
+
+export function saveStudioFlow(steps: FlowStep[]): Promise<ApiResult<StudioFlow>> {
+  return requestJson<StudioFlow>("/auth/admin/studio/flow", {
+    method: "PUT",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ steps })
+  });
+}
+
+// ---- The configs that have been live ----------------------------------------
+
+export type StudioVersion = {
+  id: string;
+  savedAt: number;
+  /** An admin's name, "studio", "file" for a config found on the server's disk at startup, or "defaults". */
+  by: string;
+  restoredFrom?: string;
+  name?: string;
+  version?: string;
+  /** The top-level config keys that differ from the version before it. */
+  changed: string[];
+  /** True when this is what the config file holds now. */
+  current: boolean;
+};
+
+export type StudioHistory = { ok: true; versions: StudioVersion[] };
+
+/** After a restore: the keys the running relay read only at startup, and so needs a restart for. */
+export type StudioRestored = StudioState & { restartFor: string[] };
+
+export function fetchStudioHistory(): Promise<ApiResult<StudioHistory>> {
+  return requestJson<StudioHistory>("/auth/admin/studio/history", { headers: authHeaders() });
+}
+
+export function restoreStudioVersion(id: string): Promise<ApiResult<StudioRestored>> {
+  return requestJson<StudioRestored>(`/auth/admin/studio/history/${encodeURIComponent(id)}/restore`, {
+    method: "POST",
+    headers: authHeaders()
+  });
 }
 
 // ---- Voice backend setup ---------------------------------------------------

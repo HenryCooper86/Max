@@ -4,6 +4,8 @@ import { registerUser, resetAccounts, setUserRole } from "../server/accounts";
 import {
   authorizeAccountUpgrade,
   authorizeUpgrade,
+  reauthorizeUpgrade,
+  upgradeIdentity,
   checkAuthRateLimit,
   checkRateLimit,
   clientAddress,
@@ -14,6 +16,7 @@ import {
   testingStatsAuthorized
 } from "../server/auth";
 import { config } from "../server/config";
+import { sessionTokens } from "../server/session-tokens";
 
 function fakeRequest(
   options: {
@@ -81,6 +84,62 @@ describe("authorizeUpgrade", () => {
     expect(authorizeUpgrade(fakeRequest({ origin: "https://max.example.com" }))).toEqual({ ok: true });
     // Native clients (iOS/Android) send no Origin header.
     expect(authorizeUpgrade(fakeRequest())).toEqual({ ok: true });
+  });
+
+  // A WebRTC session starts seconds after its signalling request was let in.
+  describe("checked again when the session starts", () => {
+    it("still passes with the credentials that passed, and does not count against the rate limit", () => {
+      config.relayAuthToken = "s3cret";
+      config.allowedOrigins = [];
+      config.connPerMinute = 2;
+      const request = fakeRequest({ authorization: "Bearer s3cret", address: "198.51.100.40" });
+      expect(authorizeUpgrade(request)).toEqual({ ok: true });
+      const identity = upgradeIdentity(request);
+      expect(identity).toEqual({ grant: false, login: false });
+      for (let i = 0; i < 5; i += 1) expect(reauthorizeUpgrade(request, identity)).toEqual({ ok: true });
+      // The limit still has one attempt left for this address.
+      expect(authorizeUpgrade(request)).toEqual({ ok: true });
+      expect(authorizeUpgrade(request).ok).toBe(false);
+    });
+
+    it("refuses when the session token is gone, on a relay that needs one", () => {
+      config.relayAuthToken = "s3cret";
+      config.allowedOrigins = [];
+      const minted = sessionTokens.mint({ userId: "user-1" });
+      if (!minted.ok) throw new Error(minted.error);
+      const request = fakeRequest({ authorization: `Bearer ${minted.token}` });
+      expect(authorizeUpgrade(request)).toEqual({ ok: true });
+      const identity = upgradeIdentity(request);
+      expect(identity.grant).toBe(true);
+      sessionTokens.revoke(minted.token);
+      expect(reauthorizeUpgrade(request, identity)).toMatchObject({ ok: false, code: 401 });
+    });
+
+    it("refuses on an open relay too: the session must not run as somebody else", () => {
+      // Without its grant the session would be the relay's own, outside the
+      // user's limits. An open relay would otherwise let it through.
+      config.relayAuthToken = "";
+      config.allowedOrigins = [];
+      const minted = sessionTokens.mint({});
+      if (!minted.ok) throw new Error(minted.error);
+      const request = fakeRequest({ authorization: `Bearer ${minted.token}` });
+      expect(authorizeUpgrade(request)).toEqual({ ok: true });
+      const identity = upgradeIdentity(request);
+      sessionTokens.revoke(minted.token);
+      expect(reauthorizeUpgrade(request, identity)).toMatchObject({ ok: false, code: 401 });
+      // A request that never had a grant is still fine on an open relay.
+      const plain = fakeRequest();
+      expect(reauthorizeUpgrade(plain, upgradeIdentity(plain))).toEqual({ ok: true });
+    });
+
+    it("refuses when the origin is no longer allowed", () => {
+      config.relayAuthToken = "";
+      config.allowedOrigins = ["https://max.example.com"];
+      const request = fakeRequest({ origin: "https://max.example.com" });
+      const identity = upgradeIdentity(request);
+      config.allowedOrigins = ["https://other.example.com"];
+      expect(reauthorizeUpgrade(request, identity)).toMatchObject({ ok: false, code: 403 });
+    });
   });
 
   it("rate limits repeated upgrade attempts from one address", () => {

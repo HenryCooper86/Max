@@ -6,6 +6,34 @@ import { normalizeEqualizer } from "./audio-eq";
 import { devicePreset, type DevicePreset } from "./device-presets";
 import { configureWakePhrase, DEFAULT_WAKE_NAMES, type WakeNames } from "../shared/wake";
 import type { ServerToolSource } from "./tools/registry";
+import { analysisConfigFrom, type AnalysisConfig } from "./conversation-analysis";
+import { guardrailsConfigFrom, type GuardrailsConfig } from "./guardrails";
+import { variantSpecsFrom } from "./variants";
+import { redactionKindsFrom, type RedactionKind } from "./redact";
+import { knowledgeConfigFrom } from "./knowledge";
+
+/**
+ * Config keys that are wired up by whoever deploys the relay and never typed
+ * into the Studio: they name servers, files on disk and where records go.
+ */
+export const DEPLOYER_KEYS = [
+  "conversation",
+  "agents",
+  "analysis",
+  "privacy",
+  "guardrails",
+  "variants",
+  "version",
+  "knowledge",
+  "mcpServers"
+] as const;
+import {
+  agentStagesFrom,
+  conversationSettingsFrom,
+  DEFAULT_CONVERSATION_SETTINGS,
+  type AgentStage,
+  type ConversationSettings
+} from "./conversation-config";
 
 /**
  * The assistant's identity: who it is, what it is worn in, what it answers to.
@@ -69,6 +97,27 @@ export type AssistantProfile = {
   wakeWord: boolean;
   /** Where the relay's own tools come from (server/tools/registry.ts). */
   tools: ServerToolSource;
+  /** When the relay checks in on a silent user and when it ends a conversation. */
+  conversation: ConversationSettings;
+  /** Specialist agents the conversation can be handed to. Empty: one agent. */
+  agents: AgentStage[];
+  /** What to work out about a finished conversation (server/conversation-analysis.ts). */
+  analysis?: AnalysisConfig;
+  /** Kinds of personal data removed from records that leave the relay (server/redact.ts). */
+  redact: RedactionKind[];
+  /** What the assistant must not say and users must not do (server/guardrails.ts). */
+  guardrails?: GuardrailsConfig;
+  /** A label of the owner's for this state of the config, named in every conversation's record. */
+  version?: string;
+  /** The assistant as each variant of an A/B test has it (server/variants.ts). Empty: no test. */
+  variants: AssistantVariant[];
+  /** On a variant's own profile: which one it is. */
+  variant?: string;
+  /** What was wrong with the conversation keys of the config file, for /health and startup. */
+  configProblems: string[];
+  /** The config keys only whoever deploys the relay sets (see {@link DEPLOYER_KEYS}), as written, so
+   *  the Studio can carry them into its own file. Knowledge paths are absolute here. */
+  deployerConfig: Record<string, unknown>;
   /** True when nothing overrides the built-in Max profile. */
   isDefault: boolean;
 };
@@ -177,6 +226,12 @@ export const DEFAULT_ASSISTANT_PROFILE: AssistantProfile = {
   wake: DEFAULT_WAKE_NAMES,
   wakeWord: true,
   tools: {},
+  conversation: DEFAULT_CONVERSATION_SETTINGS,
+  agents: [],
+  redact: [],
+  variants: [],
+  configProblems: [],
+  deployerConfig: {},
   isDefault: true
 };
 
@@ -261,9 +316,50 @@ function voiceIdFrom(value: unknown): string | undefined {
   return typeof value === "string" && value.length <= 64 && /^[A-Za-z0-9_-]+$/.test(value) ? value : undefined;
 }
 
+type AssistantVariant = { id: string; weight: number; profile: AssistantProfile };
+
 /** Builds a profile from parsed config JSON. Exported for tests. */
 export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): AssistantProfile {
   if (!isRecord(raw)) throw new Error("assistant config must be a JSON object");
+  const base = baseProfileFrom(raw, baseDir);
+  const specs = variantSpecsFrom(raw.variants);
+  if (specs.problem) base.configProblems.push(specs.problem);
+  const problems: string[] = [];
+  for (const spec of specs.variants) {
+    // The whole config with the variant's keys in place of its own.
+    const profile = baseProfileFrom({ ...raw, ...spec.overrides }, baseDir);
+    profile.variant = spec.id;
+    // Whether users are remembered is decided before a conversation has its
+    // variant: it is the config's own for all of them. Worth a word only when
+    // the variant asks for something else.
+    const asked = isRecord(spec.overrides.conversation) ? spec.overrides.conversation.rememberUsers : undefined;
+    if (profile.conversation.rememberUsers !== base.conversation.rememberUsers) {
+      profile.conversation = { ...profile.conversation, rememberUsers: base.conversation.rememberUsers };
+      if (asked !== undefined) {
+        problems.push(
+          `variants: ${spec.id}: conversation.rememberUsers is the same for every variant; the config's own value is used`
+        );
+      }
+    }
+    // What is wrong with the config whatever the variant sets is said once, for
+    // the config. What is wrong because of the variant's own keys is said for it.
+    const overridden = Object.keys(spec.overrides);
+    if (profile.configProblems.length > 0 && overridden.length > 0) {
+      const without = Object.fromEntries(Object.entries(raw).filter(([key]) => !overridden.includes(key)));
+      const others = [...baseProfileFrom(without, baseDir).configProblems];
+      for (const problem of profile.configProblems) {
+        const index = others.indexOf(problem);
+        if (index >= 0) others.splice(index, 1);
+        else problems.push(`variants: ${spec.id}: ${problem}`);
+      }
+    }
+    base.variants.push({ id: spec.id, weight: spec.weight, profile });
+  }
+  base.configProblems.push(...problems);
+  return base;
+}
+
+function baseProfileFrom(raw: Record<string, unknown>, baseDir: string): AssistantProfile {
   const brand = brandLogoFrom(raw.logo, baseDir);
   logoProblem = brand.problem;
   const logoBackground = text(raw.logoBackground, 7);
@@ -275,6 +371,31 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
   const renamed = name !== DEFAULT_ASSISTANT_PROFILE.name;
   // Changing only the look, the logo or the sound leaves the assistant who it was.
   const stock = !PERSONA_KEYS.some((key) => raw[key] !== undefined && raw[key] !== null);
+  const deployerConfig: Record<string, unknown> = {};
+  for (const key of DEPLOYER_KEYS) {
+    if (raw[key] !== undefined && raw[key] !== null) deployerConfig[key] = raw[key];
+  }
+  // Relative knowledge paths belong to this file's directory: pin them, so
+  // they still resolve when the Studio writes its own file somewhere else.
+  const knowledge = knowledgeConfigFrom(raw.knowledge, baseDir).config;
+  if (knowledge) {
+    deployerConfig.knowledge = {
+      files: knowledge.paths,
+      ...(knowledge.text ? { text: knowledge.text } : {}),
+      maxResults: knowledge.maxResults,
+      chunkChars: knowledge.chunkChars
+    };
+  }
+  const conversation = conversationSettingsFrom(raw.conversation);
+  const agents = agentStagesFrom(raw.agents);
+  const analysis = analysisConfigFrom(raw.analysis);
+  const guardrails = guardrailsConfigFrom(raw.guardrails);
+  const privacy = raw.privacy;
+  const redact = redactionKindsFrom(
+    privacy && typeof privacy === "object" && !Array.isArray(privacy)
+      ? (privacy as { redact?: unknown }).redact
+      : undefined
+  );
   return {
     name,
     device,
@@ -311,8 +432,25 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     wakeWord: typeof raw.wakeWord === "boolean" ? raw.wakeWord : !preset.general,
     tools: {
       ...(raw.tools !== undefined ? { tools: raw.tools } : {}),
-      ...(text(raw.toolsModule, 400) ? { modulePath: path.resolve(baseDir, text(raw.toolsModule, 400)!) } : {})
+      ...(text(raw.toolsModule, 400) ? { modulePath: path.resolve(baseDir, text(raw.toolsModule, 400)!) } : {}),
+      ...(raw.mcpServers !== undefined ? { mcpServers: raw.mcpServers } : {}),
+      ...(raw.knowledge !== undefined && raw.knowledge !== null ? { knowledge: raw.knowledge, baseDir } : {})
     },
+    conversation: conversation.settings,
+    agents: agents.agents,
+    ...(analysis.config ? { analysis: analysis.config } : {}),
+    redact: redact.kinds,
+    ...(guardrails.config ? { guardrails: guardrails.config } : {}),
+    ...(text(raw.version, 64) ? { version: text(raw.version, 64) } : {}),
+    variants: [],
+    deployerConfig,
+    configProblems: [
+      ...conversation.problems,
+      ...agents.problems,
+      ...(analysis.problem ? [analysis.problem] : []),
+      ...(redact.problem ? [redact.problem] : []),
+      ...(guardrails.problem ? [guardrails.problem] : [])
+    ],
     // Changing only the look, the logo or the sound leaves the assistant who
     // it was: it keeps the original Max prompts word for word.
     isDefault: stock
@@ -330,6 +468,10 @@ export function projectAssistantProfile(input: {
   language?: string;
   /** Reference facts the agent answers from (up to 20,000 characters). */
   knowledge?: string;
+  /** The project's flow: the agents a conversation can be handed between. */
+  flow?: unknown[];
+  /** Told what of the stored flow was left out, when a later release no longer takes all of it. */
+  onProblems?: (problems: string[]) => void;
 }): AssistantProfile {
   const savedProblem = logoProblem;
   try {
@@ -339,8 +481,11 @@ export function projectAssistantProfile(input: {
       wakeWord: false,
       ...(input.language ? { languages: [input.language], strictLanguages: false } : {}),
       ...(input.instructions ? { instructions: input.instructions } : {}),
-      ...(input.greeting ? { greeting: input.greeting } : {})
+      ...(input.greeting ? { greeting: input.greeting } : {}),
+      ...(input.flow?.length ? { agents: input.flow } : {})
     });
+    // A flow is checked when it is saved, so this is a flow saved under older rules.
+    if (profile.configProblems.length > 0) input.onProblems?.(profile.configProblems);
     const knowledge = input.knowledge?.trim();
     if (!knowledge) return profile;
     // Added after the loader, whose 8,000-character cap is for instructions alone.
@@ -381,7 +526,10 @@ function loadAssistantProfile(): AssistantProfile {
     return DEFAULT_ASSISTANT_PROFILE;
   }
   try {
-    return assistantProfileFrom(JSON.parse(contents), path.dirname(file));
+    const raw: unknown = JSON.parse(contents);
+    const profile = assistantProfileFrom(raw, path.dirname(file));
+    if (isRecord(raw)) loadedConfig = { file, raw };
+    return profile;
   } catch (error) {
     throw new Error(`Invalid assistant config ${file}: ${error instanceof Error ? error.message : String(error)}`, {
       cause: error
@@ -389,9 +537,17 @@ function loadAssistantProfile(): AssistantProfile {
   }
 }
 
+/** The config file the relay started from, as it was written. Nothing when it runs on its defaults. */
+let loadedConfig: { file: string; raw: Record<string, unknown> } | undefined;
+
 let active: AssistantProfile =
   process.env.NODE_ENV === "test" && !process.env.ASSISTANT_CONFIG ? DEFAULT_ASSISTANT_PROFILE : loadAssistantProfile();
 configureWakePhrase(active.wake);
+
+/** The config file the relay loaded at startup, and what it held. */
+export function loadedAssistantConfig(): { file: string; raw: Record<string, unknown> } | undefined {
+  return loadedConfig;
+}
 
 /** The configured assistant. Read at call time so tests can swap it. */
 export function assistant(): AssistantProfile {

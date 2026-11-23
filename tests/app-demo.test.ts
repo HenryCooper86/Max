@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- relay events are inspected structurally */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setAssistantProfileForTests } from "../server/assistant";
+import { assistantProfileFrom, setAssistantProfileForTests } from "../server/assistant";
 import { createLogger } from "../server/logger";
 import { createAppDemoProvider, toolRequestFrom } from "../server/providers/app-demo";
 import type { ToolDefinition, ToolSpec } from "../server/tools";
@@ -162,5 +162,49 @@ describe("app demo provider", () => {
     await provider.textInput!("hello");
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(client.json).toHaveLength(before);
+  });
+});
+
+describe("app demo provider with rules for tools", () => {
+  it("does not run a tool the owner's rules cover: demo mode has no judge to read the call", async () => {
+    const ran: string[] = [];
+    const refund: ToolDefinition = {
+      name: "refund",
+      description: "Refunds an order",
+      handler: () => ran.push("refund")
+    };
+    const find: ToolDefinition = { name: "find_order", description: "Finds an order", handler: () => ran.push("find") };
+    setAssistantProfileForTests(
+      assistantProfileFrom({
+        name: "Ava",
+        device: "app",
+        guardrails: { toolRules: ["Do not refund more than 100 dollars."], checkedTools: ["refund"] }
+      })
+    );
+    const { client, provider } = await setup([refund, find]);
+    await provider.textInput!('refund {"amount": 900}');
+    await vi.waitFor(() => expect(client.agentLines()).toHaveLength(1));
+    expect(client.agentLines()[0]).toContain("Demo mode does not run refund");
+    expect(client.ofType("tool.activity")).toEqual([]);
+    await provider.textInput!("find order");
+    await vi.waitFor(() => expect(client.agentLines()).toHaveLength(2));
+    expect(ran).toEqual(["find"]);
+  });
+
+  it("does not run a tool whose result the rules cover either: nothing here could read it", async () => {
+    const ran: string[] = [];
+    const find: ToolDefinition = { name: "find_order", description: "Finds an order", handler: () => ran.push("find") };
+    setAssistantProfileForTests(
+      assistantProfileFrom({
+        name: "Ava",
+        device: "app",
+        guardrails: { resultRules: ["Another customer's personal details."] }
+      })
+    );
+    const { client, provider } = await setup([find]);
+    await provider.textInput!("find order");
+    await vi.waitFor(() => expect(client.agentLines()).toHaveLength(1));
+    expect(client.agentLines()[0]).toContain("Demo mode does not run find_order");
+    expect(ran).toEqual([]);
   });
 });

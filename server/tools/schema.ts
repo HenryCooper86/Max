@@ -1,4 +1,4 @@
-import type { ToolParameters, ToolSpec } from "./index";
+import type { ClientToolDeclaration, ToolParameters, ToolSpec } from "./index";
 
 /**
  * Validation shared by every way a tool reaches the relay: the config file,
@@ -50,17 +50,20 @@ export function toolSpecFrom(raw: unknown): { spec?: ToolSpec; problem?: string 
 
 /** Clean specs from a client's `session.start.tools`. Throws on anything malformed:
  *  a client that sends a broken tool list has a bug its developer should see. */
-export function clientToolSpecsFrom(raw: unknown): ToolSpec[] {
+export function clientToolSpecsFrom(raw: unknown): ClientToolDeclaration[] {
   if (!Array.isArray(raw)) throw new Error("Invalid tools: expected an array");
   if (raw.length > MAX_CLIENT_TOOLS) throw new Error(`Invalid tools: at most ${MAX_CLIENT_TOOLS}`);
   const seen = new Set<string>();
-  const specs: ToolSpec[] = [];
+  const specs: ClientToolDeclaration[] = [];
   for (const item of raw) {
     const { spec, problem } = toolSpecFrom(item);
     if (!spec) throw new Error(`Invalid tools: ${problem}`);
     if (seen.has(spec.name)) throw new Error(`Invalid tools: duplicate tool ${spec.name}`);
     seen.add(spec.name);
-    specs.push(spec);
+    const background = (item as { background?: unknown }).background;
+    if (background !== undefined && typeof background !== "boolean")
+      throw new Error(`Invalid tools: tool ${spec.name}: background must be true or false`);
+    specs.push(background ? { ...spec, background: true } : spec);
   }
   return specs;
 }

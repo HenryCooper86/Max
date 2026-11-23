@@ -6,7 +6,7 @@
 
 import { createLogger } from "../logger";
 import { cloudPreviousSecretKeyInvalid, cloudSecretKey, cloudSecretKeys, now } from "./context";
-import { webhookSecretScope } from "./customers";
+import { tracesHeadersScope, webhookSecretScope } from "./customers";
 import { decryptModelKey, encryptModelKey, secretKeyId, storedSecretKeyId } from "./secrets";
 import { projectSecrets, replaceProjectSecret, type EncryptedSecretColumn } from "./store";
 
@@ -14,16 +14,20 @@ const log = createLogger("cloud");
 
 const RECHECK_MS = 60_000;
 
-const SECRETS: ReadonlyArray<{ column: EncryptedSecretColumn; name: "model key" | "webhook secret" }> = [
+type SecretName = "model key" | "webhook secret" | "traces headers";
+
+const SECRETS: ReadonlyArray<{ column: EncryptedSecretColumn; name: SecretName }> = [
   { column: "model_key_enc", name: "model key" },
-  { column: "webhook_secret_enc", name: "webhook secret" }
+  { column: "webhook_secret_enc", name: "webhook secret" },
+  { column: "traces_headers_enc", name: "traces headers" }
 ];
 
 function scopeOf(column: EncryptedSecretColumn, projectId: string): string {
-  return column === "model_key_enc" ? projectId : webhookSecretScope(projectId);
+  if (column === "model_key_enc") return projectId;
+  return column === "webhook_secret_enc" ? webhookSecretScope(projectId) : tracesHeadersScope(projectId);
 }
 
-type Unreadable = { projectId: string; secret: "model key" | "webhook secret" };
+type Unreadable = { projectId: string; secret: SecretName };
 
 export type StoredSecretsReport = {
   total: number;

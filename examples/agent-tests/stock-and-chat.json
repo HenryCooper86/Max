@@ -1,0 +1,28 @@
+[
+  {
+    "name": "demo: stock check",
+    "turns": [
+      {
+        "user": "check_stock {\"product\": \"Trail Runner 2\"}",
+        "expect": {
+          "toolCalled": "check_stock",
+          "replyContains": ["129", "inStock"],
+          "replyMatches": "priceUsd.{0,5}129"
+        }
+      }
+    ]
+  },
+  {
+    "name": "demo: plain message runs no tool",
+    "turns": [
+      {
+        "user": "Hello there",
+        "expect": {
+          "toolNotCalled": ["get_order_status", "check_stock"],
+          "replyContains": "Demo mode got",
+          "replyNotContains": "returned:"
+        }
+      }
+    ]
+  }
+]

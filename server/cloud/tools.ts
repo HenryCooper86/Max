@@ -113,6 +113,14 @@ export const guardedFetch: typeof fetch = (input, init = {}) =>
         response.on("error", reject);
       }
     );
+    // An answer of "101 Switching Protocols" is no answer to a POST. With nobody listening for it Node would drop
+    // the connection and tell no one, and whoever asked would wait for ever.
+    request.on("upgrade", (_response, socket) => {
+      socket.destroy();
+      reject(new Error("the server tried to switch protocols instead of answering"));
+    });
+    // Whatever else ends a request with neither an answer nor an error. After either, this does nothing.
+    request.on("close", () => reject(new Error("the connection closed without an answer")));
     request.on("timeout", () => request.destroy(new Error("the tool did not answer within 10 seconds")));
     request.on("error", (error: NodeJS.ErrnoException) => reject(new Error(plainNetworkError(error, target.hostname))));
     const signal = init.signal;

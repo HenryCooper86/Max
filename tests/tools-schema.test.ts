@@ -65,6 +65,18 @@ describe("clientToolSpecsFrom", () => {
     ]);
   });
 
+  it("keeps the background mark, and only when it is set", () => {
+    const specs = clientToolSpecsFrom([
+      { name: "report", description: "Make a report", background: true },
+      { name: "go", description: "Go", background: false }
+    ]);
+    expect(specs[0]).toMatchObject({ name: "report", background: true });
+    expect("background" in specs[1]!).toBe(false);
+    expect(() => clientToolSpecsFrom([{ name: "report", description: "d", background: "yes" }])).toThrow(
+      "background must be true or false"
+    );
+  });
+
   it("throws on non-arrays, invalid tools, duplicates and too many", () => {
     expect(() => clientToolSpecsFrom("x")).toThrow("expected an array");
     expect(() => clientToolSpecsFrom([{ name: "bad name", description: "d" }])).toThrow("Invalid tools");

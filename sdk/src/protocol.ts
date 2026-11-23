@@ -24,6 +24,12 @@ export const UNAUTHORIZED_CLOSE_CODE = 1008;
 const MAX_CONTEXT_CHARS = 2000;
 /** Longest typed message the relay accepts. */
 export const MAX_TEXT_CHARS = 2000;
+/** Longest `image.input` picture, in base64 characters. */
+export const MAX_IMAGE_BASE64_CHARS = 240_000;
+/** The relay refuses a picture less than this long after the last one. */
+export const MIN_IMAGE_INTERVAL_MS = 1_000;
+/** The relay drops a frame of live video that comes less than this long after the last one. */
+export const MIN_VIDEO_FRAME_INTERVAL_MS = 500;
 /** Most client tools a session may declare. */
 export const MAX_TOOLS = 32;
 /** Reconnect attempts before the client gives up. */
@@ -40,6 +46,7 @@ export type ClientToolSpec = {
   name: string;
   description: string;
   parameters?: JsonSchema;
+  background?: boolean;
 };
 
 /** What the relay reports it can do, from `session.started`. */
@@ -53,6 +60,10 @@ export type AgentCapabilities = {
   tools?: boolean;
   /** The relay accepts typed input via `text.input`. */
   textInput?: boolean;
+  /** The relay accepts pictures via `image.input` and the model can see them. */
+  imageInput?: boolean;
+  /** The relay takes live video (`video.frame`): the model sees what a camera or a shared screen shows. */
+  videoInput?: boolean;
 };
 
 /** Who said a transcript line, as the relay names it. */
@@ -88,6 +99,8 @@ export type SessionStartMessage = {
   voiceProvider?: string;
   tools?: ClientToolSpec[];
   context?: string;
+  /** The `resume` id of the session this one continues after a dropped connection. */
+  resume?: string;
 };
 
 /** Client to relay messages. */
@@ -96,6 +109,9 @@ export type ClientMessage =
   | { type: "audio.start" }
   | { type: "audio.stop" }
   | { type: "text.input"; text: string }
+  | { type: "image.input"; image: string; mimeType: "image/jpeg"; text?: string }
+  | { type: "video.frame"; image: string; mimeType: "image/jpeg" }
+  | { type: "video.stop" }
   | { type: "tool.result"; callId: string; output?: unknown; error?: string };
 
 /** Relay to client: a transcript line or partial. */
@@ -137,7 +153,11 @@ export type RelayEvent =
       capabilities?: AgentCapabilities;
       /** The relay's wire protocol; absent from relays older than the version handshake. */
       protocol?: number;
+      /** Sent back on reconnect so the conversation carries on; absent from older relays. */
+      resume?: string;
     }
+  | { type: "session.ended"; reason: string }
+  | { type: "agent.changed"; agent: string }
   | { type: "status"; state: string; detail?: string }
   | { type: "connection"; state: string; detail?: string }
   | TranscriptEvent
@@ -187,6 +207,10 @@ export function parseRelayEvent(raw: string): RelayEvent | undefined {
         : undefined;
     case "error":
       return typeof value.message === "string" ? (value as RelayEvent) : undefined;
+    case "session.ended":
+      return { type: "session.ended", reason: typeof value.reason === "string" ? value.reason : "ended" };
+    case "agent.changed":
+      return typeof value.agent === "string" && value.agent ? { type: "agent.changed", agent: value.agent } : undefined;
     default:
       return undefined;
   }
@@ -231,6 +255,11 @@ function relayHttpBase(base: string): string {
   return `${url.origin}${path}`;
 }
 
+/** Where the WebRTC transport sends its offer: `https://relay.example.com/agent/webrtc`. */
+export function relayWebRtcUrl(base: string): string {
+  return `${relayHttpBase(base)}/agent/webrtc`;
+}
+
 /**
  * A session token for a Max Cloud agent embedded without a backend. Works only
  * on a website the agent's owner listed in the console.
@@ -254,12 +283,13 @@ export const TOOL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 
 /** Strips handlers (and anything else not on the wire) from tool definitions. */
 export function serializeTools(
-  tools: ReadonlyArray<{ name: string; description: string; parameters?: JsonSchema }>
+  tools: ReadonlyArray<{ name: string; description: string; parameters?: JsonSchema; background?: boolean }>
 ): ClientToolSpec[] {
   return tools.slice(0, MAX_TOOLS).map((tool) => ({
     name: tool.name,
     description: tool.description,
-    ...(tool.parameters ? { parameters: tool.parameters } : {})
+    ...(tool.parameters ? { parameters: tool.parameters } : {}),
+    ...(tool.background ? { background: true } : {})
   }));
 }
 
@@ -269,7 +299,9 @@ export type SessionStartInput = {
   voice?: VoiceGender;
   backend?: string;
   context?: string;
-  tools?: ReadonlyArray<{ name: string; description: string; parameters?: JsonSchema }>;
+  tools?: ReadonlyArray<{ name: string; description: string; parameters?: JsonSchema; background?: boolean }>;
+  /** The previous session's resume id, when reconnecting. */
+  resume?: string;
 };
 
 /** Builds the `session.start` message. Empty optional fields are omitted. */
@@ -287,7 +319,8 @@ export function buildSessionStart(input: SessionStartInput): SessionStartMessage
     ...(input.voice ? { voiceGender: input.voice } : {}),
     ...(input.backend ? { voiceProvider: input.backend } : {}),
     ...(tools ? { tools } : {}),
-    ...(context ? { context } : {})
+    ...(context ? { context } : {}),
+    ...(input.resume ? { resume: input.resume } : {})
   };
 }
 

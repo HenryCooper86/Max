@@ -7,6 +7,8 @@ import type {
 } from "../../shared/agent";
 import type { UserMemoryFact, UserMemoryTurn } from "../user-memory";
 import type { NavPromptSpeech } from "../routing";
+import type { ResumeState } from "../session-resume";
+import type { ToolDefinition } from "../tools";
 
 export type { ClientEvent, SessionStartEvent, VoiceGender } from "../../shared/agent";
 
@@ -18,6 +20,8 @@ type HazardReportEvent = Extract<ClientEvent, { type: "hazard.report" }>;
 
 export type ProviderTelemetry = {
   serverEvent(payload: unknown, bytes: number): void;
+  /** Something the relay did that the client is not told, for the conversation's record. */
+  relayEvent?(payload: unknown): void;
   serverAudio(bytes: number): void;
   ttsFallback(): void;
 };
@@ -36,7 +40,23 @@ export type ProviderSessionContext = {
     updatedAt: number;
     turns: UserMemoryTurn[];
     facts: UserMemoryFact[];
+    /** What was said before `turns`, in a few sentences a model wrote. */
+    summary?: string;
   };
+  /** How the session reaches its user. A phone call has no screen and can be
+   *  hung up; a web session has neither property. */
+  channel?: "web" | "phone";
+  /** Tools that exist only for this session (a phone call's transfer and
+   *  keypad tools). Offered alongside the relay's own. */
+  sessionTools?: readonly ToolDefinition[];
+  /** Where the conversation left off, when this session resumes an earlier
+   *  one (server/session-resume.ts). */
+  resume?: ResumeState;
+  /** Called whenever the conversation's resumable state changes. */
+  saveResume?(state: ResumeState): void;
+  /** Ends the session from the relay's side: the client is told why
+   *  (`session.ended`) and the connection closes. */
+  endSession?(reason: string): void;
   /** Live read of whether the relay currently has a route planned — backed by
    *  server/routing.ts's createNavHandler().activeRoute(), the same signal
    *  createNavPromptHandler already trusts to gate relay nav prompts. Not a
@@ -101,6 +121,14 @@ export type AgentProvider = {
   /** A turn the user typed. Resolves `false` when the backend cannot take
    *  typed turns. Providers without typed input omit this. */
   textInput?(text: string): Promise<boolean | void>;
+  /** A picture the user showed, with or without words. Resolves `false` when
+   *  the backend cannot take pictures. Providers without image input omit this. */
+  imageInput?(image: { data: string; mimeType: string }, text?: string): Promise<boolean | void>;
+  /** A frame of the user's live video. Resolves `false` when the backend
+   *  cannot take video. Providers without it omit this. */
+  videoFrame?(image: { data: string; mimeType: string }): Promise<boolean | void>;
+  /** The user's video has stopped: the last frame is forgotten. */
+  videoStop?(): Promise<void>;
   /** A client's answer to a `tool.call`. Providers without tools omit this. */
   toolResult?(event: ToolResultEvent): Promise<void>;
 };

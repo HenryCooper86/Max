@@ -9,6 +9,7 @@
 
 import { VoiceAgent } from "./client.js";
 import type { ClientTool, VoiceAgentError, VoiceAgentOptions } from "./client.js";
+import type { ImageSource } from "./image.js";
 import type { TranscriptItem, VoiceGender } from "./protocol.js";
 import { resolveLocale, resolveStrings } from "./widget-strings.js";
 import type { WidgetStringOverrides, WidgetStrings } from "./widget-strings.js";
@@ -23,11 +24,14 @@ const OBSERVED = [
   "language",
   "voice",
   "backend",
+  "transport",
   "context",
   "label",
   "accent",
   "position",
-  "text-input"
+  "text-input",
+  "image-input",
+  "video-input"
 ] as const;
 /** `lang` only picks the widget's text language; it never reaches the relay. */
 const WATCHED = [...OBSERVED, "lang"];
@@ -40,6 +44,7 @@ const CONNECTION_ATTRS: ReadonlySet<string> = new Set([
   "language",
   "voice",
   "backend",
+  "transport",
   "context"
 ]);
 
@@ -112,6 +117,17 @@ const TEMPLATE = `
   .small[hidden] { display: none; }
   .actions { display: flex; gap: 8px; }
   .sound { margin: 0 12px 8px; align-self: flex-start; }
+  .picture { margin: 0 12px 8px; align-self: flex-start; }
+  .picture[aria-disabled="true"] { opacity: 0.55; cursor: default; }
+  .watch { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 12px 8px; }
+  .watch[hidden], .preview[hidden] { display: none; }
+  .preview {
+    display: block; margin: 0 12px 8px; width: 160px; max-height: 120px; object-fit: contain;
+    border: 1px solid var(--va-line); border-radius: 8px; background: #000;
+  }
+  input[type="file"] { display: none; }
+  .lines li[data-picture] { padding: 4px; }
+  .lines li img { display: block; max-width: 160px; max-height: 120px; border-radius: 8px; }
   .panel:focus-visible { outline: 3px solid var(--va-accent); outline-offset: -3px; }
   .fab {
     position: relative; width: 56px; height: 56px; border-radius: 50%; border: 0; padding: 0;
@@ -149,11 +165,18 @@ const TEMPLATE = `
     </header>
     <ul class="lines" part="lines" role="log" aria-live="polite" aria-relevant="additions text"></ul>
     <button class="small sound" part="sound" type="button" hidden></button>
+    <button class="small picture" part="picture" type="button" hidden></button>
+    <div class="watch" part="watch" hidden>
+      <button class="small camera" part="camera" type="button" aria-pressed="false"></button>
+      <button class="small screen" part="screen" type="button" aria-pressed="false"></button>
+    </div>
+    <video class="preview" part="preview" muted playsinline hidden></video>
     <p class="note" part="note" role="alert"></p>
     <form hidden>
       <input type="text" part="input" maxlength="2000" autocomplete="off" />
       <button class="small" part="send" type="submit"></button>
     </form>
+    <input class="file" type="file" accept="image/jpeg,image/png" tabindex="-1" />
   </section>
   <button class="fab" part="button" type="button" aria-pressed="false">
     <span class="ring" aria-hidden="true"></span>
@@ -185,11 +208,14 @@ async function fetchToken(url: string): Promise<string> {
  * `<voice-agent>`: a voice assistant button for any page.
  *
  * Attributes: `relay`, `project` (a Max Cloud public agent id: no backend needed), `token`, `token-url`, `language`, `voice`, `backend`,
+ * `transport` (`webrtc` to send audio over WebRTC where the relay offers it),
  * `context` (facts about the page, for the assistant), `label`, `accent`, `position` (`bottom-right` by default,
- * `bottom-left`, or `inline` to place it in the flow), `text-input`.
+ * `bottom-left`, or `inline` to place it in the flow), `text-input`, `image-input` (a button for showing the
+ * assistant a picture, on relays whose model can see one), `video-input` (buttons that show the assistant the
+ * camera or the screen while the conversation goes on, with a small preview of what it sees).
  * Set the `tools` property to give the agent client tools, and `strings` to override any of its text (built-in English and
  * Simplified Chinese, chosen from `language`, then `lang`). Dispatches `voice-agent:status`, `:transcript`, `:toolcall`,
- * `:error` and `:warning` events.
+ * `:error`, `:warning`, `:image` and `:video` events.
  */
 export class VoiceAgentElement extends ElementBase {
   static readonly observedAttributes = WATCHED;
@@ -201,6 +227,14 @@ export class VoiceAgentElement extends ElementBase {
   #lines = new Map<string, HTMLLIElement>();
   #strings: WidgetStringOverrides = {};
   #error: VoiceAgentError | undefined;
+  /** Why the last picture did not go out, until the next one does or a session starts. */
+  #notice: "pictureNotSent" | "pictureUnusable" | "videoUnavailable" | undefined;
+  /** The session the browser is being asked for a camera or a screen for. */
+  #openingVideoFor: VoiceAgent | undefined;
+  /** The session a picture is being prepared and sent for. */
+  #sendingFor: VoiceAgent | undefined;
+  /** Object URLs of the thumbnails shown, to release with the list. */
+  #thumbnails: string[] = [];
   /** The user closed the panel; it stays closed until the next session starts. */
   #dismissed = false;
   readonly #root: ShadowRoot;
@@ -216,6 +250,12 @@ export class VoiceAgentElement extends ElementBase {
     mute: HTMLButtonElement;
     close: HTMLButtonElement;
     sound: HTMLButtonElement;
+    picture: HTMLButtonElement;
+    watch: HTMLElement;
+    camera: HTMLButtonElement;
+    screen: HTMLButtonElement;
+    preview: HTMLVideoElement;
+    file: HTMLInputElement;
     send: HTMLButtonElement;
     live: HTMLElement;
   };
@@ -262,11 +302,17 @@ export class VoiceAgentElement extends ElementBase {
       list: select(root, ".lines"),
       note: select(root, ".note"),
       form: select(root, "form"),
-      input: select(root, "input"),
+      input: select(root, 'input[type="text"]'),
       fab: select(root, ".fab"),
       mute: select(root, ".mute"),
       close: select(root, ".close"),
       sound: select(root, ".sound"),
+      picture: select(root, ".picture"),
+      watch: select(root, ".watch"),
+      camera: select(root, ".camera"),
+      screen: select(root, ".screen"),
+      preview: select(root, ".preview"),
+      file: select(root, ".file"),
       send: select(root, 'button[type="submit"]'),
       live: select(root, ".sr")
     };
@@ -283,6 +329,18 @@ export class VoiceAgentElement extends ElementBase {
     ui.sound.addEventListener("click", () => {
       void this.#agent?.resumeAudio().then(() => this.#renderStatus());
     });
+    ui.picture.addEventListener("click", () => {
+      // Not `disabled` while a picture is on its way: that would throw the keyboard's focus away.
+      if (ui.picture.getAttribute("aria-disabled") !== "true") ui.file.click();
+    });
+    ui.camera.addEventListener("click", () => void this.#toggleVideo("camera"));
+    ui.screen.addEventListener("click", () => void this.#toggleVideo("screen"));
+    ui.file.addEventListener("change", () => {
+      const file = ui.file.files?.[0];
+      // The same file can be chosen again next time.
+      ui.file.value = "";
+      if (file) void this.sendImage(file);
+    });
     ui.form.addEventListener("submit", (event) => {
       event.preventDefault();
       if (this.#agent?.sendText(ui.input.value)) ui.input.value = "";
@@ -298,6 +356,15 @@ export class VoiceAgentElement extends ElementBase {
   disconnectedCallback(): void {
     this.#off.forEach((unsubscribe) => unsubscribe());
     this.#off = [];
+    // The transcript goes with the session: pictures in it could not be shown again once released.
+    this.#lines.clear();
+    this.#ui?.list.replaceChildren();
+    this.#releaseThumbnails();
+    this.#notice = undefined;
+    this.#sendingFor = undefined;
+    this.#openingVideoFor = undefined;
+    // Nobody is listening any more when the client lets the camera go.
+    if (this.#ui) this.#renderPreview(undefined);
     this.#agent?.destroy();
     this.#agent = undefined;
   }
@@ -312,6 +379,10 @@ export class VoiceAgentElement extends ElementBase {
   async start(): Promise<void> {
     this.#dismissed = false;
     const agent = this.#ensureAgent();
+    // What went wrong last time is not this conversation's news.
+    this.#error = undefined;
+    this.#notice = undefined;
+    this.#renderNote();
     try {
       await agent.start();
     } catch {
@@ -322,6 +393,94 @@ export class VoiceAgentElement extends ElementBase {
   /** Ends the conversation. */
   stop(): void {
     this.#agent?.stop();
+  }
+
+  /**
+   * Shows the assistant a picture, as the picture button does: with what is
+   * typed in the text box as the words that go with it, when there is a text
+   * box and something in it. The picture appears in the transcript. Resolves
+   * to whether it was sent, and `voice-agent:image` says the same; when a
+   * picture was not sent in a conversation, the panel says so.
+   */
+  async sendImage(source: ImageSource, options: { text?: string; maxSide?: number } = {}): Promise<boolean> {
+    const agent = this.#agent;
+    // No conversation to send it in, or this one is still preparing a picture.
+    if (!agent || this.#sendingFor === agent) return this.#pictureDone(false);
+    const ui = this.#ui;
+    const typed = options.text === undefined && !ui.form.hidden ? ui.input.value.trim() : "";
+    const text = options.text ?? typed;
+    // The words go with the picture from here on: out of the box, so that Send cannot send them a second time.
+    if (typed) ui.input.value = "";
+    this.#sendingFor = agent;
+    this.#renderStatus();
+    let sent = false;
+    let unusable = false;
+    try {
+      sent = await agent.sendImage(source, {
+        ...(text ? { text } : {}),
+        ...(options.maxSide ? { maxSide: options.maxSide } : {})
+      });
+    } catch {
+      unusable = true;
+    }
+    if (this.#sendingFor === agent) this.#sendingFor = undefined;
+    // The session was replaced, or the element removed, while the picture was prepared: nothing of it belongs in this panel.
+    if (this.#agent !== agent) {
+      if (this.#ui) this.#renderStatus();
+      return this.#pictureDone(false);
+    }
+    // Words that did not go out come back, unless the user has typed something else meanwhile.
+    if (!sent && typed && !ui.input.value) ui.input.value = typed;
+    // Outside a conversation the panel is closed, and there is nobody to tell.
+    this.#notice = sent || !this.#active() ? undefined : unusable ? "pictureUnusable" : "pictureNotSent";
+    if (sent) {
+      try {
+        this.#renderPicture(source);
+      } catch {
+        // The picture went out; a browser that cannot show it back is no reason to say it did not.
+      }
+    }
+    this.#renderNote();
+    this.#renderStatus();
+    return this.#pictureDone(sent);
+  }
+
+  /** The camera or the screen button: on, off, or from one to the other. */
+  async #toggleVideo(source: "camera" | "screen"): Promise<void> {
+    const agent = this.#agent;
+    // One question to the user at a time.
+    if (!agent || this.#openingVideoFor === agent) return;
+    if (agent.videoSource === source) {
+      agent.stopVideo();
+      return;
+    }
+    this.#openingVideoFor = agent;
+    this.#notice = undefined;
+    this.#renderNote();
+    try {
+      await agent.startVideo(source);
+    } catch {
+      // The user's "no" looks the same as a camera that is missing: one thing to say for both.
+      if (this.#agent === agent && this.#active()) this.#notice = "videoUnavailable";
+    } finally {
+      if (this.#openingVideoFor === agent) this.#openingVideoFor = undefined;
+    }
+    if (this.#agent !== agent) return;
+    this.#renderNote();
+    this.#renderStatus();
+  }
+
+  /** Shows what the assistant sees, or takes the preview away. */
+  #renderPreview(stream: MediaStream | undefined): void {
+    const preview = this.#ui.preview;
+    preview.srcObject = stream ?? null;
+    preview.hidden = !stream;
+    if (stream) void preview.play?.()?.catch(() => undefined);
+  }
+
+  #pictureDone(sent: boolean): boolean {
+    this.dispatchEvent(new CustomEvent("voice-agent:image", { detail: { sent }, bubbles: true, composed: true }));
+    return sent;
   }
 
   #active(): boolean {
@@ -342,7 +501,9 @@ export class VoiceAgentElement extends ElementBase {
   #dismiss(): void {
     const hadFocus = this.#root.activeElement !== null && this.#root.activeElement !== this.#ui.fab;
     this.#dismissed = true;
+    this.#notice = undefined;
     this.stop();
+    this.#renderNote();
     this.#renderStatus();
     if (hadFocus) this.#ui.fab.focus();
   }
@@ -364,6 +525,11 @@ export class VoiceAgentElement extends ElementBase {
   }
 
   #renderNote(): void {
+    // The newer of the two: a picture's notice is dropped when an error comes after it.
+    if (this.#notice) {
+      this.#ui.note.textContent = this.#t()[this.#notice];
+      return;
+    }
     const error = this.#error;
     if (!error) {
       this.#ui.note.textContent = "";
@@ -383,6 +549,10 @@ export class VoiceAgentElement extends ElementBase {
     ui.close.textContent = t.close;
     ui.close.setAttribute("aria-label", t.close);
     ui.sound.textContent = t.enableSound;
+    ui.picture.textContent = t.picture;
+    ui.camera.textContent = t.camera;
+    ui.screen.textContent = t.screen;
+    ui.preview.setAttribute("aria-label", t.videoPreview);
     ui.send.textContent = t.send;
     ui.input.setAttribute("aria-label", t.typeMessage);
     ui.input.setAttribute("placeholder", t.typeMessage);
@@ -399,7 +569,9 @@ export class VoiceAgentElement extends ElementBase {
     this.#dirty = false;
     this.#lines.clear();
     this.#ui.list.replaceChildren();
+    this.#releaseThumbnails();
     this.#error = undefined;
+    this.#notice = undefined;
 
     const relay = this.getAttribute("relay");
     const tokenUrl = this.getAttribute("token-url");
@@ -412,6 +584,7 @@ export class VoiceAgentElement extends ElementBase {
       ...(this.getAttribute("language") ? { language: this.getAttribute("language")! } : {}),
       ...(voice === "female" || voice === "male" ? { voice: voice as VoiceGender } : {}),
       ...(this.getAttribute("backend") ? { backend: this.getAttribute("backend")! } : {}),
+      ...(this.getAttribute("transport") === "webrtc" ? { transport: "webrtc" as const } : {}),
       ...(this.getAttribute("context") ? { context: this.getAttribute("context")! } : {}),
       ...(this.#tools.length ? { tools: this.#tools } : {})
     };
@@ -430,6 +603,7 @@ export class VoiceAgentElement extends ElementBase {
       agent.on("toolcall", (call) => emit("toolcall", call)),
       agent.on("error", (error) => {
         this.#error = error;
+        this.#notice = undefined;
         this.#renderNote();
         emit("error", { error });
       }),
@@ -438,6 +612,11 @@ export class VoiceAgentElement extends ElementBase {
         emit("warning", { warning });
       }),
       agent.on("audioresume", () => this.#renderStatus()),
+      agent.on("video", ({ active, source }) => {
+        this.#renderPreview(active ? agent.videoStream : undefined);
+        this.#renderStatus();
+        emit("video", { active, ...(source ? { source } : {}) });
+      }),
       agent.on("level", ({ mic, output }) => this.#ui.fab.style.setProperty("--level", String(Math.max(mic, output))))
     ];
     this.#agent = agent;
@@ -460,6 +639,29 @@ export class VoiceAgentElement extends ElementBase {
     ui.mute.textContent = muted ? t.unmute : t.mute;
     ui.mute.hidden = !active;
     ui.sound.hidden = !(this.#agent?.audioBlocked ?? false);
+    // Only where it can work: asked for on the page, in a conversation, with a model that sees pictures.
+    // A session that is still connecting has not said yet what its model takes: what the last one said does not count.
+    ui.picture.hidden = !(
+      this.hasAttribute("image-input") &&
+      active &&
+      status !== "connecting" &&
+      this.#agent?.capabilities?.imageInput === true
+    );
+    ui.picture.setAttribute(
+      "aria-disabled",
+      String(this.#sendingFor !== undefined && this.#sendingFor === this.#agent)
+    );
+    // The same for live video, with a model that takes it. No screen button where the browser cannot share one.
+    ui.watch.hidden = !(
+      this.hasAttribute("video-input") &&
+      active &&
+      status !== "connecting" &&
+      this.#agent?.capabilities?.videoInput === true
+    );
+    const showing = this.#agent?.videoSource;
+    ui.camera.setAttribute("aria-pressed", String(showing === "camera"));
+    ui.screen.setAttribute("aria-pressed", String(showing === "screen"));
+    ui.screen.hidden = typeof navigator === "undefined" || !navigator.mediaDevices?.getDisplayMedia;
     if (!active) ui.fab.style.setProperty("--level", "0");
   }
 
@@ -476,6 +678,36 @@ export class VoiceAgentElement extends ElementBase {
     this.#ui.list.scrollTop = this.#ui.list.scrollHeight;
     this.#renderStatus();
   }
+
+  #releaseThumbnails(): void {
+    for (const url of this.#thumbnails) URL.revokeObjectURL(url);
+    this.#thumbnails = [];
+  }
+
+  /** Puts a picture the user sent into the transcript: the picture itself where the browser can show it. */
+  #renderPicture(source: ImageSource): void {
+    const t = this.#t();
+    const line = document.createElement("li");
+    line.dataset.role = "user";
+    line.dataset.final = "true";
+    line.dataset.picture = "";
+    const shown =
+      typeof source === "string"
+        ? source
+        : source instanceof Blob && typeof URL.createObjectURL === "function"
+          ? URL.createObjectURL(source)
+          : undefined;
+    if (shown) {
+      if (typeof source !== "string") this.#thumbnails.push(shown);
+      const image = document.createElement("img");
+      image.src = shown;
+      image.alt = t.pictureSent;
+      line.append(image);
+    } else line.textContent = t.pictureSent;
+    this.#lines.set(`picture-${this.#lines.size}-${Date.now()}`, line);
+    this.#ui.list.append(line);
+    this.#ui.list.scrollTop = this.#ui.list.scrollHeight;
+  }
 }
 
 /** Registers `<voice-agent>` if it is not defined yet. */
@@ -488,8 +720,8 @@ export function defineVoiceAgentElement(): void {
 /**
  * Appends a `<voice-agent>` configured from a script tag's `data-*` attributes
  * (`data-relay`, `data-project`, `data-token`, `data-token-url`, `data-language`, `data-voice`,
- * `data-backend`, `data-context`, `data-label`, `data-accent`, `data-position`,
- * `data-text-input`). Does nothing without `data-relay`.
+ * `data-backend`, `data-transport`, `data-context`, `data-label`, `data-accent`, `data-position`,
+ * `data-text-input`, `data-image-input`). Does nothing without `data-relay`.
  *
  * @returns the created element, if any.
  */

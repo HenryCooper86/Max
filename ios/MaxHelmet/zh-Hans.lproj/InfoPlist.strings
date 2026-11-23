@@ -6,7 +6,7 @@
 "NSLocationWhenInUseUsageDescription" = "Max 会在您显式开始导航或 Helmet Ride 后使用精确位置；Helmet Ride 可在锁屏期间为 RDK 头盔导航转发位置，直到您停止 Helmet Ride。";
 "NSContactsUsageDescription" = "Max 需要读取通讯录，才能在你说出名字时拨打电话或发送短信。";
 "NSAppleMusicUsageDescription" = "Max 需要访问音乐库，才能在骑行时控制播放。";
-"NSCameraUsageDescription" = "Max 需要使用相机，才能在你说出指令时拍照和录像。";
+"NSCameraUsageDescription" = "Max 需要使用相机，才能在你说出指令时拍照和录像，并在你打开摄像头时让助手看到画面。";
 "NSPhotoLibraryAddUsageDescription" = "Max 需要把你导出的拍摄内容保存到系统相册。";
 "NSLocalNetworkUsageDescription" = "Max 需要访问本地网络以连接同一 Wi-Fi 下的语音中继服务器，并发现附近的 Max 头盔以便配对。";
 "NSMotionUsageDescription" = "检测摔车事故需要读取运动传感器。";

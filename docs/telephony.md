@@ -1,0 +1,521 @@
+# Phone calls
+
+Let people phone the assistant, and let the assistant phone them. A call reaches the assistant exactly as a web session
+does, so every backend, tool and [conversation setting](conversations.md) that works on a web page works on the
+phone, with nothing phone-specific to build.
+
+## What you need
+
+- A Twilio account and a phone number that can take voice calls. [Telnyx](#telnyx) works too; the steps below are
+  for Twilio, and the Telnyx section says what differs.
+- The relay reachable from the internet over HTTPS and WSS, with a certificate Twilio accepts. See
+  [deployment](deployment.md) for TLS.
+- A [voice backend](backends.md) that supports tools. Hanging up and transferring are tools, so Doubao, which has no
+  function calling, cannot do them.
+
+The relay talks to Twilio over Media Streams: Twilio answers the call and streams the audio to the relay over a
+WebSocket. There is no SIP trunk (see [limits](#limits)).
+
+## Set it up
+
+1. Set the environment variables below and restart the relay. Telephony is off until `TWILIO_AUTH_TOKEN` is set.
+2. In the Twilio console, open your number, and under "A call comes in" choose Webhook, `HTTP POST`, and enter
+   `https://<your-relay>/telephony/twilio/voice`.
+3. Call the number.
+
+```bash
+TWILIO_AUTH_TOKEN=your-twilio-auth-token
+TELEPHONY_PUBLIC_URL=https://voice.example.com
+```
+
+| Variable                     | Default | What it does                                                                                                                                                                                |
+| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TWILIO_AUTH_TOKEN`          | none    | Required. Your account's auth token. It turns telephony on and checks that webhooks really come from Twilio.                                                                                |
+| `TWILIO_ACCOUNT_SID`         | none    | Needed to transfer calls and to place outbound calls (both use Twilio's REST API), not to answer them.                                                                                      |
+| `TWILIO_PHONE_NUMBER`        | none    | The Twilio number outbound calls come from, in E.164 form such as `+14155550100`. It is also the caller ID of a transfer.                                                                   |
+| `TELEPHONY_PUBLIC_URL`       | derived | The relay's public address as Twilio reaches it, such as `https://voice.example.com`. When unset, the relay uses the address of the request.                                                |
+| `TELEPHONY_TRANSFER_NUMBERS` | none    | Where the assistant may transfer a call: `support=+14155550100,sales=sip:sales@example.com`. See [transferring](#transferring-to-a-person).                                                 |
+| `TELEPHONY_WARM_TRANSFER`    | `off`   | `on` or `confirm`: the person who picks up a transfer hears what the call is about, and the caller comes back to the assistant when nobody takes it. See [warm transfers](#warm-transfers). |
+| `TELEPHONY_TRANSFER_PROMPT`  | English | With `confirm`: the line that asks the person to press a key, at most 200 characters.                                                                                                       |
+| `TELEPHONY_MAX_CALLS`        | `20`    | Calls at the same time, 1 to 1000. Further calls are answered with a busy signal.                                                                                                           |
+
+Problems with these variables (a number that is not in E.164 form, a transfer list without `TWILIO_ACCOUNT_SID`) are
+logged at startup, and the part that is wrong is left off.
+
+Set `TELEPHONY_PUBLIC_URL` behind a reverse proxy or a tunnel. Twilio signs the exact URL it requested, and the relay
+checks the signature against its own idea of that URL, taken from `TELEPHONY_PUBLIC_URL`, or else from the request's
+`Host` and `X-Forwarded-Proto` headers. If the two differ, the relay refuses the call with HTTP 403 and logs
+"rejected a telephony webhook: bad signature".
+
+### How a call flows
+
+```text
+caller ── PSTN ── Twilio ──POST /telephony/twilio/voice──▶ relay (TwiML: connect a stream)
+                     └─────WS  /telephony/twilio/stream──▶ relay (μ-law 8 kHz both ways)
+```
+
+1. Twilio asks the relay what to do with the call. The relay checks Twilio's signature and answers with TwiML that
+   connects the call to a bidirectional stream.
+2. Twilio opens the stream WebSocket to the relay. The relay checks the ticket it put in the TwiML, starts the
+   assistant's session for the call, and tells it the caller's number.
+3. Audio flows both ways until someone hangs up.
+
+### Security
+
+- **Twilio's signature.** The voice webhook checks `X-Twilio-Signature`, an HMAC of the full URL and the form fields
+  keyed with your auth token. A request without a valid signature gets 403 and no call is set up.
+- **A one-time ticket.** Twilio's stream WebSocket carries no credentials, so the voice webhook mints a random ticket and
+  puts it in the TwiML as a stream parameter. A stream must present a ticket that is less than 60 seconds old, that has
+  not been used before and that belongs to its own call, within 3 seconds of connecting. Otherwise the relay closes
+  it. Only calls that Twilio itself signed can open a stream.
+- **A webhook cannot be replayed.** Twilio's signature has no timestamp, so a copied request stays valid. A call holds
+  one ticket at a time, and once its stream has connected the relay answers that call's webhook with a hang-up for the
+  next 24 hours.
+- **A call limit.** `TELEPHONY_MAX_CALLS` caps simultaneous calls, so a flood of calls cannot run up your model bill
+  without bound. Beyond it, the relay answers `<Reject reason="busy"/>`.
+- **Stream connections are rationed until they show a ticket.** The relay accepts a stream connection only while a
+  call is waiting for one, and holds at most 8 unproven connections per client address and 64 in all. Calls in
+  progress do not count against these, so idle connections cannot keep real calls out. Behind a reverse proxy, set
+  `RELAY_TRUST_PROXY=on` (see [deployment](deployment.md)) so the address is the client's and not the proxy's. Without
+  it the relay cannot tell clients apart, and only the total of 64 applies.
+- **Caller ID is not identity.** The assistant is told the caller's number only when it is a plain phone number, and
+  is told that caller ID can be faked. Do not let a tool act on an account because of the number alone.
+- **Calls are not QA evidence.** A caller is a member of the public, so nothing they say is kept in the relay's QA
+  evidence archive.
+- **Transfer destinations are yours.** The model chooses a name from your list and never supplies a number.
+- **Outbound calls are owner-only** (see [below](#outbound-calls)).
+
+## What the caller experiences
+
+- **They can interrupt.** When the caller speaks over the assistant, the relay tells Twilio to drop the audio it still
+  holds, so the assistant stops at once.
+- **Keypad digits arrive as typed turns.** The relay collects the digits a caller presses and sends them to the
+  assistant as a typed turn, `(keypad) 1234`. A sequence ends at `#` (not included), after 2 seconds without a key, or
+  at 32 digits. `*` and `A` to `D` are passed through as typed. The assistant is told what `(keypad)` means.
+- **The assistant can hang up.** On a phone call the assistant always has the `end_session` tool, whatever
+  `conversation.endSession` says, and is told to use it when the caller says goodbye or the business is done. After a
+  short goodbye the relay lets Twilio finish playing the audio (waiting at most 6 seconds) and closes the stream, which
+  ends the call.
+- **Prompts for a phone.** The assistant is told that the caller sees nothing and only hears it, to keep sentences short
+  and to read numbers and addresses back to confirm them. It is also told that input starting with `(system)` is a
+  notice from the phone system, not something the caller said.
+- **It knows who is calling.** For an incoming call it is told the caller's number and the number that was dialled. The
+  caller's number is information from Twilio, but it can be spoofed, so do not treat it as proof of identity.
+- **A hang up from the caller** ends the session, with the reason `caller` in the record.
+
+The other [conversation settings](conversations.md) apply too: `idleReminderSeconds` makes the assistant ask "Are you
+still there?" on a silent line, `maxDurationSeconds` caps the length of a call, and `agents` can hand a call to a
+specialist.
+
+## Transferring to a person
+
+List the places a call may go, and the assistant gets a `transfer_call` tool:
+
+```bash
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_PHONE_NUMBER=+14155550100
+TELEPHONY_TRANSFER_NUMBERS=support=+14155550123,sales=sip:sales@example.com
+```
+
+Each entry is `name=destination`. The name is letters, digits, `_` and `-`, starting with a letter, at most 32
+characters. The destination is a phone number in E.164 form or a `sip:` URI. The tool's `destination` argument is one of
+the names, so the model can only pick from your list. Tell the assistant when to use it in your `instructions`: "Transfer
+to support when the caller asks for a person or reports a fault."
+
+When the assistant calls the tool, it tells the caller in one short sentence that it is transferring them. After it has
+finished speaking (or after 12 seconds, if it never does), the relay redirects the call to the destination through
+Twilio's REST API. That needs `TWILIO_ACCOUNT_SID`: without it `transfer_call` is not offered at all. If Twilio refuses
+the transfer, the assistant is told, apologises and carries on. On success the assistant leaves the call and the
+conversation record ends with the reason `transfer`.
+
+### Warm transfers
+
+Transferred like this, the person who picks up knows nothing about the call, and a caller whose transfer nobody answers
+hears the carrier give up. `TELEPHONY_WARM_TRANSFER` changes both, on Twilio:
+
+```bash
+TELEPHONY_WARM_TRANSFER=on        # or: confirm
+```
+
+- **The person who picks up hears what the call is about.** The `transfer_call` tool gets a second argument,
+  `summary`: one or two sentences the assistant writes about who is calling and what they need. Twilio reads it to the
+  person who answers before it connects the two. The caller does not hear it. The relay keeps it to one line of at
+  most 400 characters. It is never part of what the relay sends to Twilio's REST API: Twilio asks the relay for it
+  when somebody has picked up, and the relay gives it for 30 seconds from then.
+- **The caller comes back when nobody takes the call.** The destination rings for 25 seconds. If it is busy, does not
+  answer or cannot be reached, Twilio connects the caller to the relay again. The assistant carries on the same
+  conversation, is told why the transfer did not go through, and says so. It can try again, try another destination
+  or take a message.
+- **`confirm` asks for a key press.** After the summary the person hears "Press any key to take the call." (set your
+  own line with `TELEPHONY_TRANSFER_PROMPT`) and has 8 seconds to press one. If they do not, their side is hung up and
+  the caller comes back to the assistant. Use it when the destination has voicemail: an answering machine picks up,
+  presses nothing, and the caller is not left talking to it.
+
+What to know:
+
+- While the destination rings, the assistant is not on the call, so it cannot talk to the caller or to the person who
+  picks up. It briefs that person through the summary only.
+- Twilio reads the summary in its own voice, for the first language in the assistant's `languages`. The assistant is
+  asked to write the summary in that language, whatever language the caller speaks.
+- A caller who comes back is in a new session that is given the earlier conversation. That works for a software
+  assistant (`"device": "app"`, which a phone line should be). With a wearable or vehicle preset the earlier turns are
+  not carried over: the assistant knows that the transfer failed and why, and greets the caller again.
+- The relay asks Twilio to call three URLs of its own during a transfer (`/telephony/twilio/transfer/whisper`,
+  `/accept` and `/result`). Each request is checked against Twilio's signature like the voice webhook. Behind a proxy
+  or a tunnel set `TELEPHONY_PUBLIC_URL`, as for the voice webhook.
+- A call that comes back produces a second [conversation record](conversations.md) for the same `callSid`: the first
+  ends with the reason `transfer`, the second holds what was said afterwards. Recordings are split the same way.
+- A [campaign](#calling-a-list-of-numbers) call that is transferred counts as `completed` with the reason `transfer`
+  when the two have spoken, or 90 seconds after the transfer began if Twilio has said nothing by then. If the caller
+  comes back first, the call stays in progress and ends the way the rest of the conversation does.
+- The relay remembers a transfer for five minutes. That covers the ringing, the summary and the key press many times
+  over. A caller who would come back when every line of the relay is taken (`TELEPHONY_MAX_CALLS`) is hung up.
+- If the relay restarts or is shutting down while the destination rings, the caller cannot come back and the call
+  ends when the ringing does. With `confirm` the person who picks up after a restart is still asked for the key
+  press, without the summary.
+- Calls through Telnyx are transferred without any of this, and the relay says so at startup when the variable is
+  set.
+- Tried with a local model and a stand-in for Twilio that sends the documented requests: a key press on the call, the
+  transfer, the summary, no answer, and the caller back with the assistant after about two seconds. Not yet run on a
+  real Twilio call.
+
+## Outbound calls
+
+`POST /v1/calls` makes the assistant phone someone. It needs `TWILIO_ACCOUNT_SID`, `TWILIO_PHONE_NUMBER` and the relay's
+token (on Telnyx: `TELNYX_API_KEY`, `TELNYX_ACCOUNT_SID`, `TELNYX_APPLICATION_SID` and `TELNYX_PHONE_NUMBER`). It is never open: without `RELAY_AUTH_TOKEN` set the relay answers 401 ("Set RELAY_AUTH_TOKEN before placing
+calls"), because otherwise anyone who found the URL could dial numbers on your Twilio account. Call it only from your
+own backend.
+
+```bash
+curl -X POST https://voice.example.com/v1/calls \
+  -H "Authorization: Bearer $RELAY_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "to": "+14155550142",
+    "context": "You are calling Sam Lee to confirm a delivery window for order A-1042 on Friday between 9 and 12.",
+    "userId": "cus_8f2",
+    "voicemailMessage": "Hello Sam, this is Acme Outdoor about your order. Please call us back on 415 555 0100."
+  }'
+```
+
+```json
+{ "ok": true, "callSid": "CA0123456789abcdef0123456789abcdef" }
+```
+
+| Field              | Required | What it is                                                                                                                                         |
+| ------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `to`               | yes      | The number to call, in E.164 form.                                                                                                                 |
+| `context`          | no       | Up to 2000 characters about what the call is for. The assistant treats it as facts from you, so put your own text here and never text from a user. |
+| `userId`           | no       | Up to 128 characters. The user the call is counted under for [usage](usage-and-billing.md), and the `userId` your tools see.                       |
+| `voicemailMessage` | no       | Up to 500 characters, spoken if a machine answers. Twilio only.                                                                                    |
+| `carrier`          | no       | `twilio` or `telnyx`. Only matters with both set up: Twilio places the call unless you name Telnyx.                                                |
+
+The assistant is told that it placed the call, that the person did not expect it, and to say who it is and why it is
+calling, followed by your `context`.
+
+The response means that Twilio accepted the call, not that anyone answered. Errors are `{ "ok": false, "error": "…" }`:
+
+| Status | When                                                                                                            |
+| ------ | --------------------------------------------------------------------------------------------------------------- |
+| `400`  | `to` is not in E.164 form, or another field is too long or not text.                                            |
+| `401`  | The relay token is missing or wrong, or `RELAY_AUTH_TOKEN` is not set.                                          |
+| `429`  | `TELEPHONY_MAX_CALLS` calls are already in progress.                                                            |
+| `502`  | Twilio refused the call, or could not be reached.                                                               |
+| `503`  | Telephony is not configured (`TWILIO_AUTH_TOKEN`), or `TWILIO_ACCOUNT_SID` or `TWILIO_PHONE_NUMBER` is missing. |
+
+**Answering machines.** The relay asks Twilio to detect who picked up. When it reports a machine, the relay says
+`voicemailMessage` (if you gave one) in Twilio's own text-to-speech voice and hangs up, without starting the assistant,
+so no model time is spent. A fax machine is hung up on without a message. Detection is Twilio's and not perfect: an
+answering machine can be taken for a person, and a person for a machine. The relay keeps the plan for an outbound
+call for 5 minutes, so Twilio has to fetch the call's instructions within that time.
+
+## Calling a list of numbers
+
+`POST /v1/campaigns` places the same kind of call as [`POST /v1/calls`](#outbound-calls) for each number in a list. It
+needs the same settings and is owner-only in the same way: without `RELAY_AUTH_TOKEN` set the relay answers 401.
+
+```bash
+curl -X POST https://voice.example.com/v1/campaigns \
+  -H "Authorization: Bearer $RELAY_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Delivery windows, week 48",
+    "context": "You are calling to confirm a delivery window on Friday between 9 and 12.",
+    "voicemailMessage": "Hello, this is Acme Outdoor about your delivery. Please call us back on 415 555 0100.",
+    "concurrency": 3,
+    "attempts": 2,
+    "retryAfterMinutes": 60,
+    "window": { "from": "09:00", "to": "18:00", "timeZone": "Europe/Berlin", "days": ["mon", "tue", "wed", "thu", "fri"] },
+    "calls": [
+      { "to": "+4915112345678", "userId": "cus_8f2", "context": "You are calling Sam Lee about order A-1042." },
+      { "to": "+4915187654321" }
+    ]
+  }'
+```
+
+The answer is `201` with `{ "ok": true, "campaign": { "id": "...", "status": "running", ... } }`.
+
+| Field                         | Required | What it is                                                                                                                                                                  |
+| ----------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `calls`                       | yes      | 1 to 5,000 items. Each has `to` (E.164) and may have `context`, `userId` and `voicemailMessage`. A number may appear only once.                                             |
+| `name`                        | no       | Up to 120 characters.                                                                                                                                                       |
+| `context`, `voicemailMessage` | no       | Defaults for every call. A call's own value replaces them. The same length limits as `POST /v1/calls`.                                                                      |
+| `carrier`                     | no       | `twilio` or `telnyx`, as for `POST /v1/calls`.                                                                                                                              |
+| `concurrency`                 | no       | Calls at once in this campaign, 1 to 50. Default 1.                                                                                                                         |
+| `attempts`                    | no       | Tries for a number that is busy or does not answer, 1 to 5. Default 1.                                                                                                      |
+| `retryAfterMinutes`           | no       | How long to wait before trying again, 1 to 1440. Default 30.                                                                                                                |
+| `window`                      | no       | When calls may be placed: `from` and `to` as `HH:MM` (`from` before `to`), a `timeZone` name, and optionally `days` (`mon` to `sun`). One time zone for the whole campaign. |
+| `startAt`                     | no       | An ISO time with its offset, such as `2026-12-01T09:00:00Z` or `2026-12-01T09:00:00+01:00`, at most 30 days ahead. Without it the campaign starts at once.                  |
+
+The request body may be up to 4 MB. This route has its own limit because 5,000 calls with their own contexts do not fit
+in the 32 KB the other routes allow.
+
+Other routes, all owner-only and never cached:
+
+- `GET /v1/campaigns` lists campaigns, newest first, with their counts.
+- `GET /v1/campaigns/:id` is the same summary plus `calls`: for each, `to`, `status`, `attempts`, `callSid`,
+  `durationMs`, `endedReason`, `answeredBy` and `lastAttemptAt`. It holds the numbers you sent, so treat it as private.
+- `POST /v1/campaigns/:id/cancel` stops the campaign.
+- `DELETE /v1/campaigns/:id` removes a campaign that is finished or cancelled and has no call in progress. Otherwise `409`.
+
+An unknown id is `404`. A bad request is `400`, with the first problem found. A fourth active campaign is `409`. If the
+carrier cannot place calls at all (not set up), creating the campaign is `503` with what to set.
+
+**Statuses.** A campaign is `scheduled` (before `startAt`), `running`, `done` or `cancelled`. While it is running
+outside its window it also says `waitingForWindow: true`. A campaign the relay stopped itself is `cancelled` and has a
+`stoppedReason`. A call is:
+
+| Status              | Meaning                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------- |
+| `waiting`           | Not placed yet, or waiting to be tried again.                                                             |
+| `calling`           | Placed; nobody has answered yet.                                                                          |
+| `answered`          | A person is on the line.                                                                                  |
+| `completed`         | The conversation happened and is over. `durationMs` and `endedReason` say how long and why.               |
+| `voicemail`         | A machine or a fax answered. Not tried again. Twilio only: on Telnyx a machine counts as a person.        |
+| `no-answer`, `busy` | Nobody answered, and no tries are left.                                                                   |
+| `failed`            | The carrier could not place or complete the call, or refused it. `endedReason` says why. Not tried again. |
+| `cancelled`         | The campaign was cancelled before the call was placed.                                                    |
+| `unknown`           | The relay never learned what became of the call, or restarted during it. Not tried again.                 |
+
+**How calls are placed.** At most `concurrency` calls of a campaign are on the line at once, and at least one second
+passes between two placements on the relay, because carriers limit how fast calls may start. `busy` and `no-answer`
+are tried again after `retryAfterMinutes` while tries are left. `failed`, `voicemail`, `completed` and `unknown` never
+are. A number that is on a call for one campaign is not called for another until that call is over. (A call you place
+yourself with `POST /v1/calls` is not checked against campaigns.)
+
+**The relay's lines.** Campaign calls share `TELEPHONY_MAX_CALLS` with every other call, and a campaign call that is
+still ringing counts as a line taken, because it will need one when it is answered. So `concurrency` above
+`TELEPHONY_MAX_CALLS` changes nothing: the relay places a call only when a line is free for it, and waits a few seconds
+when none is. That wait is not a try. Inbound calls are not held back for campaigns. If they take the last line while a
+campaign call rings and the person then picks up, the relay hangs up on them: that was a try, the call is tried again
+after `retryAfterMinutes` if tries are left, and is `failed` with the reason if not. Leave room for inbound calls when
+you choose `concurrency`.
+
+**When calls cannot be placed.** A number the carrier will not call (HTTP 400 and the like) is marked `failed` with the
+reason, and the campaign goes on. When the carrier says the relay is calling too fast (HTTP 429), the number is not
+marked: the relay waits 30 seconds and tries it again. The relay stops a campaign itself in two cases: five calls in a
+row fail for a reason that holds for every call (the carrier cannot be reached, answers with a server error or 429,
+refuses the relay's credentials, or the relay itself cannot place calls), or ten calls in a row are refused for any
+reason with none placed in between, which is what a wrong caller number looks like. Its waiting calls become
+`cancelled`, and `stoppedReason` says what the last answer was. Fix the cause and create a new campaign with the
+numbers that were not called.
+
+**The window.** Calls are placed only from `from` up to, not including, `to`, on the listed `days`, in the time zone you
+name. The day is the day in that time zone, not the server's. Outside the window the campaign waits, and calls already
+on the line finish.
+
+**Cancelling.** Calls that are waiting become `cancelled`. Calls in progress finish and keep their real outcome; a busy
+one is not tried again.
+
+**Limits.** At most 3 campaigns are `scheduled` or `running` at once. The relay keeps the 50 most recent finished ones
+and drops the oldest.
+
+**How the relay learns what happened.** When it places a call for a campaign it also gives the carrier a status
+callback: `/telephony/twilio/status` or `/telephony/telnyx/status`. The carrier posts there when a call ends without
+anyone answering (busy, no answer, failed, canceled). The callback is checked like the voice webhook: Twilio's signature
+on Twilio, the secret in the URL on Telnyx. The carrier must be able to reach it, so the same rule applies as for
+outbound calls: set `TELEPHONY_PUBLIC_URL`, or the relay uses the address your `POST /v1/campaigns` request came in on
+(Telnyx cannot use that, because its URL holds a secret). A call that is answered ends through its media stream
+instead. If nothing is heard about a call for about 3 minutes, it becomes `unknown`, and if it is answered after that
+the relay hangs up.
+
+**Keeping campaigns.** Without `CAMPAIGNS_FILE` campaigns live in memory and are lost when the relay restarts. With it,
+the whole state is written to that file (mode 0600, at most about once a second, less often when the file is large) and
+read again at startup. Before each call is placed, the relay also writes one line to a journal beside it
+(`<CAMPAIGNS_FILE>.journal`, mode 0600) and waits until that line is on disk, and it places a new campaign's first call
+only once the file holds the campaign. So a call that was placed or in progress when the relay stopped, even one placed
+a moment before a crash, becomes `unknown` with the reason "the relay restarted during the call" and is not dialled
+again, because the person may already have been spoken to. Waiting calls carry on. If the journal line or the file
+cannot be written (a full disk, a missing directory), calls are not placed and the relay tries again every 30 seconds.
+Both files hold the numbers you sent.
+
+- If the file cannot be read at startup, the relay logs a problem, starts with no campaigns and leaves the file alone
+  until you create a campaign.
+- If the file can be read and the journal cannot, the relay cannot know which calls were placed last. It cancels the
+  campaigns that still had calls waiting and says so in the log and in their `stoppedReason`.
+- This protects against the relay stopping. It does not make two relays that share one file safe: run campaigns on
+  one relay.
+
+**Shutting down.** When the relay is told to stop it places no more calls. Calls on the line are hung up with the rest
+of its sessions and recorded as `completed`. A call that is still ringing at that moment becomes `unknown` after the
+restart and is not dialled again. Waiting calls carry on after the restart.
+
+**Before you call a list.** In many places automated calls need the called person's consent given beforehand, are
+limited to certain hours, and must respect do-not-call lists. The relay enforces none of that beyond the window you set.
+Checking the law where you and the people you call are, and your lists, is up to you.
+
+**What was tested.** Campaigns were tested against stand-ins for the carriers, with timers driven by the test. They have
+not been run on real Twilio or Telnyx calls.
+
+## Audio
+
+Phone networks carry G.711 μ-law at 8 kHz. The relay converts it both ways: the caller's audio is decoded and
+resampled to the 16 kHz PCM that the relay's [protocol](protocol.md#audio) takes in, and the assistant's 24 kHz audio
+is resampled to 8 kHz and encoded in 20 ms μ-law frames. Only the caller's own track is used. Phone audio is
+narrow-band, so the assistant sounds different than on a web page: test with real calls.
+
+Callers phone from streets, cars and kitchens. Set `NOISE_SUPPRESSION=phone` to have the relay take steady background
+noise out of the caller's audio before the model hears it, which stops a fan or traffic from being taken for speech.
+See [noise suppression](configuration.md#noise-suppression).
+
+## Usage, records and traces
+
+- **Usage.** A call counts like any session in [usage and billing](usage-and-billing.md): its minutes and tool calls
+  are booked to the `userId` of an outbound call, or to the user `phone` for inbound calls and for outbound calls
+  without one. The usage webhook fires when the call ends. With `USAGE_MONTHLY_MINUTES` set, a call is refused at the
+  start once that user has used the allowance, and all inbound calls share the one `phone` allowance.
+- **Conversation record.** The [conversation webhook](conversations.md#the-conversation-webhook), analysis, log file and
+  redaction apply to calls. The record has `session.channel` set to `"phone"` and a `session.phone` block:
+
+  ```json
+  "phone": { "direction": "inbound", "from": "+14155550142", "to": "+14155550100", "callSid": "CA0123…" }
+  ```
+
+  `direction` is `inbound` or `outbound`. On an outbound call `to` is the person and `from` is your number. `from` and
+  `to` are left out when Twilio does not send one, and both read `[phone]` when
+  [`privacy.redact`](conversations.md#redacting-personal-data) includes `phone`. `session.endReason` is `caller` when the
+  caller hung up, `transfer` when the call was transferred, and `agent`, `idle` or `max_duration` when the relay ended
+  it.
+
+- **Traces.** Spans have `voice.channel` set to `phone`. See [tracing](conversations.md#tracing).
+
+## Telnyx
+
+Telnyx works as a second carrier, through TeXML (its dialect of TwiML) and its media streaming. What the caller
+experiences, transfers, keypad input, usage and records are the same as above. This section covers what differs.
+
+> This carrier was written to Telnyx's documentation and tested against a stand-in that speaks the documented
+> messages. It has not been run on a real Telnyx call yet. Try it on a test number before you rely on it.
+
+### Set it up
+
+1. Make up a secret of at least 16 letters and digits, for example with `openssl rand -hex 24`, and set it as
+   `TELNYX_WEBHOOK_SECRET`.
+2. Copy your account's public key from the Telnyx portal into `TELNYX_PUBLIC_KEY`. Telnyx calls are off until both
+   are set.
+3. In the portal, create a TeXML application and set its voice URL to
+   `https://<your-relay>/telephony/telnyx/voice?key=<your secret>`. Either method, GET or POST, works. Assign your
+   number to the application.
+4. Restart the relay and call the number.
+
+```bash
+TELNYX_WEBHOOK_SECRET=3f1c…your-own-secret
+TELNYX_PUBLIC_KEY=your-account-public-key
+TELEPHONY_PUBLIC_URL=https://voice.example.com
+```
+
+| Variable                  | Default | What it does                                                                                                       |
+| ------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `TELNYX_WEBHOOK_SECRET`   | none    | Required. The secret in the voice URL you give Telnyx. At least 16 characters: letters, digits, `-` and `_`.       |
+| `TELNYX_PUBLIC_KEY`       | none    | Required. Your account's public key (base64, hex or PEM). The relay checks Telnyx's signature on every stream.     |
+| `TELNYX_API_KEY`          | none    | Needed, with `TELNYX_ACCOUNT_SID`, to transfer calls and to place outbound calls.                                  |
+| `TELNYX_ACCOUNT_SID`      | none    | Your account id, as it appears in TeXML REST paths.                                                                |
+| `TELNYX_APPLICATION_SID`  | none    | The TeXML application outbound calls are placed through.                                                           |
+| `TELNYX_PHONE_NUMBER`     | none    | The Telnyx number outbound calls come from, in E.164 form. It is also the caller ID of a transfer.                 |
+| `TELNYX_UNSIGNED_STREAMS` | off     | `allow` runs Telnyx without `TELNYX_PUBLIC_KEY`. Read [the next section](#how-the-relay-knows-it-is-telnyx) first. |
+
+`TELEPHONY_PUBLIC_URL`, `TELEPHONY_TRANSFER_NUMBERS` and `TELEPHONY_MAX_CALLS` apply to Telnyx as they do to Twilio.
+`TELEPHONY_WARM_TRANSFER` does not: a call through Telnyx is transferred without a summary and does not come back.
+Twilio and Telnyx can be set up at the same time. Each then has `TELEPHONY_MAX_CALLS` lines of its own.
+
+### How the relay knows it is Telnyx
+
+```text
+caller ── PSTN ── Telnyx ──GET or POST /telephony/telnyx/voice?key=…──▶ relay (TeXML: connect a stream)
+                     └─────WS  /telephony/telnyx/stream?ticket=…──────▶ relay (μ-law 8 kHz both ways)
+```
+
+Two things together, because neither is enough alone:
+
+- **The secret in the voice URL.** Telnyx's documentation does not say how the request for a call's instructions is
+  signed, so the relay does not depend on a signature there. A request without the right `key` gets 403 and no call
+  is set up. The answer to a request with the right key holds a one-time ticket for the call's stream.
+- **Telnyx's signature on the stream.** Telnyx signs each media stream's request with your account's key (Ed25519,
+  over the time and the stream's URL, ticket included). A stream that is unsigned, signed for another URL or more than
+  five minutes old gets 403, before it counts against anything. A key the relay cannot use, including one of the few
+  values that would accept any signature, turns Telnyx off, so a mistake cannot quietly switch the check off.
+
+Behind a reverse proxy or a tunnel, set `TELEPHONY_PUBLIC_URL`: the signature is checked against the stream URL the
+relay gave Telnyx, and the relay must know its own public address to rebuild it.
+
+**If the secret leaks.** Treat the voice URL like a password: keep it out of proxy access logs and screenshots.
+Someone who has it, but not your Telnyx account, can ask the relay for tickets. They cannot open a stream with one,
+because they cannot sign it, so they cannot talk to the assistant, use its tools or place calls. What they can do is
+get in the way: a flood of requests pushes real calls' tickets out (the relay holds a fixed number), so Telnyx calls
+fail to connect while it lasts. If that happens, or you think the secret is out, set a new one and update the URL in
+the portal.
+
+**Without the public key.** `TELNYX_UNSIGNED_STREAMS=allow` lets Telnyx run with the secret and the ticket only. The
+secret is then all that stands between a stranger and the assistant: whoever has it can open sessions without placing
+a call, with any caller number they like in the assistant's context, use every tool a caller can, run up model costs
+up to `TELEPHONY_MAX_CALLS` at a time, and keep stream connections open that Twilio calls on the same relay also need.
+Use it only to find out why signed streams are being refused, and not on a relay the public can reach.
+
+### What is different from Twilio
+
+- **Outbound calls need `TELEPHONY_PUBLIC_URL`.** The URL Telnyx fetches an outbound call's instructions from holds
+  the secret, so the relay builds it only from the address you configured, never from the address a request to
+  `POST /v1/calls` came in on. Without it the relay answers 503.
+- **No answering-machine detection.** Telnyx reports who answered to a separate callback, which the relay does not
+  take yet. `POST /v1/calls` with a `voicemailMessage` is refused with 400 on Telnyx, and an outbound call that
+  reaches a machine starts the assistant, which talks to the recording.
+- **`callSid` may be empty** in the answer to `POST /v1/calls`: Telnyx's documented response does not name the call.
+  The id appears in the conversation record once the call connects.
+- **Audio frames can arrive out of order.** Telnyx does not promise their order, so the relay puts them back in
+  order, waiting for at most three later frames (60 ms at 20 ms a frame) before it gives a missing one up.
+- **Only μ-law at 8 kHz.** The relay asks Telnyx for it, and refuses a stream that announces anything else.
+
+## Testing on your own machine
+
+Twilio has to reach the relay, so run a tunnel to your local relay and give Twilio and the relay the tunnel's address.
+Any tunnel that gives you an HTTPS address works.
+
+```bash
+# 1. Start a tunnel to the relay's port, and note the https address it prints.
+# 2. Tell the relay its public address, so Twilio's signature is checked against the right URL.
+TWILIO_AUTH_TOKEN=your-twilio-auth-token \
+TELEPHONY_PUBLIC_URL=https://your-tunnel.example.com \
+npm run dev:server
+# 3. Set the number's "A call comes in" webhook to https://your-tunnel.example.com/telephony/twilio/voice
+```
+
+A free tunnel's address usually changes every time you start it, so update both places each time. The keyless demo
+(`VOICE_PROVIDER=mock`) is enough to test the plumbing, but use a real backend to test what the assistant says.
+
+## Limits
+
+- **Twilio and Telnyx only.** There is no direct SIP trunk and no other carrier yet. A SIP destination is supported
+  only as somewhere to transfer a call to. Telnyx has not been run on a real call: see [Telnyx](#telnyx).
+- **Calls are not recorded unless you ask.** With `CONVERSATION_RECORDING=phone` the relay writes each call's audio
+  to a file: see [recording the audio](conversations.md#recording-the-audio), and check what the law and your callers'
+  consent require where you operate. Otherwise audio is never stored, and the
+  [conversation log](conversations.md#the-log-file) has the text only.
+- **A line the backend cannot voice is not spoken.** The relay's own lines (the greeting, a check-in, the farewell) are
+  voiced by the backend. When it cannot voice one at that moment, for example because its connection to the voice
+  model has just dropped, the relay sends the line as text for the client to speak itself. A web client does that with
+  the browser's speech synthesis. A phone call has no such client, so the line is skipped and the call carries on (or
+  ends) as planned. The assistant's own replies are not affected.
+- **Calls are not resumable.** If a call drops, the caller phones again and starts a new conversation. The
+  [resume](conversations.md#carrying-a-conversation-across-a-dropped-connection) feature is for web and app clients.
+- **No screen.** A phone call has no page, so client tools do not exist on it and a tool cannot show anything to the
+  caller. Use code tools and webhook tools.

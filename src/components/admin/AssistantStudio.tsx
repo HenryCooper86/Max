@@ -25,10 +25,9 @@ import { useLanguage } from "../LanguageToggle";
 import { DeviceFields, IdentityFields, LookFields, SoundFields, type LogoControls } from "../studio/AssistantFields";
 import { AssistantPreview } from "../studio/AssistantPreview";
 import { VoicesPanel } from "../studio/VoicesPanel";
+import { SECTION_LEAVE_EVENT } from "../../lib/section-leave";
 import { BackendSetup } from "./BackendSetup";
-
-/** Cancelable event the workspace sends before switching section. */
-export const SECTION_LEAVE_EVENT = "admin:beforesection";
+import { ConfigHistory } from "./ConfigHistory";
 
 /** The draft an admin starts from. A relay on its defaults has an empty
  *  stored config; the draft then shows what is running (its name, device and
@@ -52,6 +51,7 @@ type Props = {
   backendApi?: Parameters<typeof BackendSetup>[0]["api"];
   voicesApi?: Parameters<typeof VoicesPanel>[0]["api"];
   voicesAudio?: Parameters<typeof VoicesPanel>[0]["audio"];
+  historyApi?: Parameters<typeof ConfigHistory>[0]["api"];
   api?: {
     fetchStudio: typeof fetchStudio;
     saveStudio: typeof saveStudio;
@@ -73,7 +73,8 @@ export function AssistantStudio({
   api = DEFAULT_API,
   backendApi,
   voicesApi,
-  voicesAudio
+  voicesAudio,
+  historyApi
 }: Props) {
   const { language } = useLanguage();
   const say = useCallback((zh: string, en: string) => localized(language, zh, en), [language]);
@@ -86,10 +87,13 @@ export function AssistantStudio({
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [logoError, setLogoError] = useState<string | undefined>();
   const [showErrors, setShowErrors] = useState(false);
+  // Counts the changes that reached the relay, so the history is read again after each.
+  const [revision, setRevision] = useState(0);
 
   const adopt = useCallback(
     (state: StudioState, keepDraft = false) => {
       setStudio(state);
+      setRevision((count) => count + 1);
       const next = draftFromStudio(state, language);
       setSaved(next);
       if (!keepDraft) {
@@ -205,8 +209,8 @@ export function AssistantStudio({
     if (
       !window.confirm(
         say(
-          "把助手恢复为默认的 Max？这会清除保存的配置和上传的标志，无法撤销。",
-          "Reset the assistant to the default Max? This clears the saved settings and any uploaded logo, and cannot be undone."
+          "把助手恢复为默认的 Max？这会清除保存的配置和上传的标志。配置可以从“历史版本”里恢复，标志不能。",
+          "Reset the assistant to the default Max? This clears the saved settings and any uploaded logo. The settings can be brought back from History; the logo cannot."
         )
       )
     )
@@ -357,6 +361,29 @@ export function AssistantStudio({
             <h3 id="studio-backend">{say("语音后端", "Voice backend")}</h3>
             <BackendSetup onSaved={onSaved} onAuthenticationExpired={onAuthenticationExpired} api={backendApi} />
           </section>
+          <ConfigHistory
+            revision={revision}
+            unsaved={dirty}
+            disabled={busy}
+            onAuthenticationExpired={onAuthenticationExpired}
+            api={historyApi}
+            onRestored={(state) => {
+              adopt(state);
+              setShowErrors(false);
+              setStatus({
+                kind: "saved",
+                message:
+                  say("已恢复。新的会话会立即使用。", "Restored. New sessions use it from now on.") +
+                  (state.restartFor.length > 0
+                    ? say(
+                        ` 其中 ${state.restartFor.join("、")} 要重启中继后才生效。`,
+                        ` Restart the relay for these to take effect: ${state.restartFor.join(", ")}.`
+                      )
+                    : "")
+              });
+              onSaved();
+            }}
+          />
           <section className="studioDanger" aria-labelledby="studio-reset">
             <h3 id="studio-reset">{say("恢复默认", "Reset to defaults")}</h3>
             <p>

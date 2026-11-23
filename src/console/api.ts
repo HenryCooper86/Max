@@ -2,6 +2,8 @@
 // the bearer token (when the endpoint needs one) and an optional fetch, so
 // tests can inject both.
 
+import type { FlowStep } from "../lib/flow";
+import type { AnalysisResult } from "../../shared/analysis";
 import type { ProjectStudio } from "../../shared/cloud-studio";
 
 export type { ProjectStudio } from "../../shared/cloud-studio";
@@ -17,6 +19,8 @@ export type Project = {
   keyPrefix: string;
   backend: Backend;
   hasModelKey: boolean;
+  /** Whether request headers for the project's trace collector are saved; their value is never sent back. */
+  hasTracesHeaders?: boolean;
   assistantName: string;
   instructions: string;
   greeting: string;
@@ -26,16 +30,21 @@ export type Project = {
   hasWebhookSecret: boolean;
   /** The owner's limit on this project's minutes per month; null (or absent, from an older relay) for none. */
   monthlyMinutesCap?: number | null;
+  /** False when conversation analysis runs on a model the service's operator named, not with the project's key. */
+  analysisOnOwnKey?: boolean;
   createdAt: number;
 };
 export type ProjectPatch = Partial<{
   name: string;
   backend: Backend;
   modelKey: string;
+  /** The trace collector's request headers (`name=value,…`); "" removes them. Absent leaves them as they are. */
+  tracesHeaders: string;
   assistantName: string;
   instructions: string;
   greeting: string;
-  studio: ProjectStudio;
+  /** Without `flow`, the project's flow stays as it is. */
+  studio: Omit<ProjectStudio, "flow"> & { flow?: ProjectStudio["flow"] };
   monthlyMinutesCap: number | null;
 }>;
 /** What a new project starts with (from a template). */
@@ -52,15 +61,34 @@ export type ConversationSummary = {
   seconds: number;
   source: "test" | "embed" | "api" | string;
   preview: string;
+  /** How long the visitor waited for an answer to begin, in ms: the median over the conversation. */
+  answerMs?: number;
+  /** From the conversation's analysis, when it has one. */
+  sentiment?: AnalysisResult["sentiment"];
+  success?: boolean;
 };
+/** What the project's analysis made of a conversation, or why it made nothing. */
+export type ConversationAnalysis = { at: number; result?: AnalysisResult; error?: string };
 export type ConversationTurn = {
   at: number;
   speaker: "user" | "agent" | "tool";
   text: string;
   ok?: boolean;
   ms?: number;
+  /** Agent turns: how long the visitor waited for this answer to begin, in ms. */
+  answerMs?: number;
 };
-export type Conversation = ConversationSummary & { projectId: string; turns: ConversationTurn[] };
+export type Conversation = ConversationSummary & {
+  projectId: string;
+  turns: ConversationTurn[];
+  analysis?: ConversationAnalysis;
+};
+/** A project's flow as the flow builder edits it: the steps, the starting step first, and the tools a step can name. */
+export type ProjectFlow = { ok: true; steps: FlowStep[]; tools: string[]; problems: string[] };
+/** How the last delivery of a conversation to the project's server went. */
+export type WebhookDelivery = { at: number; ok: boolean; attempts: number; status?: number; error?: string };
+export type WebhookTestResult = { ok: boolean; status?: number; error?: string; ms: number };
+export type TracesTestResult = { ok: true } | { ok: false; error: string };
 export type ToolTestResult = { ok: true; result: unknown; ms: number } | { ok: false; error: string; ms: number };
 export type Usage = {
   month: string;
@@ -167,6 +195,15 @@ export function createCloudApi(fetcher?: FetchLike) {
       get<{ secret: string }>(token, `/projects/${id(projectId)}/webhook-secret`),
     rotateWebhookSecret: (token: string, projectId: string) =>
       send<{ secret: string }>(token, "POST", `/projects/${id(projectId)}/webhook-secret/rotate`),
+    projectFlow: (token: string, projectId: string) => get<ProjectFlow>(token, `/projects/${id(projectId)}/flow`),
+    saveProjectFlow: (token: string, projectId: string, steps: FlowStep[]) =>
+      send<ProjectFlow & { project: Project }>(token, "PUT", `/projects/${id(projectId)}/flow`, { steps }),
+    conversationWebhook: (token: string, projectId: string) =>
+      get<{ url: string; last: WebhookDelivery | null }>(token, `/projects/${id(projectId)}/conversation-webhook`),
+    testConversationWebhook: (token: string, projectId: string) =>
+      send<WebhookTestResult>(token, "POST", `/projects/${id(projectId)}/conversation-webhook/test`),
+    testTraces: (token: string, projectId: string) =>
+      send<TracesTestResult>(token, "POST", `/projects/${id(projectId)}/traces-test`),
     conversations: (token: string, projectId: string) =>
       get<{ conversations: ConversationSummary[] }>(token, `/projects/${id(projectId)}/conversations`),
     conversation: (token: string, conversationId: string) =>

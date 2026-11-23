@@ -38,6 +38,9 @@
                   },
                   "parameters": {
                     "type": "object"
+                  },
+                  "background": {
+                    "type": "boolean"
                   }
                 },
                 "required": ["name", "description"]
@@ -50,6 +53,10 @@
             "protocol": {
               "type": "integer",
               "minimum": 1
+            },
+            "resume": {
+              "type": "string",
+              "maxLength": 64
             }
           },
           "required": ["type", "sampleRate", "channels"]
@@ -399,6 +406,56 @@
             }
           },
           "required": ["type", "text"]
+        },
+        {
+          "title": "ImageInput",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "image.input"
+            },
+            "image": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240000
+            },
+            "mimeType": {
+              "enum": ["image/jpeg", "image/png"]
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 2000
+            }
+          },
+          "required": ["type", "image", "mimeType"]
+        },
+        {
+          "title": "VideoFrame",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "video.frame"
+            },
+            "image": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240000
+            },
+            "mimeType": {
+              "enum": ["image/jpeg", "image/png"]
+            }
+          },
+          "required": ["type", "image", "mimeType"]
+        },
+        {
+          "title": "VideoStop",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "video.stop"
+            }
+          },
+          "required": ["type"]
         }
       ]
     },
@@ -423,6 +480,9 @@
             "protocol": {
               "type": "integer",
               "minimum": 1
+            },
+            "resume": {
+              "type": "string"
             }
           },
           "required": ["type", "provider", "mode", "capabilities"]
@@ -931,6 +991,32 @@
             }
           },
           "required": ["type", "callId", "name", "where", "state"]
+        },
+        {
+          "title": "SessionEnded",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "session.ended"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "reason"]
+        },
+        {
+          "title": "AgentChanged",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "agent.changed"
+            },
+            "agent": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "agent"]
         }
       ]
     }

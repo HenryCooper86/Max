@@ -17,11 +17,12 @@ import {
 } from "../shared/cloud-studio";
 import { authorizeUpgrade, resetAuthRateLimit } from "../server/auth";
 import { projectAssistantProfile } from "../server/assistant";
-import { projectRuntime, registerEmbedRoutes } from "../server/cloud";
+import { cloudConversationEnded, projectRuntime, registerEmbedRoutes } from "../server/cloud";
 import { setCloudClock } from "../server/cloud/context";
 import {
   conversationRecorder,
   listConversations,
+  medianAnswerMs,
   readConversation,
   saveConversation
 } from "../server/cloud/conversations";
@@ -241,6 +242,118 @@ describe("projects with Studio settings", () => {
     expect(patchProject(owner, created.id, { studio: { tools: "nope" } })).toMatchObject({ ok: false, status: 400 });
   });
 
+  it("takes a public https address to send conversations to, and makes a signing secret for it", async () => {
+    expect(DEFAULT_STUDIO.conversationWebhook).toBe("");
+    expect(parseStudio({}, "openai").value?.conversationWebhook).toBe("");
+    const owner = await customer();
+    const created = project(owner);
+    expect(created.hasWebhookSecret).toBe(false);
+    for (const [address, problem] of [
+      ["http://shop.example.com/hook", "must start with https://"],
+      ["https://10.0.0.5/hook", "must be a public address"],
+      ["https://localhost/hook", "must be a public address"],
+      ["https://user:pass@shop.example.com/hook", "cannot contain a user name or password"],
+      ["not an address", "must be a full https:// address"]
+    ] as const) {
+      const refused = patchProject(owner, created.id, { studio: { conversationWebhook: address } });
+      expect(refused).toMatchObject({ ok: false, status: 400 });
+      expect(!refused.ok && refused.error).toContain(`The conversation webhook's address ${problem}`);
+    }
+    // No tools, and still something of Max's to check the signature of.
+    const updated = patch(owner, created.id, { studio: { conversationWebhook: " https://shop.example.com/hook " } });
+    expect(updated.studio.conversationWebhook).toBe("https://shop.example.com/hook");
+    expect(updated.hasWebhookSecret).toBe(true);
+    const secret = revealWebhookSecret(owner, created.id);
+    expect(secret.ok && secret.value.secret).toMatch(/^whsec_/);
+    // Taking the address away keeps the secret: a tool added later is signed with the same one.
+    const cleared = patch(owner, created.id, { studio: { conversationWebhook: "" } });
+    expect(cleared.studio.conversationWebhook).toBe("");
+    expect(cleared.hasWebhookSecret).toBe(true);
+    // A project can start with one.
+    expect(
+      project(owner, { name: "Second", studio: { conversationWebhook: "https://shop.example.com/hook" } })
+        .hasWebhookSecret
+    ).toBe(true);
+  });
+
+  it("keeps a finished conversation, sends it to the project's server, both or neither", async () => {
+    const owner = await customer();
+    const created = project(owner, { name: "Shop", studio: { keepConversations: false } });
+    const sent: Array<Record<string, unknown>> = [];
+    const webhooks = { ended: (input: Record<string, unknown>) => void sent.push(input) };
+    const finish = (keep: boolean, projectId = created.id) => {
+      const recorder = conversationRecorder(() => clock);
+      recorder.event({ type: "transcript", speaker: "rider", text: "Where is my order?", final: true, turnId: "t1" });
+      cloudConversationEnded(
+        {
+          customerId: owner,
+          projectId,
+          source: "embed",
+          sessionId: "sess-1",
+          seconds: 12,
+          endedAt: clock + 12_000,
+          keep,
+          recorder
+        },
+        webhooks as never
+      );
+    };
+    const kept = () => {
+      const listed = listConversations(owner, created.id);
+      return listed.ok ? listed.value.conversations.length : -1;
+    };
+    // Neither.
+    finish(false);
+    expect([kept(), sent.length]).toEqual([0, 0]);
+    // Sent and not kept: what was said is nowhere on the relay afterwards.
+    patch(owner, created.id, { studio: { conversationWebhook: "https://shop.example.com/hook" } });
+    finish(false);
+    expect([kept(), sent.length]).toEqual([0, 1]);
+    expect(sent[0]).toMatchObject({
+      projectId: created.id,
+      url: "https://shop.example.com/hook",
+      secret: expect.stringMatching(/^whsec_/),
+      backend: "openai",
+      source: "embed",
+      sessionId: "sess-1",
+      seconds: 12,
+      turns: [{ speaker: "user", text: "Where is my order?" }]
+    });
+    // Both.
+    finish(true);
+    expect([kept(), sent.length]).toEqual([1, 2]);
+    // An address taken away while the conversation ran is no longer sent to.
+    patch(owner, created.id, { studio: { conversationWebhook: "" } });
+    finish(true);
+    expect([kept(), sent.length]).toEqual([2, 2]);
+    // A webhook that throws does not undo the history, and a deleted project has neither.
+    patch(owner, created.id, { studio: { conversationWebhook: "https://shop.example.com/hook" } });
+    const failing = {
+      ended: () => {
+        throw new Error("no room");
+      }
+    };
+    const recorder = conversationRecorder(() => clock);
+    recorder.event({ type: "transcript", speaker: "rider", text: "Hello?", final: true, turnId: "t1" });
+    cloudConversationEnded(
+      {
+        customerId: owner,
+        projectId: created.id,
+        source: "api",
+        sessionId: "sess-2",
+        seconds: 3,
+        endedAt: clock,
+        keep: true,
+        recorder
+      },
+      failing as never
+    );
+    expect(kept()).toBe(3);
+    expect(deleteProject(owner, created.id).ok).toBe(true);
+    finish(true);
+    expect(sent.length).toBe(2);
+  });
+
   it("falls back to the new backend's default voice when the backend changes", async () => {
     const owner = await customer();
     const created = project(owner);
@@ -278,6 +391,233 @@ describe("projects with Studio settings", () => {
     expect(openAiDialect("k", "cedar").voice("female")).toBe("cedar");
     expect(openAiDialect("k").voice("female")).toBe("marin");
     expect(grokDialect("k", "leo").voice("male")).toBe("leo");
+  });
+
+  const FLOW = [
+    { id: "main", handoffs: [{ to: "refunds", when: "The user wants money back." }] },
+    {
+      id: "refunds",
+      description: "Refunds.",
+      instructions: "Refund politely.",
+      tools: ["check_order"],
+      onEnter: { call: { tool: "check_order", arguments: { orderId: "A-1042" } } },
+      handoffs: [{ to: "main" }]
+    }
+  ];
+
+  it("keeps a flow, and gives a session its agents", async () => {
+    const owner = await customer();
+    const created = project(owner);
+    expect(created.studio.flow).toEqual([]);
+    const saved = patch(owner, created.id, { modelKey: "sk-test", studio: { tools: [ORDER_TOOL], flow: FLOW } });
+    expect(saved.studio.flow).toEqual(FLOW);
+    // A later save of something else leaves it as it is: with the flow sent along, and without.
+    expect(patch(owner, created.id, { studio: { ...saved.studio, voice: "cedar" } }).studio.flow).toEqual(FLOW);
+    const settings: Record<string, unknown> = { ...saved.studio };
+    delete settings.flow;
+    const later = patch(owner, created.id, { studio: { ...settings, voice: "marin" } });
+    expect(later.studio).toMatchObject({ voice: "marin", flow: FLOW });
+    expect(patch(owner, created.id, { greeting: "Hello." }).studio.flow).toEqual(FLOW);
+    // Taking a tool away under the flow is refused the same way when the flow is not sent.
+    expect(patchProject(owner, created.id, { studio: { ...settings, tools: [] } })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("this project has no tool by that name")
+    });
+    // An empty flow, said outright, is no flow.
+    expect(patch(owner, created.id, { studio: { ...settings, flow: [] } }).studio.flow).toEqual([]);
+    patch(owner, created.id, { studio: { ...settings, flow: FLOW } });
+
+    const runtime = projectRuntime(created.id)!;
+    const profile = projectAssistantProfile({
+      name: "Ava",
+      instructions: "Be brief.",
+      knowledge: "We open at 9.",
+      flow: runtime.studio.flow
+    });
+    expect(profile.configProblems).toEqual([]);
+    expect(profile.agents.map((agent) => agent.id)).toEqual(["main", "refunds"]);
+    expect(profile.agents[1]).toMatchObject({
+      instructions: "Refund politely.",
+      tools: ["check_order"],
+      onEnter: { call: { tool: "check_order" } }
+    });
+    // The project's instructions and knowledge stay what every step starts from.
+    expect(profile.instructions).toContain("Be brief.");
+    expect(profile.instructions).toContain("We open at 9.");
+    // One agent again: an empty flow, or the start alone with nothing written in it.
+    expect(
+      patch(owner, created.id, { studio: { ...saved.studio, flow: [{ id: "main", at: [40, 40] }] } }).studio.flow
+    ).toEqual([]);
+    expect(projectAssistantProfile({ name: "Ava", flow: [] }).agents).toEqual([]);
+  });
+
+  it("refuses a flow that would not work, in words for the person drawing it", async () => {
+    const owner = await customer();
+    const created = project(owner);
+    patch(owner, created.id, { studio: { tools: [ORDER_TOOL] } });
+    const refused = (studio: Record<string, unknown>) => {
+      const result = patchProject(owner, created.id, { studio: { tools: [ORDER_TOOL], ...studio } });
+      return result.ok ? "saved" : result.error;
+    };
+    expect(refused({ flow: "main" })).toBe("The flow must be a list of steps.");
+    expect(refused({ flow: ["main"] })).toBe("The flow must be a list of steps.");
+    expect(refused({ flow: Array.from({ length: 13 }, (_, index) => ({ id: `step_${index}` })) })).toBe(
+      "A flow has at most 12 steps."
+    );
+    expect(refused({ flow: [FLOW[0], { ...FLOW[1], instructions: "x".repeat(70_000) }] })).toBe(
+      "The flow is too long."
+    );
+    // The relay's own rules for a flow.
+    expect(refused({ flow: [{ id: "main", handoffs: [{ to: "nowhere" }] }] })).toContain(
+      "there is no agent nowhere to hand over to"
+    );
+    expect(refused({ flow: [FLOW[0], { ...FLOW[1], colour: "red" }] })).toContain('a step has no "colour"');
+    // What a step does by rule is done here, with a tool of the project's.
+    expect(
+      refused({ flow: [FLOW[0], { ...FLOW[1], tools: ["find_order"], onEnter: { call: { tool: "find_order" } } }] })
+    ).toBe(
+      "refunds: when the conversation is handed to it it calls find_order, and this project has no tool by that name. Add it under Tools and save, or take the call out of the step."
+    );
+    // The same when the tool is taken away under the flow.
+    expect(refused({ tools: [], flow: FLOW })).toContain("this project has no tool by that name");
+    // A step's own list may name a tool the app declares when it connects.
+    expect(
+      refused({
+        flow: [
+          FLOW[0],
+          { id: "refunds", description: "Refunds.", instructions: "Refund politely.", tools: ["open_page"] }
+        ]
+      })
+    ).toBe("saved");
+    // The conversation's own tools cannot be replaced by a project's.
+    expect(
+      refused({
+        tools: [{ ...ORDER_TOOL, name: "transfer_to_agent" }],
+        flow: [FLOW[0], { id: "refunds", description: "Refunds.", instructions: "Refund politely." }]
+      })
+    ).toBe("A project with a flow cannot have a tool called transfer_to_agent: the conversation has one of its own.");
+    // Without a flow that name is an ordinary one.
+    expect(refused({ tools: [{ ...ORDER_TOOL, name: "transfer_to_agent" }], flow: [] })).toBe("saved");
+    // A new project can start with one.
+    expect(
+      createProject(owner, { name: "Second", studio: { flow: [{ id: "main", handoffs: [{ to: "nowhere" }] }] } })
+    ).toMatchObject({ ok: false, status: 400 });
+  });
+
+  it("leaves an answer's time with the answer when the relay speaks a line of its own meanwhile", () => {
+    const recorder = conversationRecorder(() => clock);
+    const say = (speaker: "rider" | "agent", text: string, turnId: string, final = true) =>
+      recorder.event({ type: "transcript", turnId, speaker, text, final });
+    say("rider", "Where is my order?", "t1");
+    // The answer's words begin, then its sound; a line of the relay's own is finished before the answer is.
+    say("agent", "Let me", "t2", false);
+    recorder.event({ type: "metric", latencyMs: 900 });
+    say("agent", "Checking…", "line1");
+    say("agent", "Let me look. It ships today.", "t2");
+    // Sound before words: the first words after it say whose it was.
+    say("rider", "And the other one?", "t3");
+    recorder.event({ type: "metric", latencyMs: 700 });
+    say("agent", "One", "t4", false);
+    say("agent", "Still looking…", "line2");
+    say("agent", "One moment. Friday.", "t4");
+    // An answer whose words never became final is not the next answer.
+    say("rider", "Thanks.", "t5");
+    say("agent", "You", "t6", false);
+    say("rider", "Wait.", "t7");
+    recorder.event({ type: "metric", latencyMs: 500 });
+    say("agent", "Yes?", "t8");
+    expect(recorder.turns().map((turn) => [turn.text, turn.answerMs])).toEqual([
+      ["Where is my order?", undefined],
+      ["Checking…", undefined],
+      ["Let me look. It ships today.", 900],
+      ["And the other one?", undefined],
+      ["Still looking…", undefined],
+      ["One moment. Friday.", 700],
+      ["Thanks.", undefined],
+      ["Wait.", undefined],
+      ["Yes?", 500]
+    ]);
+  });
+
+  it("keeps how long each answer took to begin, and the conversation's median", async () => {
+    const owner = await customer();
+    const created = project(owner);
+    const recorder = conversationRecorder(() => clock);
+    const say = (speaker: "rider" | "agent", text: string, turnId: string) =>
+      recorder.event({ type: "transcript", turnId, speaker, text, final: true });
+    // The greeting answers nobody.
+    say("agent", "Hello! How can I help?", "t0");
+    say("rider", "Where is my order?", "t1");
+    // Sent with the first sound of the answer, before its words are final.
+    recorder.event({ type: "metric", latencyMs: 812.4 });
+    say("agent", "It ships today.", "t2");
+    say("agent", "It ships today, by 5 pm.", "t2");
+    say("rider", "And the other one?", "t3");
+    // An answer cut off before it had words: its time belongs to nobody, least of all the next answer.
+    recorder.event({ type: "metric", latencyMs: 300 });
+    say("rider", "The blue one.", "t4");
+    say("agent", "That one ships Friday.", "t5");
+    say("rider", "Thanks.", "t6");
+    recorder.event({ type: "metric", latencyMs: 1500 });
+    // Not times.
+    recorder.event({ type: "metric", latencyMs: -5 });
+    recorder.event({ type: "metric", latencyMs: "fast" });
+    recorder.event({ type: "metric" });
+    say("agent", "You're welcome.", "t7");
+    say("rider", "Bye.", "t8");
+    recorder.event({ type: "metric", latencyMs: 400 });
+    say("agent", "Goodbye!", "t9");
+    expect(recorder.turns().map((turn) => [turn.speaker, turn.answerMs])).toEqual([
+      ["agent", undefined],
+      ["user", undefined],
+      ["agent", 812],
+      ["user", undefined],
+      ["user", undefined],
+      ["agent", undefined],
+      ["user", undefined],
+      ["agent", 1500],
+      ["user", undefined],
+      ["agent", 400]
+    ]);
+    expect(medianAnswerMs(recorder.turns())).toBe(812);
+    expect(medianAnswerMs(recorder.turns().slice(0, 8))).toBe(1156);
+    expect(medianAnswerMs(recorder.turns().slice(0, 2))).toBeUndefined();
+
+    const id = saveConversation({ customerId: owner, projectId: created.id, source: "embed", seconds: 30, recorder });
+    const list = listConversations(owner, created.id);
+    expect(list.ok && list.value.conversations[0]).toMatchObject({ id, answerMs: 812 });
+    const read = readConversation(owner, id!);
+    expect(read.ok && read.value.conversation.answerMs).toBe(812);
+    expect(read.ok && read.value.conversation.turns[2]).toMatchObject({ speaker: "agent", answerMs: 812 });
+    // The project's server is sent the same turns.
+    const sent: Array<{ turns: Array<{ answerMs?: number }> }> = [];
+    patch(owner, created.id, { studio: { conversationWebhook: "https://shop.example.com/hook" } });
+    cloudConversationEnded(
+      {
+        customerId: owner,
+        projectId: created.id,
+        source: "embed",
+        sessionId: "s",
+        seconds: 30,
+        endedAt: clock,
+        keep: false,
+        recorder
+      },
+      { ended: (input: never) => void sent.push(input) } as never
+    );
+    expect(sent[0]!.turns[2]!.answerMs).toBe(812);
+    // A conversation nobody was answered in has no time to show.
+    const quiet = conversationRecorder(() => clock);
+    quiet.event({ type: "transcript", turnId: "t1", speaker: "rider", text: "Hello?", final: true });
+    const quietId = saveConversation({
+      customerId: owner,
+      projectId: created.id,
+      source: "embed",
+      seconds: 3,
+      recorder: quiet
+    });
+    const again = listConversations(owner, created.id);
+    expect(again.ok && again.value.conversations.find((one) => one.id === quietId)).not.toHaveProperty("answerMs");
   });
 
   it("keeps conversations, newest first, and deletes them with the project", async () => {

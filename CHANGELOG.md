@@ -1,5 +1,317 @@
 # Changelog
 
+## 2026-11-22 — WebRTC transport, noise suppression, pictures, Telnyx, recording, guardrails, background tools and a larger knowledge base
+
+- Web clients can send audio over WebRTC instead of the WebSocket: `WEBRTC=on` on the relay, `transport: "webrtc"`
+  in the SDK (`transport="webrtc"` on the widget). Audio travels over UDP as Opus, so a lost packet is concealed
+  instead of stalling the agent's voice, which is what a WebSocket does on a poor mobile network. The session is the
+  same `/agent` session: tokens, limits, tools, handoff, resume and every voice backend work unchanged.
+- A page that asks for WebRTC falls back to the WebSocket by itself where it cannot be used (the relay has it off, or
+  the network blocks UDP) and emits a `webrtc_unavailable` warning. `agent.transport` says which one a session got.
+- The relay needs a UDP port range open (`WEBRTC_UDP_PORTS`) and, behind NAT, its public address (`WEBRTC_PUBLIC_IP`).
+  It contacts no STUN or TURN server unless you name one. See [WebRTC transport](docs/webrtc.md).
+- Two new optional dependencies, `werift` and `opusscript` (JavaScript and WebAssembly, nothing to compile). A relay
+  with WebRTC off never loads them.
+- Tested with Chrome through the built SDK and with real peer connections in the test suite. Not yet tested: Firefox,
+  Safari, a lossy mobile network, TURN. The native iOS and Android clients keep the WebSocket.
+
+### Noise and turn-taking
+
+- `NOISE_SUPPRESSION=phone` (or `on`) makes the relay remove steady background noise from microphone audio before any
+  backend hears it, with RNNoise. It is meant for phone calls and devices, where no browser cleans the audio first.
+  One new optional dependency, `@jitsi/rnnoise-wasm`. See [configuration](docs/configuration.md#noise-suppression).
+- OpenAI Realtime: `OPENAI_TURN_EAGERNESS` for semantic turn detection, `OPENAI_VAD_THRESHOLD`,
+  `OPENAI_VAD_SILENCE_MS` and `OPENAI_VAD_PREFIX_MS` for server VAD, and `OPENAI_NOISE_REDUCTION`. Gemini Live:
+  `GEMINI_START_SENSITIVITY`, `GEMINI_END_SENSITIVITY`, `GEMINI_VAD_SILENCE_MS` and `GEMINI_VAD_PREFIX_MS`. A value
+  the relay cannot use is reported at startup. These were checked against the vendors' documentation, not their
+  servers. See [voice backends](docs/backends.md).
+
+### Images
+
+- A user can show the assistant a picture during a conversation, with or without words: a screenshot, a photo. The
+  conversation's own model sees it; this is separate from the helmet's camera, which goes to a vision service. Without
+  words the picture joins the conversation silently and the model sees it with the user's next turn.
+- Protocol: a new client event `image.input` (`image` base64, `mimeType` `image/jpeg` or `image/png`, optional `text`)
+  and a new capability `imageInput`. The relay checks that the bytes are a real JPEG or PNG, allows 240,000 base64
+  characters, one picture a second and 50 a connection (a reconnect starts a new count), and answers an invalid or refused picture with an `error` event.
+  See [the protocol](docs/protocol.md#imageinput).
+- Web SDK: `agent.sendImage(source, { text, maxSide })` takes a file, a canvas, an image, a `<video>` frame, an
+  `ImageBitmap` or a data URL, scales it to 1024 pixels on the longer side and encodes JPEG small enough for the limit.
+  It works over the WebSocket and WebRTC. `useVoiceAgent` returns it too.
+- The widget has a picture button with the new `image-input` attribute, shown only where the relay's model takes
+  pictures. What is typed in the text box goes with the picture as its question, and the picture appears in the
+  transcript. `el.sendImage(source)` does the same from code, and `voice-agent:image` says whether it was sent.
+  Tested in Chrome against a local model that can see (`gemma3:4b`).
+- Backends: OpenAI Realtime (unless the model is a preview model) and Gemini Live. The pipeline, local and Max Speech
+  backends need a chat model that can see pictures and a new setting, `PIPELINE_LLM_IMAGES=on` or `LOCAL_LLM_IMAGES=on`
+  (off by default, because the relay cannot tell). Grok and local realtime servers take none. See
+  [voice backends](docs/backends.md#pictures).
+- Pictures go to the model's vendor. The relay does not write picture bytes to conversation records, logs, traces,
+  resume state or memory; they only note that a picture was shown.
+- Run for real against Ollama on the local backend with `gemma3:4b`. The OpenAI and Gemini paths were built to the
+  vendors' documentation and not run against their servers. Not tested in a browser: the SDK's canvas encoding.
+
+### Phone calls
+
+- `POST /v1/campaigns` calls a list of numbers: up to 5,000 numbers, a limit on calls at once, retries for busy and
+  unanswered calls, and calling hours in a time zone you name. `GET /v1/campaigns/:id` shows what became of each call.
+  Campaigns live in memory unless `CAMPAIGNS_FILE` is set. The relay now also gives the carrier a status callback
+  (`/telephony/twilio/status`, `/telephony/telnyx/status`) for calls placed this way. Tested against stand-ins for
+  Twilio and Telnyx, not on real calls. See [calling a list of numbers](docs/telephony.md#calling-a-list-of-numbers).
+- A campaign writes each call to a journal on disk before it places it, so a number is not dialled again after a
+  crash, and places nothing while it cannot write. It stops placing when the relay shuts down, counts calls that are
+  still ringing against `TELEPHONY_MAX_CALLS`, does not call one number for two campaigns at once, and stops itself
+  with a `stoppedReason` when five calls in a row cannot be placed. `startAt` needs its offset.
+- Warm transfers on Twilio: with `TELEPHONY_WARM_TRANSFER=on` the person who picks up a transfer hears a summary the
+  assistant wrote, and a caller whose transfer nobody answers comes back to the assistant, which carries on the same
+  conversation. `confirm` also asks the person to press a key, so an answering machine cannot take the call. Tested
+  against a stand-in for Twilio, not on a real call. See [warm transfers](docs/telephony.md#warm-transfers).
+- Telnyx is a second carrier beside Twilio: set `TELNYX_WEBHOOK_SECRET` and `TELNYX_PUBLIC_KEY`, and point a TeXML
+  application at `/telephony/telnyx/voice?key=<secret>`. Inbound calls, transfers, keypad input and outbound calls work as on
+  Twilio. Answering-machine detection does not yet. Both carriers can be set up at once, and `POST /v1/calls` takes
+  a `carrier` field. See [phone calls](docs/telephony.md#telnyx).
+- Telnyx's media streams are checked against your account's public key, and audio frames that arrive out of order
+  are put back in order.
+- Written to Telnyx's documentation and tested against a stand-in that speaks the documented messages. Not yet run on
+  a real Telnyx call.
+
+### Versions and A/B tests
+
+- `version` in the assistant config is a label that every conversation record carries as `session.version`.
+- `variants` runs two to eight versions of the assistant side by side: each replaces a few config keys (instructions,
+  greeting, persona, conversation settings, guardrails, agents) and takes a share of conversations by `weight`. The
+  same user gets the same variant every time, the record names it as `session.variant`, and `GET /v1/variants` counts
+  conversations, length, end reasons, analysis success and sentiment for each. Its `comparison` says whether each
+  variant's success rate differs from the first variant's by more than chance (Fisher's exact test). See [versions and A/B tests](docs/conversations.md#versions-and-ab-tests).
+- A summary of older turns. With `conversation.memorySummary` a chat model folds the turns that leave a user's
+  window of 24 remembered turns into a short text, which the assistant is given with the latest turns. Written when
+  a conversation ends and during long ones; deleted with the rest when a user is forgotten. See
+  [a summary of older turns](docs/conversations.md#a-summary-of-older-turns).
+- Flows: a step at the start of a conversation. `main`'s `onStart` is done by the relay before the model is
+  connected: a tool call, values kept from its answer, a move to the agent that fits, and a sentence said after the
+  greeting. See [at the start of a conversation](docs/conversations.md#at-the-start-of-a-conversation).
+- The relay's own turn detector in front of OpenAI Realtime, Gemini Live and Grok (`TURN_DETECTOR=max-speech`). A
+  Max Speech server hears where the user's speech begins and judges, from how the last words sounded, whether they
+  have finished or are only pausing; the backend is told where each turn begins and ends and detects nothing itself.
+  A conversation falls back to the backend's own detection when the detector is not there.
+- The turn detector, after review: a conversation gives its place on the Max Speech server back when the backend
+  drops its connection (it used to keep it, and a Mac's four places ran out after four such drops); a reply asked for
+  a moment before the user spoke again is cancelled as it begins; something typed is a turn of its own on Gemini,
+  which otherwise never answered it; a detector that hangs is found out by a ping and given up after 15 seconds; a
+  turn nobody ends is ended after 36 seconds; speech the detector's transcriber made nothing of is still answered.
+  Max Speech says why each turn ended (`reason` on `transcript.final`). `MAX_SPEECH_API_KEY` is no longer sent to a
+  detector at an address of its own.
+- Live video. A user can show the assistant their camera or their screen while they talk: the web SDK's `startVideo`
+  sends a frame a second (`video.frame`, a new protocol event), the relay keeps the newest only, and the model sees it
+  with the user's next turn (on Gemini Live, as it arrives). The widget has camera and screen buttons with a preview
+  (`video-input`), the React hook `startVideo`, `stopVideo` and `video`. It works wherever pictures do
+  (`capabilities.videoInput`).
+- Live video in the iOS and Android clients. Where the session takes video, the typing field has a camera button: the
+  assistant is sent what the phone's camera shows, a frame a second (768 pixels on the longer side), with a small
+  preview and a control for the front or the back camera. The camera goes off with the conversation, with a lost
+  connection and when the app leaves the screen, and like the field it is not turned on while the bike is moving.
+  Built and unit-tested on both; the camera itself has not been run on a phone yet.
+- Max Cloud: flows for projects. A Flow tab in the Studio holds the relay's flow builder: several agents with their
+  own instructions and tools, handovers along the arrows drawn, values, and what a step does by rule, with the
+  project's webhook tools as the only tools.
+- iOS and Android: a picture for the assistant. When the backend takes pictures, the typing field has a button
+  that opens the system photo picker and sends the photo as `image.input`, upright, scaled and small enough for the
+  relay, with what is typed as one turn.
+- How long each answer took to begin, kept with the conversation. An agent line that answered the user carries
+  `answerMs` (the end of the user's turn to the first sound of the answer) in the conversation webhook and the
+  conversation log, on the relay's own assistant and on Max Cloud projects. The Max Cloud console shows it on each
+  answer, as a median per conversation, and as a median over the conversations listed.
+- The latency the relay reports (`metric.latencyMs`, and `answerMs` above) is counted from when the user's turn
+  ended, where the backend or the relay's turn detector says so, and no longer only from when their words were
+  final. On OpenAI Realtime and Grok the words often arrive after the answer is ready, and the number used to read
+  close to zero; it is now the wait the user had. Expect it to be larger than before on those backends.
+- The latency is told once for a turn of the user's. A second reply to the same turn, which follows a tool call,
+  used to send a `metric` of its own that counted the tool's time as waiting.
+- An upstream connection that comes up and is lost again within two seconds counts as a failed try. The relay used
+  to start counting anew after every connection that was made, so a backend (or a turn detector) that dropped
+  every connection at once was reconnected to for as long as the client stayed.
+- Relay turn detector on OpenAI Realtime and Grok: a turn that ended while the reply before it was waiting for a
+  tool is answered when the session gives that tool up, and no longer a turn late; a turn a guardrail refused is not
+  answered after the reply it cut.
+- Max Cloud: a relay that is stopped waits for its projects' conversations to end (and cuts a socket that does not
+  close) before it settles their analyses, so a client slow to close no longer loses its conversation's webhook.
+  In the conversation history an answer's time stays with the answer when the relay speaks a line of its own while
+  it is under way. The analysis form in the console stays open while a field behind the switch is put right.
+- Max Cloud: conversation analysis for projects. A project can have each conversation analysed when it ends: a
+  summary, how the visitor felt, a pass or fail against the owner's own rule, and fields to find in what was said.
+  The result is shown with the conversation in the console and sent with it to the project's server. It runs on the
+  project's own vendor with its own model key, or on one model the operator names
+  (`CLOUD_ANALYSIS_LLM_BASE_URL`). The cloud database gains a column by itself. Run for real with a local model;
+  the vendor endpoints are built to their documentation. See
+  [who pays for an analysis](docs/cloud.md#who-pays-for-an-analysis).
+- Project analysis, after review: a relay that stops while a conversation is being analysed still sends it to the
+  project's server (two seconds for the analysis, then without one, with the reason); at most 4 analyses of one
+  project run at once; the console says so when the operator's model does the analysing, and a project's key is not
+  read for it; the choices of a field shown in the console are always the ones that will be saved; a field left
+  unfinished is shown with what is wrong with it even with analysis switched off; a field cannot be named
+  `__proto__`; an answer with nothing that was asked for counts as no analysis.
+- Conversation analysis asks a model server again without JSON mode when it refuses `response_format` (HTTP 400).
+- Max Cloud: a conversation webhook per project. Each conversation is POSTed to the project's own server when it
+  ends, signed with the project's signing secret, with three more tries when it fails, a test request in the
+  console and the outcome of the last delivery. See [the Studio](docs/cloud.md#the-studio).
+- The start of a conversation, after review: the start has ten seconds in all and does not wait longer for a tool;
+  a user who types first is shown its sentence; a resumed conversation keeps what the start found out; a value
+  keeps the joiners of emoji and of Persian, Arabic and Indic words; the builder says which of the two things Start
+  does a problem is with, and knows that one name is one value.
+- Values in flows, after review: a `next` branch does not lead to an agent that has to be told something first; a
+  value cannot be called `channel`, `agent` or `values`, is kept as one clean line, and is either asked of the user
+  or kept from a tool; `{{…}}` around what is no name is refused; a `number` is no identifier.
+- Values in flows. An agent's `collect` names what the assistant has to get from the user before it hands the
+  conversation over (the handover is refused until it has); `onEnter.save` keeps parts of a tool's answer;
+  `{{name}}` fills a step's sentence and arguments, and a branch can test a value. See
+  [flows](docs/conversations.md#flows).
+- Flow steps, after review: an `onEnter` sentence is said before its tool is called (on the cascaded backends), not
+  after; a tool that ran is told to the model even when the user talked over the reply; a second handover in the
+  same reply gives up the first agent's `onEnter`; background tools, `end_session` and `transfer_to_agent` are
+  refused; the builder keeps `02134` and `1.50` as text.
+- Flow steps the relay does itself. An agent's new `onEnter` says a sentence in your words, calls a tool with fixed
+  arguments and moves the conversation on by what the tool answered (`is`, `in`, `above`, `below`, `exists`,
+  `failed`), with no model deciding any of it. On the cascaded backends the sentence is spoken as written. The
+  flow builder edits it and draws the branches as dashed arrows. See
+  [Flows](docs/conversations.md#flows).
+- MCP servers that are programs, after review: a server none of whose tools can be used is stopped and not started
+  again every few minutes; a program is not left running when it is stopped while starting; an answer written just
+  before a program exits is read; the program is stopped with whatever it started; its log lines are limited.
+  Going back to an earlier config no longer changes `toolsModule` or `mcpServers`.
+- Rules for what tools return, after review: the judge is no longer shown a tool's description beside its result,
+  nor told to let a result pass when in doubt; a verdict must be a whole number; a misspelled key such as
+  `resultRule` stops every tool like any other mistake in the rules for tools; invisible Unicode "tag" characters
+  are taken out of a checked result; checks stop when the conversation ends.
+- MCP servers that are programs: an `mcpServers` entry with a `command` (and `args`, `env`, `cwd`) in place of a
+  `url` is started by the relay and spoken to over its standard input and output. The program gets a small
+  environment, not the relay's keys, is started again when it stops, and is stopped with the relay. Only the config
+  file can name a command. See [MCP servers the relay runs itself](docs/tools.md#mcp-servers-the-relay-runs-itself).
+- Flows. An agent's new `handoffs` key lists the agents it may hand over to, each with a condition, so the agents
+  become steps a conversation moves through along the arrows you draw. The relay refuses a handover along no arrow
+  and tells the model where the conversation can go. Admin → Flow is a canvas for the same thing: add steps, drag
+  them, draw arrows, write conditions, tick each step's tools, save. Agents without `handoffs` behave as before. The
+  builder points out a step that no arrow leads to.
+  See [flows](docs/conversations.md#flows).
+- The relay keeps the last 50 assistant configs that were live: each save from the Studio, each restore, and a file
+  edited by hand when the relay next starts. Admin → Studio → History lists them with who made each live and which
+  keys changed, and restores one. The same is available over HTTP with an admin's token
+  (`/auth/admin/studio/history`). A restore says which keys need a restart of the relay (tools, analysis, privacy,
+  variants on or off). See
+  [going back to an earlier config](docs/conversations.md#going-back-to-an-earlier-config).
+
+### Guardrails
+
+- `guardrails` in the assistant config: `blockedTerms` the assistant never says, `rules` for the assistant and
+  `userRules` for users, judged by a chat model (`GUARDRAILS_LLM_*`, or the analysis model). The relay stops the
+  assistant, says your `say` line instead, and ends the conversation if `endConversation` is set.
+- A blocked term never reaches a caption or the record, and on the cascaded backends its sentence is not spoken. Rules
+  are judged while the assistant speaks, so they cut an answer short rather than prevent it. The conversation record
+  lists what was found. See [guardrails](docs/conversations.md#guardrails).
+- `guardrails.toolRules` are rules for what the assistant does: a chat model reads each tool call before the tool
+  runs, and a call that breaks a rule is not run. `checkedTools` limits the check to the tools you name. A call that
+  cannot be judged is not run either.
+- `guardrails.resultRules` are rules for what a tool returns: a chat model reads each result before the assistant
+  does, and a result that breaks a rule (a page that carries instructions for the assistant, say) is withheld.
+  `checkedResults` limits the check to the tools you name. A result that cannot be judged is withheld too. Tried
+  with a local 8B model as assistant and judge: an injected page was withheld three times of three, and obeyed three
+  times of three without the rule.
+- `guardrails.hold` has the judge read every sentence before it is spoken or shown, on the pipeline, local and Max
+  Speech backends: an answer that breaks a rule is stopped at that sentence and nobody hears or sees it. It adds one
+  check to the wait for the first words (about 0.27 s with a local 8B model).
+
+### Recording
+
+- `CONVERSATION_RECORDING=phone` (or `on`) with `CONVERSATION_RECORDING_DIR` records each conversation's audio as a
+  stereo WAV file, the user on the left channel and the assistant on the right. Off by default. The assistant's
+  channel holds what was heard: speech the user interrupted before it was played is left out.
+- The conversation record names the file in `recording`. With the relay's token, `GET /v1/recordings` lists the
+  recordings, and `GET` and `DELETE /v1/recordings/<file>` fetch and remove one. `CONVERSATION_RECORDING_KEEP_DAYS`
+  deletes old recordings.
+- Redaction does not apply to audio, and the relay does not announce the recording to callers. See
+  [recording the audio](docs/conversations.md#recording-the-audio).
+
+### Max Cloud traces
+
+- A Max Cloud project can name its own OpenTelemetry collector (Langfuse, Honeycomb, Grafana Tempo, Datadog: anything
+  that takes OTLP/HTTP), and its conversations are exported there, one trace each with a span per turn and per tool
+  call. The collector's headers are a stored, encrypted, write-only secret; what was said is sent only if the owner
+  turns it on; the address must be public https, by the rules of a tool call. "Send test trace" in the Conversations
+  tab checks it. A collector that is down costs the project its traces and nothing else. The relay operator's own
+  tracing still does not include projects' conversations. See [Traces](docs/cloud.md#traces).
+- Requests to a customer's address (a project's tools, its conversation webhook, its collector) no longer wait for
+  ever on a server that answers "101 Switching Protocols" or closes the connection without an answer: both are a
+  failure at once. The trace exporter keeps its 10-second limit itself, whatever the request does.
+
+### Tools and knowledge
+
+- Background tools. A tool marked `"background": true` does not hold the conversation up: the assistant says the work
+  has started, carries on, and reports the result when it comes. It works for webhook and code tools, for tools the
+  page runs (`background: true` in `defineClientTool`, or in `session.start.tools`), and for tools of an MCP server
+  (`backgroundTools`). Up to four at once in a conversation. A background webhook or MCP tool may take up to 10
+  minutes, and one in the page two. See [tools](docs/tools.md#background-tools).
+- The knowledge base takes up to 100,000 passages with embeddings (it was 5,000), set with `KNOWLEDGE_MAX_PASSAGES`.
+  Embeddings are cached on disk (`KNOWLEDGE_EMBEDDINGS_CACHE`), so a restart embeds nothing again and an edited file
+  embeds only its changed passages. Embedding retries after a rate limit or a server error, and an interrupted start
+  resumes. The cache holds vectors and hashes, never the text. Search results are the same as before.
+
+## 2026-11-22 — Phone calls, MCP, knowledge, multiple agents and conversation records
+
+We compared Max with the leading voice-agent platforms and built what was missing.
+[How Max compares](docs/comparison.md) lists every capability, and what is still not built.
+
+### Phone calls
+
+- The assistant answers and places phone calls through Twilio, on any voice backend. Callers can interrupt it, press
+  keypad digits, be transferred to a person on a list you set, and the assistant hangs up when the call is done.
+  `POST /v1/calls` places a call and can leave a voicemail message when a machine answers.
+  See [phone calls](docs/telephony.md).
+
+### Tools and knowledge
+
+- Remote MCP servers: list them under `mcpServers` and their tools become the assistant's tools. A server that is down
+  when the relay starts is tried again without a restart.
+- A built-in knowledge base: point `knowledge` at your Markdown, text, HTML, JSON or CSV files and the assistant
+  searches them before answering. Search is by keyword, and with `KNOWLEDGE_EMBEDDINGS_MODEL` set it is also by
+  meaning, through any OpenAI-compatible embeddings endpoint, hosted or local. See [tools](docs/tools.md).
+
+### Conversations
+
+- The assistant can check in on a silent user, end a conversation that is finished (`end_session`), and stop at a time
+  limit. Clients get a `session.ended` event with the reason.
+- Several agents in one assistant: each has its own instructions and tools, and the conversation is handed over
+  without the user repeating themselves. Clients get an `agent.changed` event.
+- A dropped connection no longer loses the conversation of a `"device": "app"` assistant. A client that reconnects
+  within 10 minutes carries on where it stopped, and so does the relay when its own connection to the voice model
+  drops.
+- With `conversation.rememberUsers`, a user your backend names in a session token is remembered between
+  conversations: the assistant starts the next one knowing what was said in the last. `GET` and `DELETE
+/v1/users/:userId/memory` let your backend look at or forget one user.
+- Memory between conversations no longer fills up with the pieces of one reply: a reply that arrives as it is written
+  is stored as one turn. This also fixes recall for people signed in to the relay's own accounts.
+- After each conversation the relay can write a summary, judge whether it succeeded, extract the fields you name, and
+  send the record to a webhook or a log file, with emails, phone numbers, card numbers and other personal data
+  removed first. See [running a conversation](docs/conversations.md).
+- OpenTelemetry traces: a span for each session, turn and tool call, to any collector that accepts OTLP over HTTP.
+- Admin → Studio keeps `conversation`, `agents`, `analysis`, `privacy`, `knowledge` and `mcpServers` when it saves.
+- With a small local chat model, a reply that promises a lookup ("Let me check.") and then calls no tool is asked
+  again, so the user gets the answer.
+
+### Testing
+
+- `npm run agent:test` runs scripted and simulated conversations against a relay and checks tool calls, replies and
+  an LLM judge's verdict, with pass rates over repeated runs and a JSON report for CI.
+  See [testing your agent](docs/testing-agents.md).
+
+### Web SDK
+
+- New `ended` and `agentchange` events, and an `agent` property. Reconnects carry the conversation on. These are part
+  of 0.2.0, which is not yet on npm.
+
+### Protocol
+
+- `session.start` and `session.started` have an optional `resume` field, and there are two new relay events,
+  `session.ended` and `agent.changed`. Older clients ignore them. The protocol version is still 1.
+
 ## 2026-11-22 — Reliability, security and billing fixes across the kit
 
 A review of the whole project turned up gaps in billing, security, the SDK's failure handling and release hygiene.

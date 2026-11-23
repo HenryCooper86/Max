@@ -208,6 +208,53 @@ describe("live voice session", () => {
     expect(client.of("telemetry")).toHaveLength(1);
   });
 
+  it("counts the wait for an answer from when the turn was over, not from when its words were written down", async () => {
+    const { client, engine } = await open("auto", { wakeWord: false });
+    const waited = () => client.of("metric").at(-1)?.latencyMs;
+    // A speech-to-speech backend: it says the user stopped, answers, and writes their words down last.
+    engine().events.onSpeechStarted();
+    await vi.advanceTimersByTimeAsync(2_000);
+    engine().events.onSpeechEnded!();
+    await vi.advanceTimersByTimeAsync(600);
+    engine().events.onResponseStarted();
+    engine().events.onAgentAudio(Buffer.alloc(1920, 1));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(client.of("metric")).toHaveLength(0);
+    engine().events.onRiderTranscript("what time is it", true);
+    // Heard 900 ms after the turn ended, although the words and the first sound came at the same moment.
+    expect(waited()).toBe(900);
+    expect(client.of("telemetry").at(-1)).toMatchObject({ asrMs: 2_900, totalMs: 2_900 });
+    engine().events.onResponseDone({ cancelled: false });
+
+    // A second reply to the same turn (it follows a tool call) tells no wait of its own.
+    await vi.advanceTimersByTimeAsync(4_000);
+    engine().events.onResponseStarted();
+    engine().events.onAgentAudio(Buffer.alloc(1920, 1));
+    expect(client.of("metric")).toHaveLength(1);
+    engine().events.onResponseDone({ cancelled: false });
+
+    // An engine that does not say when the turn ended: the words are all there is to go by.
+    engine().events.onSpeechStarted();
+    await vi.advanceTimersByTimeAsync(1_000);
+    engine().events.onRiderTranscript("and tomorrow", true);
+    await vi.advanceTimersByTimeAsync(450);
+    engine().events.onResponseStarted();
+    engine().events.onAgentAudio(Buffer.alloc(1920, 1));
+    expect(waited()).toBe(450);
+    engine().events.onResponseDone({ cancelled: false });
+
+    // Said after the words were final, the end is not news, and an end from the turn before is not carried over.
+    engine().events.onSpeechStarted();
+    await vi.advanceTimersByTimeAsync(1_000);
+    engine().events.onRiderTranscript("thanks", true);
+    await vi.advanceTimersByTimeAsync(200);
+    engine().events.onSpeechEnded!();
+    await vi.advanceTimersByTimeAsync(100);
+    engine().events.onResponseStarted();
+    engine().events.onAgentAudio(Buffer.alloc(1920, 1));
+    expect(waited()).toBe(300);
+  });
+
   it("withholds a reply from a self-answering backend until the wearer's words settle", async () => {
     const { client, engine } = await open("auto");
     expect(engine().config.manualResponse).toBe(false);
@@ -337,12 +384,38 @@ describe("live voice session", () => {
     await vi.advanceTimersByTimeAsync(400);
     expect(engines).toHaveLength(2);
     expect(client.statuses().at(-1)).toBe("listening");
+    // The connection that dropped is closed, so it lets go of what it held besides its upstream
+    // (a place on the turn detector's server); the one that took over is not.
+    expect(engines.map((made) => made.closedCount)).toEqual([1, 0]);
 
+    // The new connection held, so its loss is the first of a new run of tries.
+    await vi.advanceTimersByTimeAsync(2_000);
     // From here on the upstream stays down: three attempts, then the client is told.
     outage.down = true;
     engine().events.onClosed("closed (1006)");
     await vi.advanceTimersByTimeAsync(400 + 800 + 1600);
     expect(engines).toHaveLength(5);
+    // Each closed once: the one that dropped when it was replaced, the ones that never connected at once.
+    expect(engines.map((made) => made.closedCount)).toEqual([1, 1, 1, 1, 1]);
+    expect(client.of("error")).toHaveLength(1);
+    expect(client.closed?.code).toBe(1011);
+  });
+
+  it("gives up on an upstream that comes up and goes at once, time after time", async () => {
+    const { client, engines, engine } = await open("auto");
+    // Up, and gone within the moment: a turn detector that is lost as soon as it is there does this.
+    engine().events.onClosed("closed (1006)");
+    await vi.advanceTimersByTimeAsync(400);
+    engine().events.onClosed("closed (1006)");
+    await vi.advanceTimersByTimeAsync(800);
+    engine().events.onClosed("closed (1006)");
+    await vi.advanceTimersByTimeAsync(1_600);
+    expect(engines).toHaveLength(4);
+    expect(client.closed).toBeUndefined();
+    // The fourth loss in a row with no connection that held: no fifth connection is made.
+    engine().events.onClosed("closed (1006)");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(engines).toHaveLength(4);
     expect(client.of("error")).toHaveLength(1);
     expect(client.closed?.code).toBe(1011);
   });

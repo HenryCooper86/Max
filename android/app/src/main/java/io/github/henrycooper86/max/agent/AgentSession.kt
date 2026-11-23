@@ -17,6 +17,9 @@ import io.github.henrycooper86.max.BuildConfig
 import io.github.henrycooper86.max.actions.DeviceActions
 import io.github.henrycooper86.max.capture.CameraController
 import io.github.henrycooper86.max.capture.CaptureStore
+import io.github.henrycooper86.max.capture.encodeVideoBitmap
+import android.graphics.Bitmap
+import kotlinx.coroutines.isActive
 import io.github.henrycooper86.max.music.MusicController
 import io.github.henrycooper86.max.navigation.LocationManagerSource
 import io.github.henrycooper86.max.navigation.NavGuidanceState
@@ -117,7 +120,9 @@ class AgentSession(
          *  and may be flagged via turn.feedback (the relay matches inside its
          *  live session transcript, so a restored/previous-session turn could
          *  tag the wrong turn). MAX_VALUE = nothing flaggable (offline). */
-        val feedbackFloorId: Int = Int.MAX_VALUE
+        val feedbackFloorId: Int = Int.MAX_VALUE,
+        /** The camera is on and the assistant is being sent what it shows (live video). */
+        val videoActive: Boolean = false
     ) {
         /** 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx). */
         val fusedHazard: HazardLevel
@@ -153,6 +158,7 @@ class AgentSession(
 
         /** Keep the stored conversation bounded (TRANSCRIPT_CAP in src/lib/persistence.ts). */
         private const val TRANSCRIPT_CAP = 200
+        private const val VIDEO_TICK_MS = 250L
         private const val MAX_MIC_QUEUE_BYTES = 256L * 1024L
     }
 
@@ -573,6 +579,7 @@ class AgentSession(
         sessionLocation.stop()
         location = null
         crash.sessionEnded()
+        stopVideo()
         if (crash.controller.active && !force) {
             stopAfterIncident = true
             transmitting = false; micMuted = false; stopCapture(); stopAgentSpeech()
@@ -990,6 +997,8 @@ class AgentSession(
         closedSocket = socket
         socketOpen = false
         webSocket = null
+        // The socket is gone, so there is no one to show: the camera goes off, and is not left on unseen.
+        stopVideo()
         rideSpeed.onSocketClosed()
         environment.onSocketChanged()
         warningAudio.stop()
@@ -1070,6 +1079,10 @@ class AgentSession(
         when (event) {
             is AgentEvent.SessionStarted -> {
                 socketOpen = true
+                // The relay counts pictures per connection.
+                imageLimiter.reset()
+                // A reconnect to a session that takes no video ends it, here and on the relay.
+                if (video.sessionStarted(event.capabilities.videoInput)) videoEnded()
                 // A live relay's ride.context speed is the phone's own echo: only a mock relay's counts.
                 rideSpeed.onSessionMode(event.mode)
                 if (audioStartPending && transmitting && !audioPaused) { audioStartPending = false; sourceSocket.send(AUDIO_START_EVENT) }
@@ -1365,6 +1378,68 @@ class AgentSession(
         val payload = buildTextInput(text) ?: return false
         return webSocket?.send(payload) == true
     }
+
+    private val imageLimiter = ImageInputLimiter()
+
+    /**
+     * Shows the model a picture (image.input): a JPEG as base64, already
+     * scaled to fit. With [text] it is a typed turn with the picture attached;
+     * without, the model sees it with the user's next turn. Null when it went
+     * out, else why it did not.
+     */
+    fun sendImageInput(jpegBase64: String, text: String? = null): ImageRefusal? {
+        if (!socketOpen || !imageInputReady(_state.value)) return ImageRefusal.NOT_READY
+        val now = android.os.SystemClock.elapsedRealtime()
+        imageLimiter.refusal(now)?.let { return it }
+        val payload = buildImageInput(jpegBase64, text) ?: return ImageRefusal.TOO_LARGE
+        if (webSocket?.send(payload) != true) return ImageRefusal.NOT_READY
+        imageLimiter.sent(now)
+        return null
+    }
+
+    // Live video: the newest camera frame is encoded and sent about once a second, off the main thread.
+    // takesVideo reads the state, which holds the capabilities of the current session.started.
+    private val video = LiveVideo<Bitmap>(
+        connected = { socketOpen },
+        takesVideo = { _state.value.capabilities.videoInput },
+        send = { payload -> webSocket?.send(payload) == true },
+        encode = ::encodeVideoBitmap,
+        now = { android.os.SystemClock.elapsedRealtime() }
+    )
+    private var videoJob: Job? = null
+
+    /** Turns live video on. False when the session cannot take it now. */
+    @Synchronized
+    fun startVideo(): Boolean {
+        if (!video.start()) return false
+        _state.update { it.copy(videoActive = true) }
+        videoJob?.cancel()
+        videoJob = deviceScope.launch(Dispatchers.Default) {
+            // Often, so the frame sent is a fresh one; LiveVideo keeps the pace.
+            while (isActive) {
+                video.sendNewest()
+                delay(VIDEO_TICK_MS)
+            }
+        }
+        return true
+    }
+
+    /** Turns live video off and tells the relay. Safe to call when it is off. */
+    fun stopVideo() {
+        video.stop()
+        videoEnded()
+    }
+
+    // Turned on from the main thread, ended from there or from the socket's: one at a time.
+    @Synchronized
+    private fun videoEnded() {
+        videoJob?.cancel()
+        videoJob = null
+        if (_state.value.videoActive) _state.update { it.copy(videoActive = false) }
+    }
+
+    /** The camera's newest frame, from its own thread. */
+    fun offerVideoFrame(frame: Bitmap) = video.offer(frame)
 
     /** Main thread only, like the refresh job it schedules. */
     private fun showToolActivity(event: AgentEvent.ToolActivity) {

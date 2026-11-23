@@ -5,14 +5,17 @@
 import type { ProjectStudio } from "../../shared/cloud-studio";
 import { createLogger } from "../logger";
 import { cloudEnabled, cloudSecretKey, cloudSecretKeys } from "./context";
-import { projectStudio, projectWebhookSecret } from "./customers";
+import { projectStudio, projectTracesHeaders, projectWebhookSecret } from "./customers";
 import { decryptModelKey, hashToken } from "./secrets";
 import { liveProject, liveProjectByKeyHash } from "./store";
 
 export { cloudEnabled } from "./context";
 export { registerCloudPaymentRoutes, registerCloudRoutes, registerEmbedRoutes } from "./routes";
-export { conversationRecorder, pruneOldConversations, saveConversation } from "./conversations";
+export { conversationRecorder, pruneOldConversations } from "./conversations";
 export { projectServerTools } from "./tools";
+export { projectWebhooks } from "./conversation-webhook";
+export { projectTraces } from "./traces";
+export { cloudConversationEnded, settleConversationAnalyses } from "./conversation-end";
 export {
   createInvite as createCloudInvite,
   listInvites as listCloudInvites,
@@ -35,6 +38,8 @@ const log = createLogger("cloud");
 export type ProjectRuntime = {
   projectId: string;
   customerId: string;
+  /** The project's name. */
+  name: string;
   backend: "openai" | "gemini" | "grok";
   modelKey: string; // decrypted
   assistantName: string;
@@ -43,6 +48,10 @@ export type ProjectRuntime = {
   studio: ProjectStudio;
   /** Signs the project's webhook tool calls. */
   webhookSecret?: string;
+  /** The request headers of the project's trace collector, decrypted. */
+  tracesHeaders?: string;
+  /** They are saved but cannot be decrypted. */
+  tracesHeadersUnreadable?: true;
 };
 
 /** The project a project API key belongs to (live projects only), with the
@@ -79,15 +88,21 @@ export function projectRuntime(projectId: string): ProjectRuntime | undefined {
     );
     return undefined;
   }
+  const studio = projectStudio(project);
+  // Only read for a project that traces: a project without a collector has no use for them.
+  const tracesHeaders = studio.traces.endpoint ? projectTracesHeaders(project) : {};
   return {
     projectId: project.id,
     customerId: project.customer_id,
+    name: project.name,
     backend: project.backend,
     modelKey,
     assistantName: project.assistant_name || "Assistant",
     ...(project.instructions ? { instructions: project.instructions } : {}),
     ...(project.greeting ? { greeting: project.greeting } : {}),
-    studio: projectStudio(project),
-    ...(project.webhook_secret_enc ? { webhookSecret: projectWebhookSecret(project) } : {})
+    studio,
+    ...(project.webhook_secret_enc ? { webhookSecret: projectWebhookSecret(project) } : {}),
+    ...(tracesHeaders.headers ? { tracesHeaders: tracesHeaders.headers } : {}),
+    ...(tracesHeaders.unreadable ? { tracesHeadersUnreadable: true as const } : {})
   };
 }

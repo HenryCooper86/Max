@@ -20,7 +20,12 @@ few lines of JavaScript, and the agent can call your own code and APIs while it 
   speech-to-text → any chat model → text-to-speech pipeline, or fully local open-weight models. Switch with one
   environment variable; your clients do not change.
 - **Tools.** The agent looks things up and takes actions mid-sentence: functions in your relay, webhooks to any backend
-  in any language (HMAC-signed), or functions in the page itself (scroll, fill a form, add to cart).
+  in any language (HMAC-signed), remote MCP servers, a built-in knowledge base over your own files, or functions in
+  the page itself (scroll, fill a form, add to cart).
+- **Phone calls.** The same assistant answers and places calls through Twilio or Telnyx, transfers to a person and hangs up when
+  it is done.
+- **Whole conversations, not only turns.** Several agents with handoff, check-ins when the user goes quiet, and after
+  each conversation a summary, an outcome and the fields you asked for, sent to your webhook.
 - **Production details handled.** Barge-in, echo cancellation, gapless playback, reconnects that keep the
   conversation, typed input, live captions, latency telemetry, short-lived session tokens so browsers never see a
   secret, origin allowlists and rate limits.
@@ -254,22 +259,26 @@ minutes per user, can cap them, and can send each session to your billing system
 
 ## Documentation
 
-| Guide                                          | What it covers                                                       |
-| ---------------------------------------------- | -------------------------------------------------------------------- |
-| [Getting started](docs/getting-started.md)     | From clone to a voice agent in your own app, then to production      |
-| [Web SDK](sdk/README.md)                       | Widget, `VoiceAgent`, React hook, events, client tools               |
-| [Tools](docs/tools.md)                         | Code, webhook and client tools; signatures; writing good tools       |
-| [Configuration](docs/configuration.md)         | Every `assistant.config.json` key and the main environment variables |
-| [Voice backends](docs/backends.md)             | Each backend, its settings, and adding your own                      |
-| [Protocol](docs/protocol.md)                   | The `/agent` WebSocket protocol, for custom clients in any language  |
-| [Security](docs/security.md)                   | Session tokens, origins, webhook signing, prompt-injection advice    |
-| [Deployment](docs/deployment.md)               | Docker, TLS reverse proxies, scaling, health checks                  |
-| [Usage and billing](docs/usage-and-billing.md) | Minutes per user, monthly allowances, billing webhooks, Stripe       |
-| [Pricing and licensing](docs/pricing.md)       | The MIT license, Max Cloud and Enterprise                            |
-| [Running Max Cloud](docs/cloud.md)             | Accounts, projects, prepaid top-ups, WeChat Pay and Alipay           |
-| [Hardware and audio](docs/audio/README.md)     | Putting the agent on your own device: audio contract and test bench  |
-| [Running locally](docs/local-models.md)        | Open-weight speech and chat models on your own machine               |
-| [Examples](examples/README.md)                 | The web shop example and the Python device client                    |
+| Guide                                           | What it covers                                                       |
+| ----------------------------------------------- | -------------------------------------------------------------------- |
+| [Getting started](docs/getting-started.md)      | From clone to a voice agent in your own app, then to production      |
+| [Web SDK](sdk/README.md)                        | Widget, `VoiceAgent`, React hook, events, client tools               |
+| [Tools](docs/tools.md)                          | Code, webhook, MCP and client tools; the knowledge base; signatures  |
+| [Running a conversation](docs/conversations.md) | Agents and handoff, ending, resuming, analysis, webhooks, traces     |
+| [Phone calls](docs/telephony.md)                | Inbound and outbound calls (Twilio, Telnyx), transfers, keypad input |
+| [Testing your agent](docs/testing-agents.md)    | Scripted and simulated conversations, an LLM judge, CI reports       |
+| [How Max compares](docs/comparison.md)          | What agent platforms do, where Max stands, and what is not built     |
+| [Configuration](docs/configuration.md)          | Every `assistant.config.json` key and the main environment variables |
+| [Voice backends](docs/backends.md)              | Each backend, its settings, and adding your own                      |
+| [Protocol](docs/protocol.md)                    | The `/agent` WebSocket protocol, for custom clients in any language  |
+| [Security](docs/security.md)                    | Session tokens, origins, webhook signing, prompt-injection advice    |
+| [Deployment](docs/deployment.md)                | Docker, TLS reverse proxies, scaling, health checks                  |
+| [Usage and billing](docs/usage-and-billing.md)  | Minutes per user, monthly allowances, billing webhooks, Stripe       |
+| [Pricing and licensing](docs/pricing.md)        | The MIT license, Max Cloud and Enterprise                            |
+| [Running Max Cloud](docs/cloud.md)              | Accounts, projects, prepaid top-ups, WeChat Pay and Alipay           |
+| [Hardware and audio](docs/audio/README.md)      | Putting the agent on your own device: audio contract and test bench  |
+| [Running locally](docs/local-models.md)         | Open-weight speech and chat models on your own machine               |
+| [Examples](examples/README.md)                  | The web shop example and the Python device client                    |
 
 ## Project layout
 

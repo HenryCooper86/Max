@@ -11,8 +11,26 @@
 import { createBrowserAudio } from "./audio.js";
 import type { AudioIO } from "./audio.js";
 import { PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
+import { DEFAULT_IMAGE_MAX_SIDE, encodeImage } from "./image.js";
+import {
+  DEFAULT_VIDEO_INTERVAL_MS,
+  DEFAULT_VIDEO_MAX_SIDE,
+  VIDEO_QUALITIES,
+  openVideoInBrowser,
+  videoKind,
+  type OpenedVideo,
+  type VideoKind,
+  type VideoOpener,
+  type VideoOptions,
+  type VideoSource
+} from "./video.js";
+import type { ImageEncoder, ImageSource } from "./image.js";
+import { WEBRTC_UNAVAILABLE_CODE, createWebRtcSocket, webRtcSupported } from "./webrtc.js";
+import type { WebRtcSocket, WebRtcSocketOptions } from "./webrtc.js";
 import {
   MAX_TEXT_CHARS,
+  MIN_IMAGE_INTERVAL_MS,
+  MIN_VIDEO_FRAME_INTERVAL_MS,
   TOOL_NAME_PATTERN,
   buildSessionStart,
   mergeTranscript,
@@ -20,6 +38,7 @@ import {
   reconnectDelayMs,
   fetchPublicAgentToken,
   relayUrl,
+  relayWebRtcUrl,
   shouldReconnect,
   IDLE_CLOSE_CODE,
   USAGE_LIMIT_CLOSE_CODE,
@@ -49,9 +68,16 @@ export interface ClientTool<Args extends Record<string, unknown> = Record<string
   /** JSON Schema object for the arguments. Omit for a tool without arguments. */
   parameters?: JsonSchema;
   /**
+   * For work that takes a while. The agent is told at once that it has
+   * started and carries on talking; the result is reported to the user when
+   * the handler finishes. Such a call may run for up to ~110 s.
+   */
+  background?: boolean;
+  /**
    * Runs the tool. The return value (anything JSON-serializable) goes back to
    * the agent; a thrown error or rejected promise is reported as a tool error.
-   * Calls that run longer than ~14 s are abandoned with a "timeout" error.
+   * Calls that run longer than ~14 s (~110 s for a background tool) are
+   * abandoned with a "timeout" error.
    */
   handler(args: Args): unknown;
 }
@@ -66,6 +92,10 @@ export type VoiceAgentErrorCode =
   | "connection"
   | "relay"
   | "audio"
+  /** {@link VoiceAgent.sendImage} could not turn the source into a small enough JPEG. */
+  | "image"
+  /** {@link VoiceAgent.startVideo} could not open the camera, the screen or the stream: often the user said no. */
+  | "video"
   /** The relay closed with 4003: this account's voice minutes are used up. Retrying will not help. */
   | "usage_limit"
   /** The relay closed with 1008: it refused the credentials, even after a fresh token where one could be fetched. */
@@ -90,8 +120,9 @@ export type VoiceAgentWarning = {
   /**
    * `audio_blocked`: the browser left the audio context suspended, so the agent cannot be heard until {@link VoiceAgent.resumeAudio} runs inside a user gesture.
    * `protocol_mismatch`: the relay speaks a newer protocol than this SDK; the session runs, but update the SDK.
+   * `webrtc_unavailable`: `transport: "webrtc"` was asked for and could not be used; the session runs over the WebSocket.
    */
-  code: "audio_blocked" | "protocol_mismatch";
+  code: "audio_blocked" | "protocol_mismatch" | "webrtc_unavailable";
   message: string;
 };
 
@@ -135,6 +166,16 @@ export interface VoiceAgentEvents {
   audioresume: void;
   /** A session is established (fires again after each reconnect). */
   open: void;
+  /** The relay ended the conversation: the agent finished it (`agent`), the
+   *  user stayed silent (`idle`) or it reached its time limit (`max_duration`).
+   *  The last of the agent's speech still plays; `close` follows. */
+  ended: { reason: string };
+  /** The conversation moved to another of the assistant's agents. */
+  agentchange: { agent: string };
+  /** Live video for the agent went on or off: by {@link VoiceAgent.startVideo} and
+   *  {@link VoiceAgent.stopVideo}, when the session ended, or when the user stopped
+   *  sharing in the browser's own controls. */
+  video: { active: boolean; source?: VideoKind };
   /** A connection ended. */
   close: CloseInfo;
 }
@@ -171,6 +212,17 @@ export interface VoiceAgentOptions {
   context?: string;
   /** Tools the agent can call in this page. At most 32. */
   tools?: ClientTool[];
+  /**
+   * How audio travels. `"websocket"` (the default) works everywhere.
+   * `"webrtc"` sends audio over UDP with the browser's own loss concealment
+   * and jitter buffer, which holds up better on poor networks; the relay must
+   * have it turned on (`WEBRTC=on`). Where it cannot be used (the relay does
+   * not offer it, or the network blocks it) the session runs over the
+   * WebSocket instead and a `webrtc_unavailable` warning is emitted.
+   */
+  transport?: "websocket" | "webrtc";
+  /** STUN and TURN servers for `transport: "webrtc"`. Needed only on networks that block direct UDP. */
+  iceServers?: RTCIceServer[];
   /** Reconnect with exponential backoff after an unexpected drop. Default true. */
   autoReconnect?: boolean;
   /** Speak replies with the browser's `speechSynthesis` when the relay asks for it. Default true. */
@@ -205,10 +257,16 @@ export type WebSocketConstructor = new (url: string) => WebSocketLike;
 /** @internal */
 interface VoiceAgentInternals {
   WebSocket?: WebSocketConstructor;
+  /** Opens the WebRTC transport; setting it also skips the browser-support check. */
+  webrtc?: (options: WebRtcSocketOptions) => WebRtcSocket;
   /** Builds the audio layer; receives the callback to report playback start/stop. */
   audio?: (onPlayingChange: (playing: boolean) => void, onBlockedChange: (blocked: boolean) => void) => AudioIO;
   toolTimeoutMs?: number;
   connectTimeoutMs?: number;
+  /** Reads and encodes a picture, instead of the browser's canvas. */
+  imageEncoder?: ImageEncoder;
+  /** Opens a camera, a screen or a stream, instead of the browser's. */
+  video?: VideoOpener;
 }
 
 /**
@@ -220,6 +278,19 @@ export function defineClientTool<Args extends Record<string, unknown> = Record<s
 ): ClientTool {
   return tool as ClientTool;
 }
+
+/** A video being shown to the agent. */
+type LiveVideo = {
+  opened: OpenedVideo;
+  kind: VideoKind;
+  maxSide: number;
+  /** A frame is being made: the next tick does not start another. */
+  encoding: boolean;
+  timer: ReturnType<typeof setInterval>;
+};
+
+/** A frame is not sent while this much is still waiting to go out. */
+const MAX_VIDEO_BUFFERED_BYTES = 256 * 1024;
 
 type Lifecycle = "idle" | "connecting" | "active" | "error" | "closed";
 
@@ -282,6 +353,12 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private lastStatus: VoiceAgentStatus = "idle";
 
   private socket: WebSocketLike | undefined;
+  /** The current socket when it is a peer connection. */
+  private rtcSocket: WebRtcSocket | undefined;
+  /** WebRTC was asked for and could not be used: the WebSocket serves until the next start(). */
+  private rtcUnavailable = false;
+  /** Settles when the microphone is open, or could not be opened. */
+  private micReady: Promise<void> = Promise.resolve();
   private socketReady = false;
   private generation = 0;
   private sessionSeq = 0;
@@ -291,6 +368,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private blocked = false;
   private protocolWarned = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  /** What the relay gave this conversation to carry it across a reconnect. */
+  private resumeId: string | undefined;
+  private endedByRelay = false;
+  private activeAgent: string | undefined;
   private levelTimer: ReturnType<typeof setInterval> | undefined;
   private lastLevel = { mic: 0, output: 0 };
   private cancelPending: ((error: VoiceAgentError) => void) | undefined;
@@ -306,6 +387,14 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private readonly spoken = new Set<string>();
 
   private caps: AgentCapabilities | undefined;
+  /** A `sendImage` is encoding now. */
+  private imageEncoding = false;
+  /** When and on which socket the last picture went out, for the relay's one-second gap. */
+  private lastImage: { socket: WebSocketLike; at: number } | undefined;
+  /** The live video being shown to the agent. */
+  private video: LiveVideo | undefined;
+  /** Counts `startVideo` calls, so that one overtaken while the browser asked the user lets its video go. */
+  private videoAsk = 0;
   private provider: string | undefined;
 
   /**
@@ -346,6 +435,18 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     return this.provider;
   }
 
+  /** What carries the current session's audio. Undefined when there is no connection. */
+  get transport(): "websocket" | "webrtc" | undefined {
+    if (!this.socket) return undefined;
+    return this.rtcSocket === this.socket ? "webrtc" : "websocket";
+  }
+
+  /** The agent the conversation is with, once the assistant has handed it
+   *  over; undefined while it is with the one every conversation starts with. */
+  get agent(): string | undefined {
+    return this.activeAgent;
+  }
+
   /** Whether the microphone is muted. */
   get muted(): boolean {
     return this.isMuted;
@@ -367,6 +468,7 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     const generation = this.generation;
     this.attempts = 0;
     this.authRetried = false;
+    this.rtcUnavailable = false;
     this.isMuted = false;
     this.wantMic = options.microphone !== false;
     this.setLifecycle("connecting");
@@ -385,6 +487,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
                 });
           })
       : Promise.resolve();
+    this.micReady = mic.then(
+      () => undefined,
+      () => undefined
+    );
     this.startLevelTimer();
 
     const pending = new Promise<never>((_, reject) => {
@@ -456,6 +562,130 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   }
 
   /**
+   * Shows the agent a picture. With `text` it is a typed turn with the picture
+   * attached and is answered aloud; without, the agent sees the picture with
+   * your next turn. The picture is scaled so its longer side is at most
+   * `maxSide` (default 1024 pixels) and sent as JPEG; it goes to the model's
+   * vendor and the relay does not keep it.
+   *
+   * @returns false when the session is not ready or the relay does not take
+   * pictures (see `capabilities.imageInput`), when another `sendImage` is
+   * still encoding or went out less than a second ago, or when the session
+   * changed while the picture was being prepared. Nothing is sent then.
+   * @throws {VoiceAgentError} with code `image` when the source cannot be read
+   * or will not fit the relay's size limit.
+   */
+  async sendImage(source: ImageSource, options: { text?: string; maxSide?: number } = {}): Promise<boolean> {
+    const socket = this.socket;
+    const caps = this.caps;
+    if (!socket || !this.isReady() || caps?.imageInput !== true) return false;
+    // The relay refuses a second picture within a second; do not even encode one.
+    if (this.imageEncoding) return false;
+    if (this.lastImage?.socket === socket && Date.now() - this.lastImage.at < MIN_IMAGE_INTERVAL_MS) return false;
+    this.imageEncoding = true;
+    let data: string;
+    try {
+      data = await encodeImage(source, options.maxSide ?? DEFAULT_IMAGE_MAX_SIDE, this.options.internals?.imageEncoder);
+    } catch (error) {
+      throw new VoiceAgentError("image", `Could not prepare the picture: ${errorMessage(error)}`, { cause: error });
+    } finally {
+      this.imageEncoding = false;
+    }
+    // The session may have been replaced while encoding (a reconnect): the new
+    // one may not take pictures, and its limits start over.
+    if (this.socket !== socket || this.caps !== caps || caps.imageInput !== true) return false;
+    const text = options.text?.trim().slice(0, MAX_TEXT_CHARS);
+    const sent = this.sendIfReady({
+      type: "image.input",
+      image: data,
+      mimeType: "image/jpeg",
+      ...(text ? { text } : {})
+    });
+    if (sent) this.lastImage = { socket, at: Date.now() };
+    return sent;
+  }
+
+  /** What is being shown to the agent as live video, if anything. */
+  get videoSource(): VideoKind | undefined {
+    return this.video?.kind;
+  }
+
+  /** The stream being shown to the agent, for a preview. Undefined when no video is on. */
+  get videoStream(): MediaStream | undefined {
+    return this.video?.opened.stream;
+  }
+
+  /**
+   * Shows the agent live video: the camera, the screen (the browser asks the
+   * user which), or a `MediaStream` the page already has. A frame goes to the
+   * relay every `intervalMs` (a second by default) as a small JPEG, and the
+   * model sees what is shown along with what the user says next. Frames go to
+   * the model's vendor; the relay keeps the newest only, and none after the
+   * conversation. Call it from a click: browsers ask for the camera or the
+   * screen only then. A second call replaces the first video.
+   *
+   * @returns the stream, for a preview (`video.srcObject = stream`), or null
+   * when there is no ready session, the relay takes no video (see
+   * `capabilities.videoInput`), or the session ended while the browser asked.
+   * @throws {VoiceAgentError} with code `video` when the camera or the screen
+   * cannot be opened, which is what a user's "no" looks like.
+   */
+  async startVideo(source: VideoSource = "camera", options: VideoOptions = {}): Promise<MediaStream | null> {
+    if (!this.isReady() || this.caps?.videoInput !== true) return null;
+    const ask = (this.videoAsk += 1);
+    const generation = this.generation;
+    let opened: OpenedVideo;
+    try {
+      opened = await (this.options.internals?.video ?? openVideoInBrowser)(source, options);
+    } catch (error) {
+      const what = source === "camera" ? "the camera" : source === "screen" ? "the screen" : "the video";
+      throw new VoiceAgentError("video", `Could not open ${what}: ${errorMessage(error)}`, { cause: error });
+    }
+    // Stopped, or asked again, while the browser was asking the user; or the session that would have
+    // taken the video is gone. A camera is not left on with nowhere for its frames to go.
+    if (
+      this.destroyed ||
+      generation !== this.generation ||
+      ask !== this.videoAsk ||
+      !this.isReady() ||
+      this.caps?.videoInput !== true
+    ) {
+      opened.close();
+      return null;
+    }
+    this.stopVideo();
+    const interval = Number.isFinite(options.intervalMs)
+      ? Math.max(MIN_VIDEO_FRAME_INTERVAL_MS, options.intervalMs as number)
+      : DEFAULT_VIDEO_INTERVAL_MS;
+    const video: LiveVideo = {
+      opened,
+      kind: videoKind(source),
+      maxSide: options.maxSide ?? DEFAULT_VIDEO_MAX_SIDE,
+      encoding: false,
+      timer: setInterval(() => void this.sendVideoFrame(video), interval)
+    };
+    this.video = video;
+    opened.onEnded(() => {
+      if (this.video === video) this.stopVideo();
+    });
+    this.emit("video", { active: true, source: video.kind });
+    // The first frame as soon as there is one, not a whole interval later.
+    void this.sendVideoFrame(video);
+    return opened.stream;
+  }
+
+  /** Stops showing live video. A camera or screen `startVideo` opened is turned off. */
+  stopVideo(): void {
+    const video = this.video;
+    if (!video) return;
+    this.video = undefined;
+    clearInterval(video.timer);
+    video.opened.close();
+    this.sendIfReady({ type: "video.stop" });
+    this.emit("video", { active: false });
+  }
+
+  /**
    * Replaces the context string sent with `session.start`. It takes effect at
    * the next session (the next {@link start} or automatic reconnect); a
    * session already running is not changed.
@@ -467,6 +697,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   /** Silences the agent immediately, as if the user had talked over it. */
   interrupt(): void {
     this.audio?.clearPlayback();
+    // Over WebRTC the relay holds the speech still to come: it drops it.
+    if (this.rtcSocket && this.rtcSocket === this.socket && this.socketReady) {
+      this.rtcSocket.send(JSON.stringify({ type: "transport.clear" }));
+    }
   }
 
   /** Stops the conversation, removes all listeners, and makes the instance unusable. */
@@ -564,7 +798,34 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     this.reportError(wrapped);
   }
 
-  private teardown(final: "idle" | "closed"): void {
+  /** Sends the newest frame, unless the one before is still being made or the relay cannot take one now. */
+  private async sendVideoFrame(video: LiveVideo): Promise<void> {
+    const socket = this.socket;
+    // Between two sessions (a reconnect) the video stays open and its frames wait.
+    if (this.video !== video || video.encoding || !socket || !this.isReady() || this.caps?.videoInput !== true) return;
+    // Audio comes first: a connection that is behind gets no frames on top.
+    if (socket.bufferedAmount >= MAX_VIDEO_BUFFERED_BYTES) return;
+    const source = video.opened.frame();
+    if (!source) return;
+    video.encoding = true;
+    try {
+      const image = await encodeImage(source, video.maxSide, this.options.internals?.imageEncoder, VIDEO_QUALITIES);
+      if (this.video === video && this.socket === socket) {
+        this.sendIfReady({ type: "video.frame", image, mimeType: "image/jpeg" });
+      }
+    } catch {
+      // A frame that could not be read is not an error of the conversation: the next is a moment away.
+    } finally {
+      video.encoding = false;
+    }
+  }
+
+  private teardown(final: "idle" | "closed", keepPlayback = false): void {
+    // Before the socket goes: a camera must not stay on after the conversation.
+    this.stopVideo();
+    this.resumeId = undefined;
+    this.endedByRelay = false;
+    this.activeAgent = undefined;
     this.generation += 1;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
@@ -574,7 +835,7 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     this.cancelPending = undefined;
     this.startPromise = undefined;
     this.audio?.releaseMic();
-    this.audio?.clearPlayback();
+    if (!keepPlayback) this.audio?.clearPlayback();
     this.stopLevelTimer();
     this.wantMic = false;
     this.isMuted = false;
@@ -588,6 +849,7 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private cancelSocket(): void {
     const socket = this.socket;
     this.socket = undefined;
+    this.rtcSocket = undefined;
     this.socketReady = false;
     this.serverState = undefined;
     if (socket && socket.readyState <= SOCKET_OPEN) {
@@ -627,6 +889,10 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     socket.send(pcm);
   }
 
+  private isReady(): boolean {
+    return Boolean(this.socket && this.socketReady && this.socket.readyState === SOCKET_OPEN);
+  }
+
   private sendIfReady(message: ClientMessage): boolean {
     const socket = this.socket;
     if (!socket || !this.socketReady || socket.readyState !== SOCKET_OPEN) return false;
@@ -659,9 +925,11 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   private async connect(generation: number, initial: boolean): Promise<void> {
     const token = await this.resolveToken();
     if (generation !== this.generation) return;
-    const socket = new this.SocketCtor(relayUrl(this.options.url, token));
+    const rtc = this.wantsWebRtc() ? this.openWebRtc(token) : undefined;
+    const socket = rtc ?? new this.SocketCtor(relayUrl(this.options.url, token));
     socket.binaryType = "arraybuffer";
     this.socket = socket;
+    this.rtcSocket = rtc;
     this.socketReady = false;
     this.sessionSeq += 1;
     const session = this.sessionSeq;
@@ -688,6 +956,8 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
               ...(this.options.voice ? { voice: this.options.voice } : {}),
               ...(this.options.backend ? { backend: this.options.backend } : {}),
               ...(this.context ? { context: this.context } : {}),
+              // Only a reconnect carries the conversation on: start() begins a new one.
+              ...(!initial && this.resumeId ? { resume: this.resumeId } : {}),
               tools: [...this.tools.values()]
             })
           )
@@ -711,9 +981,24 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
       socket.addEventListener("close", (event) => {
         if (this.socket !== socket) return;
         this.socket = undefined;
+        this.rtcSocket = undefined;
         this.socketReady = false;
         this.serverState = undefined;
-        this.audio?.clearPlayback();
+        if (event.code === WEBRTC_UNAVAILABLE_CODE) {
+          // Nothing was lost: no session had started. Carry on over the WebSocket.
+          this.rtcUnavailable = true;
+          this.emit("warning", {
+            code: "webrtc_unavailable",
+            message: `WebRTC could not be used (${event.reason || "unavailable"}); using the WebSocket.`
+          });
+          this.connect(generation, initial).then(
+            () => settle(),
+            (error: unknown) => settle(error as VoiceAgentError)
+          );
+          return;
+        }
+        // A goodbye the relay just sent must be heard out, not cut off.
+        if (!this.endedByRelay) this.audio?.clearPlayback();
         const wasReady = this.lifecycle === "active";
         if (initial && !wasReady && event.code !== IDLE_CLOSE_CODE) {
           if (this.takeAuthRetry(event.code)) {
@@ -734,6 +1019,26 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     });
   }
 
+  private wantsWebRtc(): boolean {
+    if (this.options.transport !== "webrtc" || this.rtcUnavailable) return false;
+    return Boolean(this.options.internals?.webrtc) || webRtcSupported();
+  }
+
+  private openWebRtc(token: string | undefined): WebRtcSocket {
+    const socket = (this.options.internals?.webrtc ?? createWebRtcSocket)({
+      url: relayWebRtcUrl(this.options.url),
+      ...(token ? { token } : {}),
+      ...(this.options.iceServers ? { iceServers: this.options.iceServers } : {}),
+      onStream: (stream) => this.audio?.playStream?.(stream),
+      onStreamEnd: (stream) => this.audio?.stopStream?.(stream)
+    });
+    // The microphone may still be opening; a reconnect finds it open already.
+    void this.micReady.then(() => {
+      if (this.rtcSocket === socket) socket.setMicrophone(this.audio?.micTrack?.());
+    });
+    return socket;
+  }
+
   /**
    * A 1008 close means the relay refused the credentials. A static token cannot
    * change, so retrying is pointless; a token function (or a public agent id)
@@ -751,6 +1056,12 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     this.attempts += 1;
     const willReconnect =
       this.takeAuthRetry(code) || shouldReconnect(code, this.attempts, this.options.autoReconnect ?? true);
+    if (this.endedByRelay) {
+      // The conversation is over by the relay's own decision, whatever the code.
+      this.emit("close", { code, reason, willReconnect: false });
+      this.teardown("closed", true);
+      return;
+    }
     this.emit("close", { code, reason, willReconnect });
     if (code === IDLE_CLOSE_CODE) {
       this.teardown("closed");
@@ -793,10 +1104,13 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     switch (event.type) {
       case "session.started": {
         this.caps = event.capabilities ?? {};
+        // A reconnect that landed on a session without video: the camera goes off rather than stay on unseen.
+        if (this.video && this.caps.videoInput !== true) this.stopVideo();
         this.provider = event.provider;
         this.socketReady = true;
         this.attempts = 0;
         this.authRetried = false;
+        this.resumeId = event.resume;
         this.checkRelayProtocol(event.protocol);
         this.setLifecycle("active");
         if (this.streaming) this.sendIfReady({ type: "audio.start" });
@@ -848,6 +1162,16 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
       case "error":
         this.reportError(new VoiceAgentError("relay", event.message));
         break;
+      case "session.ended":
+        this.endedByRelay = true;
+        // Nothing more goes up: the microphone is no longer needed.
+        this.audio?.releaseMic();
+        this.emit("ended", { reason: event.reason });
+        break;
+      case "agent.changed":
+        this.activeAgent = event.agent;
+        this.emit("agentchange", { agent: event.agent });
+        break;
       case "connection":
         break;
     }
@@ -868,7 +1192,9 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("timeout")), this.options.internals?.toolTimeoutMs ?? 14000);
+        // Just under the relay's own limit for the call, so the page's answer is the one that counts.
+        const limit = this.options.internals?.toolTimeoutMs ?? (tool.background ? 110_000 : 14_000);
+        timer = setTimeout(() => reject(new Error("timeout")), limit);
       });
       const output = await Promise.race([Promise.resolve().then(() => tool.handler(call.arguments)), timeout]);
       reply(output === undefined ? {} : { output });

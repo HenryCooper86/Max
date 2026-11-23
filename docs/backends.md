@@ -28,12 +28,15 @@ sooner. Pipeline backends let you mix vendors and run each step on your own hard
 
 The `capabilities` object in `session.started` tells the client what the backend can do.
 
-| Backend                                                                         | Tools | Typed input (`text.input`) | Synthesized audio | Notes                                                                            |
-| ------------------------------------------------------------------------------- | ----- | -------------------------- | ----------------- | -------------------------------------------------------------------------------- |
-| `mock` (app assistant)                                                          | yes   | yes                        | no                | Speech is left to the client (`useBrowserSpeech`). Type a tool's name to run it. |
-| `mock` (helmet default)                                                         | no    | no (see below)             | no                | The scripted riding demo.                                                        |
-| `doubao`                                                                        | no    | no                         | yes               | No function calling and no typed turns.                                          |
-| `openai`, `grok`, `gemini`, `pipeline`, `local`, `local-realtime`, `max-speech` | yes   | yes                        | yes               |                                                                                  |
+| Backend                           | Tools | Typed input (`text.input`) | Pictures (`image.input`)        | Synthesized audio | Notes                                                                            |
+| --------------------------------- | ----- | -------------------------- | ------------------------------- | ----------------- | -------------------------------------------------------------------------------- |
+| `mock` (app assistant)            | yes   | yes                        | no                              | no                | Speech is left to the client (`useBrowserSpeech`). Type a tool's name to run it. |
+| `mock` (helmet default)           | no    | no (see below)             | no                              | no                | The scripted riding demo.                                                        |
+| `doubao`                          | no    | no                         | no                              | yes               | No function calling and no typed turns.                                          |
+| `openai`                          | yes   | yes                        | yes (see [Pictures](#pictures)) | yes               |                                                                                  |
+| `gemini`                          | yes   | yes                        | yes                             | yes               |                                                                                  |
+| `pipeline`, `local`, `max-speech` | yes   | yes                        | only when you turn it on        | yes               | Needs a chat model that can see pictures.                                        |
+| `grok`, `local-realtime`          | yes   | yes                        | no                              | yes               |                                                                                  |
 
 The "app assistant" row applies when the assistant's device is `app` (a general software assistant, see
 `assistant.config.json`). Without an assistant config the relay is the original "Max" helmet assistant and uses the
@@ -41,6 +44,112 @@ helmet demo.
 
 The helmet demo is a scripted ride: it takes no typed turns or tools and reports `textInput: false` and
 `tools: false`. Use the app preset for anything that is not the helmet.
+
+## Pictures
+
+A user can show the assistant a picture during a conversation (`image.input`, see the [protocol](protocol.md#imageinput)
+and the web SDK's `sendImage`). The conversation's own model sees it; this is separate from the helmet's camera, which
+goes to a vision service. `session.started.capabilities.imageInput` says whether it will work. It is true only where the
+picture reaches a model that can see it:
+
+| Backend                                    | `imageInput`                                                                                                                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openai`                                   | True unless `OPENAI_REALTIME_MODEL` contains "preview". OpenAI documents image input for `gpt-realtime` and `gpt-realtime-2`, and not for the preview models. |
+| `gemini`                                   | True. Sent as a video frame, which Gemini Live takes at most once a second.                                                                                   |
+| `pipeline`                                 | True when `PIPELINE_LLM_IMAGES=on`.                                                                                                                           |
+| `local`                                    | True when `LOCAL_LLM_IMAGES=on`.                                                                                                                              |
+| `max-speech`                               | True when `LOCAL_LLM_IMAGES=on`: its chat model is the one `local` uses (`LOCAL_LLM_*`).                                                                      |
+| `grok`, `local-realtime`, `doubao`, `mock` | False. The relay sends no pictures to them.                                                                                                                   |
+
+The chat-model backends talk to an OpenAI-compatible chat endpoint, and the relay cannot tell whether the model behind
+it can see pictures, so you say so with the setting above. Leave it off for a text-only model. If you turn it on for a
+model that cannot see, its server refuses the request that carries the picture (Ollama answers HTTP 400 for
+`qwen3:8b`); the relay reports that error, drops the pictures from the conversation so the next turns work, and the
+user can go on.
+
+How these backends handle pictures: a picture sent with words is a user message with the text and the picture. A
+picture sent without words waits and goes with the user's next turn. Only the two most recent pictures are sent again
+with each request; older ones become the text "[a picture the user showed earlier]".
+
+Pictures go to the model's vendor (or to your own model server) and the relay does not write picture bytes to conversation records, logs, traces, resume state or memory. The OpenAI and Gemini
+paths were built to the vendors' documentation and have not been run against their servers. The `local` backend was run
+against Ollama with `gemma3:4b`.
+
+### Live video
+
+A user can also show the assistant their camera or their screen while they talk (`video.frame`, see the
+[protocol](protocol.md#videoframe-and-videostop); `startVideo` in the [web SDK](../sdk/README.md#live-video), buttons
+in the widget). It works wherever pictures do, with the same settings: `session.started.capabilities.videoInput` is
+true exactly where `imageInput` is. The client sends about a frame a second, and the relay keeps the newest only.
+
+| Backend                           | What the model sees                                                                                                                                                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gemini`                          | Every frame as it arrives, at most one a second: Gemini Live takes video itself.                                                                                                                                        |
+| `openai`                          | The newest frame, put into the conversation when the user begins to speak or sends a typed turn. The conversation keeps the last two frames; older ones are taken out, because each is paid for again with every reply. |
+| `pipeline`, `local`, `max-speech` | The newest frame, attached to the user's turn when it is answered. Like pictures, only the two most recent are sent again with later requests.                                                                          |
+
+So this is a model that looks when it is spoken to, a frame a turn (Gemini: a frame a second), not one that watches a
+film: it does not see motion between two frames, and it does not speak up about what it sees unless the user says
+something. Frames are not kept or recorded by the relay. The `local` backend was run with live video against Ollama
+with `gemma3:4b`, from a script and from the widget in Chrome with a camera; the OpenAI and Gemini paths were built to
+the vendors' documentation and have not been run against their servers.
+
+## The relay's own turn detector
+
+OpenAI Realtime, Gemini Live and Grok each decide by themselves when the user has finished speaking, mostly from how
+long the silence is. A silence is a poor judge: someone reading out a phone number, or looking for a word, pauses in
+the middle and is answered too soon. With `TURN_DETECTOR=max-speech` the relay decides instead, with the voice
+detector and the learned turn detector (Smart Turn) of a [Max Speech](speech-server-deployment.md) server you run. It
+judges from the sound of the last words whether the speaker is done or only pausing.
+
+```dotenv
+TURN_DETECTOR=max-speech
+# The Max Speech server. MAX_SPEECH_URL is used when this is not set, and http://localhost:8790 when neither is.
+TURN_DETECTOR_URL=http://localhost:8790
+```
+
+| Setting                   | Default              | What it does                                                                                                                         |
+| ------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `TURN_DETECTOR`           | `off`                | `max-speech`: the relay takes the turns on `openai`, `gemini` and `grok`. `off`: each backend's own detection.                       |
+| `TURN_DETECTOR_URL`       | `MAX_SPEECH_URL`     | The Max Speech server to use for it.                                                                                                 |
+| `TURN_DETECTOR_API_KEY`   | `MAX_SPEECH_API_KEY` | Its key, when it has one. `MAX_SPEECH_API_KEY` is used only when `TURN_DETECTOR_URL` is not set: that key goes to that server alone. |
+| `TURN_DETECTOR_EAGERNESS` | `normal`             | `low`, `normal` or `high`. A pause ends the turn whatever the detector thinks after 2, 1.5 or 0.8 seconds of silence.                |
+
+How it works: the microphone audio goes to Max Speech as well. When it hears speech begin, the relay opens the turn on
+the backend and sends the audio from 600 ms before that moment on; when it judges the turn over, the relay closes it
+and the backend answers. Between turns the backend is sent no audio at all. The backend's own detection is switched
+off for the connection (`audio.input.turn_detection: null` on OpenAI, `turn_detection.type: null` on Grok,
+`automaticActivityDetection.disabled` on Gemini), so the settings for it in the sections below do not apply. Speech
+that begins while the assistant talks interrupts it, as before, and so does speech that begins in the moment after a
+reply was asked for and before it began. A sound too short to be speech (under 200 ms), with no speech right after
+it, is not answered. Speech that Max Speech's own transcriber made nothing of (a short "yes", a language it does not
+know) is still a turn: the backend hears it and answers. Something typed, and a line the relay has the assistant
+say, is sent to Gemini as a turn of its own, since Gemini with its detection off answers nothing else.
+
+What to know before turning it on:
+
+- It needs a Max Speech server: an Apple silicon Mac or a machine with a GPU. Each conversation takes one of its live
+  sessions (4 at a time on a Mac and 8 with a GPU by default, `SPEECH_MAX_SESSIONS`). The user's audio goes to that
+  server as well as to the backend; nothing is stored there.
+- The detector is a helper, not a requirement. When it cannot be reached as a conversation starts (not running, full,
+  still loading), that conversation uses the backend's own detection, and the log says so. When it goes away in the
+  middle of a conversation, the relay connects to the backend again and carries on with the backend's own; what the
+  user was saying at that moment is lost. A detector that stops answering without closing (the machine went to
+  sleep) is found out by a ping every 5 seconds and given up after 15 seconds of silence, which is how long the
+  assistant can be deaf. A turn the detector never ends is ended by the relay after 36 seconds.
+- A conversation holds its place on the Max Speech server only while its connection to the backend is up: when the
+  backend drops it (Gemini ends a session every ten minutes or so) the place is given back at once and taken again
+  by the connection that follows.
+- On [Max Cloud](cloud.md) the detector is the operator's: every project's conversations use it, their audio goes to
+  that Max Speech server, and they share its live sessions.
+- An older Max Speech server does not say why a turn ended. With one, a turn in which it made out no words is taken
+  for a noise and not answered, so update it with the relay.
+- It applies to `openai`, `gemini` and `grok`. `max-speech` already works this way; `pipeline` and `local` take turns
+  by silence, `doubao` and `local-realtime` by their own detection.
+
+Run on a Mac with Max Speech and the real detector, with stand-ins for the three vendors: a phone number spoken with
+a one-second pause in the middle was one turn, the end of a turn was reported about 0.4 seconds after the last word, and both fallbacks above happened as described. What is sent to OpenAI, Google and xAI follows their
+documentation for manual turns and was not run against their servers.
 
 ## Backend reference
 
@@ -87,8 +196,21 @@ OPENAI_API_KEY=sk-...
 | `OPENAI_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe`           |
 | `OPENAI_VOICE`            | `marin` (female)                   |
 | `OPENAI_VOICE_MALE`       | `cedar`                            |
-| `OPENAI_TURN_DETECTION`   | `server_vad`                       |
 | `OPENAI_REALTIME_URL`     | `wss://api.openai.com/v1/realtime` |
+
+How the model decides that the user has finished speaking, and what it does about background noise:
+
+| Setting                  | Default      | What it does                                                                                                                        |
+| ------------------------ | ------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENAI_TURN_DETECTION`  | `server_vad` | `server_vad` ends a turn after a silence. `semantic_vad` also listens to the words, and waits when the user is plainly mid-thought. |
+| `OPENAI_TURN_EAGERNESS`  | OpenAI's     | With `semantic_vad`: `low` gives the user time, `high` answers as soon as it can, `medium`, `auto`.                                 |
+| `OPENAI_VAD_THRESHOLD`   | OpenAI's     | With `server_vad`: 0 to 1. Higher needs louder speech, which helps in a noisy room.                                                 |
+| `OPENAI_VAD_SILENCE_MS`  | OpenAI's     | With `server_vad`: the silence that ends a turn, 100 to 5000 ms. Shorter answers sooner and interrupts more.                        |
+| `OPENAI_VAD_PREFIX_MS`   | OpenAI's     | With `server_vad`: audio kept from before speech was detected, 0 to 2000 ms.                                                        |
+| `OPENAI_NOISE_REDUCTION` | OpenAI's     | `near_field` for a headset or a phone at the ear, `far_field` for a laptop or a room, `off` for none.                               |
+
+A value the relay cannot use is reported in the log at startup and left out. These settings were checked against
+OpenAI's documentation and the relay's tests cover what is sent; they were not run against OpenAI's servers.
 
 ### grok
 
@@ -121,6 +243,17 @@ GEMINI_API_KEY=...
 
 `GOOGLE_API_KEY` is accepted in place of `GEMINI_API_KEY`.
 
+Gemini detects the user's speech itself. To tune it:
+
+| Setting                    | Default  | What it does                                                                            |
+| -------------------------- | -------- | --------------------------------------------------------------------------------------- |
+| `GEMINI_START_SENSITIVITY` | Gemini's | `high` or `low`: how readily a sound counts as the start of speech.                     |
+| `GEMINI_END_SENSITIVITY`   | Gemini's | `high` or `low`: how readily a pause ends the turn. `low` suits slow, careful speakers. |
+| `GEMINI_VAD_SILENCE_MS`    | Gemini's | The silence that ends a turn, 50 to 5000 ms.                                            |
+| `GEMINI_VAD_PREFIX_MS`     | Gemini's | The speech needed before a turn starts, 0 to 2000 ms.                                   |
+
+As with OpenAI, these were checked against Google's documentation and the relay's tests, not against Google's servers.
+
 ### pipeline
 
 Three steps, each an OpenAI-compatible HTTP endpoint. They may be different vendors.
@@ -136,6 +269,9 @@ OPENAI_API_KEY=sk-...
 | Chat model     | `PIPELINE_LLM_BASE_URL`, `PIPELINE_LLM_API_KEY`, `PIPELINE_LLM_MODEL` | `gpt-4o-mini`     |
 | Text-to-speech | `PIPELINE_TTS_BASE_URL`, `PIPELINE_TTS_API_KEY`, `PIPELINE_TTS_MODEL` | `gpt-4o-mini-tts` |
 | Voices         | `PIPELINE_TTS_VOICE`, `PIPELINE_TTS_VOICE_MALE`                       | `nova`, `onyx`    |
+
+`PIPELINE_LLM_IMAGES=on` lets users show the assistant pictures; set it only when the chat model can see them. Off by
+default. See [Pictures](#pictures).
 
 `PIPELINE_API_KEY` and `PIPELINE_BASE_URL` apply to every step unless a step overrides them. With neither set, the relay
 uses `OPENAI_API_KEY` and `https://api.openai.com/v1`. The text-to-speech step must return raw PCM16
@@ -165,6 +301,9 @@ LOCAL_VOICE=on
 
 Tool calling needs a chat model that supports it. Small local models are less reliable at choosing tools and filling
 arguments than hosted ones.
+
+To let users show the assistant pictures, set `LOCAL_LLM_IMAGES=on` and use a multimodal chat model such as
+`gemma3:4b`. See [Pictures](#pictures).
 
 ### local-realtime
 
@@ -249,6 +388,8 @@ bookkeeping) lives once in `server/providers/live/session.ts` and is shared.
      addContext?(text: string): void;
      sendToolResult?(callId: string, output: string): void; // the result of a tool call
      sendText?(text: string): void; // a typed turn
+     sendImage?(image: { data: string; mimeType: string }, text?: string): void; // a picture, with or without words
+     sendVideoFrame?(image: { data: string; mimeType: string } | undefined): void; // the newest frame of live video; undefined when it stops
      close(): void;
    };
    ```
@@ -260,6 +401,9 @@ bookkeeping) lives once in `server/providers/live/session.ts` and is shared.
      uses one, and implement `sendToolResult(callId, output)` to hand the result back and let the model continue. The
      relay runs the tool (relay-side or on the client) and always calls you back, even on failure or timeout.
    - Implement `sendText` if the upstream can take a typed turn.
+   - Implement `sendImage` only if the upstream and its model can see pictures. With `text` it is a typed turn with the
+     picture attached; without, the picture joins the conversation and the reply waits for the next turn. Also give the
+     catalog entry an `imageInput()` check, so `capabilities.imageInput` is true only where it works.
    - Use the helpers in `engine.ts`: `resamplePcm16`, `wavFromPcm16`, `pcm16Rms`, `env`, and the constants
      `CLIENT_INPUT_RATE` (16000) and `CLIENT_OUTPUT_RATE` (24000).
    - `connect` should reject with a message fit for the person setting the kit up, such as "set MYVENDOR_API_KEY".

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import type { Project, ProjectPatch, ProjectStudio } from "../api";
 import { useSay, type Session } from "../hooks";
 import { AgentTab } from "./AgentTab";
+import { mayLeaveSection } from "../../lib/section-leave";
+import { FlowTab } from "./FlowTab";
 import { HistoryTab } from "./HistoryTab";
 import { InstallTab } from "./InstallTab";
 import { KnowledgeTab } from "./KnowledgeTab";
@@ -23,6 +25,7 @@ const TABS: { id: StudioTab; zh: string; en: string }[] = [
   { id: "agent", zh: "助手", en: "Agent" },
   { id: "knowledge", zh: "知识", en: "Knowledge" },
   { id: "tools", zh: "工具", en: "Tools" },
+  { id: "flow", zh: "流程", en: "Flow" },
   { id: "test", zh: "测试", en: "Test" },
   { id: "install", zh: "安装", en: "Install" },
   { id: "history", zh: "对话", en: "Conversations" },
@@ -33,15 +36,18 @@ const TABS: { id: StudioTab; zh: string; en: string }[] = [
  *  limit only when it is a whole number or empty (Settings says when it is not). */
 export function patchFromDraft(draft: StudioDraft): ProjectPatch {
   const cap = minutesCapFromDraft(draft.monthlyMinutesCap);
+  // The flow has a save of its own (the Flow tab): this one says nothing of it, and the relay leaves it as it is.
+  const studio: ProjectPatch["studio"] = { ...draft.studio, flow: undefined };
   return {
     name: draft.name,
     backend: draft.backend,
     assistantName: draft.assistantName,
     instructions: draft.instructions,
     greeting: draft.greeting,
-    studio: draft.studio,
+    studio,
     ...(cap !== undefined ? { monthlyMinutesCap: cap } : {}),
-    ...(draft.modelKey.trim() ? { modelKey: draft.modelKey.trim() } : {})
+    ...(draft.modelKey.trim() ? { modelKey: draft.modelKey.trim() } : {}),
+    ...(draft.tracesHeaders.trim() ? { tracesHeaders: draft.tracesHeaders.trim() } : {})
   };
 }
 
@@ -95,7 +101,14 @@ export function Studio({
   onDeleted: (project: Project) => void;
 }) {
   const say = useSay();
-  const [tab, setTab] = useState<StudioTab>(initialTab);
+  const [tab, showTab] = useState<StudioTab>(initialTab);
+  // The flow has unsaved changes of its own, apart from the draft: it is asked before its tab gives way.
+  const setTab = useCallback(
+    (next: StudioTab) => {
+      if (next !== tab && mayLeaveSection()) showTab(next);
+    },
+    [tab]
+  );
   const [draft, setDraft] = useState<StudioDraft>(() => draftFromProject(project));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -175,6 +188,7 @@ export function Studio({
         {tab === "agent" ? <AgentTab {...tabProps} /> : null}
         {tab === "knowledge" ? <KnowledgeTab {...tabProps} /> : null}
         {tab === "tools" ? <ToolsTab {...tabProps} /> : null}
+        {tab === "flow" ? <FlowTab {...tabProps} /> : null}
         {tab === "test" ? <TestTab {...tabProps} /> : null}
         {tab === "install" ? <InstallTab {...tabProps} /> : null}
         {tab === "history" ? <HistoryTab {...tabProps} /> : null}

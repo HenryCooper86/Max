@@ -380,7 +380,10 @@ function SigningSecret({ props }: { props: StudioTabProps }) {
       </p>
       {!project.hasWebhookSecret ? (
         <p className="cxMuted">
-          {say("保存第一个工具后，你会得到签名密钥。", "Save your first tool to get a signing secret.")}
+          {say(
+            "保存第一个工具或对话的接收地址后，你会得到签名密钥。",
+            "Save your first tool, or an address to send conversations to, to get a signing secret."
+          )}
         </p>
       ) : (
         <>
@@ -523,7 +526,8 @@ export function ToolsTab(props: StudioTabProps) {
         <p className="cxMuted">{say("改动要保存后才会生效。", "Changes take effect after you save.")}</p>
       ) : null}
 
-      {tools.length > 0 ? <SigningSecret props={props} /> : null}
+      {/* A project that only sends its conversations has a secret too, and needs to see it. */}
+      {tools.length > 0 || props.project.hasWebhookSecret ? <SigningSecret props={props} /> : null}
 
       <details className="cxsToolsDocs cxCard">
         <summary>{say("你的服务器会收到什么", "What your server receives")}</summary>

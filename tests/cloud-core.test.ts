@@ -165,6 +165,7 @@ describe("projects for the relay", () => {
     expect(projectRuntime(project.id)).toEqual({
       projectId: project.id,
       customerId,
+      name: "Shop",
       backend: "gemini",
       modelKey: "sk-proj-abc",
       assistantName: "Assistant",

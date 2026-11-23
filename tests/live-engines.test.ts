@@ -149,6 +149,30 @@ describe("OpenAI realtime engine", () => {
     expect(session.audio.output).toMatchObject({ format: { type: "audio/pcm", rate: 24_000 }, voice: "marin" });
   });
 
+  it("asks for semantic turn detection and noise reduction when the environment says so", async () => {
+    process.env.OPENAI_TURN_DETECTION = "semantic_vad";
+    process.env.OPENAI_TURN_EAGERNESS = "low";
+    process.env.OPENAI_NOISE_REDUCTION = "far_field";
+    try {
+      const { socket } = await connect();
+      const input = (socket.ofType("session.update")[0]!.session as Record<string, any>).audio.input;
+      expect(input.turn_detection).toEqual({
+        type: "semantic_vad",
+        create_response: false,
+        interrupt_response: true,
+        eagerness: "low"
+      });
+      expect(input.noise_reduction).toEqual({ type: "far_field" });
+      // The settings sit beside the format and transcription, not in place of them.
+      expect(input.format).toEqual({ type: "audio/pcm", rate: 24_000 });
+      expect(input.transcription.model).toBeTruthy();
+    } finally {
+      delete process.env.OPENAI_TURN_DETECTION;
+      delete process.env.OPENAI_TURN_EAGERNESS;
+      delete process.env.OPENAI_NOISE_REDUCTION;
+    }
+  });
+
   it("lets the upstream answer on its own when no wake word gates it", async () => {
     const { socket } = await connect({ ...CONFIG, manualResponse: false, voiceGender: "male" });
     const session = socket.ofType("session.update")[0]!.session as Record<string, any>;
@@ -318,6 +342,8 @@ describe("Gemini live engine", () => {
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Aoede");
     expect(setup.systemInstruction.parts[0].text).toBe("You are Max.");
     expect(setup).toHaveProperty("inputAudioTranscription");
+    // No activity-detection setting was given: Gemini's own defaults apply.
+    expect(setup).not.toHaveProperty("realtimeInputConfig");
     expect(setup).toHaveProperty("outputAudioTranscription");
 
     engine.sendAudio(Buffer.alloc(640));
@@ -351,6 +377,26 @@ describe("Gemini live engine", () => {
       ["speech"],
       ["done", true]
     ]);
+  });
+
+  it("passes activity-detection settings on in the setup message", async () => {
+    process.env.GEMINI_API_KEY = "gem-test";
+    process.env.GEMINI_END_SENSITIVITY = "low";
+    process.env.GEMINI_VAD_SILENCE_MS = "900";
+    try {
+      const socket = new FakeSocket();
+      const engine = createGeminiLiveEngine(log, () => socket as never);
+      const ready = engine.connect(CONFIG, recorder().events);
+      socket.emit("open");
+      socket.receive({ setupComplete: {} }, true);
+      await ready;
+      expect((socket.sent[0]!.setup as Record<string, any>).realtimeInputConfig).toEqual({
+        automaticActivityDetection: { endOfSpeechSensitivity: "END_SENSITIVITY_LOW", silenceDurationMs: 900 }
+      });
+    } finally {
+      delete process.env.GEMINI_END_SENSITIVITY;
+      delete process.env.GEMINI_VAD_SILENCE_MS;
+    }
   });
 
   it("reports why a setup was refused", async () => {

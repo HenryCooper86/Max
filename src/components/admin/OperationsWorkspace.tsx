@@ -9,6 +9,7 @@ import {
   GearSix,
   ListChecks,
   PaintBrush,
+  TreeStructure,
   RocketLaunch,
   ShieldCheck,
   UserCircle,
@@ -37,7 +38,9 @@ import { useWorkspaceLocation } from "./workspace-location";
 import { AccountManagement } from "./AccountManagement";
 import { CloudInvites } from "./CloudInvites";
 import { AdminOverview } from "./AdminOverview";
-import { AssistantStudio, SECTION_LEAVE_EVENT } from "./AssistantStudio";
+import { mayLeaveSection } from "../../lib/section-leave";
+import { AssistantStudio } from "./AssistantStudio";
+import { FlowBuilder } from "./FlowBuilder";
 import { QualityOverview } from "./QualityOverview";
 import { EvidenceWorkspace } from "./EvidenceWorkspace";
 import { GovernanceWorkspace } from "./GovernanceWorkspace";
@@ -56,7 +59,8 @@ const SECTION_ICONS = {
   policies: GearSix,
   accounts: Users,
   audit: ShieldCheck,
-  studio: PaintBrush
+  studio: PaintBrush,
+  flow: TreeStructure
 };
 
 // One line under each page title saying what the page is for.
@@ -73,6 +77,10 @@ const SECTION_DESCRIPTIONS: Record<WorkspaceSection, [string, string]> = {
   studio: [
     "修改正在运行的助手：名字、设备、外观和声音。保存后新会话立即生效。",
     "Change the running assistant: its name, device, look and sound. New sessions use a save straight away."
+  ],
+  flow: [
+    "把助手的工作分成几步，画出对话可以怎样从一步走到另一步。",
+    "Split the assistant's work into steps, and draw how a conversation can move from one to the next."
   ]
 };
 
@@ -242,11 +250,7 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
                       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                       event.preventDefault();
                       // A section with unsaved edits (the Studio) may veto the switch.
-                      if (
-                        item !== active &&
-                        !window.dispatchEvent(new Event(SECTION_LEAVE_EVENT, { cancelable: true }))
-                      )
-                        return;
+                      if (item !== active && !mayLeaveSection()) return;
                       navigate(item, {}, false, workspace);
                     }}
                   >
@@ -390,6 +394,9 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
               onSaved={() => void agent.refreshHealth()}
               onAuthenticationExpired={onAuthenticationExpired}
             />
+          ) : null}
+          {administration && active === "flow" ? (
+            <FlowBuilder key={accountScope} onAuthenticationExpired={onAuthenticationExpired} />
           ) : null}
           {administration && active === "accounts" ? (
             <>

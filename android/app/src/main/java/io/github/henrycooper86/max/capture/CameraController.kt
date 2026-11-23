@@ -30,6 +30,8 @@ class CameraController(private val context: Context, val store: CaptureStore, pr
     private var watchdog: Job? = null
     private val mutableRecording = MutableStateFlow(false)
     val isRecording = mutableRecording.asStateFlow()
+    /** Called before the camera is bound for a photo or a recording: live video, which uses the other camera, lets go first. Main thread. */
+    var beforeCapture: () -> Unit = {}
 
     fun attach(lifecycleOwner: LifecycleOwner, displayRotation: Int = Surface.ROTATION_0) {
         owner = lifecycleOwner
@@ -47,7 +49,7 @@ class CameraController(private val context: Context, val store: CaptureStore, pr
     }
     fun stopForSession() { if (recording != null) recording?.stop() else unbind() }
 
-    private fun unbind() { bindingGeneration++; provider?.unbindAll(); photo = null; video = null; boundCamera = null }
+    private fun unbind() { bindingGeneration++; provider?.let { p -> listOfNotNull(photo, video).takeIf { it.isNotEmpty() }?.let { p.unbind(*it.toTypedArray()) } }; photo = null; video = null; boundCamera = null }
 
     suspend fun setTorch(on: Boolean): Boolean? {
         val camera = boundCamera ?: return null
@@ -62,6 +64,8 @@ class CameraController(private val context: Context, val store: CaptureStore, pr
         val host = owner ?: return false
         if (!host.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return false
         if (photo != null && video != null) return true
+        // One camera at a time: most phones cannot have the front and the back one open together.
+        beforeCapture()
         val future = ProcessCameraProvider.getInstance(context)
         val cameraProvider = suspendCancellableCoroutine<ProcessCameraProvider?> { continuation ->
             future.addListener({ if (continuation.isActive) continuation.resume(runCatching { future.get() }.getOrNull()) }, ContextCompat.getMainExecutor(context))

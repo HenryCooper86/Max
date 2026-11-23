@@ -17,7 +17,10 @@ export const CLIENT_EVENT_TYPES = [
   "nav.prompt",
   "vision.frames",
   "tool.result",
-  "text.input"
+  "text.input",
+  "image.input",
+  "video.frame",
+  "video.stop"
 ] as const;
 
 export const SERVER_EVENT_TYPES = [
@@ -42,7 +45,9 @@ export const SERVER_EVENT_TYPES = [
   "nav.route",
   "nav.error",
   "tool.call",
-  "tool.activity"
+  "tool.activity",
+  "session.ended",
+  "agent.changed"
 ] as const;
 
 export const SERVER_EVENT_REQUIRED_FIELDS = {
@@ -170,5 +175,13 @@ export const SERVER_EVENT_REQUIRED_FIELDS = {
     "name",
     "where",
     "state"
+  ],
+  "session.ended": [
+    "type",
+    "reason"
+  ],
+  "agent.changed": [
+    "type",
+    "agent"
   ]
 } as const;

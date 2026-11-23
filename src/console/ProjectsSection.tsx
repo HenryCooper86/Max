@@ -1,3 +1,4 @@
+import { mayLeaveSection } from "../lib/section-leave";
 import { useState, type FormEvent } from "react";
 import { useLanguage } from "../components/LanguageToggle";
 import { AGENT_TEMPLATES, findTemplate, type AgentTemplate } from "../lib/agent-templates";
@@ -204,7 +205,10 @@ export function ProjectsSection({
                     className={`siteButton small${isOpen ? " secondary" : ""}`}
                     aria-expanded={isOpen}
                     aria-controls={`cx-panel-${project.id}`}
-                    onClick={() => setOpen(isOpen ? null : { id: project.id, tab: "agent" })}
+                    onClick={() => {
+                      // A flow with unsaved changes is asked before its Studio closes or another opens.
+                      if (open === null || mayLeaveSection()) setOpen(isOpen ? null : { id: project.id, tab: "agent" });
+                    }}
                   >
                     {isOpen ? say("收起", "Close") : say("打开工作室", "Open studio")}
                   </button>

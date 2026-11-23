@@ -2,7 +2,7 @@ import express from "express";
 import http from "node:http";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, promises as fsPromises } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import {
@@ -22,6 +22,8 @@ import {
 } from "./accounts";
 import {
   authorizeUpgrade,
+  reauthorizeUpgrade,
+  upgradeIdentity,
   checkAuthRateLimit,
   clientAddress,
   clientRegionHint,
@@ -38,7 +40,27 @@ import { buildHealth, config, describeConfig, readinessIssues, readinessWarnings
 import { metricsResponse, registerMetricsSource } from "./prometheus";
 import { cloudCounters } from "./cloud/counters";
 import { cloudSessionTokens, sessionTokens } from "./session-tokens";
-import { installServerTools } from "./tools/registry";
+import { closeServerTools, installServerTools, serverTools as installedServerTools } from "./tools/registry";
+import { createConversationLifecycle } from "./conversation-lifecycle";
+import { createRecordings, recordingSettingsFromEnv } from "./recording";
+import { guardrailModelFromEnv, guardrailProblems } from "./guardrails";
+import { compareVariants, createVariantResults, pickVariant } from "./variants";
+import {
+  telnyxCarrier,
+  telnyxSettingsFromEnv,
+  telnyxSignedStreamUrl,
+  validTelnyxStreamSignature
+} from "./telephony/telnyx";
+import {
+  createTelephony,
+  telephonySettingsFromEnv,
+  type Telephony,
+  type TelephonyDeps
+} from "./telephony/twilio-calls";
+import type { IncomingMessage } from "node:http";
+import { createWebRtcGateway, webRtcSettingsFromEnv, type WebRtcGateway } from "./webrtc/gateway";
+import { turnSettingProblems } from "./providers/live/turn-settings";
+import { loadNoiseSuppression, noiseSuppressionFromEnv } from "./noise-suppression";
 import { createUsageMeter, monthOf, usageSettingsFromEnv } from "./usage";
 import {
   cloudEnabled,
@@ -55,9 +77,12 @@ import {
   openCloudSession,
   projectForApiKey,
   projectLimitRefusal,
+  projectWebhooks,
+  projectTraces,
+  cloudConversationEnded,
+  settleConversationAnalyses,
   pruneOldConversations,
   projectServerTools,
-  saveConversation,
   projectKeyValid,
   projectRuntime,
   recoverCloudSessions,
@@ -108,10 +133,25 @@ import {
   type TestingReviewStatus,
   type TestingValidityStatus
 } from "../shared/testing";
-import { assistant, assistantLogo, projectAssistantProfile } from "./assistant";
+import { assistant, assistantLogo, projectAssistantProfile, type AssistantProfile } from "./assistant";
 import { sendBrandLogo } from "./brand-logo-route";
 import { localizeErrors } from "./error-language";
-import { clearStudioVoice, removeStudioLogo, saveStudioConfig, saveStudioLogo, studioState } from "./studio";
+import {
+  clearStudioVoice,
+  ConfigFileError,
+  deleteStudioVersion,
+  FlowError,
+  recordStartupConfig,
+  removeStudioLogo,
+  restoreStudioConfig,
+  saveStudioConfig,
+  saveStudioFlow,
+  saveStudioLogo,
+  studioFlow,
+  studioHistory,
+  studioState,
+  studioVersion
+} from "./studio";
 import { createStudioVoicesRouter, jsonParserExceptStudioVoices } from "./studio-voices";
 import { loadStudioBackends, saveStudioBackends, studioBackendsState } from "./studio-backends";
 import { chooseVoiceProvider, createSelectableProvider, createVoiceProvider } from "./providers/factory";
@@ -120,8 +160,17 @@ import { AgentSessionController } from "./session-controller";
 import { markClientActivity, startWatchdog, trackClient } from "./watchdog";
 import type { Logger } from "./logger";
 import { staticCacheControl } from "./static-cache";
-import { clearUserConversationMemory, flushUserMemory, userMemorySummary } from "./user-memory";
+import { analysisModelFromEnv } from "./conversation-analysis";
+import { summarizeMemory } from "./memory-summary";
+import {
+  clearUserConversationMemory,
+  externalUserMemoryKey,
+  flushUserMemory,
+  setUserMemorySummarizer,
+  userMemorySummary
+} from "./user-memory";
 import { registerAmapRoutes } from "./amap-proxy";
+import { createCampaigns } from "./telephony/campaigns";
 import { createCompanionBindingStore } from "./companion-store";
 import { createCompanionRegistry } from "./companion-registry";
 import { createCompanionSocketServer } from "./companion-socket";
@@ -154,6 +203,31 @@ server.requestTimeout = 30_000;
 server.keepAliveTimeout = 5_000;
 server.maxRequestsPerSocket = 1_000;
 const activeSessions = new Map<WebSocket, AgentSessionController>();
+// Phone calls (server/telephony): a carrier's media streams carry no relay
+// credentials, so they have their own socket server and prove themselves with
+// a ticket. Twilio and Telnyx can both be set up; each has its own routes.
+const telephonySockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
+const telephonyConfig = telephonySettingsFromEnv();
+const telnyxConfig = telnyxSettingsFromEnv();
+// Recording of conversations' audio (server/recording.ts). Off unless asked for.
+const recordingConfig = recordingSettingsFromEnv();
+const recordings = recordingConfig.settings
+  ? createRecordings(recordingConfig.settings, { log: createLogger("recording") })
+  : undefined;
+let telephony: Telephony | undefined;
+let telnyx: Telephony | undefined;
+/** Media-stream sockets that have not presented a ticket yet, by client address. */
+const pendingStreams = new Map<string, number>();
+let pendingStreamTotal = 0;
+const MAX_PENDING_STREAMS_PER_ADDRESS = 8;
+const MAX_PENDING_STREAMS = 64;
+// Noise suppression on microphone audio (server/noise-suppression.ts): off unless NOISE_SUPPRESSION is set.
+const noiseSuppression = noiseSuppressionFromEnv();
+// WebRTC transport for /agent (server/webrtc): off unless WEBRTC=on.
+const webRtcConfig = webRtcSettingsFromEnv();
+const webRtc: WebRtcGateway | undefined = webRtcConfig.settings
+  ? createWebRtcGateway(webRtcConfig.settings, { log: createLogger("webrtc") })
+  : undefined;
 const usageMeter = createUsageMeter(usageSettingsFromEnv());
 /** A public-embed session ends after this long, so nobody can hold one open for hours. */
 const CLOUD_EMBED_SESSION_MS = 15 * 60_000;
@@ -219,6 +293,23 @@ app.use((req, res, next) => {
 registerCloudPaymentRoutes(app);
 // A Cloud project carries up to 20,000 characters of knowledge (3 bytes each in Chinese) and its tools.
 app.use("/cloud/api/projects", express.json({ limit: "512kb", strict: true }));
+// A campaign lists up to 5,000 calls, which the small default does not hold. Its
+// limit applies after the owner check, so nobody else can make the relay buffer it.
+app.use(
+  "/v1/campaigns",
+  (req, res, next) => {
+    if (ownerRequest(req, res)) next();
+  },
+  express.json({ limit: "4mb", strict: true })
+);
+// A flow is up to 12 steps of 8,000 characters each. Its limit applies after the admin check.
+app.use(
+  "/auth/admin/studio/flow",
+  (req, res, next) => {
+    if (requireAdmin(req, res)) next();
+  },
+  express.json({ limit: "512kb", strict: true })
+);
 // The Studio's voice routes set their own limits (a recording is megabytes), after the admin check.
 app.use(jsonParserExceptStudioVoices("32kb"));
 // Errors go out in English to a client that asks for it.
@@ -356,6 +447,356 @@ app.get("/v1/usage", (req, res) => {
   res.json(usageMeter.report(month, userId));
 });
 
+/** The origin a request was made to, as the caller saw it. */
+function requestOrigin(req: express.Request): string {
+  const forwarded = req.headers["x-forwarded-proto"];
+  const proto = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
+  const scheme = proto === "https" || proto === "http" ? proto : req.protocol;
+  return `${scheme}://${req.headers.host ?? "localhost"}`;
+}
+
+// Twilio asks this what to do with a call; the answer connects it to the
+// assistant. Authenticated by Twilio's signature over the URL and the form.
+app.post("/telephony/twilio/voice", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  if (!telephony) {
+    res.status(404).type("text/plain").send("Telephony is not configured. Set TWILIO_AUTH_TOKEN.");
+    return;
+  }
+  const params: Record<string, string> = {};
+  for (const [name, value] of Object.entries((req.body ?? {}) as Record<string, unknown>)) {
+    if (typeof value === "string") params[name] = value;
+  }
+  const origin = telephonyConfig.settings?.publicUrl ?? requestOrigin(req);
+  const signature = req.headers["x-twilio-signature"];
+  const answer = telephony.voiceWebhook({
+    url: `${origin}${req.originalUrl}`,
+    params,
+    signature: Array.isArray(signature) ? signature[0] : signature
+  });
+  if (answer.status === 403) log.warn("rejected a telephony webhook: bad signature", { address: clientAddress(req) });
+  res.status(answer.status).type("text/xml").send(answer.body);
+});
+
+// The same for Telnyx, which asks with GET (its default) or POST. Authenticated
+// by the secret in the URL you gave Telnyx: see server/telephony/telnyx.ts.
+app.all("/telephony/telnyx/voice", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  if (req.method !== "GET" && req.method !== "POST") {
+    res.status(405).set("Allow", "GET, POST").end();
+    return;
+  }
+  if (!telnyx) {
+    res.status(404).type("text/plain").send("Telnyx is not configured. Set TELNYX_WEBHOOK_SECRET.");
+    return;
+  }
+  // The call's details are in the query of a GET and in the form of a POST.
+  const params: Record<string, string> = {};
+  for (const source of [req.query, req.method === "POST" ? req.body : undefined]) {
+    for (const [name, value] of Object.entries((source ?? {}) as Record<string, unknown>)) {
+      if (typeof value === "string") params[name] = value;
+    }
+  }
+  const origin = telnyxConfig.settings?.publicUrl ?? requestOrigin(req);
+  const answer = telnyx.voiceWebhook({ url: `${origin}${req.originalUrl}`, params, signature: undefined });
+  if (answer.status === 403) log.warn("rejected a Telnyx webhook: wrong key", { address: clientAddress(req) });
+  // Nothing on the way may keep an answer that holds a ticket.
+  res.status(answer.status).set("Cache-Control", "no-store").type("text/xml").send(answer.body);
+});
+
+// Where the carriers report what became of a call placed for a campaign. Twilio
+// signs the request as it does the voice webhook.
+app.post("/telephony/twilio/status", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  if (!telephony) {
+    res.status(404).end();
+    return;
+  }
+  const params: Record<string, string> = {};
+  for (const [name, value] of Object.entries((req.body ?? {}) as Record<string, unknown>)) {
+    if (typeof value === "string") params[name] = value;
+  }
+  const origin = telephonyConfig.settings?.publicUrl ?? requestOrigin(req);
+  const signature = req.headers["x-twilio-signature"];
+  const answer = telephony.statusWebhook({
+    url: `${origin}${req.originalUrl}`,
+    params,
+    signature: Array.isArray(signature) ? signature[0] : signature
+  });
+  if (answer.status === 403)
+    log.warn("rejected a telephony status callback: bad signature", { address: clientAddress(req) });
+  res.status(answer.status).end();
+});
+
+// What Twilio asks during a warm transfer: what the person who picked up
+// hears, whether they took the call, and what to do with the caller afterwards.
+app.post("/telephony/twilio/transfer/:kind", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  if (!telephony) {
+    res.status(404).end();
+    return;
+  }
+  const params: Record<string, string> = {};
+  for (const [name, value] of Object.entries((req.body ?? {}) as Record<string, unknown>)) {
+    if (typeof value === "string") params[name] = value;
+  }
+  const origin = telephonyConfig.settings?.publicUrl ?? requestOrigin(req);
+  const signature = req.headers["x-twilio-signature"];
+  const answer = telephony.transferWebhook(String(req.params.kind), {
+    url: `${origin}${req.originalUrl}`,
+    params,
+    signature: Array.isArray(signature) ? signature[0] : signature
+  });
+  if (answer.status === 403)
+    log.warn("rejected a telephony transfer callback: bad signature", { address: clientAddress(req) });
+  res.status(answer.status).type("text/xml").send(answer.body);
+});
+
+// The same for Telnyx, authenticated by the secret in the URL.
+app.post("/telephony/telnyx/status", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  if (!telnyx) {
+    res.status(404).end();
+    return;
+  }
+  const params: Record<string, string> = {};
+  for (const [name, value] of Object.entries((req.body ?? {}) as Record<string, unknown>)) {
+    if (typeof value === "string") params[name] = value;
+  }
+  const origin = telnyxConfig.settings?.publicUrl ?? requestOrigin(req);
+  const answer = telnyx.statusWebhook({ url: `${origin}${req.originalUrl}`, params, signature: undefined });
+  if (answer.status === 403) log.warn("rejected a Telnyx status callback: wrong key", { address: clientAddress(req) });
+  res.status(answer.status).end();
+});
+
+// WebRTC signalling for /agent: the client's offer in, the relay's answer out.
+// The same checks as the WebSocket upgrade apply, and the session that follows
+// is the same session: only its transport differs (server/webrtc/gateway.ts).
+// Pages on other sites call this with fetch, so it answers their preflight;
+// the origin allowlist is enforced on the request itself, below.
+const webRtcCors = (_req: express.Request, res: express.Response, next: express.NextFunction) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "authorization, content-type");
+  res.setHeader("Access-Control-Max-Age", "600");
+  next();
+};
+app.options("/agent/webrtc", webRtcCors, (_req, res) => {
+  res.status(204).end();
+});
+app.post("/agent/webrtc", webRtcCors, express.json({ limit: "64kb" }), async (req, res) => {
+  if (!webRtc) {
+    res.status(404).json({ ok: false, error: "WebRTC is not turned on for this relay. Use the WebSocket." });
+    return;
+  }
+  if (shuttingDown) {
+    res.status(503).json({ ok: false, error: "The relay is shutting down." });
+    return;
+  }
+  const decision = authorizeUpgrade(req);
+  if (!decision.ok) {
+    metrics.rejectedUpgrade();
+    log.warn("rejected /agent/webrtc offer", {
+      address: clientAddress(req),
+      code: decision.code,
+      reason: decision.reason
+    });
+    res.status(decision.code).json({ ok: false, error: decision.reason });
+    return;
+  }
+  // The session starts when the peer connects, after this request is over:
+  // keep what it will need to know about who asked.
+  const asked = {
+    url: req.originalUrl,
+    headers: req.headers,
+    socket: { remoteAddress: req.socket.remoteAddress }
+  } as unknown as IncomingMessage;
+  const identity = upgradeIdentity(asked);
+  const body = (req.body ?? {}) as { sdp?: unknown };
+  const answer = await webRtc.accept(
+    body.sdp,
+    (socket) => {
+      // Seconds may have passed since the checks above: the token must still stand.
+      const still = shuttingDown
+        ? ({ ok: false, code: 1001, reason: "server shutdown" } as const)
+        : reauthorizeUpgrade(asked, identity);
+      if (!still.ok) {
+        log.warn("rejected a webrtc session at connect", { address: clientAddress(asked), reason: still.reason });
+        socket.send(JSON.stringify({ type: "error", message: still.reason }));
+        socket.close(still.code === 1001 ? 1001 : 1008, still.reason);
+        return;
+      }
+      wss.emit("connection", socket as unknown as WebSocket, asked);
+    },
+    clientAddress(asked)
+  );
+  if (answer.ok) res.status(201).json({ ok: true, sdp: answer.sdp });
+  else res.status(answer.status).json({ ok: false, error: answer.error });
+});
+
+// With both carriers set up, Twilio places the call unless the request names Telnyx.
+function telephonyFor(wanted: "twilio" | "telnyx" | undefined): Telephony | undefined {
+  return wanted === "telnyx" ? telnyx : wanted === "twilio" ? telephony : (telephony ?? telnyx);
+}
+
+function telephonyMissing(wanted: "twilio" | "telnyx" | undefined): string {
+  return wanted === "telnyx"
+    ? "Telnyx is not configured. Set TELNYX_WEBHOOK_SECRET."
+    : wanted === "twilio"
+      ? "Twilio is not configured. Set TWILIO_AUTH_TOKEN."
+      : "Telephony is not configured. Set TWILIO_AUTH_TOKEN or TELNYX_WEBHOOK_SECRET.";
+}
+
+// Places a phone call for the assistant to hold. Owner-only, and never open:
+// a relay without a token must not let strangers dial numbers on its account.
+app.post("/v1/calls", async (req, res) => {
+  if (!config.relayAuthToken || !relayTokenPresented(req)) {
+    res.status(401).json({
+      ok: false,
+      error: config.relayAuthToken
+        ? "Send the relay token: Authorization: Bearer <RELAY_AUTH_TOKEN>."
+        : "Set RELAY_AUTH_TOKEN before placing calls."
+    });
+    return;
+  }
+  const { carrier: wanted, ...input } = (req.body ?? {}) as Record<string, unknown>;
+  if (wanted !== undefined && wanted !== "twilio" && wanted !== "telnyx") {
+    res.status(400).json({ ok: false, error: "carrier must be twilio or telnyx." });
+    return;
+  }
+  const calls = telephonyFor(wanted);
+  if (!calls) {
+    res.status(503).json({ ok: false, error: telephonyMissing(wanted) });
+    return;
+  }
+  const placed = await calls.placeCall(input, requestOrigin(req));
+  if (placed.ok) res.status(201).json({ ok: true, callSid: placed.callSid });
+  else res.status(placed.status).json({ ok: false, error: placed.error });
+});
+
+// Batch outbound calls (server/telephony/campaigns.ts). Owner-only: the check
+// runs before the body is read, with the larger limit set above.
+app.post("/v1/campaigns", (req, res) => {
+  const created = campaigns.create(req.body, requestOrigin(req));
+  if (created.ok) res.status(201).json({ ok: true, campaign: created.campaign });
+  else res.status(created.status).json({ ok: false, error: created.problem });
+});
+
+app.get("/v1/campaigns", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  res.json({ ok: true, campaigns: campaigns.list() });
+});
+
+app.get("/v1/campaigns/:id", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const campaign = campaigns.get(req.params.id);
+  if (campaign) res.json({ ok: true, campaign });
+  else res.status(404).json({ ok: false, error: "There is no such campaign." });
+});
+
+app.post("/v1/campaigns/:id/cancel", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const campaign = campaigns.cancel(req.params.id);
+  if (campaign) res.json({ ok: true, campaign });
+  else res.status(404).json({ ok: false, error: "There is no such campaign." });
+});
+
+app.delete("/v1/campaigns/:id", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const removed = campaigns.remove(req.params.id);
+  if (removed.ok) res.json({ ok: true });
+  else res.status(removed.status).json({ ok: false, error: removed.problem });
+});
+
+// What the relay remembers about one of your users between conversations
+// (`conversation.rememberUsers`), by the id your backend put in their session
+// token. Owner-only: this is how a product honours "forget me".
+function ownerRequest(req: express.Request, res: express.Response): boolean {
+  if (config.relayAuthToken && relayTokenPresented(req)) return true;
+  res.status(401).json({
+    ok: false,
+    error: config.relayAuthToken
+      ? "Send the relay token: Authorization: Bearer <RELAY_AUTH_TOKEN>."
+      : "Set RELAY_AUTH_TOKEN to use this route."
+  });
+  return false;
+}
+
+app.get("/v1/users/:userId/memory", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const { enabled, updatedAt, turnCount, factCount } = userMemorySummary(externalUserMemoryKey(req.params.userId));
+  res.json({ ok: true, memory: { enabled, ...(updatedAt ? { updatedAt } : {}), turnCount, factCount } });
+});
+
+app.delete("/v1/users/:userId/memory", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const removed = clearUserConversationMemory(externalUserMemoryKey(req.params.userId));
+  log.info("a token user's conversation memory was cleared", { removed });
+  res.json({ ok: true, removed });
+});
+
+// The variants of an A/B test and how their conversations went. Owner-only.
+app.get("/v1/variants", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const { variants, version } = assistant();
+  const total = variants.reduce((sum, variant) => sum + variant.weight, 0);
+  const results = variantResults.tallies();
+  const compared = compareVariants(
+    results,
+    variants.map((variant) => variant.id),
+    version
+  );
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json({
+    ok: true,
+    ...(version ? { version } : {}),
+    variants: variants.map(({ id, weight }) => ({ id, weight, share: Math.round((weight / total) * 1000) / 1000 })),
+    results,
+    // Whether the variants' success rates differ by more than chance, for the config's own version.
+    ...(compared ? { comparison: compared } : {}),
+    // False when nothing is counted because no conversation records are kept.
+    counting: conversations.keepsRecords(),
+    ...(variantResults.reading() ? { readingLog: true } : {})
+  });
+});
+
+// The finished recordings, newest first. Owner-only, like the two routes after it.
+app.get("/v1/recordings", async (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  if (!recordings) {
+    res.status(404).json({ ok: false, error: "Recording is not on." });
+    return;
+  }
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json({ ok: true, ...(await recordings.list()) });
+});
+
+// A conversation's recording, by the file name its record gives. Owner-only:
+// it is what people said, as sound.
+app.get("/v1/recordings/:file", (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const file = recordings?.pathOf(req.params.file);
+  if (!file) {
+    res.status(404).json({ ok: false, error: "There is no such recording." });
+    return;
+  }
+  res.set("Cache-Control", "private, no-store");
+  res.type("audio/wav").sendFile(file, { dotfiles: "allow" }, (error) => {
+    if (error && !res.headersSent) res.status(404).json({ ok: false, error: "There is no such recording." });
+  });
+});
+
+app.delete("/v1/recordings/:file", async (req, res) => {
+  if (!ownerRequest(req, res)) return;
+  const file = recordings?.pathOf(req.params.file);
+  if (!file) {
+    res.status(404).json({ ok: false, error: "There is no such recording." });
+    return;
+  }
+  try {
+    await fsPromises.rm(file, { force: true });
+    log.info("a recording was deleted", { file: req.params.file });
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ ok: false, error: "The recording could not be deleted." });
+  }
+});
+
 app.get("/health", (_req, res) => {
   // Liveness stays small and public. Evidence moved to scoped /testing APIs;
   // never resend every retained transcript on the five-second health poll.
@@ -381,7 +822,7 @@ app.get("/ready", (_req, res) => {
 // Prometheus scrape endpoint (server/prometheus.ts). Off unless METRICS_TOKEN
 // is set, and then only for that token.
 registerMetricsSource(() => ({
-  relay_agent_sockets_open: wss.clients.size,
+  relay_agent_sockets_open: wss.clients.size + (webRtc ? [...webRtc.sockets()].length : 0),
   relay_companion_sockets_open: [...companionSockets.clients()].length
 }));
 // Billing counters (bookings, failed bookings, top-ups); all zero while Max Cloud is off.
@@ -618,12 +1059,100 @@ app.put("/auth/admin/studio", (req, res) => {
   if (!admin) return;
   const body = (req.body ?? {}) as Record<string, unknown>;
   try {
-    const state = saveStudioConfig(body.config);
+    const state = saveStudioConfig(body.config, admin.username);
     log.info("assistant config saved from studio", { by: admin.username, name: state.assistant.name });
     res.json(state);
   } catch (error) {
     res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Invalid assistant config." });
   }
+});
+
+// The flow builder: the assistant's agents as steps and the arrows between them.
+// `tools` are the names a step can be limited to; a client's own tools are not known here.
+const flowTools = () => [...new Set(installedServerTools().map((tool) => tool.name))].sort();
+
+app.get("/auth/admin/studio/flow", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json({ ...studioFlow(), tools: flowTools() });
+});
+
+app.put("/auth/admin/studio/flow", (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  try {
+    const flow = saveStudioFlow(body.steps, admin.username);
+    log.info("flow saved from studio", { by: admin.username, steps: flow.steps.map((step) => step.id) });
+    res.json({ ...flow, tools: flowTools() });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (error instanceof FlowError) {
+      res.status(400).json({ ok: false, error: message, problems: error.problems });
+    } else if (error instanceof ConfigFileError) {
+      log.warn("the assistant config file could not be written", { message });
+      res.status(500).json({ ok: false, error: `The config file on the server could not be written: ${message}` });
+    } else res.status(400).json({ ok: false, error: message || "The flow could not be saved." });
+  }
+});
+
+// The configs that have been live, newest first, and going back to one of them.
+app.get("/auth/admin/studio/history", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json(studioHistory());
+});
+
+app.get("/auth/admin/studio/history/:id", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const version = studioVersion(String(req.params.id));
+  res.setHeader("Cache-Control", "private, no-store");
+  if (!version) res.status(404).json({ ok: false, error: "There is no such version." });
+  else res.json(version);
+});
+
+app.post("/auth/admin/studio/history/:id/restore", (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const id = String(req.params.id);
+  try {
+    const state = restoreStudioConfig(id, admin.username);
+    if (!state) {
+      res.status(404).json({ ok: false, error: "There is no such version." });
+      return;
+    }
+    log.info("assistant config restored from history", {
+      by: admin.username,
+      version: id,
+      restartFor: state.restartFor
+    });
+    res.json(state);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (error instanceof ConfigFileError) {
+      log.warn("the assistant config file could not be written", { message });
+      res.status(500).json({ ok: false, error: `The config file on the server could not be written: ${message}` });
+      return;
+    }
+    res.status(400).json({
+      ok: false,
+      error: `That version can no longer be used: ${message || "it is not a valid config"}`
+    });
+  }
+});
+
+// For a kept config that held something that must not stay on disk, such as a secret that was since replaced.
+app.delete("/auth/admin/studio/history/:id", (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const id = String(req.params.id);
+  if (!deleteStudioVersion(id)) {
+    res.status(404).json({ ok: false, error: "There is no such version." });
+    return;
+  }
+  log.info("assistant config removed from history", { by: admin.username, version: id });
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json(studioHistory());
 });
 
 app.put(
@@ -1097,6 +1626,74 @@ server.on("upgrade", (request, socket, head) => {
     companionSockets.handleUpgrade(request, socket, head);
     return;
   }
+  if (url.pathname === "/telephony/twilio/stream" || url.pathname === "/telephony/telnyx/stream") {
+    const viaTelnyx = url.pathname === "/telephony/telnyx/stream";
+    const calls = viaTelnyx ? telnyx : telephony;
+    const address = clientAddress(request);
+    const waiting = pendingStreams.get(address) ?? 0;
+    // A media stream carries no credentials until its first message, so the
+    // sockets that have not shown a ticket yet are rationed: none at all unless
+    // a call is waiting for its stream, a few per address, and a fixed number
+    // in total. Calls in progress do not count against them.
+    // Through a proxy the relay was not told to trust, every client has the
+    // proxy's address: a per-address ration would be one ration for everybody,
+    // Twilio included. The total still holds.
+    const shared = !config.trustProxy && Boolean(request.headers["x-forwarded-for"] ?? request.headers.forwarded);
+    if (
+      !calls ||
+      !calls.expectsStream() ||
+      (!shared && waiting >= MAX_PENDING_STREAMS_PER_ADDRESS) ||
+      pendingStreamTotal >= MAX_PENDING_STREAMS
+    ) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    // Telnyx signs the request for a stream; with its public key set, an
+    // unsigned one goes no further. The signature covers the URL as Telnyx was
+    // given it, which is the relay's public origin and this path and ticket.
+    const telnyxKey = viaTelnyx ? telnyxConfig.settings?.publicKey : undefined;
+    if (telnyxKey) {
+      const header = (name: string): string | undefined => {
+        const value = request.headers[name];
+        return Array.isArray(value) ? value[0] : value;
+      };
+      const signed = validTelnyxStreamSignature({
+        publicKey: telnyxKey,
+        streamUrl: telnyxSignedStreamUrl({
+          ...(telnyxConfig.settings?.publicUrl ? { publicUrl: telnyxConfig.settings.publicUrl } : {}),
+          ...(request.headers.host ? { host: request.headers.host } : {}),
+          ...(header("x-forwarded-proto") ? { forwardedProto: header("x-forwarded-proto") } : {}),
+          encrypted: "encrypted" in request.socket,
+          requestUrl: request.url ?? ""
+        }),
+        timestamp: header("telnyx-timestamp"),
+        signature: header("telnyx-signature-ed25519")
+      });
+      if (!signed) {
+        log.warn("rejected a Telnyx media stream: bad signature", { address });
+        socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+    }
+    const urlTicket = viaTelnyx ? (url.searchParams.get("ticket") ?? "") : undefined;
+    pendingStreams.set(address, waiting + 1);
+    pendingStreamTotal += 1;
+    let counted = true;
+    const settled = () => {
+      if (!counted) return;
+      counted = false;
+      pendingStreamTotal -= 1;
+      const left = (pendingStreams.get(address) ?? 1) - 1;
+      if (left > 0) pendingStreams.set(address, left);
+      else pendingStreams.delete(address);
+    };
+    // A handshake that never completes gives its slot back too.
+    socket.once("close", settled);
+    telephonySockets.handleUpgrade(request, socket, head, (stream) => calls.handleStream(stream, settled, urlTicket));
+    return;
+  }
   if (url.pathname !== "/agent") {
     socket.destroy();
     return;
@@ -1120,16 +1717,243 @@ server.on("upgrade", (request, socket, head) => {
   });
 });
 
-function selectProvider(client: WebSocket, sessionLog: Logger, telemetry: ProviderTelemetry): AgentProvider {
+function selectProvider(
+  client: WebSocket,
+  sessionLog: Logger,
+  telemetry: ProviderTelemetry,
+  /** The assistant as this conversation's variant has it, in an A/B test. */
+  profile?: AssistantProfile
+): AgentProvider {
   return createSelectableProvider((requested) => {
     const id = chooseVoiceProvider(requested, {
       fallback: config.voiceProvider,
       switching: config.voiceProviderSwitching
     });
     if (id !== config.voiceProvider) sessionLog.info("session picked its own voice backend", { provider: id });
-    return createVoiceProvider(id, client, sessionLog, telemetry);
+    return createVoiceProvider(id, client, sessionLog, telemetry, profile ? { profile } : {});
   });
 }
+
+// How the conversations of each variant went (server/variants.ts), counted
+// from the conversation records: the ones in the log file, and each new one.
+const variantResults = createVariantResults();
+
+// Traces, post-conversation analysis and the conversation webhook, for the
+// relay's own assistant. (Max Cloud projects keep their history in the console.)
+const conversations = createConversationLifecycle({
+  ...(assistant().analysis ? { analysis: assistant().analysis } : {}),
+  redact: assistant().redact,
+  onRecord: (record) => variantResults.add(record),
+  // An A/B test is counted from the records, so it has them made even with nowhere to send them.
+  keepRecords: assistant().variants.length > 0
+});
+if (process.env.CONVERSATION_LOG_FILE?.trim()) void variantResults.readLog(process.env.CONVERSATION_LOG_FILE.trim());
+for (const problem of [
+  ...assistant().configProblems,
+  ...conversations.problems(),
+  ...turnSettingProblems(),
+  ...new Set(
+    [assistant(), ...assistant().variants.map((variant) => variant.profile)].flatMap((profile) =>
+      guardrailProblems(profile.guardrails)
+    )
+  )
+]) {
+  log.warn(problem);
+}
+if (assistant().variants.length > 0) {
+  log.info("variants on", {
+    variants: assistant().variants.map((variant) => `${variant.id}:${variant.weight}`),
+    ...(assistant().version ? { version: assistant().version } : {})
+  });
+  if (!process.env.CONVERSATION_LOG_FILE?.trim())
+    log.warn(
+      "variants are counted in memory only and start from zero at a restart: set CONVERSATION_LOG_FILE to keep the counts"
+    );
+  if (!config.trustProxy)
+    log.warn(
+      "variants: visitors without a user id are told apart by their address. Behind a reverse proxy every visitor has the proxy's address and gets the same variant: set RELAY_TRUST_PROXY=on, or give users an id with a session token"
+    );
+  if (config.voiceProvider === "doubao" || config.voiceProvider === "mock")
+    log.warn(
+      `variants do not apply to the ${config.voiceProvider === "mock" ? "demo" : "Doubao"} backend: every conversation there runs the config as it is`
+    );
+}
+if (assistant().guardrails) {
+  const {
+    blockedTerms,
+    rules,
+    userRules,
+    toolRules,
+    checkedTools,
+    resultRules,
+    checkedResults,
+    endConversation,
+    hold
+  } = assistant().guardrails!;
+  log.info("guardrails on", {
+    blockedTerms: blockedTerms.length,
+    rules: rules.length,
+    userRules: userRules.length,
+    ...(toolRules.length > 0 ? { toolRules: toolRules.length, checkedTools: checkedTools ?? "all" } : {}),
+    ...(resultRules.length > 0 ? { resultRules: resultRules.length, checkedResults: checkedResults ?? "all" } : {}),
+    ...(rules.length + userRules.length + toolRules.length + resultRules.length > 0
+      ? { model: guardrailModelFromEnv()?.model ?? "none" }
+      : {}),
+    ...(hold ? { hold: true } : {}),
+    then: endConversation ? "end the conversation" : "carry on"
+  });
+}
+// Speech can be held for the judge only where the relay makes the speech from text itself.
+for (const profile of [assistant(), ...assistant().variants.map((variant) => variant.profile)]) {
+  if (!profile.guardrails?.hold) continue;
+  const where = profile.variant ? `variants: ${profile.variant}: ` : "";
+  if (profile.guardrails.rules.length === 0) {
+    log.warn(`${where}guardrails.hold is set but there are no rules to judge: nothing is held`);
+  } else if (!["pipeline", "local", "max-speech"].includes(config.voiceProvider)) {
+    log.warn(
+      `${where}guardrails.hold does not apply to the ${config.voiceProvider} backend, which makes speech and text together: rules are judged while the assistant speaks`
+    );
+  }
+}
+
+for (const problem of noiseSuppression.problems) log.warn(problem);
+if (noiseSuppression.mode !== "off") {
+  void loadNoiseSuppression(log).then((loaded) => {
+    if (loaded)
+      log.info("noise suppression ready", { sessions: noiseSuppression.mode === "on" ? "all" : "phone calls" });
+  });
+}
+for (const problem of recordingConfig.problems) log.warn(problem);
+if (recordingConfig.settings) {
+  log.info("conversation recording on", {
+    conversations: recordingConfig.settings.mode === "on" ? "all" : "phone calls",
+    keepDays: recordingConfig.settings.keepDays ?? "for ever"
+  });
+}
+for (const problem of webRtcConfig.problems) log.warn(problem);
+if (webRtcConfig.settings) {
+  log.info("webrtc ready", {
+    publicAddresses: webRtcConfig.settings.publicAddresses,
+    ports: webRtcConfig.settings.portRange ?? "any",
+    maxSessions: webRtcConfig.settings.maxSessions
+  });
+}
+/** What a call needs from the relay, whichever carrier brought it. */
+const callDeps = (logName: string): TelephonyDeps => ({
+  log: createLogger(logName),
+  openSession(client, call, extras) {
+    const usageUserId = call.userId ?? "phone";
+    if (shuttingDown) return { refused: "shutting down" };
+    if (usageMeter.overLimit(usageUserId)) return { refused: "usage limit reached" };
+    const sessionId = randomUUID();
+    const sessionLog = createLogger(`call:${shortSessionId(sessionId)}`);
+    const metered = usageMeter.open(sessionId, usageUserId);
+    // The same person gets the same variant on every call: by who they are, or else by their number.
+    const other = call.direction === "inbound" ? call.from : call.to;
+    const variant = pickVariant(assistant().variants, call.userId ?? other);
+    const observer = conversations.active()
+      ? conversations.open({
+          sessionId,
+          channel: "phone",
+          assistant: assistant().name,
+          ...(assistant().version ? { version: assistant().version } : {}),
+          ...(variant ? { variant: variant.id } : {}),
+          phone: {
+            direction: call.direction,
+            callSid: call.callSid,
+            ...(call.from ? { from: call.from } : {}),
+            ...(call.to ? { to: call.to } : {})
+          },
+          ...(call.userId ? { userId: call.userId } : {}),
+          ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
+        })
+      : undefined;
+    const recording = recordings?.records("phone") ? recordings.open(sessionId) : undefined;
+    metrics.sessionOpened();
+    const socket = client as unknown as WebSocket;
+    const session = new AgentSessionController(
+      socket,
+      (target, telemetry) => selectProvider(target, sessionLog, telemetry, variant?.profile),
+      sessionLog,
+      "phone",
+      undefined,
+      undefined,
+      {
+        deviceRegistrationAuthorized: false,
+        // A caller is a member of the public: nothing they say is QA evidence.
+        privateSession: true,
+        resumeScope: "phone",
+        channel: "phone",
+        noiseSuppression: noiseSuppression.mode !== "off",
+        ...(recording ? { recording, recordingClient: "phone" as const } : {}),
+        sessionTools: extras.sessionTools,
+        trustedContext: extras.trustedContext,
+        ...(call.userId ? { tokenGrant: { userId: call.userId } } : {}),
+        onServerEvent: (payload) => {
+          observer?.event(payload);
+          const event = payload as { type?: unknown; state?: unknown };
+          if (event?.type === "tool.activity" && event.state === "started") metered.toolCall();
+        }
+      }
+    );
+    activeSessions.set(socket, session);
+    let over = false;
+    return {
+      handleMessage: (data, isBinary) => session.handleMessage(data, isBinary),
+      close(reason) {
+        if (over) return;
+        over = true;
+        metered.close();
+        const recorded = recording?.close();
+        observer?.end(reason ?? "caller", recorded ? { recording: recorded } : undefined);
+        activeSessions.delete(socket);
+        metrics.sessionClosed();
+        void session.close().catch((error: unknown) => {
+          sessionLog.warn("session close failed", {
+            message: error instanceof Error ? error.message : String(error)
+          });
+        });
+      }
+    };
+  },
+  ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
+});
+for (const problem of telephonyConfig.problems) log.warn(problem);
+if (telephonyConfig.settings) {
+  telephony = createTelephony(telephonyConfig.settings, callDeps("telephony"));
+  log.info("telephony ready", {
+    transfers: [...telephonyConfig.settings.transferTargets.keys()],
+    ...(telephonyConfig.settings.warmTransfer ? { warmTransfer: telephonyConfig.settings.warmTransfer } : {}),
+    outbound: Boolean(telephonyConfig.settings.accountSid && telephonyConfig.settings.phoneNumber)
+  });
+}
+// What both carriers share is read for each: say it once.
+for (const problem of telnyxConfig.problems) {
+  if (!telephonyConfig.problems.includes(problem)) log.warn(problem);
+}
+if (telnyxConfig.settings) {
+  const settings = telnyxConfig.settings;
+  telnyx = createTelephony(settings, callDeps("telnyx"), telnyxCarrier(settings));
+  log.info("telephony ready (Telnyx)", {
+    transfers: settings.apiKey ? [...settings.transferTargets.keys()] : [],
+    outbound: Boolean(settings.applicationSid && settings.phoneNumber && settings.publicUrl),
+    streamSignature: Boolean(settings.publicKey)
+  });
+}
+
+// Batch calls go through the same placing as POST /v1/calls.
+const campaigns = createCampaigns({
+  log: createLogger("campaigns"),
+  ...(process.env.CAMPAIGNS_FILE?.trim() ? { file: process.env.CAMPAIGNS_FILE.trim() } : {}),
+  notReady: (wanted) =>
+    telephonyFor(wanted)?.placeProblem() ?? (telephonyFor(wanted) ? undefined : telephonyMissing(wanted)),
+  lineFree: (wanted) => telephonyFor(wanted)?.hasFreeLine() ?? true,
+  place: async (wanted, input, watch, origin) => {
+    const calls = telephonyFor(wanted);
+    if (!calls) return { ok: false, status: 503, error: telephonyMissing(wanted) };
+    return calls.placeCall(input, origin ?? "", watch);
+  }
+});
 
 wss.on("connection", (client, request) => {
   const sessionLog = createLogger(`sess:${shortSessionId(randomUUID())}`);
@@ -1202,7 +2026,21 @@ wss.on("connection", (client, request) => {
   const usageSessionId = randomUUID();
   const meteredSession = usageMeter.open(usageSessionId, usageUserId);
   // The project's conversation history, when the customer keeps one.
-  const recorder = runtime?.studio.keepConversations ? conversationRecorder() : undefined;
+  // Or sends each one to their own server. (What is said is collected for no other reason.)
+  const recorder =
+    runtime?.studio.keepConversations || runtime?.studio.conversationWebhook ? conversationRecorder() : undefined;
+  // Traces to the project's own collector, when it names one: its conversations, not the relay owner's.
+  const tracer = runtime
+    ? projectTraces.open({
+        projectId: runtime.projectId,
+        name: runtime.name,
+        sessionId: usageSessionId,
+        backend: runtime.backend,
+        traces: runtime.studio.traces,
+        ...(runtime.tracesHeaders ? { headers: runtime.tracesHeaders } : {}),
+        ...(runtime.tracesHeadersUnreadable ? { headersUnreadable: true } : {})
+      })
+    : undefined;
   // Billed only while the voice model can talk, checkpointed and checked every few seconds.
   const cloudSession = cloudProject ? openCloudSession(usageSessionId, cloudProject, address) : undefined;
   const usageCheck = cloudSession
@@ -1225,6 +2063,30 @@ wss.on("connection", (client, request) => {
   embedLimit?.unref();
   metrics.sessionOpened();
   trackClient(client);
+  // The same user gets the same variant every time; a visitor without an id, by their address.
+  const variant = cloudProject
+    ? undefined
+    : pickVariant(
+        assistant().variants,
+        // An address nobody could tell is not one to tell people apart by: such a visitor is drawn at random.
+        authenticatedUser?.id ?? tokenGrant?.userId ?? (address && address !== "unknown" ? address : undefined)
+      );
+  const observer =
+    !cloudProject && conversations.active()
+      ? conversations.open({
+          sessionId: usageSessionId,
+          channel: "web",
+          assistant: assistant().name,
+          ...(assistant().version ? { version: assistant().version } : {}),
+          ...(variant ? { variant: variant.id } : {}),
+          ...((authenticatedUser?.id ?? tokenGrant?.userId)
+            ? { userId: authenticatedUser?.id ?? tokenGrant?.userId }
+            : {}),
+          ...(assistant().languages[0] ? { language: assistant().languages[0] } : {})
+        })
+      : undefined;
+  // A Max Cloud project's conversations are its customer's: the relay's owner does not record them.
+  const recording = !cloudProject && recordings?.records("web") ? recordings.open(usageSessionId) : undefined;
   let sessionProvider: AgentProvider | undefined;
   const session = new AgentSessionController(
     client,
@@ -1237,13 +2099,16 @@ wss.on("connection", (client, request) => {
               instructions: runtime.instructions,
               greeting: runtime.greeting,
               language: runtime.studio.language,
-              knowledge: runtime.studio.knowledge
+              knowledge: runtime.studio.knowledge,
+              flow: runtime.studio.flow,
+              onProblems: (problems) =>
+                sessionLog.warn("the project's settings were not all used", { project: runtime.projectId, problems })
             }),
             // Only the project's own webhook tools: never the relay's.
             serverTools: () => projectServerTools(runtime.studio, runtime.webhookSecret),
             ...(runtime.studio.voice ? { voice: runtime.studio.voice } : {})
           })
-        : selectProvider(socket, sessionLog, telemetry)),
+        : selectProvider(socket, sessionLog, telemetry, variant?.profile)),
     sessionLog,
     address,
     region,
@@ -1252,10 +2117,15 @@ wss.on("connection", (client, request) => {
       deviceRegistrationAuthorized:
         !cloudProject && (relayTokenPresented(request) || (!config.relayAuthToken && !authActive())),
       privateSession: Boolean(cloudProject),
+      noiseSuppression: noiseSuppression.mode === "on",
+      ...(recording ? { recording } : {}),
+      ...(cloudProject ? { resumeScope: `cloud:${cloudProject.projectId}` } : {}),
       ...(tokenGrant ? { tokenGrant: { userId: tokenGrant.userId, context: tokenGrant.context } } : {}),
       onServerEvent: (payload) => {
         cloudSession?.observe(payload, sessionProvider?.upstreamUsable?.());
         recorder?.event(payload);
+        tracer?.event(payload);
+        observer?.event(payload);
         const event = payload as { type?: unknown; state?: unknown };
         if (event?.type === "tool.activity" && event.state === "started") meteredSession.toolCall();
       },
@@ -1264,6 +2134,7 @@ wss.on("connection", (client, request) => {
     }
   );
   activeSessions.set(client, session);
+  if (cloudProject && (recorder || tracer)) cloudConversationsOpen.add(client);
 
   client.on("message", async (data, isBinary) => {
     markClientActivity(client);
@@ -1280,23 +2151,27 @@ wss.on("connection", (client, request) => {
     if (usageCheck) clearInterval(usageCheck);
     if (embedLimit) clearTimeout(embedLimit);
     const usage = meteredSession.close();
+    const recorded = recording?.close();
+    observer?.end(
+      code === 1000 || code === 1005 ? "client" : "disconnected",
+      recorded ? { recording: recorded } : undefined
+    );
+    tracer?.end(code === 1000 || code === 1005 ? "client" : "disconnected");
     const endedAt = usage?.endedAt ?? Date.now();
     const billedSeconds = cloudSession?.close(endedAt);
     if (cloudProject && recorder) {
-      try {
-        saveConversation({
-          customerId: cloudProject.customerId,
-          projectId: cloudProject.projectId,
-          source: cloudProject.source ?? "api",
-          seconds: usage?.seconds ?? 0,
-          recorder
-        });
-      } catch (error) {
-        sessionLog.warn("conversation could not be saved", {
-          message: error instanceof Error ? error.message : String(error)
-        });
-      }
+      cloudConversationEnded({
+        customerId: cloudProject.customerId,
+        projectId: cloudProject.projectId,
+        source: cloudProject.source ?? "api",
+        sessionId: usageSessionId,
+        seconds: usage?.seconds ?? 0,
+        endedAt,
+        keep: Boolean(runtime?.studio.keepConversations),
+        recorder
+      });
     }
+    cloudConversationsOpen.delete(client);
     if (cloudProject && billedSeconds !== undefined) {
       try {
         // A failed booking is kept and retried by the booking timer below.
@@ -1339,7 +2214,8 @@ const stopMetricsHistory = startMetricsHistory();
 // Liveness + idle watchdog: terminates half-open links and closes forgotten
 // sessions so their Doubao upstream slots are released. See server/watchdog.ts.
 const stopWatchdog = startWatchdog({
-  clients: () => wss.clients,
+  // Peers on the WebRTC transport are sessions like any other.
+  clients: () => (webRtc ? [...wss.clients, ...(webRtc.sockets() as unknown as Iterable<WebSocket>)] : wss.clients),
   heartbeatMs: config.heartbeatMs,
   idleTimeoutMs: config.idleTimeoutMs,
   log
@@ -1374,6 +2250,58 @@ authSessionSweepTimer.unref();
 // The relay's own tools (assistant.config.json → tools / toolsModule) load
 // before the first session can start.
 await installServerTools(assistant().tools);
+// The config the relay starts with is part of its history, also when it was edited by hand.
+recordStartupConfig();
+// A name in guardrails.checkedTools or checkedResults that is no tool is most likely a tool that is not being checked.
+for (const profile of [assistant(), ...assistant().variants.map((variant) => variant.profile)]) {
+  const known = new Set([...installedServerTools().map((tool) => tool.name), "transfer_call"]);
+  for (const key of ["checkedTools", "checkedResults"] as const) {
+    const strangers = (profile.guardrails?.[key] ?? []).filter((name) => !known.has(name));
+    if (strangers.length === 0) continue;
+    log.warn(
+      `${profile.variant ? `variants: ${profile.variant}: ` : ""}guardrails.${key} names ${strangers.join(", ")}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the tool you meant is not checked.`
+    );
+  }
+}
+// Summaries of what a user said longer ago, where the config asks for them and there is a model to write them.
+setUserMemorySummarizer({
+  enabled: () => assistant().conversation.memorySummary,
+  summarize: (input) => {
+    const model = analysisModelFromEnv();
+    if (!model) throw new Error("there is no model for the memory summary");
+    return summarizeMemory(input, model);
+  }
+});
+if (assistant().conversation.memorySummary && !analysisModelFromEnv()) {
+  log.warn(
+    "conversation.memorySummary needs a chat model to write the summaries: set ANALYSIS_LLM_BASE_URL and ANALYSIS_LLM_MODEL, or a chat model for the conversation. Until then older turns wait, up to 48 for a user, and are not summarised."
+  );
+}
+// The same for a tool an agent's onEnter calls: the step would arrive, call nothing and say why.
+{
+  const installed = installedServerTools();
+  const known = new Set(installed.map((tool) => tool.name));
+  const later = new Set(installed.filter((tool) => tool.background).map((tool) => tool.name));
+  const said = new Set<string>();
+  for (const profile of [assistant(), ...assistant().variants.map((variant) => variant.profile)]) {
+    for (const agent of profile.agents) {
+      for (const key of ["onEnter", "onStart"] as const) {
+        const tool = agent[key]?.call?.tool;
+        if (!tool || said.has(`${agent.id}:${key}:${tool}`)) continue;
+        said.add(`${agent.id}:${key}:${tool}`);
+        if (later.has(tool)) {
+          log.warn(
+            `agents: ${agent.id}: ${key} calls ${tool}, which runs in the background. A step goes by the tool's answer, so the call will not be made: use a tool that answers at once.`
+          );
+        } else if (!known.has(tool)) {
+          log.warn(
+            `agents: ${agent.id}: ${key} calls ${tool}, and the relay has no tool of that name right now. Unless it is a tool of your client or of an MCP server that is still connecting, the call will fail.`
+          );
+        }
+      }
+    }
+  }
+}
 // Max Cloud sessions a crash or restart left unbooked are charged up to their last checkpoint, and
 // bookings that failed are retried: now, and from then on every 15 seconds.
 recoverCloudSessions();
@@ -1407,6 +2335,20 @@ server.listen(config.port, () => {
 
 let shutdownPromise: Promise<void> | null = null;
 
+/** The sockets of Max Cloud conversations that have not ended yet. */
+const cloudConversationsOpen = new Set<WebSocket>();
+
+/** Waits until every Max Cloud conversation has ended; after `graceMs` the sockets still open are cut. */
+async function cloudConversationsEnded(graceMs: number): Promise<void> {
+  const wait = async (ms: number) => {
+    const until = Date.now() + ms;
+    while (cloudConversationsOpen.size > 0 && Date.now() < until) await new Promise((done) => setTimeout(done, 20));
+  };
+  await wait(graceMs);
+  for (const client of cloudConversationsOpen) client.terminate();
+  await wait(300);
+}
+
 function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (shutdownPromise) return shutdownPromise;
   shutdownPromise = (async () => {
@@ -1426,17 +2368,39 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
 
     const forceTimer = setTimeout(() => {
       for (const client of wss.clients) client.terminate();
+      for (const client of webRtc?.sockets() ?? []) client.terminate();
       for (const client of companionSockets.clients()) client.terminate();
       server.closeAllConnections?.();
     }, 5_000);
     forceTimer.unref();
 
+    // No new calls from here on: nobody would be there when they are answered.
+    campaigns.stop();
     for (const client of wss.clients) client.close(1001, "server shutdown");
+    for (const client of telephonySockets.clients) client.close(1001, "server shutdown");
+    webRtc?.close();
     await companionSockets.close();
     await companionRegistry.close();
     await companionStore.flush();
     await Promise.allSettled([...activeSessions.values()].map((session) => session.close()));
+    // No session is left to call a tool: the MCP servers the relay runs itself are stopped with it.
+    closeServerTools();
     usageMeter.flush();
+    // What the sessions left to be written on this machine is written now, before anything is waited for on
+    // the network: a process manager that allows a stop only a second or two must not cut these short.
+    await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);
+    // A project's conversation is saved, analysed and sent when its socket has closed, and a client can be
+    // slow to answer the close: a short wait for it, then the socket is cut, so that none ends after the
+    // wait below and is left out of it.
+    await cloudConversationsEnded(700);
+    // A project's conversation that is being analysed is sent when that is done: two seconds for it, then
+    // it goes without.
+    await settleConversationAnalyses(2_000);
+    // Conversations that just ended still owe their webhook and their traces.
+    await Promise.all([conversations.drain(3_000), projectWebhooks.drain(3_000), projectTraces.drain(3_000)]);
+    await recordings?.close();
+    await campaigns.close();
+    // And once more, for what the waits above still wrote.
     await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);
     closeTestingStore();
     await serverClosed;

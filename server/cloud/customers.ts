@@ -5,6 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { DEFAULT_STUDIO, parseStudio, type ProjectStudio } from "../../shared/cloud-studio";
 import { createLogger } from "../logger";
+import { analysisUsesProjectKey } from "./analysis";
 import { cloudSecretKey, cloudSecretKeys, now } from "./context";
 import {
   customerByEmail,
@@ -29,6 +30,8 @@ import {
   type ProjectChanges,
   type ProjectRow
 } from "./store";
+import { checkedProjectFlow } from "./flow";
+import { tracesHeadersProblem } from "./traces";
 import {
   decryptModelKey,
   encryptModelKey,
@@ -51,6 +54,8 @@ export type PublicProject = {
   keyPrefix: string;
   backend: Backend;
   hasModelKey: boolean;
+  /** Whether request headers for the trace collector are saved. Their value is never returned. */
+  hasTracesHeaders: boolean;
   assistantName: string;
   instructions: string;
   greeting: string;
@@ -61,6 +66,8 @@ export type PublicProject = {
   hasWebhookSecret: boolean;
   /** The owner's limit on this project's minutes per calendar month (UTC); null for none. */
   monthlyMinutesCap: number | null;
+  /** Whether conversation analysis runs with the project's own model key, and not on a model the operator named. */
+  analysisOnOwnKey: boolean;
   createdAt: number;
 };
 
@@ -213,6 +220,19 @@ export function logout(token: string): void {
 
 // --- projects -------------------------------------------------------------------
 
+/**
+ * Whether a project's stored settings can still be read as they were saved.
+ * False after a release that no longer takes something in them: reading them
+ * then gives the defaults, and writing those back would lose the rest.
+ */
+export function projectStudioReadable(row: Pick<ProjectRow, "studio" | "backend">): boolean {
+  try {
+    return parseStudio(JSON.parse(row.studio || "{}"), row.backend).value !== undefined;
+  } catch {
+    return false;
+  }
+}
+
 /** A project's stored Studio settings; defaults when the stored JSON is missing or no longer valid. */
 export function projectStudio(row: Pick<ProjectRow, "studio" | "backend">): ProjectStudio {
   let raw: unknown;
@@ -232,6 +252,7 @@ function publicProject(row: ProjectRow): PublicProject {
     keyPrefix: row.key_prefix,
     backend: row.backend,
     hasModelKey: Boolean(row.model_key_enc),
+    hasTracesHeaders: Boolean(row.traces_headers_enc),
     assistantName: row.assistant_name,
     instructions: row.instructions,
     greeting: row.greeting,
@@ -239,6 +260,7 @@ function publicProject(row: ProjectRow): PublicProject {
     publicId: row.public_id ?? "",
     hasWebhookSecret: Boolean(row.webhook_secret_enc),
     monthlyMinutesCap: row.monthly_minutes_cap ?? null,
+    analysisOnOwnKey: analysisUsesProjectKey(),
     createdAt: row.created_at
   };
 }
@@ -247,11 +269,31 @@ const newPublicId = () => `pub_${randomBytes(12).toString("hex")}`;
 /** What a project's webhook secret is bound to, so it cannot be swapped with its model key. */
 export const webhookSecretScope = (projectId: string) => `${projectId}#webhook-secret`;
 
+/** What a project's trace headers are bound to, so they cannot be swapped with its model key or signing secret. */
+export const tracesHeadersScope = (projectId: string) => `${projectId}#traces-headers`;
+
+/** The project's trace collector headers, decrypted: none when it has none, `unreadable` when they cannot be read. */
+export function projectTracesHeaders(row: Pick<ProjectRow, "id" | "traces_headers_enc">): {
+  headers?: string;
+  unreadable?: true;
+} {
+  if (!row.traces_headers_enc) return {};
+  const key = cloudSecretKey();
+  const headers = key
+    ? decryptModelKey(row.traces_headers_enc, cloudSecretKeys(), tracesHeadersScope(row.id))
+    : undefined;
+  return headers === undefined ? { unreadable: true } : { headers };
+}
+
 /** The project's webhook signing secret, decrypted; undefined when it has none. */
 export function projectWebhookSecret(row: Pick<ProjectRow, "id" | "webhook_secret_enc">): string | undefined {
   if (!cloudSecretKey() || !row.webhook_secret_enc) return undefined;
   return decryptModelKey(row.webhook_secret_enc, cloudSecretKeys(), webhookSecretScope(row.id));
 }
+
+/** Whatever Max sends a project's own server is signed: its tool calls and its conversations. */
+const needsSigningSecret = (studio: ProjectStudio): boolean =>
+  studio.tools.length > 0 || Boolean(studio.conversationWebhook);
 
 function newWebhookSecret(projectId: string): string | undefined {
   const secret = cloudSecretKey();
@@ -298,6 +340,9 @@ export function createProject(
   const requested = body.studio && typeof body.studio === "object" ? (body.studio as Record<string, unknown>) : {};
   const studio = parseStudio({ ...requested, keepConversations: requested.keepConversations !== false }, "openai");
   if (studio.error !== undefined) return fail(400, studio.error);
+  const startFlow = checkedProjectFlow(studio.value);
+  if ("error" in startFlow) return fail(400, startFlow.error);
+  studio.value.flow = startFlow.flow;
   const id = newId("prj_");
   const key = newApiKey();
   const row: ProjectRow = {
@@ -313,7 +358,8 @@ export function createProject(
     greeting: starters.greeting.value ?? "",
     studio: JSON.stringify(studio.value),
     public_id: newPublicId(),
-    webhook_secret_enc: studio.value.tools.length ? (newWebhookSecret(id) ?? null) : null,
+    webhook_secret_enc: needsSigningSecret(studio.value) ? (newWebhookSecret(id) ?? null) : null,
+    traces_headers_enc: null,
     monthly_minutes_cap: null,
     created_at: now(),
     deleted_at: null
@@ -353,16 +399,35 @@ export function patchProject(
   }
   const backend = changes.backend ?? current.backend;
   if (body.studio !== undefined || backend !== current.backend) {
-    const raw = body.studio !== undefined ? body.studio : projectStudio(current);
+    const sent = body.studio !== undefined ? body.studio : projectStudio(current);
+    // A save of the settings that says nothing of the flow leaves the flow as it is: the flow has a save of
+    // its own, and a Studio opened before that one must not put an older flow back, or none.
+    // The same for the analysis and the traces settings: a client that does not know of them (an older console, a script
+    // that sets one thing) must not switch a project's analysis off by saving something else.
+    const stored = projectStudio(current);
+    const record =
+      sent && typeof sent === "object" && !Array.isArray(sent) ? (sent as Record<string, unknown>) : undefined;
+    const raw = record
+      ? {
+          ...record,
+          ...(record.flow === undefined ? { flow: stored.flow } : {}),
+          ...(record.analysis === undefined ? { analysis: stored.analysis } : {}),
+          ...(record.traces === undefined ? { traces: stored.traces } : {})
+        }
+      : sent;
     let studio = parseStudio(raw, backend);
     // A voice belongs to one backend: after a backend change, fall back to the new one's default voice.
     if (studio.error !== undefined && backend !== current.backend && raw && typeof raw === "object") {
       studio = parseStudio({ ...(raw as object), voice: "" }, backend);
     }
     if (studio.error !== undefined) return fail(400, studio.error);
+    // The flow goes by the tools as they are saved with it: a tool a step names cannot be taken away under it.
+    const flow = checkedProjectFlow(studio.value);
+    if ("error" in flow) return fail(400, flow.error);
+    studio.value.flow = flow.flow;
     changes.studio = JSON.stringify(studio.value);
     const next = JSON.parse(changes.studio) as ProjectStudio;
-    if (next.tools.length && !current.webhook_secret_enc) {
+    if (needsSigningSecret(next) && !current.webhook_secret_enc) {
       const secret = newWebhookSecret(projectId);
       if (!secret) return fail(503, "Max Cloud is not configured");
       changes.webhook_secret_enc = secret;
@@ -396,6 +461,33 @@ export function patchProject(
       changes.model_key_enc = encryptModelKey(modelKey, secret, projectId);
     }
   }
+  if (body.tracesHeaders !== undefined) {
+    if (typeof body.tracesHeaders !== "string") return fail(400, "Traces headers must be text.");
+    // Checked as typed: a line break at the end is not trimmed away unseen.
+    const problem = tracesHeadersProblem(body.tracesHeaders);
+    const headers = body.tracesHeaders.trim();
+    if (problem) return fail(400, problem);
+    if (!headers) {
+      changes.traces_headers_enc = null;
+    } else {
+      const secret = cloudSecretKey();
+      if (!secret) return fail(503, "Max Cloud is not configured");
+      changes.traces_headers_enc = encryptModelKey(headers, secret, tracesHeadersScope(projectId));
+    }
+  } else if (current.traces_headers_enc && changes.studio !== undefined) {
+    // The headers were given for one collector. When the traces go to another host, they do not go with them:
+    // one service's API key is not sent to the next because an address was changed (or mistyped).
+    const host = (endpoint: string) => {
+      try {
+        return new URL(endpoint).origin;
+      } catch {
+        return "";
+      }
+    };
+    const before = projectStudio(current).traces.endpoint;
+    const after = (JSON.parse(changes.studio) as ProjectStudio).traces.endpoint;
+    if (host(before) !== host(after)) changes.traces_headers_enc = null;
+  }
   if (!updateProject(projectId, customerId, changes)) return fail(404, "Project not found.");
   const row = liveProject(projectId, customerId);
   if (!row) return fail(404, "Project not found.");
@@ -425,7 +517,7 @@ export function revealWebhookSecret(customerId: string, projectId: string): Resu
   const row = liveProject(projectId, customerId);
   if (!row) return fail(404, "Project not found.");
   const secret = projectWebhookSecret(row);
-  if (!secret) return fail(404, "This project has no signing secret yet: add a tool first.");
+  if (!secret) return fail(404, "This project has no signing secret yet: add a tool or a conversation webhook first.");
   return { ok: true, value: { secret } };
 }
 

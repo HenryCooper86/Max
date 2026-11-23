@@ -30,7 +30,7 @@ class FakeClient {
   close() {}
 }
 
-async function projectSession(serverTools?: () => readonly ToolDefinition[]) {
+async function projectSession(serverTools?: () => readonly ToolDefinition[], flow?: unknown[]) {
   const client = new FakeClient();
   let config: EngineConfig | undefined;
   const engine: VoiceEngine = {
@@ -41,6 +41,7 @@ async function projectSession(serverTools?: () => readonly ToolDefinition[]) {
     sendAudio() {},
     respond() {},
     cancel() {},
+    updateTools() {},
     close() {}
   };
   const provider = createLiveProvider(
@@ -53,7 +54,8 @@ async function projectSession(serverTools?: () => readonly ToolDefinition[]) {
       profile: projectAssistantProfile({
         name: "Lumi",
         instructions: "You help guests of the Harbor Hotel.",
-        greeting: "Welcome to the Harbor Hotel."
+        greeting: "Welcome to the Harbor Hotel.",
+        ...(flow ? { flow } : {})
       }),
       serverTools: serverTools ?? (() => [])
     }
@@ -82,6 +84,66 @@ describe("project sessions", () => {
     expect(config().tools).toEqual([]);
     expect(config().instructions).toContain("You have no tools");
     expect(JSON.stringify(config())).not.toContain(RELAY_TOOL.name);
+  });
+
+  it("with a flow start at its first step, with that step's tools and the others by name", async () => {
+    const tool = (name: string): ToolDefinition => ({ name, description: `Does ${name}`, handler: () => 1 });
+    const { config } = await projectSession(
+      () => [tool("find_booking"), tool("refund")],
+      [
+        { id: "main", tools: ["find_booking"], handoffs: [{ to: "refunds", when: "The guest wants money back." }] },
+        { id: "refunds", description: "Refunds.", instructions: "Refund politely.", tools: ["refund"] }
+      ]
+    );
+    expect(config().tools.map((entry) => entry.name)).toEqual(["transfer_to_agent", "find_booking"]);
+    expect(config().instructions).toContain("Harbor Hotel");
+    expect(config().instructions).toContain('you are the "main" agent');
+    expect(config().instructions).toContain("- refunds: The guest wants money back.");
+    expect(config().instructions).not.toContain("Refund politely.");
+    expect(JSON.stringify(config())).not.toContain(RELAY_TOOL.name);
+  });
+
+  it("with a step done by rule, call the project's own tool for it", async () => {
+    const called: unknown[] = [];
+    const lookup: ToolDefinition = {
+      name: "find_booking",
+      description: "Looks a booking up",
+      handler: (args) => {
+        called.push(args);
+        return { room: "204" };
+      }
+    };
+    const { config } = await projectSession(
+      () => [lookup],
+      [
+        {
+          id: "main",
+          onStart: { call: { tool: "find_booking", arguments: { guest: "{{session.id}}" } } },
+          handoffs: [{ to: "refunds", when: "The guest wants money back." }]
+        },
+        { id: "refunds", description: "Refunds.", instructions: "Refund politely." }
+      ]
+    );
+    // Done by the relay before the model is connected, with the project's tool and nobody else's.
+    expect(called).toEqual([{ guest: "s" }]);
+    expect(config().instructions).toContain("204");
+  });
+
+  it("says what of a stored flow is no longer taken", () => {
+    const problems: string[][] = [];
+    const profile = projectAssistantProfile({
+      name: "Lumi",
+      flow: [
+        { id: "main", handoffs: [{ to: "nowhere" }] },
+        { id: "refunds", description: "Refunds." }
+      ],
+      onProblems: (found) => problems.push(found)
+    });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.join(" ")).toContain("nowhere");
+    expect(profile.name).toBe("Lumi");
+    projectAssistantProfile({ name: "Lumi", onProblems: (found) => problems.push(found) });
+    expect(problems).toHaveLength(1);
   });
 
   it("build the persona without disturbing the relay's logo diagnostics", () => {

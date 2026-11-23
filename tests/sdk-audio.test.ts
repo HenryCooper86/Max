@@ -114,3 +114,181 @@ describe("blocked audio", () => {
     expect(changes).toEqual([true, false]);
   });
 });
+
+describe("agent voice as a media stream", () => {
+  /** Records every call on a gain's `gain` param. */
+  function param() {
+    const calls: Array<[string, number]> = [];
+    return {
+      value: 1,
+      calls,
+      cancelScheduledValues: (t: number) => void calls.push(["cancel", t]),
+      setValueAtTime: (v: number, t: number) => void calls.push(["set", v, t] as unknown as [string, number])
+    };
+  }
+
+  function streamContext() {
+    const loud = { value: false };
+    const gains: Array<{ gain: ReturnType<typeof param>; connect: () => void; disconnect: ReturnType<typeof vi.fn> }> =
+      [];
+    const sources: Array<{ connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; stream: unknown }> =
+      [];
+    const meters: Array<{ disconnect: ReturnType<typeof vi.fn> }> = [];
+    const plain = () => ({
+      connect: () => undefined,
+      disconnect: vi.fn(),
+      threshold: { value: 0 },
+      knee: { value: 0 },
+      ratio: { value: 0 },
+      attack: { value: 0 },
+      release: { value: 0 }
+    });
+    const context = {
+      state: "running",
+      currentTime: 10,
+      sampleRate: 48000,
+      destination: {},
+      createGain: () => {
+        const g = { ...plain(), gain: param() };
+        gains.push(g);
+        return g;
+      },
+      createDynamicsCompressor: plain,
+      createAnalyser: () => {
+        const meter = {
+          ...plain(),
+          fftSize: 0,
+          getFloatTimeDomainData: (samples: Float32Array) => samples.fill(loud.value ? 0.2 : 0)
+        };
+        meters.push(meter);
+        return meter;
+      },
+      createMediaStreamSource: (stream: unknown) => {
+        const source = { connect: vi.fn(), disconnect: vi.fn(), stream };
+        sources.push(source);
+        return source;
+      },
+      createScriptProcessor: () => ({ connect: () => undefined, disconnect: () => undefined, onaudioprocess: null }),
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      resume: () => Promise.resolve()
+    };
+    return { context: context as unknown as AudioContext, loud, gains, sources, meters };
+  }
+
+  class FakeAudioElement {
+    static instances: FakeAudioElement[] = [];
+    muted = false;
+    srcObject: unknown = undefined;
+    paused = false;
+    play = vi.fn(() => Promise.resolve());
+    pause = () => void (this.paused = true);
+    constructor() {
+      FakeAudioElement.instances.push(this);
+    }
+  }
+
+  beforeEach(() => {
+    FakeAudioElement.instances = [];
+    vi.stubGlobal("Audio", FakeAudioElement);
+    vi.stubGlobal("AudioWorkletNode", class {});
+  });
+  afterEach(() => void vi.unstubAllGlobals());
+
+  function setup() {
+    const fakes = streamContext();
+    const changes: boolean[] = [];
+    const audio = createBrowserAudio({ audioContext: fakes.context, onPlayingChange: (p) => changes.push(p) });
+    const stream = { id: "remote" } as unknown as MediaStream;
+    return { ...fakes, audio, changes, stream };
+  }
+
+  it("plays the stream through the graph and reports playing while the meter is loud, then quiet after the hold time", async () => {
+    const { audio, stream, sources, loud, changes } = setup();
+    audio.playStream!(stream);
+    expect(sources).toHaveLength(1);
+    expect(sources[0]!.stream).toBe(stream);
+    expect(sources[0]!.connect).toHaveBeenCalledTimes(2);
+    // The element exists only so Chrome feeds the stream to Web Audio; it must stay muted.
+    expect(FakeAudioElement.instances[0]).toMatchObject({ muted: true, srcObject: stream });
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(changes).toEqual([]);
+    loud.value = true;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(changes).toEqual([true]);
+    expect(audio.levels().output).toBeGreaterThan(0);
+
+    loud.value = false;
+    await vi.advanceTimersByTimeAsync(300);
+    expect(changes).toEqual([true]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(changes).toEqual([true, false]);
+    expect(audio.levels().output).toBe(0);
+  });
+
+  it("stopStream with the current stream disconnects it and reports not playing", async () => {
+    const { audio, stream, sources, loud, changes } = setup();
+    audio.playStream!(stream);
+    loud.value = true;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(changes).toEqual([true]);
+    audio.stopStream!(stream);
+    expect(changes).toEqual([true, false]);
+    expect(sources[0]!.disconnect).toHaveBeenCalled();
+    expect(FakeAudioElement.instances[0]).toMatchObject({ paused: true, srcObject: null });
+    // The meter timer is gone: loud input no longer reports anything.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(changes).toEqual([true, false]);
+  });
+
+  it("stopStream with a different stream does nothing", async () => {
+    const { audio, stream, sources, loud, changes } = setup();
+    audio.playStream!(stream);
+    loud.value = true;
+    await vi.advanceTimersByTimeAsync(50);
+    audio.stopStream!({} as MediaStream);
+    expect(sources[0]!.disconnect).not.toHaveBeenCalled();
+    expect(changes).toEqual([true]);
+  });
+
+  it("close() stops the stream", async () => {
+    const { audio, stream, sources } = setup();
+    audio.playStream!(stream);
+    audio.close();
+    expect(sources[0]!.disconnect).toHaveBeenCalled();
+  });
+
+  it("clearPlayback() mutes the playing stream now and unmutes it shortly after", () => {
+    const { audio, stream, gains } = setup();
+    audio.playStream!(stream);
+    // gains[0] is the playback gain made with the context; gains[1] is the stream's mute gain.
+    const mute = gains[1]!.gain;
+    audio.clearPlayback();
+    expect(mute.calls).toEqual([
+      ["cancel", 10],
+      ["set", 0, 10],
+      ["set", 1, 10.15]
+    ]);
+  });
+
+  it("clearPlayback() after the stream stopped leaves the gains alone", () => {
+    const { audio, stream, gains } = setup();
+    audio.playStream!(stream);
+    audio.stopStream!(stream);
+    audio.clearPlayback();
+    for (const g of gains) expect(g.gain.calls).toEqual([]);
+  });
+
+  it("micTrack() is the microphone's first audio track once the microphone is open, and undefined before", async () => {
+    const { audio } = setup();
+    const track = { stop: vi.fn(), enabled: true };
+    const media = { getAudioTracks: () => [track], getTracks: () => [track] };
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => media) } });
+    expect(audio.micTrack!()).toBeUndefined();
+    await audio.startMic(() => undefined);
+    expect(audio.micTrack!()).toBe(track);
+    audio.releaseMic();
+    expect(audio.micTrack!()).toBeUndefined();
+  });
+});

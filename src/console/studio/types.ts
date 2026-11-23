@@ -1,13 +1,15 @@
 import type { Backend, Project, ProjectStudio } from "../api";
 import type { Session } from "../hooks";
 
-export type StudioTab = "agent" | "knowledge" | "tools" | "test" | "install" | "history" | "settings";
+export type StudioTab = "agent" | "knowledge" | "tools" | "flow" | "test" | "install" | "history" | "settings";
 
 /** Everything the Studio edits before it is saved. `modelKey` is "" unless the person typed a new one. */
 export type StudioDraft = {
   name: string;
   backend: Backend;
   modelKey: string;
+  /** The trace collector's headers: "" unless the person typed new ones (the saved ones are never shown). */
+  tracesHeaders: string;
   assistantName: string;
   instructions: string;
   greeting: string;
@@ -40,6 +42,7 @@ export function draftFromProject(project: Project): StudioDraft {
     name: project.name,
     backend: project.backend,
     modelKey: "",
+    tracesHeaders: "",
     assistantName: project.assistantName,
     instructions: project.instructions,
     greeting: project.greeting,
@@ -58,7 +61,11 @@ export function minutesCapFromDraft(typed: string): number | null | undefined {
 /** True when the draft has changes worth saving. */
 export function draftChanged(draft: StudioDraft, project: Project): boolean {
   const saved = draftFromProject(project);
-  return Boolean(draft.modelKey) || JSON.stringify({ ...draft, modelKey: "" }) !== JSON.stringify(saved);
+  return (
+    Boolean(draft.modelKey) ||
+    Boolean(draft.tracesHeaders) ||
+    JSON.stringify({ ...draft, modelKey: "", tracesHeaders: "" }) !== JSON.stringify(saved)
+  );
 }
 
 /** Per-browser memory of onboarding steps the server cannot know about. */

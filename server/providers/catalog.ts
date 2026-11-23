@@ -3,8 +3,8 @@ import { DOUBAO_CAPABILITIES, LIVE_CAPABILITIES, MOCK_CAPABILITIES } from "../..
 import { env } from "./live/engine";
 import { geminiConfigured } from "./live/gemini-live";
 import { maxSpeechEnabled } from "./live/max-speech";
-import { localRealtimeEnabled } from "./live/openai-realtime";
-import { localPipelineEnabled, pipelineConfigured } from "./live/pipeline";
+import { localRealtimeEnabled, openAiImageInputEnabled } from "./live/openai-realtime";
+import { localPipelineEnabled, localPipelineSettings, pipelineConfigured, pipelineSettings } from "./live/pipeline";
 
 /**
  * Every voice backend the relay knows, with what it needs to run.
@@ -22,6 +22,9 @@ export type VoiceProviderEntry = {
   kind: VoiceProviderKind;
   description: string;
   capabilities: ProviderCapabilities;
+  /** Whether pictures reach a model that can see them with the current
+   *  settings. Absent: never. Read through `voiceCapabilities`. */
+  imageInput?: () => boolean;
   /** True when the relay has what this backend needs. */
   configured(): boolean;
   /** What to set when it is not. */
@@ -59,6 +62,7 @@ export const VOICE_PROVIDERS: readonly VoiceProviderEntry[] = [
     kind: "live",
     description: "ChatGPT-style live speech-to-speech.",
     capabilities: LIVE_CAPABILITIES,
+    imageInput: openAiImageInputEnabled,
     configured: () => Boolean(env("OPENAI_API_KEY")),
     requires: "OPENAI_API_KEY"
   },
@@ -77,6 +81,7 @@ export const VOICE_PROVIDERS: readonly VoiceProviderEntry[] = [
     kind: "live",
     description: "Google Gemini live voice.",
     capabilities: LIVE_CAPABILITIES,
+    imageInput: () => true,
     configured: geminiConfigured,
     requires: "GEMINI_API_KEY"
   },
@@ -86,6 +91,7 @@ export const VOICE_PROVIDERS: readonly VoiceProviderEntry[] = [
     kind: "pipeline",
     description: "Whisper speech-to-text, any chat model, any text-to-speech. Works with local models.",
     capabilities: LIVE_CAPABILITIES,
+    imageInput: () => pipelineSettings().llm.images === true,
     configured: () => pipelineConfigured(),
     requires: "PIPELINE_API_KEY or OPENAI_API_KEY (none for local endpoints)"
   },
@@ -95,6 +101,7 @@ export const VOICE_PROVIDERS: readonly VoiceProviderEntry[] = [
     kind: "pipeline",
     description: "Open-weight models on your own hardware: Whisper, an Ollama chat model, Kokoro speech.",
     capabilities: LIVE_CAPABILITIES,
+    imageInput: () => localPipelineSettings().llm.images === true,
     configured: localPipelineEnabled,
     requires: "LOCAL_VOICE=on (see docs/local-models.md)",
     local: true
@@ -116,6 +123,8 @@ export const VOICE_PROVIDERS: readonly VoiceProviderEntry[] = [
     description:
       "Max's own speech server: voice detection, turn-taking, transcription and speech, with an Ollama chat model.",
     capabilities: LIVE_CAPABILITIES,
+    // Its chat model is the local pipeline's.
+    imageInput: () => localPipelineSettings().llm.images === true,
     configured: maxSpeechEnabled,
     requires: "MAX_SPEECH_URL or MAX_SPEECH=on (see docs/local-models.md)",
     local: true
@@ -150,6 +159,15 @@ export function voiceProvider(id: VoiceProviderId): VoiceProviderEntry {
   const entry = VOICE_PROVIDERS.find((candidate) => candidate.id === id);
   if (!entry) throw new Error(`Unknown voice provider ${id}`);
   return entry;
+}
+
+/** What a session on this backend reports: the static set, with `imageInput`
+ *  true only where pictures will actually work under the current settings.
+ *  Live video is frames of the same kind, so it works wherever pictures do. */
+export function voiceCapabilities(id: VoiceProviderId): ProviderCapabilities {
+  const entry = voiceProvider(id);
+  const pictures = entry.imageInput?.() === true;
+  return { ...entry.capabilities, imageInput: pictures, videoInput: pictures };
 }
 
 export function voiceProviderSummaries(): VoiceProviderSummary[] {

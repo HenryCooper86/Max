@@ -189,7 +189,11 @@ data class ProviderCapabilities(
     /** The backend can call tools. Absent (false) on relays older than tool support. */
     val tools: Boolean = false,
     /** The session accepts typed turns (`text.input`). Absent (false) on older relays. */
-    val textInput: Boolean = false
+    val textInput: Boolean = false,
+    /** The backend takes pictures (`image.input`). Absent (false) on relays older than image input. */
+    val imageInput: Boolean = false,
+    /** The session takes live video (`video.frame`). Absent (false) on relays older than live video. */
+    val videoInput: Boolean = false
 )
 
 /** Mirror of the ride.context event payload / DEFAULT_RIDE_CONTEXT in src/main.tsx. */
@@ -338,7 +342,9 @@ fun parseAgentEvent(text: String): AgentEvent {
                     sessionMemory = caps?.optBoolean("sessionMemory", false) ?: false,
                     emergencyMode = caps?.optBoolean("emergencyMode", false) ?: false,
                     tools = caps?.optBoolean("tools", false) ?: false,
-                    textInput = caps?.optBoolean("textInput", false) ?: false
+                    textInput = caps?.optBoolean("textInput", false) ?: false,
+                    imageInput = caps?.optBoolean("imageInput", false) ?: false,
+                    videoInput = caps?.optBoolean("videoInput", false) ?: false
                 )
             )
         }

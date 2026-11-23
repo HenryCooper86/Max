@@ -1,4 +1,4 @@
-import { APP_DEMO_CAPABILITIES, providerCapabilities, type AgentHealth } from "../shared/agent";
+import { APP_DEMO_CAPABILITIES, type AgentHealth } from "../shared/agent";
 import { buildInfo } from "./build-info";
 import { accountsStorageHealthy, authActive, registrationOpen } from "./accounts";
 import { untrustedProxyHeadersSeen } from "./auth";
@@ -9,7 +9,7 @@ import { userMemoryEnabled, userMemoryStorageHealthy } from "./user-memory";
 import { assistant, assistantLogoProblem, assistantSummary, wakeWordActive } from "./assistant";
 import { serverTools } from "./tools/registry";
 import { equalizerOptions } from "./audio-eq";
-import { resolveVoiceProviderId, voiceProvider, voiceProviderSummaries } from "./providers/catalog";
+import { resolveVoiceProviderId, voiceCapabilities, voiceProvider, voiceProviderSummaries } from "./providers/catalog";
 import { config } from "./runtime-config";
 export { config };
 
@@ -195,7 +195,7 @@ export function buildHealth(uptimeSec: number, includeTesting = false): AgentHea
     capabilities:
       config.voiceProvider === "mock" && assistant().preset.general
         ? APP_DEMO_CAPABILITIES
-        : providerCapabilities(config.voiceProvider),
+        : voiceCapabilities(config.voiceProvider),
     metrics: { ...metrics.snapshot() },
     metricsWindow: { ...metricsWindow() },
     // Lets clients decide whether to show the login/registration UI.

@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity(), DeviceActivityHost {
         viewModel.syncLanguage()
         viewModel.deviceActions.host = this
         viewModel.camera.attach(this, window.decorView.display?.rotation ?: Surface.ROTATION_0)
+        viewModel.videoCamera.attach(this, window.decorView.display?.rotation ?: Surface.ROTATION_0)
         viewModel.music.launchPicker = { ticket ->
             musicSelectionTicket = ticket
             musicPicker.launch(arrayOf("audio/*"))
@@ -79,6 +80,9 @@ class MainActivity : ComponentActivity(), DeviceActivityHost {
     override fun onStop() {
         viewModel.helmetDiscovery.stop()
         if (viewModel.deviceActions.host === this) viewModel.deviceActions.host = null
+        // The camera does not run behind the user's back: the video ends, here and on the relay.
+        viewModel.stopVideo()
+        viewModel.videoCamera.detach(this)
         viewModel.camera.detach(this)
         viewModel.music.launchPicker = null
         viewModel.music.setAppForeground(false)
@@ -89,7 +93,10 @@ class MainActivity : ComponentActivity(), DeviceActivityHost {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         viewModel.syncLanguage()
-        window.decorView.post { viewModel.camera.updateRotation(window.decorView.display?.rotation ?: Surface.ROTATION_0) }
+        window.decorView.post {
+            viewModel.camera.updateRotation(window.decorView.display?.rotation ?: Surface.ROTATION_0)
+            viewModel.videoCamera.updateRotation(window.decorView.display?.rotation ?: Surface.ROTATION_0)
+        }
     }
 
     override suspend fun requestPermission(permission: String): Boolean {

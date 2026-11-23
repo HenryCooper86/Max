@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLanguage } from "../../components/LanguageToggle";
-import type { Conversation, ConversationSummary, ConversationTurn } from "../api";
+import { STUDIO_LIMITS, toolUrlProblem } from "../../../shared/cloud-studio";
+import type { Conversation, ConversationSummary, ConversationTurn, WebhookDelivery, WebhookTestResult } from "../api";
 import { useSay } from "../hooks";
+import { AnalysisMarks, AnalysisSetting, AnalysisView } from "./AnalysisSetting";
+import { TracesSetting } from "./TracesSetting";
 import type { StudioTabProps } from "./types";
 import "./history-tab.css";
 
@@ -67,6 +70,29 @@ export function toolLine(
 
 type Say = (zh: string, en: string) => string;
 
+/** Milliseconds as seconds with one decimal: "0.8", "12.4". */
+export function formatWait(ms: number): string {
+  return (Math.max(0, ms) / 1000).toFixed(1);
+}
+
+/**
+ * How fast the project answers, over the conversations listed: the median of
+ * their own medians, which one slow conversation does not move. Nothing when
+ * none of them was timed.
+ */
+export function answerSummary(list: ReadonlyArray<Pick<ConversationSummary, "answerMs">>, say: Say): string {
+  const times = list
+    .flatMap((item) => (typeof item.answerMs === "number" ? [item.answerMs] : []))
+    .sort((a, b) => a - b);
+  if (times.length === 0) return "";
+  const middle = Math.floor(times.length / 2);
+  const median = times.length % 2 ? times[middle]! : (times[middle - 1]! + times[middle]!) / 2;
+  return say(
+    `访客一轮说完后，回答通常在 ${formatWait(median)} 秒内开始（${times.length} 段对话的中位数）`,
+    `An answer usually begins ${formatWait(median)} s after the visitor's turn ends (the median of ${times.length} ${times.length === 1 ? "conversation" : "conversations"})`
+  );
+}
+
 function Turn({ turn, language, say }: { turn: ConversationTurn; language: string; say: Say }) {
   if (turn.speaker === "tool") {
     return (
@@ -79,13 +105,155 @@ function Turn({ turn, language, say }: { turn: ConversationTurn; language: strin
     <li className={`cxsHistoryBubble ${turn.speaker}`}>
       <span className="cxsHistoryWho">
         {turn.speaker === "user" ? say("访客", "Visitor") : say("助手", "Agent")} · {formatClock(turn.at, language)}
+        {turn.speaker === "agent" && typeof turn.answerMs === "number"
+          ? say(` · 等了 ${formatWait(turn.answerMs)} 秒`, ` · after ${formatWait(turn.answerMs)} s`)
+          : ""}
       </span>
       <p>{turn.text}</p>
     </li>
   );
 }
 
-export function HistoryTab({ session, project, draft, updateStudio, dirty, goTo }: StudioTabProps) {
+/** "Delivered · HTTP 200" or "Not delivered after 4 tries: HTTP 500". */
+export function deliveryLine(
+  delivery: Pick<WebhookDelivery, "ok" | "attempts" | "status" | "error">,
+  say: Say
+): string {
+  if (delivery.ok) return say(`已送达 · HTTP ${delivery.status ?? 200}`, `Delivered · HTTP ${delivery.status ?? 200}`);
+  const why = delivery.error ?? (delivery.status ? `HTTP ${delivery.status}` : say("未知原因", "unknown reason"));
+  return delivery.attempts > 1
+    ? say(`试了 ${delivery.attempts} 次仍未送达：${why}`, `Not delivered after ${delivery.attempts} tries: ${why}`)
+    : say(`未送达：${why}`, `Not delivered: ${why}`);
+}
+
+/** Where each conversation is sent when it ends: the address, a test request, and how the last delivery went. */
+function WebhookSetting({ session, project, draft, updateStudio, goTo }: StudioTabProps) {
+  const say = useSay();
+  const { language } = useLanguage();
+  const url = draft.studio.conversationWebhook ?? "";
+  const saved = project.studio.conversationWebhook ?? "";
+  const unsaved = url.trim() !== saved;
+  const problem = url.trim() ? toolUrlProblem(url.trim()) : undefined;
+  // Each with the address it is about: what is known of one address says nothing of the next.
+  const [last, setLast] = useState<{ of: string; delivery: WebhookDelivery | null } | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [tested, setTested] = useState<{ of: string; result: WebhookTestResult } | null>(null);
+  const result = tested?.of === saved ? tested.result : null;
+  const delivery = last?.of === saved ? last.delivery : null;
+  const [error, setError] = useState("");
+  const alive = useRef(true);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+
+  useEffect(() => {
+    alive.current = true;
+    if (saved) {
+      const { api, token } = sessionRef.current;
+      api
+        .conversationWebhook(token, project.id)
+        .then((answer) => {
+          if (alive.current) setLast({ of: saved, delivery: answer.last });
+        })
+        // The address works without this line: an older relay has no such route.
+        .catch(() => undefined);
+    }
+    return () => {
+      alive.current = false;
+    };
+  }, [project.id, saved]);
+
+  async function test() {
+    setTesting(true);
+    setTested(null);
+    setError("");
+    try {
+      const answer = await session.api.testConversationWebhook(session.token, project.id);
+      if (alive.current) setTested({ of: saved, result: answer });
+    } catch (caught) {
+      if (alive.current) setError(session.fail(caught));
+    } finally {
+      if (alive.current) setTesting(false);
+    }
+  }
+
+  return (
+    <div className="cxsHistorySetting">
+      <label className="cxField" htmlFor="cxsHistoryWebhook">
+        <span>{say("对话结束时发送到你的服务器", "Send each conversation to your server when it ends")}</span>
+        <input
+          id="cxsHistoryWebhook"
+          type="url"
+          inputMode="url"
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="https://example.com/max/conversations"
+          maxLength={STUDIO_LIMITS.url}
+          aria-invalid={problem ? true : undefined}
+          aria-describedby="cxsHistoryWebhookHint"
+          value={url}
+          onChange={(event) => updateStudio({ conversationWebhook: event.target.value })}
+        />
+        <small id="cxsHistoryWebhookHint">
+          {say(
+            "留空则不发送。Max 把最终文字和工具结果用 POST 发到这个地址（JSON，conversation.ended），用项目的签名密钥签名，失败时最多再试 3 次。它和“保存对话记录”互不影响。",
+            "Leave empty to send nothing. Max POSTs the final text and tool outcomes to this address (JSON, conversation.ended), signed with the project's signing secret, and tries up to 3 more times when it fails. It is separate from keeping transcripts."
+          )}
+        </small>
+      </label>
+      {problem ? (
+        <p className="cxWarn" role="status">
+          {say("这个地址不能用：", "This address cannot be used: it ")}
+          {problem}
+        </p>
+      ) : null}
+      {unsaved && !problem ? (
+        <p className="cxWarn" role="status">
+          {say("请保存以生效", "Save to apply")}
+        </p>
+      ) : null}
+      {saved ? (
+        <div className="cxsHistoryWebhookActions">
+          <button
+            type="button"
+            className="siteButton secondary small"
+            onClick={() => void test()}
+            disabled={testing || unsaved}
+            aria-busy={testing}
+          >
+            {testing ? say("发送中…", "Sending…") : say("发送测试请求", "Send test request")}
+          </button>
+          <button type="button" className="siteButton secondary small" onClick={() => goTo("tools")}>
+            {say("查看签名密钥", "Show the signing secret")}
+          </button>
+        </div>
+      ) : null}
+      <div aria-live="polite">
+        {result && !unsaved ? (
+          <p className={result.ok ? "cxMuted" : "cxWarn"}>
+            {result.ok
+              ? say(
+                  `你的服务器收到了测试对话（HTTP ${result.status ?? 200}，${result.ms} ms）。`,
+                  `Your server took the test conversation (HTTP ${result.status ?? 200}, ${result.ms} ms).`
+                )
+              : say(`测试没有送达：${result.error ?? ""}`, `The test did not arrive: ${result.error ?? ""}`)}
+          </p>
+        ) : null}
+        {saved && delivery && !unsaved ? (
+          <p className={delivery.ok ? "cxMuted" : "cxWarn"}>
+            {say("最近一次对话：", "Last conversation: ")}
+            {deliveryLine(delivery, say)} · {formatWhen(delivery.at, language)}
+          </p>
+        ) : null}
+      </div>
+      <p className="cxError" role="alert">
+        {error}
+      </p>
+    </div>
+  );
+}
+
+export function HistoryTab(props: StudioTabProps) {
+  const { session, project, draft, updateStudio, dirty, goTo } = props;
   const say = useSay();
   const { language } = useLanguage();
   const [list, setList] = useState<ConversationSummary[] | null>(null);
@@ -177,10 +345,18 @@ export function HistoryTab({ session, project, draft, updateStudio, dirty, goTo 
             {say("← 返回", "← Back")}
           </button>
           <span className="cxsHistoryBadge">{sourceLabel(open.source, say)}</span>
+          <AnalysisMarks sentiment={open.sentiment} success={open.success} />
           <span className="cxMuted">
             {formatWhen(open.startedAt, language)} · {formatDuration(open.seconds)}
+            {typeof open.answerMs === "number"
+              ? say(
+                  ` · 回答通常在 ${formatWait(open.answerMs)} 秒内开始`,
+                  ` · answers usually began after ${formatWait(open.answerMs)} s`
+                )
+              : ""}
           </span>
         </div>
+        {open.analysis ? <AnalysisView analysis={open.analysis} /> : null}
         {open.turns.length === 0 ? (
           <p className="cxMuted">{say("这段对话没有文字。", "This conversation has no words.")}</p>
         ) : (
@@ -205,6 +381,7 @@ export function HistoryTab({ session, project, draft, updateStudio, dirty, goTo 
       <div aria-live="polite" aria-busy={loading}>
         {loading && !list ? <p className="cxMuted">{say("加载中…", "Loading…")}</p> : null}
         {list ? <p className="cxMuted">{countSummary(list.length, say)}</p> : null}
+        {list && answerSummary(list, say) ? <p className="cxMuted">{answerSummary(list, say)}</p> : null}
       </div>
       <p className="cxError" role="alert">
         {error}
@@ -231,7 +408,13 @@ export function HistoryTab({ session, project, draft, updateStudio, dirty, goTo 
                 <span className="cxsHistoryMeta">
                   <span>{formatWhen(item.startedAt, language)}</span>
                   <span className="cxsHistoryDuration">{formatDuration(item.seconds)}</span>
+                  {typeof item.answerMs === "number" ? (
+                    <span title={say("回答开始前的等待时间（中位数）", "How long answers took to begin (median)")}>
+                      {say(`应答 ${formatWait(item.answerMs)} 秒`, `answers in ${formatWait(item.answerMs)} s`)}
+                    </span>
+                  ) : null}
                   <span className="cxsHistoryBadge">{sourceLabel(item.source, say)}</span>
+                  <AnalysisMarks sentiment={item.sentiment} success={item.success} />
                   {opening === item.id ? <span className="cxMuted">{say("打开中…", "Opening…")}</span> : null}
                 </span>
                 <span className="cxsHistoryPreview">{item.preview.trim() || say("（没有文字）", "(no words)")}</span>
@@ -241,6 +424,9 @@ export function HistoryTab({ session, project, draft, updateStudio, dirty, goTo 
         </ul>
       ) : null}
       {setting}
+      <WebhookSetting {...props} />
+      <AnalysisSetting {...props} />
+      <TracesSetting {...props} />
     </div>
   );
 }

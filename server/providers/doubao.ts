@@ -2311,7 +2311,8 @@ export function createDoubaoProvider(
         : "";
       const previousConversationPrompt = buildPreviousConversationPrompt(
         [],
-        context?.previousConversation?.facts ?? []
+        context?.previousConversation?.facts ?? [],
+        context?.previousConversation?.summary
       );
       const dialogContext = buildDoubaoDialogContext(context?.previousConversation?.turns ?? []);
       const speakingStyle = buildPersonalityPrompt(event.voicePersonality ?? "concise");

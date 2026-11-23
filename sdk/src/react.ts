@@ -9,6 +9,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { VoiceAgent, VoiceAgentError } from "./client.js";
 import type { ClientTool, StartOptions, VoiceAgentOptions, VoiceAgentStatus } from "./client.js";
+import type { ImageSource } from "./image.js";
+import type { VideoKind, VideoOptions, VideoSource } from "./video.js";
 import type { TranscriptItem } from "./protocol.js";
 
 /** What {@link useVoiceAgent} returns. */
@@ -27,6 +29,14 @@ export interface UseVoiceAgentResult {
   unmute(): void;
   /** Sends a typed turn. Returns false when there is no live session. */
   sendText(text: string): boolean;
+  /** Shows the agent a picture. See `VoiceAgent.sendImage`. Resolves false when there is no live session or the relay takes no pictures. */
+  sendImage(source: ImageSource, options?: { text?: string; maxSide?: number }): Promise<boolean>;
+  /** Shows the agent live video: the camera, the screen or a stream. See `VoiceAgent.startVideo`. Resolves to the stream for a preview, or null when there is no live session or the relay takes no video. */
+  startVideo(source?: VideoSource, options?: VideoOptions): Promise<MediaStream | null>;
+  /** Stops the live video. */
+  stopVideo(): void;
+  /** What is being shown to the agent as live video, if anything. */
+  video: VideoKind | undefined;
   /** Whether the mic is muted. */
   isMuted: boolean;
   /** Mic and agent-output loudness, 0..1. Updates up to ~30 times a second. */
@@ -54,6 +64,8 @@ function connectionKey(options: VoiceAgentOptions): string {
     options.language ?? null,
     options.voice ?? null,
     options.backend ?? null,
+    options.transport ?? null,
+    options.iceServers ?? null,
     options.autoReconnect ?? null,
     options.speakFallback ?? null,
     (options.tools ?? []).map(({ name, description, parameters }) => [name, description, parameters ?? null])
@@ -65,7 +77,7 @@ function connectionKey(options: VoiceAgentOptions): string {
  *
  * The client is created when the component mounts and again whenever a
  * connection option changes (`url`, `token`, `project`, `language`, `voice`,
- * `backend`, `autoReconnect`, `speakFallback`, or the tools' names,
+ * `backend`, `transport`, `iceServers`, `autoReconnect`, `speakFallback`, or the tools' names,
  * descriptions and parameters); the old one is destroyed, which ends any
  * running conversation. A token function, tool handlers and `context` are read
  * live, so inline closures are safe and never restart the client. `audioContext`
@@ -82,6 +94,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
   const [isMuted, setMuted] = useState(false);
   const [level, setLevel] = useState(SILENT);
   const [error, setError] = useState<VoiceAgentError | undefined>();
+  const [video, setVideo] = useState<VideoKind | undefined>();
 
   useEffect(() => {
     const first = latest.current;
@@ -106,6 +119,7 @@ export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
     setMuted(false);
     setLevel(SILENT);
     setError(undefined);
+    setVideo(undefined);
     const off = [
       instance.on("status", (next) => {
         setStatus(next);
@@ -113,7 +127,8 @@ export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
       }),
       instance.on("transcript", ({ transcript: next }) => setTranscript(next)),
       instance.on("level", setLevel),
-      instance.on("error", setError)
+      instance.on("error", setError),
+      instance.on("video", ({ active, source }) => setVideo(active ? source : undefined))
     ];
     setAgent(instance);
     return () => {
@@ -150,6 +165,33 @@ export function useVoiceAgent(options: VoiceAgentOptions): UseVoiceAgentResult {
     setMuted(false);
   }, [agent]);
   const sendText = useCallback((text: string) => agent?.sendText(text) ?? false, [agent]);
+  const sendImage = useCallback(
+    (source: ImageSource, options?: { text?: string; maxSide?: number }) =>
+      agent?.sendImage(source, options) ?? Promise.resolve(false),
+    [agent]
+  );
 
-  return { status, transcript, start, stop, mute, unmute, sendText, isMuted, level, error, agent };
+  const startVideo = useCallback(
+    (source?: VideoSource, options?: VideoOptions) => agent?.startVideo(source, options) ?? Promise.resolve(null),
+    [agent]
+  );
+  const stopVideo = useCallback(() => agent?.stopVideo(), [agent]);
+
+  return {
+    status,
+    transcript,
+    start,
+    stop,
+    mute,
+    unmute,
+    sendText,
+    sendImage,
+    startVideo,
+    stopVideo,
+    video,
+    isMuted,
+    level,
+    error,
+    agent
+  };
 }

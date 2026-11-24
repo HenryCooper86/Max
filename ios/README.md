@@ -170,6 +170,17 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl l
 
 The simulator can connect to the Mac relay at `ws://localhost:8787/agent`.
 
+To record the guided demo ride without tapping (Debug builds only, relay on `VOICE_PROVIDER=mock`),
+give the simulator a location and launch with `--debug-demo-ride`, which turns on captions and the
+guided tour and starts hands-free. `--debug-language zh|en` picks the app language. The homepage
+recordings in `public/video/phone-*.mp4` were made this way.
+
+```bash
+xcrun simctl location "$DEVICE" set 31.2304,121.4737
+xcrun simctl io "$DEVICE" recordVideo --codec h264 demo.mp4 &
+xcrun simctl launch "$DEVICE" io.github.henrycooper86.max --debug-language zh --debug-demo-ride
+```
+
 ### Physical device quick start
 
 Running on a real iPhone needs a signing team. With a **free** Apple ID, add it once in

@@ -21,6 +21,15 @@ struct MaxHelmetApp: App {
                         defaults: .standard,
                         installGuidance: session.installAMapDeviceValidationGuidance
                     )
+                    // Recording aid: `--debug-demo-ride` starts hands-free with the
+                    // guided demo ride and captions on, so a simulator can be recorded
+                    // without taps.
+                    if ProcessInfo.processInfo.arguments.contains("--debug-demo-ride"),
+                       !session.state.handsFree {
+                        viewModel.showCaptions = true
+                        viewModel.setGuidedDemo(true)
+                        viewModel.toggleHandsFree()
+                    }
                     #endif
                     updateIdleTimer()
                 }

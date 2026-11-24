@@ -12,6 +12,7 @@ import { BACKENDS, BUILT_IN_EQUALIZER, DEVICES, deviceLogoUrl, findDevice } from
 import { localized } from "../lib/i18n";
 import { APP_PATH, BUILD_PATH, REPOSITORY_URL } from "../lib/routes";
 import { useOnScreen, useScrollReveal, useSectionMood, useTyped } from "./motion";
+import { PhoneAppsSection } from "./PhoneAppsSection";
 import { StudioSection } from "./StudioSection";
 import { VoiceStage } from "./VoiceStage";
 import { Mascot, mascotMoodFor } from "../components/Mascot";
@@ -446,6 +447,7 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
         <Mascot className="siteBird" mood={mood} followCursor restOver="a, button, input, select, .siteHeader" />
       )}
       <Demo />
+      <PhoneAppsSection />
       <StudioSection />
       <Devices />
       <Backends />

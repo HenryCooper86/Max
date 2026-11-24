@@ -111,6 +111,18 @@ describe("landing page", () => {
     expect(html).toContain('href="/console"');
   });
 
+  it("shows the iOS and Android apps as simulator recordings and says they are built from source", () => {
+    const html = render(false);
+    expect(html).toContain('id="apps"');
+    expect(html).toContain("/video/phone-ios.mp4");
+    expect(html).toContain("/video/phone-android.mp4");
+    expect(html).toContain("在 iOS 模拟器中录制");
+    expect(html).toContain("在 Android 模拟器中录制");
+    expect(html).toContain("尚未上架 App Store 或 Google Play");
+    expect(html).toContain(`${REPOSITORY_URL}/tree/main/ios`);
+    expect(html).toContain(`${REPOSITORY_URL}/tree/main/android`);
+  });
+
   it("presents Max Speech as self-hosted, with its consent and hardware limits", () => {
     const html = render(false);
     expect(html).toContain("Max Speech");

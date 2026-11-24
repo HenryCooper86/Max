@@ -33,6 +33,7 @@ function SiteHeader({
       </a>
       <nav className="siteNav" aria-label={say("页面导航", "Page")}>
         <a href={`${home}#demo`}>{say("演示", "Demo")}</a>
+        <a href={`${home}#apps`}>{say("手机应用", "Apps")}</a>
         <a href={`${home}#devices`}>{say("设备", "Devices")}</a>
         <a href={`${home}#backends`}>{say("语音后端", "Backends")}</a>
         <a href={`${home}#speech`}>Max Speech</a>

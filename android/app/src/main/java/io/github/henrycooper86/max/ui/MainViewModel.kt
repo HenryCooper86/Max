@@ -326,12 +326,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         session.setVoiceProvider(voiceProviderId)
         session.selectTranscriptOwner(authUserId.takeIf { isLoggedIn && it.isNotEmpty() })
         refreshHealth()
-        // The session can end the video by itself (it ends, a reconnect takes none): the camera goes off too.
-        viewModelScope.launch {
-            session.state.map { it.videoActive }.distinctUntilChanged().collect { active ->
-                if (!active) { videoCamera.stop(); _videoPreview.value = null }
-            }
-        }
     }
 
     /** Best-effort GET /health: applies optional assistant branding and the voice backend list. */
@@ -586,6 +580,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val videoCamera = io.github.henrycooper86.max.capture.LiveVideoCamera(application)
     private val _videoPreview = MutableStateFlow<Bitmap?>(null)
     val videoPreview: StateFlow<Bitmap?> = _videoPreview.asStateFlow()
+
+    // Declared after videoCamera and _videoPreview: Kotlin runs initialisers in order, and
+    // Main.immediate collects the first value at once, so an earlier init block saw them null.
+    init {
+        // The session can end the video by itself (it ends, a reconnect takes none): the camera goes off too.
+        viewModelScope.launch {
+            session.state.map { it.videoActive }.distinctUntilChanged().collect { active ->
+                if (!active) { videoCamera.stop(); _videoPreview.value = null }
+            }
+        }
+    }
     private val _videoNote = MutableStateFlow<Str?>(null)
     /** What became of the last try to turn the camera on, said under the field. */
     val videoNote: StateFlow<Str?> = _videoNote.asStateFlow()

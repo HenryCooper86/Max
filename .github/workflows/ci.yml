@@ -42,6 +42,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium firefox webkit
+      # Firefox on Linux needs a sound server: without one its AudioContext stays suspended and no microphone
+      # audio reaches the relay. A null sink is enough.
+      - name: Start PulseAudio with a null sink
+        run: |
+          sudo apt-get install -y pulseaudio
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=null
+          pactl set-default-sink null
       - run: npm run test:browser
       - if: failure()
         uses: actions/upload-artifact@v7

@@ -58,7 +58,8 @@ those areas. `npm run test:rdk-vision` runs the Python tests.
 
 `npm run test:browser` runs the web SDK in Chromium, Firefox and WebKit with Playwright: the relay on the demo backend,
 the example shop and its script-tag widget, with a fake microphone. It needs the browsers once
-(`npx playwright install chromium firefox webkit`) and ports 3000 and 8799 free. CI runs it as its own job.
+(`npx playwright install chromium firefox webkit`) and ports 3000 and 8799 free. On Linux, Firefox also needs a sound
+server (PulseAudio or PipeWire; a null sink will do), or no microphone audio flows. CI runs it as its own job.
 
 ## Tests
 

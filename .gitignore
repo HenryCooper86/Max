@@ -50,3 +50,7 @@ research_notes/
 
 # Max Speech benchmark output
 speech-server/bench/out/
+
+# Playwright output (npm run test:browser)
+test-results/
+playwright-report/

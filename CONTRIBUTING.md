@@ -41,20 +41,24 @@ npm run check
 
 It runs these steps in order and stops at the first failure:
 
-| Step                | What it checks                                                          |
-| ------------------- | ----------------------------------------------------------------------- |
-| `check:protocol`    | The generated protocol files match `protocol/agent-events.schema.json`. |
-| `format:check`      | Prettier formatting.                                                    |
-| `lint`              | ESLint.                                                                 |
-| `check:dead-code`   | `knip` finds unused files, exports and dependencies.                    |
-| `check:rdk`         | Type check of the embedded board agent in `rdk/agent`.                  |
-| `check:sdk`         | Type check of the browser SDK in `sdk/`.                                |
-| `test`              | The vitest suite.                                                       |
-| `test:fault-matrix` | A scripted set of failure scenarios for the relay.                      |
-| `build`             | `tsc`, the web app build and the SDK build.                             |
+| Step                | What it checks                                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `check:protocol`    | The generated protocol files match `protocol/agent-events.schema.json`.                                                  |
+| `format:check`      | Prettier formatting.                                                                                                     |
+| `lint`              | ESLint.                                                                                                                  |
+| `check:dead-code`   | `knip` finds unused files, exports and dependencies.                                                                     |
+| `check:rdk`         | Type check of the embedded board agent in `rdk/agent`.                                                                   |
+| `check:sdk`         | Type check of the browser SDK in `sdk/`.                                                                                 |
+| `test`              | The vitest suite.                                                                                                        |
+| `test:fault-matrix` | The testing evaluator's verdicts on altered golden sessions (latency, relay errors, unsafe replies). It starts no relay. |
+| `build`             | `tsc`, the web app build and the SDK build.                                                                              |
 
 Some jobs in CI need other toolchains (Python for `rdk/vision`, Android and iOS builds). You only need them if you change
 those areas. `npm run test:rdk-vision` runs the Python tests.
+
+`npm run test:browser` runs the web SDK in Chromium, Firefox and WebKit with Playwright: the relay on the demo backend,
+the example shop and its script-tag widget, with a fake microphone. It needs the browsers once
+(`npx playwright install chromium firefox webkit`) and ports 3000 and 8799 free. CI runs it as its own job.
 
 ## Tests
 

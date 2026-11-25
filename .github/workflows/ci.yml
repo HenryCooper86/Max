@@ -29,6 +29,29 @@ jobs:
       - run: npm run check
       - run: npm audit --omit=dev --audit-level=low
 
+  # The web SDK as a page embeds it, in Chromium, Firefox and WebKit: the README's quick start
+  # (relay on the demo backend, example shop, one script tag), with a fake microphone.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - run: npm run test:browser
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
   rdk-vision:
     runs-on: ubuntu-latest
     timeout-minutes: 15

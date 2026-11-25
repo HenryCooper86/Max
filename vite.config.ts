@@ -63,7 +63,8 @@ export default defineConfig({
     // 923 of the 2231 collected cases — 41% of a local run spent re-testing
     // an abandoned branch, and a failure there would read as a failure here.
     // Both directories are gitignored, so this only ever affects local runs.
-    exclude: [...configDefaults.exclude, "**/.claude/**", "**/.worktrees/**"]
+    // browser-tests/ holds Playwright specs (npm run test:browser), not Vitest ones.
+    exclude: [...configDefaults.exclude, "**/.claude/**", "**/.worktrees/**", "browser-tests/**"]
   },
   define: {
     "import.meta.env.VITE_APP_VERSION": JSON.stringify(resolveAppVersion()),

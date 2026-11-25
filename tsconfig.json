@@ -22,5 +22,5 @@
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src", "server", "shared"]
+  "include": ["src", "server", "shared", "browser-tests", "playwright.config.ts"]
 }

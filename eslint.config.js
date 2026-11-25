@@ -13,7 +13,9 @@ export default tseslint.config(
       "ios/build/**",
       "public/pcm-worklet.js",
       "public/wav-capture-worklet.js",
-      "**/.venv/**"
+      "**/.venv/**",
+      "test-results/**",
+      "playwright-report/**"
     ]
   },
   js.configs.recommended,

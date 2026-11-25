@@ -33,6 +33,7 @@
     "check:dead-code": "knip",
     "check:rdk": "tsc -p rdk/agent/tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:browser": "npm run build:sdk && playwright test",
     "test:rdk-vision": "python3 -m pytest -c rdk/vision/pytest.ini -m \"not hardware\" --strict-markers rdk/vision/tests",
     "test:speech": "cd speech-server && uv run --frozen pytest -q",
     "test:watch": "vitest",
@@ -50,6 +51,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.65.1",
     "@types/express": "^5.0.6",
     "@types/multicast-dns": "^7.2.4",
     "@types/node": "^26.6.6",

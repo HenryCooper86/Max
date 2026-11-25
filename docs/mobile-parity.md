@@ -1,6 +1,6 @@
 # iOS / Android core feature parity
 
-Audit and implementation pass: 2026-09-16; resilience pass: 2026-11-22 (see [the last section](#resilience-pass-2026-11-22)). This records functional behavior, not a claim that hardware-dependent features have been certified on both platforms. The iOS implementation in this checkout is the reference, including the new in-app music controls.
+Audit and implementation pass: 2026-09-16; resilience pass: 2026-11-22 (see [that section](#resilience-pass-2026-11-22)); final relay closes: 2026-11-25 (see [the last section](#final-relay-closes-2026-11-25)). This records functional behavior, not a claim that hardware-dependent features have been certified on both platforms. The iOS implementation in this checkout is the reference, including the new in-app music controls.
 
 ## Architecture direction
 
@@ -174,3 +174,31 @@ need recorded rides before the thresholds are changed:
 14. Critical heat (Android `override-status 4`; iOS in the sun): "turn on the torch" and "play music" are refused,
     a lit torch switches off, Max's own music pauses (QQ Music keeps playing) and HUD casting stops until it is
     started again. A recording started just as the phone turns hot stops and is kept.
+
+## Final relay closes, 2026-11-25
+
+Both apps treated only the idle close (4001) as final. Any other close from the relay went into the reconnect loop, so
+an account out of voice minutes (4003) or with refused credentials (1008) was retried: every reconnect was refused
+again, until the rider stopped hands-free or the relay rate-limited the phone. The apps now follow
+[the close codes](protocol.md#close-codes) alike:
+
+- **4003, voice minutes used up.** Hands-free ends at once and nothing reconnects. The status says the minutes are
+  used up until next month.
+- **1008, credentials refused.** Hands-free ends at once. The status says the sign-in expired, and the account
+  settings open as after an HTTP 401: a stored login is dropped, and a new sign-in restarts hands-free. Neither app
+  has a silent token refresh (signing in needs the password, and the relay has no refresh endpoint), so the dead
+  credentials are never retried.
+- **4001, idle.** Unchanged: hands-free ends and nothing reconnects. On Android it keeps retrying while a crash
+  incident is open, as before.
+- **Anything else.** Unchanged: the reconnect budget applies.
+
+On Android, 1008 also ends an open crash incident's relay link, as an HTTP 401 does, because its alert cannot be sent
+without credentials. 4003 leaves the incident running, as ending hands-free does.
+
+A session that ends in an error now says why on the idle screen, in the line that otherwise says how to start. Before,
+the reason was only under 设置 → 诊断. This covers every error that ends a session (relay refused, relay unreachable,
+microphone permission), not only the two closes above.
+
+Tests: `RelayCloseTests` closes a real iOS `AgentSession` through a loopback relay and its own `URLSessionWebSocketTask`.
+`FinalRelayCloseTest` covers the Android classification on the JVM, because `AgentSession` needs a device to run. Neither
+has been tried against a live relay that refuses a session.

@@ -58,8 +58,9 @@ final class AgentSession: NSObject, ObservableObject {
         var speedKmh: Double? = nil
         /// Guided demo ride: the mock provider auto-tours the scenario catalog.
         var guidedDemo = false
-        /// The relay refused the connection with HTTP 401 — a login (or token)
-        /// is required. The UI opens the account settings when this flips on.
+        /// The relay refused the credentials — HTTP 401 on the upgrade, or close
+        /// code 1008 once connected — so a login (or token) is required. The UI
+        /// opens the account settings when this flips on.
         var authRequired = false
         /// Transcript ids above this floor belong to the CURRENT relay session
         /// and may be flagged via turn.feedback (the relay matches inside its
@@ -102,9 +103,6 @@ final class AgentSession: NSObject, ObservableObject {
 
     /// Mirrors MAX_RECONNECT_ATTEMPTS in src/main.tsx.
     static let maxReconnectAttempts = ReconnectPolicy.maxAttempts
-    /// Mirrors IDLE_CLOSE_CODE in shared/agent.ts: the relay closed this idle
-    /// session to free its upstream slot; auto-reconnecting would defeat it.
-    static let idleCloseCode = 4001
     /// Past the normal give-up point, an active incident with an un-acked
     /// crash.alert keeps retrying at this slower, indefinite cadence instead
     /// of giving up — the alert queues and survives reconnect; the network
@@ -1157,14 +1155,14 @@ final class AgentSession: NSObject, ObservableObject {
             return
         }
 
-        // The relay closed an idle session to free its upstream slot. End
-        // hands-free entirely (mirrors the web client's stopMic on 4001):
-        // leaving it half-alive kept the mic capturing, the audio route
-        // claimed, and the orb pulsing "listening" with no session behind it.
-        if task.closeCode.rawValue == Self.idleCloseCode {
-            reconnectPolicy.reset()
-            stop()
-            update { $0.statusText = L("st.idleEnded") }
+        // The relay closed the session for good (docs/protocol.md, Close
+        // codes): reconnecting with the same account would only be refused
+        // again, so hands-free ends instead and the status says why. An idle
+        // close ends it like the web client's stopMic on 4001: leaving the
+        // session half-alive kept the mic capturing, the audio route claimed,
+        // and the orb pulsing "listening" with no session behind it.
+        if let close = FinalRelayClose(task.closeCode.rawValue) {
+            endHandsFree(for: close)
             return
         }
 
@@ -1244,6 +1242,21 @@ final class AgentSession: NSObject, ObservableObject {
         }
         reconnectWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Ends hands-free for a close the rider cannot reconnect past (see
+    /// FinalRelayClose) and leaves its reason on the HUD.
+    private func endHandsFree(for close: FinalRelayClose) {
+        reconnectPolicy.reset()
+        stop()
+        update {
+            // An idle session ended normally; the other closes are failures.
+            if close != .idleEnded { $0.connection = .degraded }
+            $0.statusText = close.statusText
+            // Refused credentials get the HTTP 401 treatment: the UI opens
+            // the account settings, and a sign-in restarts hands-free.
+            $0.authRequired = close == .credentialsRejected
+        }
     }
 
     // MARK: - event handling
@@ -1587,6 +1600,39 @@ final class AgentSession: NSObject, ObservableObject {
             }
         }
         if Thread.isMainThread { apply() } else { DispatchQueue.main.async(execute: apply) }
+    }
+}
+
+// MARK: - relay close codes
+
+/// A relay close code that ends hands-free instead of reconnecting
+/// (docs/protocol.md, Close codes; shouldReconnect in sdk/src/protocol.ts):
+/// reconnecting with the same account would only be refused again. Mirrors
+/// FinalRelayClose in android/.../AgentSession.kt.
+enum FinalRelayClose: Equatable {
+    /// 4001: the session sat idle, or the relay ended the conversation.
+    case idleEnded
+    /// 4003: the account's voice minutes are used up until next month.
+    case minutesUsedUp
+    /// 1008: the relay refused the credentials (signed out, expired or revoked).
+    case credentialsRejected
+
+    init?(_ closeCode: Int) {
+        switch closeCode {
+        case 4001: self = .idleEnded
+        case 4003: self = .minutesUsedUp
+        case 1008: self = .credentialsRejected
+        default: return nil
+        }
+    }
+
+    /// What the HUD says once the session has ended.
+    var statusText: String {
+        switch self {
+        case .idleEnded: return L("st.idleEnded")
+        case .minutesUsedUp: return L("st.minutesUsedUp")
+        case .credentialsRejected: return L("st.signInAgain")
+        }
     }
 }
 

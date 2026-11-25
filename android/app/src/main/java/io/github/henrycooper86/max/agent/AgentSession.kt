@@ -113,8 +113,9 @@ class AgentSession(
         val navGuidance: NavGuidanceState? = null,
         /** Guided demo ride: the mock provider auto-tours the scenario catalog. */
         val guidedDemo: Boolean = false,
-        /** The relay refused the connection with HTTP 401 — a login (or token)
-         *  is required. The UI opens the account settings when this flips on. */
+        /** The relay refused the credentials — HTTP 401 on the upgrade, or close code 1008
+         * once connected — so a login (or token) is required. The UI opens the account
+         * settings when this flips on. */
         val authRequired: Boolean = false,
         /** Transcript ids above this floor belong to the CURRENT relay session
          *  and may be flagged via turn.feedback (the relay matches inside its
@@ -148,6 +149,14 @@ class AgentSession(
         /** Mirrors IDLE_CLOSE_CODE in shared/agent.ts: the relay closed this idle
          * session to free its upstream slot; auto-reconnecting would defeat it. */
         const val IDLE_CLOSE_CODE = 4001
+
+        /** Mirrors USAGE_LIMIT_CLOSE_CODE in shared/agent.ts: the account's voice minutes are
+         * spent, and every reconnect would be refused the same way. */
+        const val USAGE_LIMIT_CLOSE_CODE = 4003
+
+        /** Mirrors UNAUTHORIZED_CLOSE_CODE in shared/agent.ts: the relay refused the
+         * credentials (signed out, expired, revoked or deleted). */
+        const val UNAUTHORIZED_CLOSE_CODE = 1008
 
         /** Repeated agent lines inside this window are dropped (src/main.tsx). */
 
@@ -628,8 +637,9 @@ class AgentSession(
         // nav.request as an honest failure and retire the active route
         // (silently — there is no rider-facing turn left to answer or speak
         // it to). Every abnormal handleSocketClosed branch that ends the
-        // session (idle close, rejected upgrade, exhausted reconnects) routes
-        // through this same stop(), so they inherit the same teardown.
+        // session (idle close, used-up minutes, refused credentials, rejected
+        // upgrade, exhausted reconnects) routes through this same stop(), so
+        // they inherit the same teardown.
         navSearch.failPending()
         navController.teardown()
         _state.update {
@@ -1009,15 +1019,15 @@ class AgentSession(
         }
         val generation = lifecycle.current() ?: return
 
-        // The relay closed an idle session to free its upstream slot. End
-        // hands-free entirely (mirrors the web client's stopMic on 4001):
+        // The relay closed the session for good (docs/protocol.md, Close
+        // codes): reconnecting with the same account would only be refused
+        // again, so hands-free ends instead and the status says why. An idle
+        // close ends it entirely (mirrors the web client's stopMic on 4001):
         // leaving it half-alive kept the mic capturing, Bluetooth SCO routed,
         // and the orb pulsing "listening" with no session behind it.
-        if (closeCode == IDLE_CLOSE_CODE && !crash.controller.active) {
-            environment.reconnect.onConnected()
-            lifecycle.finishOn(deviceScope, generation, teardown = { stop() }, publish = {
-                _state.update { it.copy(statusText = tr(Str.STATUS_IDLE_ENDED)) }
-            })
+        val finalClose = FinalRelayClose.from(closeCode, crashActive = crash.controller.active)
+        if (finalClose != null) {
+            endHandsFree(generation, finalClose)
             return
         }
 
@@ -1071,6 +1081,32 @@ class AgentSession(
                 }
             }
         }
+    }
+
+    /**
+     * Ends hands-free for a close the rider cannot reconnect past (see
+     * [FinalRelayClose]) and leaves its reason on the HUD. Nothing retries, so
+     * the reconnect budget starts afresh for the next session.
+     */
+    private fun endHandsFree(generation: Int, close: FinalRelayClose) {
+        environment.reconnect.onConnected()
+        // Refused credentials take the HTTP 401 route: a crash alert could not
+        // reach the relay without them either.
+        val accountRefused = close.authRequired
+        lifecycle.finishOn(deviceScope, generation,
+            teardown = {
+                if (accountRefused) crash.controller.detachAccount()
+                stop(force = accountRefused)
+            },
+            publish = {
+                _state.update {
+                    it.copy(
+                        connection = if (close.failed) ConnectionState.DEGRADED else it.connection,
+                        authRequired = accountRefused,
+                        statusText = tr(close.status)
+                    )
+                }
+            })
     }
 
     // ---- event handling ----------------------------------------------------
@@ -1722,3 +1758,36 @@ internal fun hazardSpeechPath(language: io.github.henrycooper86.max.ui.AppLangua
 /** The TTS voice for a line of text: any Han character selects Chinese, otherwise US English. */
 internal fun ttsLocaleFor(text: String): Locale =
     if (detectLanguage(text) == "zh") Locale.SIMPLIFIED_CHINESE else Locale.US
+
+/**
+ * A relay close that ends hands-free instead of reconnecting, and how the HUD is left
+ * (docs/protocol.md, Close codes; shouldReconnect in sdk/src/protocol.ts). Reconnecting
+ * with the same account would only be refused again. Mirrors FinalRelayClose in
+ * ios/.../AgentSession.swift.
+ */
+internal enum class FinalRelayClose(val status: Str, val authRequired: Boolean = false) {
+    /** 4001: the session sat idle, or the relay ended the conversation. */
+    IDLE_ENDED(Str.STATUS_IDLE_ENDED),
+    /** 4003: the account's voice minutes are used up until next month. */
+    MINUTES_USED_UP(Str.STATUS_MINUTES_USED_UP),
+    /** 1008: the relay refused the credentials (signed out, expired or revoked). */
+    CREDENTIALS_REJECTED(Str.STATUS_SIGN_IN_AGAIN, authRequired = true);
+
+    /** An idle session ended normally; the other closes are failures. */
+    val failed: Boolean get() = this != IDLE_ENDED
+
+    companion object {
+        /**
+         * The final close a code stands for, or null when the reconnect budget decides.
+         * Only an idle close is not final under a crash incident: its alert still needs the
+         * relay. Used-up minutes and refused credentials would refuse that alert too, so
+         * retrying gains nothing.
+         */
+        fun from(closeCode: Int, crashActive: Boolean): FinalRelayClose? = when (closeCode) {
+            AgentSession.IDLE_CLOSE_CODE -> IDLE_ENDED.takeUnless { crashActive }
+            AgentSession.USAGE_LIMIT_CLOSE_CODE -> MINUTES_USED_UP
+            AgentSession.UNAUTHORIZED_CLOSE_CODE -> CREDENTIALS_REJECTED
+            else -> null
+        }
+    }
+}

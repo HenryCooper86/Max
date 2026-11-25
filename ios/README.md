@@ -282,6 +282,11 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
 - Reconnect with exponential backoff and user-visible connection status. An `NWPathMonitor`
   reconnects the moment the network returns (or the phone hands over between Wi-Fi and cellular) with
   a fresh retry budget; drops while there is no network at all do not spend that budget.
+- Closes the relay sends for good end hands-free instead of reconnecting (docs/protocol.md, Close
+  codes): idle (4001), voice minutes used up (4003) and refused credentials (1008). The idle screen
+  then says why the session ended. After 1008 the account settings open, as after an HTTP 401, and
+  a sign-in restarts hands-free. The app has no silent token refresh, so dead credentials are never
+  retried.
 - Interruption recovery: a phone call or Siri pauses capture and playback (the relay session stays
   open, with `audio.stop`/`audio.start` around the pause) and the HUD says so. When the interruption
   ends the session resumes even if iOS omits `shouldResume`, because a rider cannot reach the phone to

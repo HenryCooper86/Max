@@ -81,6 +81,8 @@ func readoutHeadline(_ state: AgentSession.State, name: String) -> String {
 
 func readoutHint(_ state: AgentSession.State, wakePhrase: String?) -> String {
     if !state.handsFree {
+        // A session that ended in an error says why until the rider starts another.
+        if state.connection == .degraded { return state.statusText }
         if let wakePhrase, !wakePhrase.isEmpty { return L("hint.wake", ("wake", wakePhrase)) }
         return L("hint.start")
     }

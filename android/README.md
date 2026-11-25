@@ -160,6 +160,11 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
   usually closes it at once. Mid-reply, a socket that stays silent for 5 s after the change is
   replaced. When idle, OkHttp's 20-second ping is the bound (20-40 s): the relay has no message a
   client can send to get an answer.
+- Closes the relay sends for good end hands-free instead of reconnecting (docs/protocol.md, Close
+  codes): idle (4001), voice minutes used up (4003) and refused credentials (1008). The idle screen
+  then says why the session ended. After 1008 the account settings open, as after an HTTP 401, and
+  a sign-in restarts hands-free. The app has no silent token refresh, so dead credentials are never
+  retried.
 - A microphone that stops working (a helmet headset that dies, a dead mic) switches voice off
   only: hands-free, the foreground service and crash detection stay on. Max says so once and
   retries the microphone on every audio-device change and every 15 s until it works. Phone calls

@@ -188,6 +188,13 @@ internal fun orbCaption(state: AgentSession.State, assistantName: String = DEFAU
 }
 
 /**
+ * Why the last hands-free session ended. Shown instead of how to start one while hands-free
+ * is off and the session ended in an error; the next start resets both fields.
+ */
+internal fun endedSessionNotice(state: AgentSession.State): String? =
+    if (!state.handsFree && state.connection == ConnectionState.DEGRADED) relocalize(state.statusText) else null
+
+/**
  * Voice-mode main screen: wordmark and connection state on top, the Visor hero,
  * greeting/hint, the mic dock and (optionally) the transcript. All rider and test
  * settings live in the settings sheet. The safety-critical hazard banner stays
@@ -409,12 +416,15 @@ private fun TopBar(state: AgentSession.State, name: String, viewModel: MainViewM
 @Composable
 private fun SessionReadout(state: AgentSession.State, name: String, wakePhrase: String?) {
     val c = Visor.colors
-    // Idle: greet, then say how to start. Live: the turn state, then relay detail.
+    // Idle: greet, then why the last session ended if it failed, else how to start.
+    // Live: the turn state, then relay detail.
     val idle = !state.handsFree
     val headline = if (idle) tr(Str.GREETING, "name" to name) else orbCaption(state, name)
     val hint = when {
-        idle && !wakePhrase.isNullOrBlank() -> tr(Str.HINT_WAKE, "caption" to orbCaption(state, name), "wake" to wakePhrase)
-        idle -> orbCaption(state, name)
+        idle -> endedSessionNotice(state) ?: when {
+            wakePhrase.isNullOrBlank() -> orbCaption(state, name)
+            else -> tr(Str.HINT_WAKE, "caption" to orbCaption(state, name), "wake" to wakePhrase)
+        }
         // A running tool says what the wait is for, ahead of the relay's own detail.
         state.toolStatus != null -> toolStatusText(state.toolStatus)
         // While a turn is in flight the relay's detail only rewords the headline

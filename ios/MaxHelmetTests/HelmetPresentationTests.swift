@@ -38,4 +38,16 @@ final class HelmetPresentationTests: XCTestCase {
         XCTAssertEqual(helmetMotionTime(elapsed: 42, reduceMotion: true), 0)
         XCTAssertEqual(helmetMotionTime(elapsed: 42, reduceMotion: false), 42)
     }
+
+    /// A final relay close (used-up minutes, refused credentials) leaves its
+    /// reason on the idle screen; a session that ended normally keeps the start hint.
+    func testAnIdleScreenSaysWhyTheLastSessionEndedOnlyWhenItFailed() {
+        var state = AgentSession.State()
+        state.statusText = L("st.minutesUsedUp")
+        XCTAssertEqual(readoutHint(state, wakePhrase: "Max"), L("hint.wake", ("wake", "Max")))
+        state.connection = .degraded
+        XCTAssertEqual(readoutHint(state, wakePhrase: "Max"), L("st.minutesUsedUp"))
+        state.handsFree = true
+        XCTAssertEqual(readoutHint(state, wakePhrase: nil), L("hint.end"), "while live the hint stays about the session")
+    }
 }

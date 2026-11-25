@@ -4,8 +4,13 @@ import io.github.henrycooper86.max.agent.AgentSession
 import io.github.henrycooper86.max.agent.ConnectionState
 import io.github.henrycooper86.max.agent.HazardLevel
 import io.github.henrycooper86.max.agent.RideContext
+import io.github.henrycooper86.max.ui.AppLanguage
+import io.github.henrycooper86.max.ui.Localization
+import io.github.henrycooper86.max.ui.Str
+import io.github.henrycooper86.max.ui.tr
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -54,5 +59,20 @@ class HelmetPresentationTest {
         )
 
         assertEquals("高风险 · 优先安全 · 麦克风已静音", orbCaption(state))
+    }
+
+    @Test
+    fun `an idle screen says why the last session ended only when it failed`() {
+        val ended = AgentSession.State(connection = ConnectionState.DEGRADED, statusText = tr(Str.STATUS_MINUTES_USED_UP))
+
+        assertEquals("本月语音时长已用完，下月恢复", endedSessionNotice(ended))
+        assertNull("a session that ended normally keeps the start hint", endedSessionNotice(ended.copy(connection = ConnectionState.OFFLINE)))
+        assertNull("while live the hint stays about the session", endedSessionNotice(ended.copy(handsFree = true)))
+        try {
+            Localization.forTest(AppLanguage.EN)
+            assertEquals("Voice minutes used up for this month. Back next month.", endedSessionNotice(ended))
+        } finally {
+            Localization.forTest(AppLanguage.ZH)
+        }
     }
 }

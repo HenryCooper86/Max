@@ -1,5 +1,98 @@
 # Changelog
 
+## 2026-11-25 — Fixes from a gap review
+
+- Max Cloud's database syncs every change to disk before the relay goes on (`synchronous = FULL`). It used the
+  `NORMAL` setting that is usual with a write-ahead log, which could lose a top-up the relay had already credited
+  when the operating system crashed or the power failed.
+- `npm run cloud:backup -- <file>` writes a consistent copy of Max Cloud's database while the relay keeps running
+  (SQLite's `VACUUM INTO`), and never over an existing file. Copying the files of the live database by hand could catch
+  it half written, or leave out the newest top-ups. How to back up and restore is in `docs/cloud.md`.
+- A top-up whose payment notification never arrived is credited all the same: the relay asks each payment provider
+  every minute about the orders that are still unpaid, twenty at a time and pending ones first, credits what the
+  provider confirms and closes expired ones, and goes on asking about a closed order for 24 hours after it expired,
+  so a query that failed at expiry is not the last word. A closed order is asked about again at most every 15 minutes,
+  the most recently expired and the longest unasked first. Until now a pending order was only asked about while the
+  customer kept the top-up dialog open. The sweep shares the console's limit of one provider query per order every 3
+  seconds, and stops with the relay.
+- `npm run cloud:settle -- <order id>` settles one top-up order by hand: it asks the order's payment provider whether
+  the order was paid, whatever the order's age, and credits it as a notification would have been, so it is safe to run
+  twice and a notification that arrives later changes nothing. It is for orders the sweep has stopped asking about
+  (closed as unpaid more than a day after they expired) that the provider's records show as paid, and it refuses an
+  id the relay has no order for and an order whose provider is not configured. `npm run cloud:credit` would pay such
+  an order twice: it is for payments with no order at all.
+- The Max Cloud operator commands (`cloud:backup`, `cloud:credit`, `cloud:reencrypt`, `cloud:settle`) read `.env` in
+  the app directory as the relay does, with variables set in the shell taking precedence. They used to see only the
+  shell's environment, so with the relay's settings in `.env` they opened (or created) a database under
+  `~/.max-relay` instead of the relay's `STUDIO_DIR`, and saw no payment provider.
+- A Max Cloud session booked in several ledger entries is charged for once: its cost is rounded up to the whole fen
+  for the session as a whole, so a later entry charges only what the earlier ones left unpaid. Each entry used to be
+  rounded up on its own, which could cost an extra fen. Every entry, and the session's free seconds, belong to the
+  month of the first entry.
+- Deleting a Max Cloud project removes it and its conversations in one transaction. A failure in between used to leave
+  the project deleted with its conversations lingering, and a retry answered 404.
+- "Max，大声一点" and "小声一点" now work on the RDK X5 helmet. The relay sends `volume.set` with a direction, but the
+  agent on the board accepted only an absolute level, so every spoken volume change failed there. The agent now reads
+  the ALSA playback level and steps it across seven levels, and never below one seventh of the range: quieter must
+  not silence Max or a spoken hazard warning. Not yet checked on a board: how large a step sounds and how quiet the
+  lowest level is.
+- "看看我刚拍的照片" and "刚才录的视频里有什么" now work on Android as well as iOS. The relay sent `gallery.describe`
+  to iOS sessions only, although the Android app already implemented it.
+- The RDK agent and the reference device client stop reconnecting when the relay closes with 4003 (voice minutes used
+  up) or 1008 (credentials refused), as the close-code table in `docs/protocol.md` says. Both used to treat them as
+  ordinary drops and retry every 30 seconds. The agent logs the cause, quoting the relay's own close reason, shows it
+  on its HUD and stays up; the reference client logs the cause the same way and exits. Neither can fetch a new token,
+  so neither retries with fresh credentials; the reference client, refused as a Max Cloud project that is not ready,
+  needs starting again once the project's model key has been added.
+- A `usage.json` that cannot be read, or is not a usage file, is no longer silently started over from empty, which
+  wrote an empty ledger over the billing history and gave everybody their monthly allowance again. The relay moves it
+  aside as `usage.json.corrupt-<time>`, logs an error and answers `503` at `/ready` with `usage-storage-unavailable`.
+  That stays so across restarts for as long as the kept copy sits beside `usage.json`, and meanwhile the relay counts
+  in memory only and saves nothing. With `USAGE_MONTHLY_MINUTES` set, no new voice session is taken either: every
+  `/agent` upgrade is refused (HTTP 503), Max Cloud project sessions included, and so is a phone call once its audio
+  reaches the relay, because the allowance would start again from zero at every restart. Without it, sessions and
+  calls go on being admitted. To recover, put a good `usage.json` back or delete the kept copy, then start the relay
+  again. If the file cannot be moved aside, nothing is written to it. See `docs/usage-and-billing.md`.
+- `/ready` reports campaign storage problems as `campaigns-storage-unavailable`: a `CAMPAIGNS_FILE` or journal that
+  could not be read at startup, or that could not be written twice in a row. One failed write is still only logged.
+- The Amap map proxy (`/_AMapService`) is rate-limited per client address (`AMAP_PROXY_PER_MINUTE`, 600 by default, in
+  a bucket of its own) and reads at most 8 MiB of an answer (more is a `502`). A request with no `Referer` is still
+  served: the relay's own pages are sent with `Referrer-Policy: no-referrer`, so that is what the real map sends. See
+  `docs/configuration.md`.
+- The iOS and Android apps stop reconnecting when the relay closes with 4003 (voice minutes used up) or 1008
+  (credentials refused), like the RDK agent above. Only the idle close (4001) was final there, so both codes went
+  round the reconnect loop: the relay accepted and refused each new connection again, about once a second, until the
+  rider stopped hands-free or the phone hit the relay's connection limit. Hands-free now ends at once. After 4003 the
+  screen says the minutes are used up; after 1008 it says the sign-in expired and opens the account settings, where a
+  new sign-in restarts hands-free. Neither app can fetch a new token, so nothing is retried.
+- A hands-free session that ends in an error now says why on the idle screen of the iOS and Android apps, in the line
+  that otherwise says how to start. The reason used to be visible only under 设置 → 诊断.
+- The Android app's startup is now covered by a test that runs on the JVM, so CI needs no emulator: it opens
+  `MainActivity`, builds the view model and lays out the idle HUD with Robolectric. Nothing did this before, so the
+  crash on every launch fixed the day before (a collector stopped the camera before it was built) showed only on a
+  device. The test runs on an Android 15 runtime with animations off, so the animated HUD is not covered.
+- `npm run setup` run a second time keeps what it does not ask about. It used to write a new `assistant.config.json`
+  from its answers alone, so `instructions`, `greeting`, `toolsModule`, tools and every other key were lost. Its
+  questions now start from the current values (`-` removes the maker, accent colour or extra wake names), a new device
+  starts from that device's template, equaliser and voice display, and it refuses to touch a config it cannot read.
+- Getting started no longer suggests `npx serve .` in the checkout: `serve` sends any file in the folder it serves,
+  `.env` with its API keys included, and listens on every network interface. The test page goes in an empty folder,
+  served on `127.0.0.1` only.
+- `deploy-lightsail.command` installs the deployed commit's own packages (`npm ci` in the archived copy) instead of
+  building with the checkout's `node_modules`, which could belong to another commit. After an automatic rollback it
+  waits until `/ready` reports the release that was serving before, with no issues, and says whether it did; when the
+  rollback itself fails it no longer reports the previous release as back. With `TESTING_GATE_URL` set it runs the
+  live-agent release gate for the commit first and deploys nothing unless it passes.
+- `npm run test:release-gate` refuses to decide without a candidate build. Without one it passed whatever build the
+  QA relay reported; it now also takes `GITHUB_SHA` in GitHub Actions, as it took `CI_COMMIT_SHA` in GitLab.
+- An RDK deploy that changes `rdk/aec` compiles `max-aec` on the board from the new sources, and stops if that fails.
+  It used to carry the old binary forward whatever the release changed, so a reviewed echo-cancellation fix never
+  reached the helmet. The board needs `g++`, `pkg-config`, `libwebrtc-audio-processing-dev` and `libasound2-dev`.
+- `npm run test:browser` runs the web SDK in Chromium, Firefox and WebKit with Playwright, as a page embeds it: the
+  relay on the demo backend, the example shop, the one-line script tag and the `data-relay` auto-mount, a fake
+  microphone whose audio must reach the relay, and a relay, a webhook and a page tool. The test relay keeps its files in
+  a temporary folder and writes no QA history. CI runs it as its own job; GitLab CI does not yet.
+
 ## 2026-11-22 — WebRTC transport, noise suppression, pictures, Telnyx, recording, guardrails, background tools and a larger knowledge base
 
 - Web clients can send audio over WebRTC instead of the WebSocket: `WEBRTC=on` on the relay, `transport: "webrtc"`

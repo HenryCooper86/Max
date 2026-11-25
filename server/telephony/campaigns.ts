@@ -132,6 +132,8 @@ export type Campaigns = {
   remove(id: string): { ok: true } | { ok: false; status: number; problem: string };
   /** Why the saved file could not be read, if it could not. */
   loadProblem: string | undefined;
+  /** For /ready: the load problem, or a file that could not be written twice in a row. */
+  readinessIssue(): string | undefined;
   /** Places no more calls. Calls on the line still end and are still saved. For the start of a shutdown. */
   stop(): void;
   /** Resolves when no write to the files is under way any more. */
@@ -155,6 +157,8 @@ const SAVE_GAP_MS = 1_000;
 const SAVE_COST_FACTOR = 10;
 /** When a placement cannot be written down first, placing waits this long. */
 const STORAGE_RETRY_MS = 30_000;
+/** Writes to a file that may fail in a row before /ready says so: one is a blip that the next write puts right. */
+const PERSISTENT_SAVE_FAILURES = 2;
 /** Timers take at most 2^31-1 ms. Nothing waits longer than this without looking again. */
 const MAX_WAKE_MS = 60 * 60_000;
 /** This many calls in a row that cannot be placed stop a campaign: it is the setup, not the numbers. */
@@ -355,6 +359,10 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
   let loadProblem: string | undefined;
   /** A file that could not be read is left alone until a campaign is created. */
   let saveBlocked = false;
+  /** Writes that failed in a row with none succeeding between, per file. */
+  const failedWrites = { file: 0, journal: 0 };
+  /** Why a file last could not be written, once PERSISTENT_SAVE_FAILURES writes to it failed in a row. */
+  const saveProblems: { file?: string; journal?: string } = {};
 
   // Placement: one at a time, with a gap, and never while the relay's lines are full.
   let placing = false;
@@ -443,6 +451,23 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
 
   // --- persistence ---------------------------------------------------------
 
+  /** Counts a write to one of the files that failed. The caller says so in the log. */
+  function writeFailed(which: "file" | "journal", error: unknown): void {
+    failedWrites[which] += 1;
+    if (failedWrites[which] < PERSISTENT_SAVE_FAILURES) return;
+    const inARow = `${PERSISTENT_SAVE_FAILURES} times in a row (${reasonOf(error)})`;
+    saveProblems[which] =
+      which === "file"
+        ? `CAMPAIGNS_FILE could not be saved ${inARow}: what changed since is kept only in memory.`
+        : `The campaigns journal could not be written ${inARow}: no call is placed until it can be.`;
+  }
+
+  /** Counts a write to one of the files that succeeded: that file can be written. */
+  function writeWorked(which: "file" | "journal"): void {
+    failedWrites[which] = 0;
+    delete saveProblems[which];
+  }
+
   async function writeFileNow(): Promise<void> {
     const file = options.file;
     if (!file || saveBlocked || !dirty) return;
@@ -483,9 +508,11 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
       }
       // A campaign waits for this before its first call.
       if (fresh) wake(0);
+      writeWorked("file");
     } catch (error) {
       dirty = true;
       log.warn("campaigns could not be saved", { reason: reasonOf(error) });
+      writeFailed("file", error);
     }
     saveGap = Math.max(SAVE_GAP_MS, (now() - started) * SAVE_COST_FACTOR);
   }
@@ -506,18 +533,24 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
 
   /** One line of the journal, written and synced. Throws when it cannot be. */
   async function appendToJournal(entry: Record<string, unknown>): Promise<void> {
-    const handle = await open(journalFile as string, "a", 0o600);
     try {
-      // A line of its own even after one that a crash cut short.
-      await handle.appendFile(`\n${JSON.stringify(entry)}\n`);
-      await handle.sync();
-    } finally {
-      await handle.close();
+      const handle = await open(journalFile as string, "a", 0o600);
+      try {
+        // A line of its own even after one that a crash cut short.
+        await handle.appendFile(`\n${JSON.stringify(entry)}\n`);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      if (!journalSynced) {
+        await syncDirectory(journalFile as string);
+        journalSynced = true;
+      }
+    } catch (error) {
+      writeFailed("journal", error);
+      throw error;
     }
-    if (!journalSynced) {
-      await syncDirectory(journalFile as string);
-      journalSynced = true;
-    }
+    writeWorked("journal");
   }
 
   /**
@@ -1069,6 +1102,13 @@ export function createCampaigns(options: CampaignOptions): Campaigns {
     remove,
     get loadProblem() {
       return loadProblem;
+    },
+    readinessIssue() {
+      // A load problem is said for good: what clears it is a restart that can read the file.
+      const problem = loadProblem
+        ? `${loadProblem} Fix it and restart the relay.`
+        : (saveProblems.journal ?? saveProblems.file);
+      return problem ? `campaigns-storage-unavailable: ${problem}` : undefined;
     },
     stop,
     settled,

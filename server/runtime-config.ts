@@ -98,7 +98,11 @@ export const config = {
   // Web 端 (JS API) key served to the browser HUD; the map panel hides without it.
   amapJsKey: process.env.AMAP_JS_KEY?.trim() ?? "",
   // JS API 安全密钥 — used only inside the /_AMapService proxy, never sent to a client.
-  amapJsSecret: process.env.AMAP_JS_SECRET?.trim() ?? ""
+  amapJsSecret: process.env.AMAP_JS_SECRET?.trim() ?? "",
+  // Requests a client address may send through that proxy per minute. A map
+  // draws dozens of tiles a minute, so this sits far above the login limit:
+  // it bounds what one address can spend of the operator's Amap quota.
+  amapProxyPerMinute: resolveBoundedInt(process.env.AMAP_PROXY_PER_MINUTE, 600, 1, 10_000)
 };
 
 function resolveBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {

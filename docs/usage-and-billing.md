@@ -20,6 +20,30 @@ each user a monthly allowance, or to bill your own customers. It needs no billin
 
 Totals are kept in `usage.json` in the relay's data directory (`STUDIO_DIR`), for the last 24 months.
 
+If that file is there but cannot be read, or is not a usage file (a disk that filled up in the middle of a write can
+leave one behind), the relay does not carry on as if it were the first run: that would give everybody their monthly
+allowance again. It moves the file aside as `usage.json.corrupt-<time>`, logs an error and answers `503` at `/ready`
+with `usage-storage-unavailable`. It goes on doing so across restarts for as long as a `usage.json.corrupt-*` file sits
+beside `usage.json`, and while one does, the relay saves nothing:
+
+- Totals start from what the relay can read, which is nothing until a good file is put back. `GET /v1/usage` and
+  `USAGE_MONTHLY_MINUTES` do not see anything counted before the relay last started.
+- What is counted meanwhile stays in memory and is not added to the ledger. Each finished session is still POSTed to
+  `USAGE_WEBHOOK_URL`, so a billing system fed by the webhook misses nothing.
+
+With `USAGE_MONTHLY_MINUTES` set, no new voice session is taken meanwhile, because the allowance would otherwise start
+again from zero at every restart. Every `/agent` upgrade is refused with HTTP 503, Max Cloud project sessions included
+(see [refusals](protocol.md#refusals)), and a phone call is refused once its audio reaches the relay. Sessions already
+running go on. Without it the meter only reports: sessions and calls go on being admitted, and the minutes counted
+meanwhile are not added to the ledger.
+
+To recover, deal with the kept copy and start the relay again: put a good `usage.json` back (a backup, or the kept copy
+once repaired) and delete or move the kept copy away, or just delete it to start the ledger again from empty. A good
+file put back earlier is read, but not written to, until the kept copy is gone.
+
+If the damaged file cannot be moved aside, it stays as it is: nothing is written to it, and the relay stays unready
+until it is repaired and started again.
+
 So the one thing to get right is the user. Mint session tokens with your own customer or account id:
 
 ```js

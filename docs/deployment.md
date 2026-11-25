@@ -187,7 +187,12 @@ Note that `RELAY_MAX_PAYLOAD_BYTES` is clamped to 320 KiB–1 MiB; the default i
 | `open-registration-enabled`       | Production, accounts exist, no relay token, and registration is still on.       |
 | `accounts-storage-unavailable`    | The accounts file cannot be written.                                            |
 | `user-memory-storage-unavailable` | The per-user memory file cannot be written.                                     |
+| `usage-storage-unavailable`       | The usage file could not be read at start. Kept as `usage.json.corrupt-<time>`. |
+| `campaigns-storage-unavailable`   | `CAMPAIGNS_FILE`, or its journal, could not be read, or written twice in a row. |
 | `shutting-down`                   | The relay received a stop signal and is draining.                               |
+
+Both end with what to do. For the usage file see [usage and billing](usage-and-billing.md#what-is-counted); for
+campaigns, [calling a list of numbers](telephony.md#calling-a-list-of-numbers).
 
 `/ready` also returns `warnings`: problems an operator should fix that do not make the relay unready, so they never turn
 the answer into `503`.

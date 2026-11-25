@@ -57,7 +57,7 @@ export function noteProxyHeaders(request: IncomingMessage): void {
   log.warn(
     "!!! A request arrived with X-Forwarded-For/Forwarded but RELAY_TRUST_PROXY is off. If this relay is behind a " +
       "reverse proxy, every client now shares the proxy's address and the per-IP rate limits (WebSocket, login, " +
-      "embed) are global: one visitor can lock everyone out. Set RELAY_TRUST_PROXY=on (and RELAY_TRUSTED_PROXY_HOPS). " +
+      "embed, map proxy) are global: one visitor can lock everyone out. Set RELAY_TRUST_PROXY=on (and RELAY_TRUSTED_PROXY_HOPS). " +
       "收到带 X-Forwarded-For/Forwarded 头的请求，但 RELAY_TRUST_PROXY 为 off：若位于反向代理之后，所有客户端共用代理 IP，" +
       "按 IP 的速率限制会变成全局限制。请设置 RELAY_TRUST_PROXY=on。",
     { remoteAddress: request.socket?.remoteAddress ?? "unknown" }
@@ -221,14 +221,25 @@ export function testingClearAuthorized(request: IncomingMessage): boolean {
 // Each route class counts separately: a visitor who used up relay logins (or
 // an office behind one NAT address) must still be able to sign in to Cloud or
 // change a password, and anonymous token minting must not eat login attempts.
-export type AuthRateBucket = "relay-auth" | "relay-password" | "cloud-auth" | "token-mint" | "tool-test";
+// The Amap tile proxy counts separately too, and against its own limit.
+export type AuthRateBucket = "relay-auth" | "relay-password" | "cloud-auth" | "token-mint" | "tool-test" | "amap-proxy";
 const authHits = new Map<string, number[]>();
 
-export function checkAuthRateLimit(address: string, now = Date.now(), bucket: AuthRateBucket = "relay-auth"): boolean {
+/**
+ * `limit` is for a bucket that is not login attempts. The Amap proxy passes
+ * AMAP_PROXY_PER_MINUTE: a map draws dozens of tiles a minute, where ten
+ * guesses a minute is right for a password.
+ */
+export function checkAuthRateLimit(
+  address: string,
+  now = Date.now(),
+  bucket: AuthRateBucket = "relay-auth",
+  limit = config.authAttemptsPerMinute
+): boolean {
   const key = `${bucket} ${address}`;
   const cutoff = now - RATE_WINDOW_MS;
   const recent = (authHits.get(key) ?? []).filter((at) => at > cutoff);
-  if (recent.length >= config.authAttemptsPerMinute) {
+  if (recent.length >= limit) {
     authHits.set(key, recent);
     return false;
   }

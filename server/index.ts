@@ -809,9 +809,13 @@ app.get("/health", (_req, res) => {
 
 app.get("/ready", (_req, res) => {
   const companionIssue = companionStore.readinessIssue();
+  const campaignIssue = campaigns.readinessIssue();
+  const usageIssue = usageMeter.readinessIssue;
   const issues = [
     ...readinessIssues(),
     ...cloudReadinessIssues(),
+    ...(usageIssue ? [usageIssue] : []),
+    ...(campaignIssue ? [campaignIssue] : []),
     ...(companionIssue ? [companionIssue] : []),
     ...(shuttingDown ? ["shutting-down"] : [])
   ];
@@ -1712,6 +1716,22 @@ server.on("upgrade", (request, socket, head) => {
     return;
   }
 
+  // With a per-user allowance on, the usage ledger is what it is enforced
+  // from. When that could not be read, every restart would hand everybody
+  // their allowance again, so no new session is taken until the ledger is
+  // dealt with; those running go on. A relay that only reports usage goes on
+  // taking sessions.
+  if (usageMeter.refusesNewSessions()) {
+    log.warn("refused /agent upgrade", {
+      address: clientAddress(request),
+      code: 503,
+      reason: "usage storage unavailable"
+    });
+    socket.write("HTTP/1.1 503 Usage storage unavailable\r\nConnection: close\r\nRetry-After: 5\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
   const decision = authorizeUpgrade(request);
   if (!decision.ok) {
     metrics.rejectedUpgrade();
@@ -1857,6 +1877,7 @@ const callDeps = (logName: string): TelephonyDeps => ({
   openSession(client, call, extras) {
     const usageUserId = call.userId ?? "phone";
     if (shuttingDown) return { refused: "shutting down" };
+    if (usageMeter.refusesNewSessions()) return { refused: "usage storage unavailable" };
     if (usageMeter.overLimit(usageUserId)) return { refused: "usage limit reached" };
     const sessionId = randomUUID();
     const sessionLog = createLogger(`call:${shortSessionId(sessionId)}`);

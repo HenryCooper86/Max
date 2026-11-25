@@ -48,12 +48,12 @@ which keeps the token out of URLs and proxy logs. Never put the relay token in a
 
 The relay refuses the upgrade with a plain HTTP status before any WebSocket exists:
 
-| Status | Meaning                                                                                   |
-| ------ | ----------------------------------------------------------------------------------------- |
-| 401    | A token is required and the one sent is missing, wrong or expired.                        |
-| 403    | The browser `Origin` header is not in `RELAY_ALLOWED_ORIGINS`.                            |
-| 429    | More than `RELAY_CONN_PER_MINUTE` (default 30) upgrade attempts from this IP in a minute. |
-| 503    | The relay is shutting down. Retry after a few seconds.                                    |
+| Status | Meaning                                                                                                                                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 401    | A token is required and the one sent is missing, wrong or expired.                                                                                                                                                                       |
+| 403    | The browser `Origin` header is not in `RELAY_ALLOWED_ORIGINS`.                                                                                                                                                                           |
+| 429    | More than `RELAY_CONN_PER_MINUTE` (default 30) upgrade attempts from this IP in a minute.                                                                                                                                                |
+| 503    | The relay is shutting down, or its usage file is unreadable while `USAGE_MONTHLY_MINUTES` is set, so no new session is taken until that is repaired (see [usage and billing](usage-and-billing.md#what-is-counted)). Retry with backoff. |
 
 Requests to any path other than `/agent` and `/companion` are dropped without a response.
 

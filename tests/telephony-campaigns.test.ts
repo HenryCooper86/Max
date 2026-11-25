@@ -622,6 +622,76 @@ describe("keeping campaigns in a file", () => {
     await settleFile(again);
     expect(JSON.parse(readFileSync(file, "utf8")).campaigns).toHaveLength(1);
   });
+
+  // What /ready says (readinessIssue). A file that could not be read is
+  // reported for as long as the relay runs; a file that could not be written
+  // twice in a row, until a write succeeds. One failed write is not reported:
+  // the next one usually works.
+  it("reports a file it could not read, until the relay is started again", async () => {
+    const file = path.join(directory, "campaigns.json");
+    writeFileSync(file, "{ nope");
+    const harness = setup({ file });
+    expect(harness.campaigns.readinessIssue()).toBe(
+      "campaigns-storage-unavailable: CAMPAIGNS_FILE is not a campaigns file, so no campaigns were loaded. " +
+        "It is left as it is until a campaign is created. Fix it and restart the relay."
+    );
+
+    // A new campaign replaces the file, but only a start that can read it shows that all is well.
+    make(harness);
+    await settleFile(harness);
+    expect(harness.campaigns.readinessIssue()).toContain("campaigns-storage-unavailable");
+    expect(setup({ file }).campaigns.readinessIssue()).toBeUndefined();
+  });
+
+  it("reports a file it could not save twice in a row, and stops once one is saved", async () => {
+    const file = path.join(directory, "campaigns.json");
+    // Where a save is written first cannot be opened as a file: nothing can be saved.
+    const inTheWay = `${file}.tmp`;
+    mkdirSync(inTheWay);
+    const harness = setup({ file });
+    make(harness);
+    await settleFile(harness);
+    expect(harness.campaigns.readinessIssue()).toBeUndefined();
+
+    await pass(harness, 2_000);
+    expect(harness.campaigns.readinessIssue()).toBe(
+      "campaigns-storage-unavailable: CAMPAIGNS_FILE could not be saved 2 times in a row (EISDIR): " +
+        "what changed since is kept only in memory."
+    );
+    // A new campaign's first call waits for the file to hold it.
+    expect(harness.placed).toHaveLength(0);
+
+    rmSync(inTheWay, { recursive: true });
+    await pass(harness, 35_000);
+    expect(harness.campaigns.readinessIssue()).toBeUndefined();
+    expect(JSON.parse(readFileSync(file, "utf8")).campaigns).toHaveLength(1);
+    expect(harness.placed).toHaveLength(1);
+  });
+
+  it("reports a journal it could not write twice in a row, and places no call meanwhile", async () => {
+    const file = path.join(directory, "campaigns.json");
+    const harness = setup({ file });
+    make(harness, { calls: numbers(3) });
+    await pass(harness, 2_000);
+    expect(harness.placed).toHaveLength(1);
+
+    // From now on no line can be added to the journal.
+    rmSync(`${file}.journal`, { force: true });
+    mkdirSync(`${file}.journal`);
+    harness.placed[0]!.watch({ type: "ended", callSid: "CA1", reason: "caller", durationMs: 1 });
+    await pass(harness, 2_000);
+    // One failure is a blip.
+    expect(harness.campaigns.readinessIssue()).toBeUndefined();
+    expect(harness.placed).toHaveLength(1);
+
+    // A call that could not be written down first is tried again half a minute later.
+    await pass(harness, 35_000);
+    expect(harness.campaigns.readinessIssue()).toBe(
+      "campaigns-storage-unavailable: The campaigns journal could not be written 2 times in a row (EISDIR): " +
+        "no call is placed until it can be."
+    );
+    expect(harness.placed).toHaveLength(1);
+  });
 });
 
 describe("not dialling anybody twice", () => {

@@ -112,13 +112,14 @@ remains the control for them. Never treat the origin as authentication.
 
 ### Rate limits
 
-| Setting                    | Default | What it limits                                                                                   |
-| -------------------------- | ------- | ------------------------------------------------------------------------------------------------ |
-| `RELAY_CONN_PER_MINUTE`    | 30      | `/agent` upgrade attempts per client IP, in a sliding 60 s window. 429 beyond. `0` turns it off. |
-| `AUTH_ATTEMPTS_PER_MINUTE` | 10      | Attempts per client IP per minute, counted separately for each route class (see below).          |
-| `RELAY_IDLE_TIMEOUT_MS`    | 600000  | Closes sessions with no client traffic (code 4001).                                              |
-| `RELAY_HEARTBEAT_MS`       | 30000   | Drops dead connections.                                                                          |
-| `RELAY_MAX_PAYLOAD_BYTES`  | 393216  | Largest single WebSocket message.                                                                |
+| Setting                    | Default | What it limits                                                                                                                    |
+| -------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `RELAY_CONN_PER_MINUTE`    | 30      | `/agent` upgrade attempts per client IP, in a sliding 60 s window. 429 beyond. `0` turns it off.                                  |
+| `AUTH_ATTEMPTS_PER_MINUTE` | 10      | Attempts per client IP per minute, counted separately for each route class (see below).                                           |
+| `AMAP_PROXY_PER_MINUTE`    | 600     | Requests per client IP per minute to the map proxy (`/_AMapService/`), which signs them with the relay's Amap secret. 429 beyond. |
+| `RELAY_IDLE_TIMEOUT_MS`    | 600000  | Closes sessions with no client traffic (code 4001).                                                                               |
+| `RELAY_HEARTBEAT_MS`       | 30000   | Drops dead connections.                                                                                                           |
+| `RELAY_MAX_PAYLOAD_BYTES`  | 393216  | Largest single WebSocket message.                                                                                                 |
 
 `AUTH_ATTEMPTS_PER_MINUTE` applies to each of these on its own, so using up one does not lock a visitor out of another:
 relay login and registration, relay password change, Max Cloud login and sign-up, anonymous token minting on an open

@@ -349,8 +349,9 @@ again, because the person may already have been spoken to. Waiting calls carry o
 cannot be written (a full disk, a missing directory), calls are not placed and the relay tries again every 30 seconds.
 Both files hold the numbers you sent.
 
-- If the file cannot be read at startup, the relay logs a problem, starts with no campaigns and leaves the file alone
-  until you create a campaign.
+- If the file cannot be read at startup, the relay logs a problem, starts with no campaigns, leaves the file alone
+  until you create a campaign, and reports `campaigns-storage-unavailable` on `/ready` (503) until it restarts with a
+  readable file. Two failed writes in a row to the file or the journal are reported there too, until a write succeeds.
 - If the file can be read and the journal cannot, the relay cannot know which calls were placed last. It cancels the
   campaigns that still had calls waiting and says so in the log and in their `stoppedReason`.
 - This protects against the relay stopping. It does not make two relays that share one file safe: run campaigns on

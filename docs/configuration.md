@@ -181,6 +181,23 @@ Behind Caddy, nginx or any other proxy, `RELAY_TRUST_PROXY=on` is required: with
 address and one of them can use up the login and connection limits for everyone. See
 [deployment](deployment.md#reverse-proxy-with-tls).
 
+### Map tiles (Amap)
+
+With `AMAP_JS_KEY` and `AMAP_JS_SECRET` set, the web app draws the route on an Amap map. The map's requests go through
+the relay (`/_AMapService/…`), which signs them with the secret, so the secret never reaches a browser. Each signed
+request spends your Amap quota, and anyone who can reach the relay can send one, so the proxy is bounded:
+
+| Variable                | Default | What it does                                                                    |
+| ----------------------- | ------- | ------------------------------------------------------------------------------- |
+| `AMAP_PROXY_PER_MINUTE` | `600`   | Requests one client address may send through the proxy per minute (1 to 10000). |
+
+- A map stays far below the limit: a tile, a style or a search result is one request. Beyond it the proxy answers `429`.
+  Behind a reverse proxy, set `RELAY_TRUST_PROXY=on`, or all visitors share one limit.
+- An answer larger than 8 MiB is not passed on (the map gets `502`). A real one is a few hundred KB.
+- A request whose `Referer` names another site is refused. One with no `Referer` is served, because the relay sends its
+  own pages with `Referrer-Policy: no-referrer`: that is what the real map's requests look like. Any script can invent
+  a `Referer`, so the limit and the size cap are what bound the proxy.
+
 ### Monitoring and logs
 
 | Variable        | Default | What it does                                                                                                      |

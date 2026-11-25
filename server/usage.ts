@@ -21,6 +21,9 @@ import { signatureHeaders, urlAllowed } from "./tools/webhook";
  * Totals are kept in `usage.json` in the relay's data directory. Each finished
  * session can also be POSTed to the owner's billing system
  * (USAGE_WEBHOOK_URL), signed like tool webhooks. See docs/usage-and-billing.md.
+ * A totals file that is there but cannot be read is never written over. The
+ * relay moves it aside, saves nothing until that copy is dealt with, and says
+ * so on /ready (readinessIssue below).
  */
 
 const ANONYMOUS = "anonymous";
@@ -85,6 +88,15 @@ export type UsageMeter = {
   report(month: string, userId?: string): UsageReport;
   /** Writes pending totals now (shutdown). */
   flush(): void;
+  /** Why the totals file could not be read when the relay started, and what became of it. For /ready. */
+  readonly readinessIssue: string | undefined;
+  /**
+   * True while new sessions must be refused. The per-user allowance is enforced
+   * from the totals file, and when that could not be read they start from
+   * nothing at every restart, which would hand everybody their allowance again.
+   * Without an allowance the meter only reports, and sessions go on.
+   */
+  refusesNewSessions(): boolean;
 };
 
 type OpenSession = {
@@ -103,24 +115,129 @@ type UsageReport = {
 
 const minutes = (seconds: number) => Math.round((seconds / 60) * 100) / 100;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isTotals = (value: unknown): value is Totals =>
+  isRecord(value) &&
+  typeof value.sessions === "number" &&
+  typeof value.seconds === "number" &&
+  typeof value.toolCalls === "number";
+
+/** The shape the meter writes and counts on from: every month, user and counter where it expects them. */
+function isStore(value: unknown): value is Store {
+  return (
+    isRecord(value) &&
+    value.version === 1 &&
+    isRecord(value.months) &&
+    Object.values(value.months).every((month) => isRecord(month) && Object.values(month).every(isTotals))
+  );
+}
+
+/** The totals file, or why it cannot be counted on. No file at all is the first run: an empty ledger. */
+function readTotals(file: string): { store: Store } | { problem: string } {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT"
+      ? { store: { version: 1, months: {} } }
+      : { problem: `could not be read (${code ?? "error"})` };
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return isStore(parsed) ? { store: parsed } : { problem: "is not a usage file" };
+  } catch {
+    return { problem: "is not JSON" };
+  }
+}
+
+/** The damaged totals files kept beside `file`, oldest first. What keeps the relay unready until they are dealt with. */
+function keptCopies(file: string): string[] {
+  const prefix = `${path.basename(file)}.corrupt-`;
+  try {
+    return fs
+      .readdirSync(path.dirname(file))
+      .filter((name) => name.startsWith(prefix))
+      .sort();
+  } catch {
+    // No directory yet is the first run. Anything else is said by the first save.
+    return [];
+  }
+}
+
+/** What an owner does about kept copies of the totals file, said the same wherever they are reported. */
+function keptCopyAdvice(count: number, name: string): string {
+  const one = count === 1;
+  return `Move or delete ${one ? "it" : "them"}, then start the relay again; to keep ${one ? "its" : "their"} totals, put a good ${name} back as well.`;
+}
+
 export function createUsageMeter(
   settings: UsageSettings,
   options: { now?: () => number; request?: typeof fetch; persist?: boolean } = {}
 ): UsageMeter {
   const now = options.now ?? Date.now;
   const request = options.request ?? fetch;
-  const persist = options.persist ?? true;
+  let persist = options.persist ?? true;
   let store: Store = { version: 1, months: {} };
   const live = new Map<string, { userKey: string; startedAt: number }>();
   let writeTimer: NodeJS.Timeout | undefined;
+  let readinessIssue: string | undefined;
 
   if (persist) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(settings.file, "utf8")) as Store;
-      if (parsed && parsed.version === 1 && parsed.months && typeof parsed.months === "object") store = parsed;
-    } catch {
-      /* first run, or unreadable: start empty */
+    const name = path.basename(settings.file);
+    const read = readTotals(settings.file);
+    if ("problem" in read) {
+      // A file is there and cannot be counted on. Counting from nothing is all
+      // that is left, but it must not pass for the first run: the next save
+      // would write an empty ledger over the owner's billing history, and
+      // everybody would have their monthly allowance again. So the file is
+      // kept and the relay says that it is not ready.
+      const aside = `${settings.file}.corrupt-${new Date(now()).toISOString()}`;
+      try {
+        fs.renameSync(settings.file, aside);
+        readinessIssue =
+          `usage-storage-unavailable: ${name} ${read.problem}, so it was moved aside to ${path.basename(aside)}. ` +
+          `Totals started empty, and nothing is saved while the kept copy is there. ${keptCopyAdvice(1, name)}`;
+        log.error(
+          "usage totals file could not be read: it was moved aside, and nothing is saved until the copy is dealt with and the relay started again",
+          { file: settings.file, movedTo: aside, problem: read.problem }
+        );
+      } catch (error) {
+        readinessIssue =
+          `usage-storage-unavailable: ${name} ${read.problem}, and it could not be moved aside. Nothing is saved, ` +
+          `and totals started empty. Stop the relay, repair ${name}, and start it again.`;
+        log.error(
+          "usage totals file could not be read and could not be moved aside: nothing is saved, and the relay is not ready until it is repaired and started again",
+          {
+            file: settings.file,
+            problem: read.problem,
+            moveError: error instanceof Error ? error.message : String(error)
+          }
+        );
+      }
+    } else {
+      store = read.store;
+      // The totals file is missing or readable, but a damaged one is still
+      // kept beside it: an earlier start moved it there and the owner has not
+      // dealt with it yet. A start that finds the path free must not pass for
+      // a clean one, or a restart alone would clear the problem.
+      const kept = keptCopies(settings.file);
+      if (kept.length > 0) {
+        readinessIssue =
+          `usage-storage-unavailable: ${kept.join(", ")}: kept beside ${name}, and those totals were never loaded. ` +
+          `Nothing is saved while a kept copy is there. ${keptCopyAdvice(kept.length, name)}`;
+        log.error(
+          "a damaged usage totals file is still kept beside the totals file: nothing is saved until it is dealt with and the relay started again",
+          { kept }
+        );
+      }
     }
+    // Nothing is written while the ledger is in doubt: not to the kept copy,
+    // and not to the totals file either, which the owner may be about to
+    // replace with a good one. What is counted meanwhile stays in memory.
+    if (readinessIssue) persist = false;
   }
 
   let webhookProblem: string | undefined;
@@ -264,6 +381,8 @@ export function createUsageMeter(
         users
       };
     },
+    readinessIssue,
+    refusesNewSessions: () => Boolean(readinessIssue) && settings.monthlyMinutes > 0,
     flush() {
       if (writeTimer) clearTimeout(writeTimer);
       write();

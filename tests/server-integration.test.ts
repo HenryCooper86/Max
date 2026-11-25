@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
+import { twilioSignature } from "../server/telephony/twilio-stream";
 
 const require = createRequire(import.meta.url);
 // Load tsx in-process via --import rather than the tsx CLI: the CLI wraps the
@@ -93,6 +94,44 @@ function closeSocket(socket: WebSocket): Promise<void> {
   return new Promise((resolve) => {
     socket.once("close", () => resolve());
     socket.close();
+  });
+}
+
+/** Starts the relay with `env`, and says how its run ends and what it logged. */
+async function startRelay(
+  baseUrl: string,
+  env: NodeJS.ProcessEnv
+): Promise<{
+  child: ChildProcess;
+  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  logs: () => string;
+}> {
+  const child = spawn(process.execPath, ["--import", tsxImport, "server/index.ts"], {
+    cwd: process.cwd(),
+    env,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  relay = child;
+  let output = "";
+  child.stdout?.on("data", (chunk) => (output += String(chunk)));
+  child.stderr?.on("data", (chunk) => (output += String(chunk)));
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  await waitForServer(baseUrl);
+  return { child, exited, logs: () => output };
+}
+
+/** The HTTP status a `/agent` upgrade with the relay token gets, or "open" when the relay takes it. */
+function upgradeStatus(port: number): Promise<number | "open"> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/agent?token=integration-operator-token`);
+    socket.once("open", () => {
+      socket.close();
+      resolve("open");
+    });
+    socket.once("unexpected-response", (_request, response) => resolve(response.statusCode ?? 0));
+    socket.once("error", reject);
   });
 }
 
@@ -613,6 +652,230 @@ describe("relay process integration", () => {
     await expect(relayExit).resolves.toEqual({ code: 0, signal: null });
     relay = null;
   });
+
+  it("reports a usage file and a campaigns file it cannot read on /ready, keeps both, and stays unready after a restart", async () => {
+    const port = await reservePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-relay-unreadable-stores-"));
+    // What a disk that filled up in the middle of a write can leave behind.
+    fs.writeFileSync(path.join(tempDir, "usage.json"), "{ nope");
+    fs.writeFileSync(path.join(tempDir, "campaigns.json"), "{ nope");
+    const env = {
+      ...process.env,
+      // Usage counts, Studio settings and backend keys go under STUDIO_DIR; keep them out of the real home.
+      STUDIO_DIR: tempDir,
+      PORT: String(port),
+      NODE_ENV: "production",
+      VOICE_PROVIDER: "mock",
+      RELAY_AUTH_TOKEN: "integration-operator-token",
+      AUTH_REGISTRATION: "on",
+      ACCOUNTS_FILE: path.join(tempDir, "accounts.json"),
+      CAMPAIGNS_FILE: path.join(tempDir, "campaigns.json"),
+      USER_MEMORY_FILE: "off",
+      TESTING_DATABASE: "off",
+      TESTING_HISTORY_DIR: "off"
+    };
+    /** Starts the relay on this data directory, and says how its run ends. */
+    const start = async () => {
+      const child = spawn(process.execPath, ["--import", tsxImport, "server/index.ts"], {
+        cwd: process.cwd(),
+        env,
+        stdio: ["ignore", "ignore", "ignore"]
+      });
+      relay = child;
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+      await waitForServer(baseUrl);
+      return { child, exited };
+    };
+    const ready = async () => {
+      const response = await fetch(`${baseUrl}/ready`, { headers: { Connection: "close" } });
+      // The relay's own answer; what follows checks its shape.
+      const body = (await response.json()) as { issues: string[] };
+      return { status: response.status, issues: body.issues };
+    };
+
+    const first = await start();
+    expect(await ready()).toMatchObject({
+      status: 503,
+      issues: [
+        expect.stringContaining("usage-storage-unavailable: usage.json is not JSON"),
+        expect.stringContaining("campaigns-storage-unavailable: CAMPAIGNS_FILE is not a campaigns file")
+      ]
+    });
+
+    // The usage file is kept under the name it was moved to. The campaigns
+    // file is left where it is, until a campaign is created.
+    const kept = fs
+      .readdirSync(tempDir)
+      .filter((name) => /^usage\.json\.corrupt-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(name));
+    expect(kept).toHaveLength(1);
+    expect(fs.readFileSync(path.join(tempDir, kept[0]!), "utf8")).toBe("{ nope");
+    expect(fs.readFileSync(path.join(tempDir, "campaigns.json"), "utf8")).toBe("{ nope");
+
+    // An orchestrator restarts the relay. The campaigns file was replaced by a
+    // good one; the kept usage copy was not dealt with, so the relay is still
+    // not ready, and nothing has been written in place of the usage file.
+    const good = path.join(tempDir, "campaigns.json");
+    fs.writeFileSync(good, JSON.stringify({ version: 1, journalSeq: 0, campaigns: [] }));
+    first.child.kill("SIGTERM");
+    await expect(first.exited).resolves.toEqual({ code: 0, signal: null });
+    expect(fs.existsSync(path.join(tempDir, "usage.json"))).toBe(false);
+
+    await start();
+    expect(await ready()).toEqual({
+      status: 503,
+      issues: [expect.stringContaining(`usage-storage-unavailable: ${kept[0]}: kept beside usage.json`)]
+    });
+    expect(fs.existsSync(path.join(tempDir, "usage.json"))).toBe(false);
+    expect(fs.readFileSync(path.join(tempDir, kept[0]!), "utf8")).toBe("{ nope");
+  }, 30_000);
+
+  it("refuses /agent upgrades while per-user limits have no ledger to be enforced from, until the kept copy is gone", async () => {
+    const port = await reservePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-relay-usage-quarantine-"));
+    // What a disk that filled up in the middle of a write can leave behind.
+    const ledger = path.join(tempDir, "usage.json");
+    fs.writeFileSync(ledger, "{ nope");
+    const env = {
+      ...process.env,
+      // Usage counts, Studio settings and backend keys go under STUDIO_DIR; keep them out of the real home.
+      STUDIO_DIR: tempDir,
+      PORT: String(port),
+      NODE_ENV: "production",
+      VOICE_PROVIDER: "mock",
+      RELAY_AUTH_TOKEN: "integration-operator-token",
+      AUTH_REGISTRATION: "on",
+      ACCOUNTS_FILE: path.join(tempDir, "accounts.json"),
+      USER_MEMORY_FILE: "off",
+      TESTING_DATABASE: "off",
+      TESTING_HISTORY_DIR: "off",
+      USAGE_MONTHLY_MINUTES: "500"
+    };
+
+    // The allowance would start again from zero, so nobody is let in, and a stop writes nothing.
+    const first = await startRelay(baseUrl, env);
+    expect(await upgradeStatus(port)).toBe(503);
+    first.child.kill("SIGTERM");
+    await first.exited;
+    expect(fs.existsSync(ledger)).toBe(false);
+
+    // A restart finds the path free but the kept copy beside it: still refused, and still nothing written.
+    const kept = fs.readdirSync(tempDir).filter((name) => name.startsWith("usage.json.corrupt-"));
+    expect(kept).toHaveLength(1);
+    const second = await startRelay(baseUrl, env);
+    expect(await upgradeStatus(port)).toBe(503);
+    second.child.kill("SIGTERM");
+    await second.exited;
+    expect(fs.existsSync(ledger)).toBe(false);
+
+    // Once the kept copy is gone, sessions are taken and the ledger is kept again.
+    fs.rmSync(path.join(tempDir, kept[0]!));
+    const third = await startRelay(baseUrl, env);
+    expect(await upgradeStatus(port)).toBe("open");
+    third.child.kill("SIGTERM");
+    await third.exited;
+    expect(fs.existsSync(ledger)).toBe(true);
+  }, 30_000);
+
+  it("keeps taking /agent upgrades while the usage ledger is quarantined when no per-user limit is set", async () => {
+    const port = await reservePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-relay-usage-quarantine-"));
+    const ledger = path.join(tempDir, "usage.json");
+    fs.writeFileSync(ledger, "{ nope");
+    const run = await startRelay(baseUrl, {
+      ...process.env,
+      STUDIO_DIR: tempDir,
+      PORT: String(port),
+      NODE_ENV: "production",
+      VOICE_PROVIDER: "mock",
+      RELAY_AUTH_TOKEN: "integration-operator-token",
+      AUTH_REGISTRATION: "on",
+      ACCOUNTS_FILE: path.join(tempDir, "accounts.json"),
+      USER_MEMORY_FILE: "off",
+      TESTING_DATABASE: "off",
+      TESTING_HISTORY_DIR: "off",
+      USAGE_MONTHLY_MINUTES: ""
+    });
+    // The meter only reports here, so sessions go on. The relay still says that it is not ready, and still writes nothing.
+    expect(await upgradeStatus(port)).toBe("open");
+    const ready = await fetch(`${baseUrl}/ready`, { headers: { Connection: "close" } });
+    expect(ready.status).toBe(503);
+    run.child.kill("SIGTERM");
+    await run.exited;
+    expect(fs.existsSync(ledger)).toBe(false);
+  }, 30_000);
+
+  it("refuses phone calls too while per-user limits have no ledger to be enforced from", async () => {
+    const port = await reservePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-relay-usage-quarantine-calls-"));
+    fs.writeFileSync(path.join(tempDir, "usage.json"), "{ nope");
+    const twilioToken = "integration-twilio-token";
+    const run = await startRelay(baseUrl, {
+      ...process.env,
+      STUDIO_DIR: tempDir,
+      PORT: String(port),
+      NODE_ENV: "production",
+      VOICE_PROVIDER: "mock",
+      RELAY_AUTH_TOKEN: "integration-operator-token",
+      AUTH_REGISTRATION: "on",
+      ACCOUNTS_FILE: path.join(tempDir, "accounts.json"),
+      USER_MEMORY_FILE: "off",
+      TESTING_DATABASE: "off",
+      TESTING_HISTORY_DIR: "off",
+      USAGE_MONTHLY_MINUTES: "500",
+      TWILIO_AUTH_TOKEN: twilioToken,
+      LOG_FORMAT: "json"
+    });
+
+    // Twilio asks what to do with a call, signed as Twilio signs, and is told where to stream its audio.
+    const callSid = `CA7${"0".repeat(30)}1`;
+    const params = { CallSid: callSid, From: "+14155550111", To: "+14155550100", Direction: "inbound" };
+    const voice = await fetch(`${baseUrl}/telephony/twilio/voice`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-Twilio-Signature": twilioSignature(twilioToken, `${baseUrl}/telephony/twilio/voice`, params)
+      },
+      body: new URLSearchParams(params).toString()
+    });
+    expect(voice.status).toBe(200);
+    const answer = await voice.text();
+    const streamUrl = /<Stream url="([^"]+)"/.exec(answer)?.[1];
+    const ticket = /<Parameter name="ticket" value="([^"]+)"\/>/.exec(answer)?.[1];
+    expect(streamUrl).toBeTruthy();
+    expect(ticket).toBeTruthy();
+
+    // The audio arrives, and with it the request for a conversation. That is where the call is refused.
+    const stream = new WebSocket(streamUrl!);
+    const closed = new Promise<number>((resolve) => stream.once("close", (code) => resolve(code)));
+    await new Promise<void>((resolve, reject) => {
+      stream.once("open", resolve);
+      stream.once("error", reject);
+    });
+    stream.send(
+      JSON.stringify({
+        event: "start",
+        streamSid: "MZ1",
+        start: { streamSid: "MZ1", callSid, accountSid: "AC1", customParameters: { ticket } }
+      })
+    );
+    expect(await closed).toBe(1000);
+    run.child.kill("SIGTERM");
+    await run.exited;
+    const refusals = run
+      .logs()
+      .split("\n")
+      .filter((line) => line.startsWith("{"))
+      .map((line) => JSON.parse(line) as { message?: string; reason?: string })
+      .filter((entry) => entry.message === "call refused")
+      .map((entry) => entry.reason);
+    expect(refusals).toEqual(["usage storage unavailable"]);
+  }, 30_000);
 
   it("keeps a buried review attributed to its original session and run on POST update", async () => {
     const port = await reservePort();

@@ -9,6 +9,8 @@
  * the second run changes nothing. Run it where the relay's data lives (the
  * same STUDIO_DIR, default ~/.max-relay); the relay sees the change at once.
  */
+// The relay reads its settings from .env in the app directory, and so does this script; exported variables win.
+import "dotenv/config";
 import { customerByEmail, customerFunds, adjustBalance } from "../server/cloud/store";
 
 function fenFromYuan(text: string): number | undefined {

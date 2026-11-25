@@ -78,7 +78,9 @@ const MAX_SESSIONS_PER_CUSTOMER = 20;
 let databaseInstance: DatabaseSync | null = null;
 let pathOverride: string | undefined;
 
-function resolveDatabasePath(): string {
+/** The file the database is opened at: `STUDIO_DIR/cloud.sqlite` (by default `~/.max-relay/cloud.sqlite`), the last
+ *  file a test named, or ":memory:" for a test run that named none. */
+export function cloudDatabasePath(): string {
   if (pathOverride) return pathOverride;
   const directory = process.env.STUDIO_DIR?.trim();
   // Never touch the real home directory from a test run that did not ask for a file.
@@ -102,7 +104,7 @@ function secureDatabaseFiles(filePath: string): void {
 
 function database(): DatabaseSync {
   if (databaseInstance) return databaseInstance;
-  const filePath = resolveDatabasePath();
+  const filePath = cloudDatabasePath();
   const onDisk = filePath !== ":memory:";
   if (onDisk) {
     ensureTestingStorageDirectorySync(filePath);
@@ -116,7 +118,9 @@ function database(): DatabaseSync {
     db.exec("PRAGMA busy_timeout = 5000");
     if (onDisk) {
       db.exec("PRAGMA journal_mode = WAL");
-      db.exec("PRAGMA synchronous = NORMAL");
+      // FULL, not the NORMAL that suits most users of a write-ahead log: with NORMAL a commit the relay has already
+      // acknowledged (a top-up credited) can still be lost when the operating system crashes or the power fails.
+      db.exec("PRAGMA synchronous = FULL");
     }
     db.exec(`
       CREATE TABLE IF NOT EXISTS customers (
@@ -286,6 +290,10 @@ function database(): DatabaseSync {
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_public_id ON projects(public_id)");
     // A project's minutes this month, read by its spend limit every few seconds while it talks.
     db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_project_month ON ledger(project_id, kind, month)");
+    // Orders by status and expiry, read once a minute by the top-up sweep. The index was called idx_orders_pending
+    // before the sweep read closed orders too: drop that one, so that no database keeps both.
+    db.exec("DROP INDEX IF EXISTS idx_orders_pending");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, expires_at)");
     const liveColumns = new Set(
       (db.prepare("PRAGMA table_info(live_sessions)").all() as { name: string }[]).map((column) => column.name)
     );
@@ -324,6 +332,52 @@ export function immediate<T>(work: (db: DatabaseSync) => T): T {
   }
 }
 
+/**
+ * Writes a consistent copy of the database to `target`, which must not exist
+ * yet, and returns its path. The copy is taken with VACUUM INTO: one moment's
+ * state of the whole database, read while the relay keeps writing. Copying the
+ * files by hand is not the same: in WAL mode the newest commits are in the
+ * `-wal` file, and a copy made mid-write may not open.
+ *
+ * The copy is written beside `target` first and put in place only once whole,
+ * and is private like the database (it holds the same customers and encrypted
+ * secrets). Throws when `target` exists, when its folder does not, or when the
+ * copy cannot be written; nothing is left at `target` then.
+ */
+export function backupDatabase(target: string): string {
+  const file = path.resolve(target);
+  const folder = path.dirname(file);
+  if (fs.existsSync(file)) throw new Error(`${file} already exists: an existing backup is never overwritten.`);
+  if (!fs.statSync(folder, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new Error(`There is no folder ${folder} to write the copy into.`);
+  }
+  const partial = `${file}.partial-${process.pid}`;
+  try {
+    database().prepare("VACUUM INTO ?").run(partial);
+    secureTestingFileSync(partial);
+    // Exclusive: the file is put in place only if nothing took its name meanwhile.
+    fs.copyFileSync(partial, file, fs.constants.COPYFILE_EXCL);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`The copy of ${cloudDatabasePath()} could not be written to ${file}: ${reason}`, { cause: error });
+  } finally {
+    // Best effort: a copy left beside the target is harmless, and must not hide why writing it failed.
+    try {
+      fs.rmSync(partial, { force: true });
+    } catch {
+      /* nothing here can be cleaned up */
+    }
+  }
+  // "Done" means on disk: what is still in the operating system's cache does not survive a power failure.
+  const written = fs.openSync(file, "r+");
+  try {
+    fs.fsyncSync(written);
+  } finally {
+    fs.closeSync(written);
+  }
+  return file;
+}
+
 // --- customers and their sessions -------------------------------------------
 
 /** Inserts a customer; false when the email is taken. */
@@ -339,6 +393,10 @@ export function insertCustomer(row: CustomerRow): boolean {
 
 export function customerByEmail(email: string): CustomerRow | undefined {
   return database().prepare("SELECT * FROM customers WHERE email = ?").get(email) as CustomerRow | undefined;
+}
+
+export function customerById(customerId: string): CustomerRow | undefined {
+  return database().prepare("SELECT * FROM customers WHERE id = ?").get(customerId) as CustomerRow | undefined;
 }
 
 /** Stores a login session, keeping at most the newest 20 per customer. */
@@ -593,11 +651,22 @@ export function replaceProjectKey(projectId: string, customerId: string, keyHash
   return result.changes === 1;
 }
 
+/**
+ * Deletes a project together with its transcripts, in one transaction: both
+ * happen or neither does, so a failure in between (a full disk) leaves the
+ * project live for a retry to delete, and never a deleted project whose
+ * conversations linger. The row stays, marked `deleted_at`, for the
+ * activation metrics. False when there is no such live project.
+ */
 export function softDeleteProject(projectId: string, customerId: string, at: number): boolean {
-  const result = database()
-    .prepare("UPDATE projects SET deleted_at = ? WHERE id = ? AND customer_id = ? AND deleted_at IS NULL")
-    .run(at, projectId, customerId);
-  return result.changes === 1;
+  return immediate((db) => {
+    const deleted = db
+      .prepare("UPDATE projects SET deleted_at = ? WHERE id = ? AND customer_id = ? AND deleted_at IS NULL")
+      .run(at, projectId, customerId);
+    if (deleted.changes !== 1) return false;
+    db.prepare("DELETE FROM conversations WHERE project_id = ? AND customer_id = ?").run(projectId, customerId);
+    return true;
+  });
 }
 
 // --- ledger ---------------------------------------------------------------------
@@ -639,23 +708,31 @@ export type UsageBooking = {
   at: number;
 };
 
+// `;` is the character after `:`, so the range covers exactly the refs that start with "<id>:rest:".
+const SESSION_USAGE = "kind = 'usage' AND (ref = ? OR (ref >= ? AND ref < ?))";
+
 /** Seconds the ledger already holds for a session: its entry and any remainder entries. */
 export function sessionSecondsBooked(sessionId: string): number {
-  // `;` is the character after `:`, so the range covers exactly the refs that start with "<id>:rest:".
   const held = database()
-    .prepare(
-      `SELECT COALESCE(SUM(seconds), 0) AS seconds FROM ledger
-       WHERE kind = 'usage' AND (ref = ? OR (ref >= ? AND ref < ?))`
-    )
+    .prepare(`SELECT COALESCE(SUM(seconds), 0) AS seconds FROM ledger WHERE ${SESSION_USAGE}`)
     .get(sessionId, `${sessionId}:rest:`, `${sessionId}:rest;`) as { seconds: number };
   return held.seconds;
 }
+
+/** What the ledger holds for a session so far: its entries, and their seconds, paid seconds and fen. */
+type HeldUsage = { entries: number; seconds: number; paid_seconds: number; fen: number };
 
 /**
  * Books a session's usage up to `seconds` in total, idempotently: seconds the
  * ledger already holds for the session are never booked again.
  *
- * - "booked": the session's first entry.
+ * A session is one charge, whatever number of entries it takes. Its cost is
+ * its paid seconds at the price per minute, rounded up once as a whole, and
+ * an entry charges only what the entries before it left of that unpaid. Its
+ * free seconds come from the month of its first entry, and so does every
+ * entry: the session is booked to that month as a whole.
+ *
+ * - "booked": the session's first entry, to the month of `endedAt`.
  * - "remainder": the session was booked before for fewer seconds (another
  *   relay took it for abandoned and booked it up to a checkpoint while it was
  *   still running); the difference is booked as a further entry whose ref is
@@ -664,21 +741,29 @@ export function sessionSecondsBooked(sessionId: string): number {
  */
 export function bookUsage(usage: UsageBooking): "booked" | "remainder" | "already-booked" {
   return immediate((db) => {
-    // `;` is the character after `:`, so the range covers exactly the refs that start with "<id>:rest:".
+    const session = [usage.sessionId, `${usage.sessionId}:rest:`, `${usage.sessionId}:rest;`] as const;
     const held = db
       .prepare(
-        `SELECT COUNT(*) AS entries, COALESCE(SUM(seconds), 0) AS seconds FROM ledger
-         WHERE kind = 'usage' AND (ref = ? OR (ref >= ? AND ref < ?))`
+        `SELECT COUNT(*) AS entries, COALESCE(SUM(seconds), 0) AS seconds,
+                COALESCE(SUM(seconds - free_seconds), 0) AS paid_seconds, COALESCE(-SUM(amount_fen), 0) AS fen
+         FROM ledger WHERE ${SESSION_USAGE}`
       )
-      .get(usage.sessionId, `${usage.sessionId}:rest:`, `${usage.sessionId}:rest;`) as {
-      entries: number;
-      seconds: number;
-    };
+      .get(...session) as HeldUsage;
     const seconds = usage.seconds - held.seconds;
     if (held.entries > 0 && seconds <= 0) return "already-booked";
-    const month = monthOf(usage.endedAt);
-    const left = freeSecondsLeft(freeSecondsUsedIn(db, usage.customerId, month));
-    const { freeSeconds, costFen } = usageCharge(seconds, left);
+    let month = monthOf(usage.endedAt);
+    if (held.entries > 0) {
+      const first = db
+        .prepare(`SELECT month FROM ledger WHERE ${SESSION_USAGE} ORDER BY id LIMIT 1`)
+        .get(...session) as { month: string };
+      month = first.month;
+    }
+    const freeSeconds = usageCharge(
+      seconds,
+      freeSecondsLeft(freeSecondsUsedIn(db, usage.customerId, month))
+    ).freeSeconds;
+    // Never below zero: entries written before a session was charged as a whole each rounded up on their own.
+    const costFen = Math.max(0, usageCharge(held.paid_seconds + seconds - freeSeconds, 0).costFen - held.fen);
     const ref = held.entries === 0 ? usage.sessionId : `${usage.sessionId}:rest:${held.entries}`;
     db.prepare(
       `INSERT INTO ledger (customer_id, kind, amount_fen, free_seconds, seconds, project_id, ref, month, created_at)
@@ -785,6 +870,32 @@ export function closePendingOrder(orderId: string): boolean {
     .prepare("UPDATE orders SET status = 'closed' WHERE id = ? AND status = 'pending'")
     .run(orderId);
   return result.changes === 1;
+}
+
+/** Pending orders, the first to expire first; at most `limit`. */
+export function pendingOrders(limit: number): OrderRow[] {
+  return database()
+    .prepare("SELECT * FROM orders WHERE status = 'pending' ORDER BY expires_at, id LIMIT ?")
+    .all(limit) as OrderRow[];
+}
+
+type ClosedOrderRef = Pick<OrderRow, "id" | "provider" | "expires_at">;
+
+/**
+ * Orders closed as unpaid that expired within the last `closedWithin` ms, the
+ * most recently expired first and at most `limit`. An order that is closed and
+ * has not expired was one the provider could not create: nobody was shown a
+ * code to pay, so it is left out. Which of these a sweep asks about is decided
+ * from when each was last asked (topups.ts).
+ */
+export function recentlyClosedOrders(at: number, closedWithin: number, limit: number): ClosedOrderRef[] {
+  return database()
+    .prepare(
+      `SELECT id, provider, expires_at FROM orders
+       WHERE status = 'closed' AND expires_at <= ? AND expires_at > ?
+       ORDER BY expires_at DESC, id DESC LIMIT ?`
+    )
+    .all(at, at - closedWithin, limit) as ClosedOrderRef[];
 }
 
 export type CreditOutcome = "credited" | "duplicate" | "unknown-order" | "provider-mismatch" | "amount-mismatch";
@@ -1167,13 +1278,6 @@ export function setConversationAnalysis(id: string, customerId: string, analysis
 export function conversationById(id: string, customerId: string): ConversationRow | undefined {
   return database().prepare("SELECT * FROM conversations WHERE id = ? AND customer_id = ?").get(id, customerId) as
     ConversationRow | undefined;
-}
-
-export function deleteProjectConversations(projectId: string, customerId: string): number {
-  return Number(
-    database().prepare("DELETE FROM conversations WHERE project_id = ? AND customer_id = ?").run(projectId, customerId)
-      .changes
-  );
 }
 
 /** Deletes conversations that started before `before`; returns how many. */

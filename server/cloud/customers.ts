@@ -19,7 +19,6 @@ import {
   insertSession,
   liveProject,
   liveProjects,
-  deleteProjectConversations,
   replaceProjectKey,
   revokeProjectModelKey,
   sessionCustomer,
@@ -517,9 +516,8 @@ export function rotateProjectKey(
 }
 
 export function deleteProject(customerId: string, projectId: string): Result<{ ok: true }> {
+  // Its transcripts go with it, in the same transaction (store.ts).
   if (!softDeleteProject(projectId, customerId, now())) return fail(404, "Project not found.");
-  // Transcripts go with the project.
-  deleteProjectConversations(projectId, customerId);
   return { ok: true, value: { ok: true } };
 }
 

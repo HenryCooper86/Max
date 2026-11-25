@@ -28,7 +28,10 @@ CLOUD_PUBLIC_URL=https://max.example.com
 Without `CLOUD_SECRET_KEY` every `/cloud` address answers "Max Cloud is not configured" and the console says so.
 
 Data lives in `cloud.sqlite` in the relay's data folder (`STUDIO_DIR`, default `~/.max-relay`), next to the relay's
-other data. Back up that folder and `CLOUD_SECRET_KEY` together.
+other data. Each change is written to disk before the relay goes on, so a top-up that has been credited stays credited
+through a crash of the operating system or a power failure. Back the data up together with `CLOUD_SECRET_KEY`, and
+take the database's copy with the command in [Backup and restore](#backup-and-restore): the file is in use while the
+relay runs, and one copied by hand can be caught half written.
 
 ## Invitations
 
@@ -305,6 +308,75 @@ idempotent, so nothing is charged twice.
 The billed clock runs only while the voice backend is connected: it starts when the backend is ready and stops while
 the relay reconnects to it, whatever the client does meanwhile.
 
+## Backup and restore
+
+`cloud.sqlite` is a SQLite database in write-ahead-log mode. While the relay runs, its newest writes are in
+`cloud.sqlite-wal` beside it, and are moved into `cloud.sqlite` only from time to time. So do not copy the files by
+hand: a copy taken mid-write may not open, and one that leaves out the `-wal` file, or copies it a moment later than
+the database, silently lacks the latest top-ups and bookings. Take the copy with the backup command instead, on the
+relay host, in the app directory:
+
+```bash
+npm run cloud:backup -- /backups/max-cloud-2026-11-25.sqlite
+```
+
+- The relay keeps running. The copy is made with SQLite's `VACUUM INTO`, so it is the whole database as it was at one
+  moment: customers, projects, the ledger, top-up orders and kept conversations.
+- The target file must not exist, and its folder must: an existing backup is never overwritten.
+- The copy is one file, readable by its owner only, like the database. It holds everything the database holds, so keep
+  it as private as `CLOUD_SECRET_KEY`, and keep that key (the one in use when the copy was taken) with it: without the
+  key, the saved model keys, webhook secrets and trace headers cannot be read.
+- Run it as often as you want backups, for example every night from cron with the date in the file name, and keep
+  the copies somewhere other than the relay host.
+- A file ending in `.partial-<number>` beside the target is a copy that was cut short (the disk filled up, or the
+  command was killed). Nothing was put at the target's name: delete that file and run the command again.
+
+### Restoring a backup
+
+1. Stop the relay.
+2. Move `cloud.sqlite` out of the data folder, and `cloud.sqlite-wal` and `cloud.sqlite-shm` too if they are there.
+   Keep them until the restore has been checked: they hold everything that changed since the backup.
+3. Copy the backup file into the data folder and name it `cloud.sqlite`. Leave no `cloud.sqlite-wal` or
+   `cloud.sqlite-shm` beside it: they belong to the database that was there before, and applied to another file they
+   can corrupt it.
+4. Make sure `CLOUD_SECRET_KEY` is the key the backup was made with, or that that key is set as
+   `CLOUD_SECRET_KEY_PREVIOUS`.
+
+Top-ups paid after the backup was taken are not in the restored ledger. Let the relay settle them itself, and add by
+hand only what it cannot know:
+
+1. Start the relay. Do not add anything with `npm run cloud:credit` yet.
+2. Wait for the sweep to have asked the provider about every order the backup still knows. It asks about each order
+   that is still pending in its first sweeps, and about each order the backup shows as closed as unpaid and that
+   expired within the last day, within a quarter of an hour of the start. One sweep asks about twenty orders, so give
+   it longer if several hundred are waiting. To tell that it is through: a quarter of an hour has passed since the
+   start, and this shows no order whose payment window has closed but is still pending (the path is the data folder's,
+   `STUDIO_DIR`):
+
+   ```bash
+   sqlite3 ~/.max-relay/cloud.sqlite \
+     "SELECT id FROM orders WHERE status = 'pending' AND expires_at <= CAST(strftime('%s','now') AS INTEGER) * 1000"
+   ```
+
+   Orders still within their payment window stay pending: their customers may yet pay, and the sweep goes on asking
+   about them every minute, crediting each one the provider reports paid.
+
+3. Compare the provider's own records with what the relay knows and has credited:
+
+   ```bash
+   sqlite3 ~/.max-relay/cloud.sqlite "SELECT o.id, o.status, l.kind FROM orders o LEFT JOIN ledger l ON l.ref = o.id"
+   ```
+
+   A payment the provider shows whose order is missing from that output was created after the backup. Add its
+   balance with `npm run cloud:credit` (see [Today: manual top-ups](#today-manual-top-ups)), using the order's id as
+   the reference. Never add one that has an order row this way: the sweep credits it as a top-up, and the customer
+   would be paid twice.
+
+An order the backup shows as closed as unpaid, and that had expired more than a day before the relay was started
+again, is not asked about. If the provider's records show that it was paid, settle it by hand with
+`npm run cloud:settle` (see [Settling one order by hand](#settling-one-order-by-hand)). Never `npm run cloud:credit`
+for it: the relay has a record of that order, and the customer would be paid twice.
+
 ## Rotating CLOUD_SECRET_KEY
 
 Customers' model keys, webhook secrets and trace headers are encrypted with `CLOUD_SECRET_KEY`, and each one records which key it was
@@ -351,6 +423,10 @@ npm run cloud:credit -- dev@example.com 200 INV-2026-0007
 The amount is in yuan (`49.50` works; a negative amount removes balance). The reference (an invoice or receipt number)
 makes it safe to run twice. Run it on the relay host, in the app directory; the relay sees the change at once.
 
+It is for payments that came another way, with no order in the relay. For a top-up order the relay has a record of,
+use `npm run cloud:settle` instead ([below](#settling-one-order-by-hand)): crediting such an order here adds a second
+payment, and the customer is paid twice.
+
 ### Later: WeChat Pay and Alipay
 
 Both need a merchant account, which needs a business licence (for example an individual business licence,
@@ -396,6 +472,31 @@ for each configured provider, and balances are credited automatically and exactl
 Every notification's signature is verified, the paid amount must match the order, and an order is credited once
 however often the provider repeats the notification. A payment confirmed just after its order expired is still
 credited, so a customer is never charged without receiving balance.
+
+A notification that never arrives is not a lost payment. The relay also asks each provider every minute about the
+orders that are still unpaid, credits what the provider confirms, and closes an expired order that was not paid. It
+goes on asking about a closed order for 24 hours after it expired: the answer that got it closed may have failed (the
+provider was down) or not have caught up with a payment made at the last second, and a payment the provider confirms
+in that time is still credited. A closed order is asked about again at most every 15 minutes, and when more are due
+than one sweep can ask, the ones asked about longest ago go first. So a payment whose notification was lost is credited
+by the next sweep or two, as long as at most twenty orders are waiting: one sweep asks about twenty pending orders
+a minute, the closest to expiring first, and with more waiting the rest follow in the sweeps after. The console's own
+polling and this sweep share one limit on the provider's API: at most one query per order every 3 seconds.
+
+### Settling one order by hand
+
+The sweep stops asking about an order a day after it expired. If the provider's records then show that it was paid
+after all, settle it with its id from those records:
+
+```bash
+npm run cloud:settle -- mc20261125093000abcdef0123456789
+```
+
+It asks that order's provider whether it was paid, whatever the order's age, and credits it to the customer as the
+provider's own notification would have been. So it is safe to run twice, and a notification that arrives later changes
+nothing. It refuses an id the relay has no order for, and an order whose provider is not configured on the relay, so
+run it with the relay's environment. Never settle an order with `npm run cloud:credit`: the relay has a record of
+that order, and the customer would be paid twice.
 
 ### Testing payments without a merchant account
 

@@ -91,7 +91,9 @@ import {
   registerCloudPaymentRoutes,
   registerCloudRoutes,
   registerEmbedRoutes,
-  spendEmbedTokens
+  spendEmbedTokens,
+  startTopupSweep,
+  stopTopupSweep
 } from "./cloud";
 import { USAGE_LIMIT_CLOSE_CODE } from "../shared/agent";
 import { createLogger, shortSessionId } from "./logger";
@@ -2362,6 +2364,8 @@ const conversationPruneTimer = setInterval(() => {
   }
 }, 3_600_000);
 conversationPruneTimer.unref();
+// A top-up whose payment notification never arrived is asked of its provider until it is settled.
+startTopupSweep();
 
 const warnings = validateConfig();
 server.on("error", (error) => {
@@ -2399,6 +2403,8 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     stopWatchdog();
     stopCompanionWatchdog();
     clearInterval(authSessionSweepTimer);
+    // No new top-up sweep from here on; the one under way stops at its next order and is waited for below.
+    const topupSweepStopped = stopTopupSweep(2_000);
     const serverClosed = new Promise<void>((resolve) => {
       server.close((error) => {
         if (error) log.warn("HTTP server close reported an error", { message: error.message });
@@ -2439,6 +2445,8 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     await settleConversationAnalyses(2_000);
     // Conversations that just ended still owe their webhook and their traces.
     await Promise.all([conversations.drain(3_000), projectWebhooks.drain(3_000), projectTraces.drain(3_000)]);
+    // A sweep under way is given two seconds (from the start of the shutdown) to write the credit it is on.
+    await topupSweepStopped;
     await recordings?.close();
     await campaigns.close();
     // And once more, for what the waits above still wrote.

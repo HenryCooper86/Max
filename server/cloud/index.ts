@@ -35,6 +35,7 @@ export {
 export { cloudReadinessIssues, cloudReadinessWarnings, cloudUnreadableSecrets } from "./keyring";
 export { CLOUD_CHECK_INTERVAL_MS, admitCloudSession, openCloudSession, projectLimitRefusal } from "./live";
 export { spendEmbedTokens } from "./sessions";
+export { startTopupSweep, stopTopupSweep } from "./topups";
 
 const log = createLogger("cloud");
 

@@ -144,7 +144,14 @@ the metering above, because there money changes hands:
   balance at ¥0.15 a minute (rounded up to the whole fen).
 - **Months** are calendar months in UTC. A session that crosses midnight at a month's end is booked whole to the month
   it **ended** in: its seconds count against that month's free allowance and appear in that month's usage, and none in
-  the month it started in.
+  the month it started in. A session booked early, in several entries (next point), is the exception: all of its
+  entries belong to the month of the first.
+- **A session booked early is still one charge.** A session the relay booked up to a checkpoint because it looked
+  abandoned (see below), and that was in fact still running, has the rest booked when it closes, as a second ledger
+  entry whose reference ends in `:rest:1`. Nothing is rounded a second time: the session costs what its paid seconds
+  cost at ¥0.15 a minute, rounded up to the whole fen once, and the second entry charges only what the first left of
+  that unpaid. Both entries belong to the month of the first, and the rest takes its free seconds from that month's
+  allowance.
 - **Running sessions are checked every 5 seconds.** A session starts only when the customer has at least 5 seconds
   left, and is closed with code `4003` when their balance (or the project's monthly minutes limit) runs out, so a
   customer can go at most 5 seconds per open session past what they had.

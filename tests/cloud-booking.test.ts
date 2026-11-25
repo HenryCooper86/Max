@@ -18,7 +18,7 @@ import {
 import { setCloudClock, setCloudInstanceId, setCloudPaymentProviders } from "../server/cloud/context";
 import { cloudCounters } from "../server/cloud/counters";
 import { createProject, signup } from "../server/cloud/customers";
-import { resetCloudDatabase } from "../server/cloud/store";
+import { customerFunds, ledgerEntries, resetCloudDatabase, usageSummary } from "../server/cloud/store";
 
 const START = Date.UTC(2026, 10, 18, 12, 0, 0);
 let clock = START;
@@ -311,5 +311,53 @@ describe("sessions left open", () => {
     clock = START + 75_000 + 61_000;
     expect(recoverCloudSessions()).toBe(1);
     expect(before - remainingSeconds(customerId)).toBe(75);
+  });
+});
+
+describe("a session booked in several entries", () => {
+  /** A session's ledger entries, oldest first: [ref, seconds, fen]. */
+  function entriesOf(customerId: string, sessionId: string) {
+    return ledgerEntries(customerId, 100)
+      .filter((entry) => entry.ref?.startsWith(sessionId))
+      .reverse()
+      .map((entry) => [entry.ref, entry.seconds, entry.amount_fen]);
+  }
+
+  it("is charged for once, rounded up as a whole, whatever number of entries it takes", async () => {
+    const { customerId, projectId } = await customerWithProject();
+    // The month's free seconds go first, so every second of the session below is paid for.
+    chargeSession({ customerId, projectId, sessionId: "s-allowance", seconds: 60_000, endedAt: clock });
+    const charge = (seconds: number) =>
+      chargeSession({ customerId, projectId, sessionId: "s-partial", seconds, endedAt: clock });
+    expect(charge(1)).toBe("booked"); // Booked early as abandoned: 1 paid second costs 1 fen.
+    expect(charge(2)).toBe("booked"); // Found longer: the session's 2 seconds still cost 1 fen.
+    expect(charge(4)).toBe("booked"); // Its 4 seconds still cost 1 fen: rounded on its own, each rest costs another.
+    expect(customerFunds(customerId, clock).fen).toBe(-1);
+    expect(charge(5)).toBe("booked"); // 5 seconds cost 2 fen.
+    expect(customerFunds(customerId, clock).fen).toBe(-2);
+    expect(entriesOf(customerId, "s-partial")).toEqual([
+      ["s-partial", 1, -1],
+      ["s-partial:rest:1", 1, 0],
+      ["s-partial:rest:2", 2, 0],
+      ["s-partial:rest:3", 1, -1]
+    ]);
+    expect(charge(5)).toBe("already-booked");
+  });
+
+  it("has every entry, and its free seconds, in the month of its first entry", async () => {
+    const { customerId, projectId } = await customerWithProject();
+    const november = Date.UTC(2026, 10, 30, 23, 59, 0);
+    const december = Date.UTC(2026, 11, 1, 0, 0, 30);
+    // Booked early with ten free seconds left in November, then found to have run into December.
+    chargeSession({ customerId, projectId, sessionId: "s-crossing", seconds: 59_990, endedAt: november });
+    chargeSession({ customerId, projectId, sessionId: "s-crossing", seconds: 60_040, endedAt: december });
+    // The rest takes November's last ten free seconds and pays for forty.
+    expect(usageSummary(customerId, "2026-11")).toMatchObject({
+      seconds: 60_040,
+      freeSecondsUsed: 60_000,
+      chargedFen: 10
+    });
+    expect(usageSummary(customerId, "2026-12")).toMatchObject({ seconds: 0, freeSecondsUsed: 0, chargedFen: 0 });
+    expect(customerFunds(customerId, december)).toEqual({ fen: -10, freeSecondsLeft: 60_000, month: "2026-12" });
   });
 });

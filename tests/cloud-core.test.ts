@@ -1,15 +1,38 @@
 import { DEFAULT_STUDIO } from "../shared/cloud-studio";
 import { randomBytes } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chargeSession, cloudEnabled, projectForApiKey, projectRuntime, remainingSeconds } from "../server/cloud";
-import { bookedSeconds, secondsForFen, usageCharge } from "../server/cloud/billing";
+import { bookedSeconds, ORDER_LIFETIME_MS, secondsForFen, usageCharge } from "../server/cloud/billing";
 import { setCloudClock, setCloudPaymentProviders } from "../server/cloud/context";
 import { cloudCounters } from "../server/cloud/counters";
 import { createProject, patchProject, rotateProjectKey, deleteProject, signup } from "../server/cloud/customers";
 import type { PaidOrder, PaymentProvider, QrOrder } from "../server/cloud/payments";
 import { decryptModelKey, encryptModelKey } from "../server/cloud/secrets";
-import { resetCloudDatabase } from "../server/cloud/store";
-import { createTopup, creditPaidOrder, topupStatus } from "../server/cloud/topups";
+import {
+  backupDatabase,
+  immediate,
+  insertConversation,
+  insertOrder,
+  ledgerEntries,
+  liveProject,
+  orderById,
+  projectConversations,
+  recentlyClosedOrders,
+  resetCloudDatabase,
+  type OrderRow
+} from "../server/cloud/store";
+import {
+  createTopup,
+  creditPaidOrder,
+  settleOrder,
+  startTopupSweep,
+  stopTopupSweep,
+  sweepTopups,
+  topupStatus
+} from "../server/cloud/topups";
 
 const KEY = randomBytes(32);
 const START = Date.UTC(2026, 10, 18, 12, 0, 0);
@@ -408,5 +431,441 @@ describe("top-ups", () => {
     expect(await createTopup(customerId, { pack: "cny50", provider: "wechat" })).toMatchObject({ status: 429 });
     clock += 16 * 60_000;
     expect((await createTopup(customerId, { pack: "cny50", provider: "wechat" })).ok).toBe(true);
+  });
+
+  describe("the sweep", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const paid = (orderId: string, providerTxnId: string, amountFen = 20_000): PaidOrder => ({
+      orderId,
+      providerTxnId,
+      amountFen
+    });
+
+    const orderNumber = (index: number) => `mc${String(index).padStart(30, "0")}`;
+    /** Stores an order of `customerId` whose id is its number, as createTopup stores one. */
+    function store(
+      customerId: string,
+      index: number,
+      status: OrderRow["status"],
+      expiresAt: number,
+      provider = "wechat"
+    ): void {
+      insertOrder({
+        id: orderNumber(index),
+        customer_id: customerId,
+        provider,
+        pack: "cny200",
+        amount_fen: 20_000,
+        status,
+        provider_txn_id: null,
+        created_at: expiresAt - ORDER_LIFETIME_MS,
+        paid_at: null,
+        expires_at: expiresAt
+      });
+    }
+
+    it("credits a payment nobody is polling for, once its provider confirms it", async () => {
+      const { fake, customerId, order } = await pendingOrder();
+      const queried = vi.spyOn(fake.provider, "queryOrder");
+      expect(await sweepTopups()).toBe(0);
+      expect(orderById(order.orderId)?.status).toBe("pending");
+      // The customer paid and closed the dialog, and the provider's notification is lost.
+      fake.paidAtProvider.set(order.orderId, paid(order.orderId, "sweep"));
+      expect(await sweepTopups()).toBe(0); // Asked a moment ago: not again within 3 seconds.
+      clock += 3_000;
+      expect(await sweepTopups()).toBe(1);
+      expect(orderById(order.orderId)).toMatchObject({ status: "paid", provider_txn_id: "sweep" });
+      expect(remainingSeconds(customerId)).toBe(140_000);
+      expect(await sweepTopups()).toBe(0); // Settled: nothing left to ask about.
+      expect(queried).toHaveBeenCalledTimes(2);
+    });
+
+    it("shares the limit on provider queries with the customer's polling: one per order every 3 seconds", async () => {
+      const { fake, customerId, order } = await pendingOrder();
+      const queried = vi.spyOn(fake.provider, "queryOrder");
+      await topupStatus(customerId, order.orderId); // The console's poll asks the provider.
+      expect(await sweepTopups()).toBe(0);
+      expect(queried).toHaveBeenCalledTimes(1);
+      clock += 3_000;
+      await sweepTopups();
+      expect(queried).toHaveBeenCalledTimes(2);
+    });
+
+    it("asks about an expired order before closing it, so a payment made at the last second is credited", async () => {
+      const { fake, customerId, order } = await pendingOrder();
+      fake.paidAtProvider.set(order.orderId, paid(order.orderId, "late"));
+      clock += 15 * 60_000 + 1;
+      expect(await sweepTopups()).toBe(1);
+      expect(fake.closed).toEqual([]);
+      expect(remainingSeconds(customerId)).toBe(140_000);
+    });
+
+    it("closes an expired order at its provider too, and asks about it again a quarter of an hour later", async () => {
+      const { fake, order } = await pendingOrder();
+      const queried = vi.spyOn(fake.provider, "queryOrder");
+      clock += 15 * 60_000 + 1;
+      expect(await sweepTopups()).toBe(0);
+      expect(orderById(order.orderId)?.status).toBe("closed");
+      await Promise.resolve();
+      expect(fake.closed).toEqual([order.orderId]);
+      // It has just answered: not asked about again before a quarter of an hour has gone by.
+      clock += 15 * 60_000 - 1;
+      expect(await sweepTopups()).toBe(0);
+      expect(queried).toHaveBeenCalledTimes(1);
+      clock += 1;
+      expect(await sweepTopups()).toBe(0);
+      expect(queried).toHaveBeenCalledTimes(2);
+      // Still inside the day after it expired: asked about again, in case the first answer was wrong.
+      clock += 24 * 3_600_000 - 15 * 60_000 - 1_000;
+      expect(await sweepTopups()).toBe(0);
+      expect(queried).toHaveBeenCalledTimes(3);
+      // A day after it expired: left alone.
+      clock += 2_000;
+      expect(await sweepTopups()).toBe(0);
+      expect(queried).toHaveBeenCalledTimes(3);
+    });
+
+    it("closes an expired order when the query fails, yet credits it once a later sweep finds it paid", async () => {
+      const { fake, customerId, order } = await pendingOrder();
+      const queryOrder = fake.provider.queryOrder;
+      let providerDown = true;
+      fake.provider.queryOrder = async (orderId) => {
+        if (providerDown) throw new Error("provider down");
+        return queryOrder(orderId);
+      };
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      clock += 15 * 60_000 + 1;
+      expect(await sweepTopups()).toBe(0);
+      expect(orderById(order.orderId)?.status).toBe("closed");
+      // A quarter of an hour later the provider is back, and the customer had paid just before the order expired.
+      providerDown = false;
+      fake.paidAtProvider.set(order.orderId, paid(order.orderId, "recovered"));
+      clock += 15 * 60_000;
+      expect(await sweepTopups()).toBe(1);
+      expect(orderById(order.orderId)).toMatchObject({ status: "paid", provider_txn_id: "recovered" });
+      expect(remainingSeconds(customerId)).toBe(140_000);
+      // Exactly once, whoever reports the payment again.
+      expect(await sweepTopups()).toBe(0);
+      expect(creditPaidOrder(paid(order.orderId, "recovered"), "wechat")).toBe("duplicate");
+      expect(remainingSeconds(customerId)).toBe(140_000);
+    });
+
+    it("goes round the closed orders: a second sweep asks about ones the first did not", async () => {
+      const fake = fakeProvider("wechat");
+      setCloudPaymentProviders([fake.provider]);
+      process.env.CLOUD_PUBLIC_URL = "https://max.example.com";
+      const customerId = await newCustomer();
+      // Thirty orders closed as unpaid inside the day after they expired, none asked about yet.
+      for (let index = 1; index <= 30; index += 1) store(customerId, index, "closed", clock - index * 60_000);
+      const queried = vi.spyOn(fake.provider, "queryOrder");
+      const asked = () => {
+        const ids = queried.mock.calls.map(([orderId]) => orderId);
+        queried.mockClear();
+        return ids;
+      };
+
+      await sweepTopups();
+      const first = asked();
+      clock += 60_000;
+      await sweepTopups();
+      const second = asked();
+      // Twenty fit in one sweep, the most recently expired first. The next takes the other ten, and none of the
+      // twenty again: they have just answered.
+      expect(first).toEqual(Array.from({ length: 20 }, (_, index) => orderNumber(index + 1)));
+      expect(second).toEqual(Array.from({ length: 10 }, (_, index) => orderNumber(index + 21)));
+      // A quarter of an hour after the first sweep, those twenty are the ones asked about longest ago.
+      clock += 14 * 60_000;
+      await sweepTopups();
+      expect(asked()).toEqual(first);
+    });
+
+    it("asks about twenty orders a sweep: pending first, then the closed ones asked longest ago", async () => {
+      const { fake, customerId, order } = await pendingOrder();
+      const queried = vi.spyOn(fake.provider, "queryOrder");
+      // One more pending, then thirty closed as unpaid inside the day after they expired, the oldest numbered 60.
+      // One more closed a day and an hour ago, and one closed before it expired.
+      store(customerId, 100, "pending", clock + 1 + ORDER_LIFETIME_MS);
+      for (let index = 1; index <= 30; index += 1) store(customerId, index + 30, "closed", clock - index * 60_000);
+      store(customerId, 61, "closed", clock - 25 * 3_600_000);
+      store(customerId, 62, "closed", clock + ORDER_LIFETIME_MS);
+      const asked = () => {
+        const ids = queried.mock.calls.map(([orderId]) => orderId);
+        queried.mockClear();
+        return ids;
+      };
+
+      await sweepTopups();
+      // The two pending ones, then the eighteen closed ones that expired most recently.
+      expect(asked()).toEqual([
+        order.orderId,
+        orderNumber(100),
+        ...Array.from({ length: 18 }, (_, index) => orderNumber(index + 31))
+      ]);
+      clock += 60_000;
+      await sweepTopups();
+      // The pending ones again, then twelve closed ones the first sweep did not reach.
+      expect(asked()).toEqual([
+        order.orderId,
+        orderNumber(100),
+        ...Array.from({ length: 12 }, (_, index) => orderNumber(index + 49))
+      ]);
+    });
+
+    it("leaves out orders whose provider is not configured, but closes them once they expire", async () => {
+      const fake = fakeProvider("wechat");
+      setCloudPaymentProviders([fake.provider]);
+      const customerId = await newCustomer();
+      // Alipay is not configured on this relay, so nothing can be asked about its orders: twenty pending, five
+      // closed as unpaid. They must not take the sweep's twenty places from orders that can be asked about, a
+      // pending WeChat order that expires after all of them and one closed as unpaid an hour ago.
+      for (let index = 201; index <= 220; index += 1) {
+        store(customerId, index, "pending", clock + index + ORDER_LIFETIME_MS, "alipay");
+      }
+      for (let index = 221; index <= 225; index += 1) {
+        store(customerId, index, "closed", clock - index * 60_000, "alipay");
+      }
+      store(customerId, 229, "pending", clock + 30 * 60_000 + ORDER_LIFETIME_MS);
+      store(customerId, 230, "closed", clock - 60 * 60_000);
+      const queried = vi.spyOn(fake.provider, "queryOrder");
+      const asked = () => queried.mock.calls.map(([orderId]) => orderId);
+
+      await sweepTopups();
+      expect(asked()).toEqual([orderNumber(229), orderNumber(230)]);
+      // An expired order of that provider is closed all the same, and asked about never.
+      store(customerId, 226, "pending", clock - 1, "alipay");
+      clock += 60_000;
+      queried.mockClear();
+      await sweepTopups();
+      expect(orderById(orderNumber(226))?.status).toBe("closed");
+      expect(asked()).toEqual([orderNumber(229)]);
+    });
+
+    it("reads the closed orders that expired most recently first", async () => {
+      const customerId = await newCustomer();
+      for (let index = 301; index <= 305; index += 1) store(customerId, index, "closed", clock - index * 60_000);
+      expect(recentlyClosedOrders(clock, 24 * 3_600_000, 3).map((order) => order.id)).toEqual([
+        orderNumber(301),
+        orderNumber(302),
+        orderNumber(303)
+      ]);
+    });
+
+    it("once restored, is settled by the sweep: what it knows is credited once, the rest not at all", async () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "max-cloud-restore-"));
+      const file = path.join(directory, "cloud.sqlite");
+      try {
+        // As a relay that keeps a database file has it.
+        resetCloudDatabase(file);
+        const { fake, customerId, order } = await pendingOrder();
+        const backup = backupDatabase(path.join(directory, "backup.sqlite"));
+        // After the backup was taken, the customer pays that order, starts another and pays that too.
+        const later = await createTopup(customerId, { pack: "cny50", provider: "wechat" });
+        if (!later.ok) throw new Error(later.error);
+        fake.paidAtProvider.set(order.orderId, paid(order.orderId, "first"));
+        fake.paidAtProvider.set(later.value.orderId, paid(later.value.orderId, "second", 5_000));
+
+        // The backup is restored as the relay's database, and the relay started again.
+        resetCloudDatabase();
+        fs.copyFileSync(backup, file);
+        fs.rmSync(`${file}-wal`, { force: true });
+        fs.rmSync(`${file}-shm`, { force: true });
+        resetCloudDatabase(file);
+
+        // Nothing is added by hand. The sweep credits the order the backup still knows, once and as a top-up. The
+        // other has no row here, so nothing credits it: that is the case for `npm run cloud:credit`.
+        expect(await sweepTopups()).toBe(1);
+        expect(await sweepTopups()).toBe(0);
+        expect(remainingSeconds(customerId)).toBe(140_000);
+        expect(ledgerEntries(customerId, 10)).toEqual([
+          expect.objectContaining({ kind: "topup", ref: order.orderId, amount_fen: 20_000 })
+        ]);
+        expect(orderById(later.value.orderId)).toBeUndefined();
+      } finally {
+        resetCloudDatabase();
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    it("logs a query that fails and goes on with the other orders", async () => {
+      const { fake, customerId, order } = await pendingOrder();
+      const later = await createTopup(customerId, { pack: "cny50", provider: "wechat" });
+      if (!later.ok) throw new Error(later.error);
+      fake.paidAtProvider.set(later.value.orderId, paid(later.value.orderId, "second", 5_000));
+      const queryOrder = fake.provider.queryOrder;
+      fake.provider.queryOrder = async (orderId) => {
+        if (orderId === order.orderId) throw new Error("provider down");
+        return queryOrder(orderId);
+      };
+      const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(await sweepTopups()).toBe(1);
+      expect(warned).toHaveBeenCalledWith(expect.stringContaining("order query failed"));
+      expect(warned.mock.calls.flat().join("\n")).toContain("provider down");
+      expect(orderById(later.value.orderId)?.status).toBe("paid");
+      expect(orderById(order.orderId)?.status).toBe("pending");
+    });
+
+    it("asks nothing while Max Cloud is off", async () => {
+      const { fake } = await pendingOrder();
+      const queried = vi.spyOn(fake.provider, "queryOrder");
+      delete process.env.CLOUD_SECRET_KEY;
+      expect(await sweepTopups()).toBe(0);
+      expect(queried).not.toHaveBeenCalled();
+      process.env.CLOUD_SECRET_KEY = KEY.toString("base64");
+    });
+
+    describe("its timer", () => {
+      afterEach(async () => {
+        await stopTopupSweep(0);
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      });
+
+      it("does not keep the relay alive, is started once, and is cleared when the sweep stops", async () => {
+        await pendingOrder();
+        const scheduled: NodeJS.Timeout[] = [];
+        const real = globalThis.setInterval;
+        vi.spyOn(globalThis, "setInterval").mockImplementation((callback, ms) => {
+          const timer = real(callback, ms);
+          scheduled.push(timer);
+          return timer;
+        });
+        const cleared = vi.spyOn(globalThis, "clearInterval");
+        startTopupSweep();
+        startTopupSweep();
+        expect(scheduled).toHaveLength(1);
+        expect(scheduled[0]!.hasRef()).toBe(false);
+        await stopTopupSweep(1_000);
+        expect(cleared).toHaveBeenCalledWith(scheduled[0]);
+      });
+
+      it("sweeps every minute, and not once it is stopped", async () => {
+        vi.useFakeTimers();
+        const { fake, customerId, order } = await pendingOrder();
+        clock += 1_000;
+        const unpaid = await createTopup(customerId, { pack: "cny50", provider: "wechat" });
+        if (!unpaid.ok) throw new Error(unpaid.error);
+        fake.paidAtProvider.set(order.orderId, paid(order.orderId, "sweep"));
+        startTopupSweep();
+        await vi.advanceTimersByTimeAsync(59_999);
+        expect(orderById(order.orderId)?.status).toBe("pending");
+        await vi.advanceTimersByTimeAsync(1);
+        expect(orderById(order.orderId)?.status).toBe("paid");
+        await stopTopupSweep(1_000);
+        // An order still waiting would be asked about every minute, had the sweep not stopped.
+        const queried = vi.spyOn(fake.provider, "queryOrder");
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+        expect(queried).not.toHaveBeenCalled();
+        expect(orderById(unpaid.value.orderId)?.status).toBe("pending");
+      });
+
+      it("runs one sweep at a time, and one that is waiting on the provider stops at its next order", async () => {
+        vi.useFakeTimers();
+        const { fake, customerId, order } = await pendingOrder();
+        clock += 1_000;
+        const next = await createTopup(customerId, { pack: "cny50", provider: "wechat" });
+        if (!next.ok) throw new Error(next.error);
+        // The provider does not answer for a while.
+        let answer: (paid: PaidOrder | null) => void = () => {};
+        const answering = new Promise<PaidOrder | null>((resolve) => {
+          answer = resolve;
+        });
+        const queried = vi.spyOn(fake.provider, "queryOrder").mockImplementation(() => answering);
+        startTopupSweep();
+        await vi.advanceTimersByTimeAsync(3 * 60_000);
+        expect(queried).toHaveBeenCalledTimes(1);
+        const stopped = stopTopupSweep(5_000);
+        answer(paid(order.orderId, "late"));
+        await stopped;
+        expect(orderById(order.orderId)?.status).toBe("paid");
+        // The order after it is left for the next sweep.
+        expect(queried).toHaveBeenCalledTimes(1);
+        expect(orderById(next.value.orderId)?.status).toBe("pending");
+      });
+    });
+  });
+
+  describe("settling one order by hand", () => {
+    it("credits an order the sweep has stopped asking about, once, as a notification would", async () => {
+      const { fake, customerId, order } = await pendingOrder();
+      // Closed as unpaid, then two days go by: outside the sweep's day, so nothing asks about it any more.
+      clock += 15 * 60_000 + 1;
+      await sweepTopups();
+      expect(orderById(order.orderId)?.status).toBe("closed");
+      clock += 2 * 24 * 3_600_000;
+      // The provider's records show that it was paid after all.
+      const payment = { orderId: order.orderId, providerTxnId: "by-hand", amountFen: order.amountFen };
+      fake.paidAtProvider.set(order.orderId, payment);
+      expect(await sweepTopups()).toBe(0);
+      expect(orderById(order.orderId)?.status).toBe("closed");
+
+      const queried = vi.spyOn(fake.provider, "queryOrder");
+      expect(await settleOrder(order.orderId)).toMatchObject({ kind: "confirmed", credited: "credited" });
+      expect(queried).toHaveBeenCalledTimes(1);
+      expect(orderById(order.orderId)).toMatchObject({ status: "paid", provider_txn_id: "by-hand" });
+      expect(remainingSeconds(customerId)).toBe(140_000);
+      // A notification that arrives later, and running it again, change nothing.
+      expect(creditPaidOrder(payment, "wechat")).toBe("duplicate");
+      expect(await settleOrder(order.orderId)).toMatchObject({ kind: "confirmed", credited: "duplicate" });
+      expect(queried).toHaveBeenCalledTimes(1);
+      expect(remainingSeconds(customerId)).toBe(140_000);
+      expect(ledgerEntries(customerId, 10).map((entry) => [entry.kind, entry.ref])).toEqual([["topup", order.orderId]]);
+    });
+
+    it("credits nothing for an order the provider says was not paid", async () => {
+      const { customerId, order } = await pendingOrder();
+      const settled = await settleOrder(order.orderId);
+      expect(settled).toMatchObject({ kind: "unpaid", order: { id: order.orderId, status: "pending" } });
+      expect(remainingSeconds(customerId)).toBe(60_000);
+      expect(orderById(order.orderId)?.status).toBe("pending");
+    });
+
+    it("refuses an unknown order and a provider that is not configured, asking no one", async () => {
+      const { fake, order } = await pendingOrder();
+      const queried = vi.spyOn(fake.provider, "queryOrder");
+      expect(await settleOrder("mcunknown0000000000000000000000")).toEqual({ kind: "unknown-order" });
+      expect(await settleOrder("not an order id")).toEqual({ kind: "unknown-order" });
+      setCloudPaymentProviders([]);
+      expect(await settleOrder(order.orderId)).toMatchObject({
+        kind: "provider-missing",
+        order: { id: order.orderId }
+      });
+      expect(queried).not.toHaveBeenCalled();
+      expect(orderById(order.orderId)?.status).toBe("pending");
+    });
+  });
+});
+
+describe("deleting a project", () => {
+  it("removes it with its conversations, or neither when the conversations cannot be removed", async () => {
+    const customerId = await newCustomer();
+    const { project } = newProject(customerId);
+    insertConversation({
+      id: "con_1",
+      customer_id: customerId,
+      project_id: project.id,
+      started_at: clock,
+      ended_at: clock + 30_000,
+      seconds: 30,
+      source: "api",
+      preview: "Hello",
+      turns: "[]"
+    });
+    // The transcripts cannot be deleted (the disk is full, say).
+    immediate((db) =>
+      db.exec(
+        "CREATE TRIGGER broken BEFORE DELETE ON conversations BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END"
+      )
+    );
+    expect(() => deleteProject(customerId, project.id)).toThrow(/database or disk is full/);
+    // Nothing was half deleted: the project is still there, so the customer's retry can delete it.
+    expect(liveProject(project.id, customerId)).toMatchObject({ id: project.id });
+    expect(projectConversations(project.id, customerId, 10)).toHaveLength(1);
+    immediate((db) => db.exec("DROP TRIGGER broken"));
+    expect(deleteProject(customerId, project.id)).toEqual({ ok: true, value: { ok: true } });
+    expect(liveProject(project.id, customerId)).toBeUndefined();
+    expect(projectConversations(project.id, customerId, 10)).toEqual([]);
   });
 });

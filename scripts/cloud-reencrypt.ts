@@ -13,6 +13,8 @@
  * Exits 1 when a secret decrypts with neither key: those are listed, left as
  * they are, and their owners must enter them again.
  */
+// The relay reads its settings from .env in the app directory, and so does this script; exported variables win.
+import "dotenv/config";
 import { cloudPreviousSecretKeyInvalid, cloudSecretKey } from "../server/cloud/context";
 import { checkStoredSecrets, reencryptStoredSecrets } from "../server/cloud/keyring";
 

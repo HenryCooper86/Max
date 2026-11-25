@@ -78,6 +78,10 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew lintDebug
 ```
 
+`./gradlew test` also starts the real app once with no emulator: `MainLaunchTest` opens `MainActivity` and its view
+model under Robolectric (Android 15, animations off). Its Android runtime (about 200 MB) is downloaded to
+`~/.m2/repository` on the first run.
+
 ## Run against the relay
 
 1. Start the relay on the Mac: `npm run dev:server` (or `npm run dev`) from the repo root.

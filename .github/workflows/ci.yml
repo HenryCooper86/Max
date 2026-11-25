@@ -118,6 +118,11 @@ jobs:
         with:
           # Install only what is needed (v4 defaults to platform-tools). Match AGP's SDK selection.
           packages: "platform-tools platforms;android-36.1 build-tools;36.0.0"
+      # MainLaunchTest's Robolectric runtime (about 200 MB) is fetched into ~/.m2, which `cache: gradle` leaves out.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ hashFiles('android/gradle/libs.versions.toml') }}
       - run: chmod +x android/gradlew
       - run: android/gradlew -p android test lint
       # Unsigned: proves the release variant still builds and packages.

@@ -108,6 +108,10 @@ android {
         compose = true
         buildConfig = true
     }
+    testOptions {
+        // Robolectric tests start the real app: the HUD needs the merged manifest and resources.
+        unitTests.isIncludeAndroidResources = true
+    }
     // Reuse the canonical safety clips directly; no duplicated binary source files.
     sourceSets.getByName("main").assets.srcDir(rootProject.file("../public/audio"))
 }
@@ -133,6 +137,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    // JVM-run app start path (MainActivity + MainViewModel under Robolectric, no emulator).
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.test.ext.junit)
     // Test-only: the unit-test android.jar's org.json.* classes are throwing
     // stubs (Robolectric-less JVM unit tests get "not mocked" RuntimeExceptions
     // on JSONObject.put/optString/... ). This shadows those stubs with the real

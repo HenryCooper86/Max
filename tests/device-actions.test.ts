@@ -732,10 +732,18 @@ describe("gallery.describe", () => {
     expect(extractDeviceCommand("你能看到什么")).toMatchObject({ action: "camera.look" });
   });
 
-  it("is gated to ios", () => {
+  it("is gated to the phones that can answer it", () => {
+    // Both apps decode the command and upload the capture as vision.frames
+    // (iOS AgentProtocol.swift, Android DeviceActions.kt).
     expect(extractDeviceCommandForPlatform("看看我刚拍的照片", "ios")).toMatchObject({ action: "gallery.describe" });
-    expect(extractDeviceCommandForPlatform("看看我刚拍的照片", "android")).toBeNull();
+    expect(extractDeviceCommandForPlatform("看看我刚拍的照片", "android")).toMatchObject({
+      action: "gallery.describe"
+    });
+    // The board has no photo library and a web session has no handler, so
+    // there the phrase falls through to ordinary conversation.
     expect(extractDeviceCommandForPlatform("看看我刚拍的照片", "embedded")).toBeNull();
+    expect(extractDeviceCommandForPlatform("看看我刚拍的照片", "web")).toBeNull();
+    expect(extractDeviceCommandForPlatform("看看我刚拍的照片", undefined)).toBeNull();
   });
 
   it("speaks the filler on success and honest failures", () => {

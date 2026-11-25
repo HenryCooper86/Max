@@ -5,6 +5,7 @@ import { createCapture } from "./audio/capture";
 import { createBargeInGuard } from "./audio/barge-in";
 import { rms } from "./audio/dsp";
 import { applyCrosstalk } from "./audio/mixer";
+import { getAlsaVolume, setAlsaVolume } from "./audio/volume";
 import { createPlayback } from "./audio/playback";
 import { createReferenceSink, type ReferenceSink } from "./audio/reference";
 import { createVoiceGate } from "./audio/voice-gate";
@@ -24,7 +25,7 @@ import {
   type PhoneLocationSource,
   type PhoneLocationState
 } from "./navigation/phone-location";
-import { createRelayClient, nextBackoffMs } from "./relay";
+import { createRelayClient, nextBackoffMs, type RelayClose, type RelayCloseKind } from "./relay";
 import { createVisionClient, type VisionClient, type VisionEvent } from "./vision-client";
 import { startHeartbeat } from "./watchdog";
 import type { AgentEvent, DeviceResultEvent } from "../../../shared/agent";
@@ -32,29 +33,65 @@ import { NAV_FABRICATION_CLEAR_DETAIL } from "../../../shared/nav-fabrication";
 
 const VISION_RECONNECT_MS = 2_000;
 
-export type CloseReason = "idle" | "dropped" | "intentional";
-
 /**
  * Reconnect policy. The idle case is the embedded-only one: the relay frees the
  * upstream slot on purpose, and blindly reconnecting would immediately re-open
  * what the idle timeout just closed. With no button on the helmet, the local
  * voice gate is what brings the session back.
+ *
+ * The two refusals are final the same way, only for good: the relay would
+ * answer a retry exactly as it answered the connection that just closed.
+ * Nothing on this board changes either: the minutes come back only when the
+ * allowance resets or a Max Cloud balance or limit is raised elsewhere, and
+ * the token is a line in /etc/max/agent.env that the agent cannot edit, so
+ * there are no fresh credentials to retry once with (docs/protocol.md allows
+ * exactly that one).
  */
-export function decideReconnect(reason: CloseReason, gateOpen: boolean): "now" | "wait-for-voice" | "never" {
-  if (reason === "intentional") return "never";
+export function decideReconnect(reason: RelayCloseKind, gateOpen: boolean): "now" | "wait-for-voice" | "never" {
   if (reason === "dropped") return "now";
-  return gateOpen ? "now" : "wait-for-voice";
+  if (reason === "idle") return gateOpen ? "now" : "wait-for-voice";
+  return "never";
 }
 
 /** The onClosed wiring, extracted so a test can prove the gate state is real —
  *  it was hardcoded `false` for a while, which made the "now" branch dead. */
 export function reconnectDecision(
   shuttingDown: boolean,
-  idle: boolean,
+  close: RelayClose,
   gateOpen: boolean
 ): "now" | "wait-for-voice" | "never" {
-  const reason: CloseReason = shuttingDown ? "intentional" : idle ? "idle" : "dropped";
-  return decideReconnect(reason, gateOpen);
+  return decideReconnect(shuttingDown ? "intentional" : close.kind, gateOpen);
+}
+
+/**
+ * What the journal and the HUD say about a close the agent will not recover
+ * from by itself: the cause, why retrying cannot help, and what brings the
+ * helmet back. One that has stopped for good looks exactly like one waiting
+ * for the rider to speak, and the only witness is a bench page.
+ */
+export function terminalCloseDiagnosis(close: RelayClose): string | undefined {
+  switch (close.kind) {
+    case "usage-limit":
+      return [
+        `voice minutes used up${close.reason ? ` (${close.reason})` : ""}`,
+        "the relay refuses every new session until the allowance resets or the balance or limit is raised",
+        "the agent is not reconnecting: restart max-agent once it has"
+      ].join("; ");
+    case "credentials":
+      // The relay names its own reason (docs/protocol.md lists them), and it is
+      // not always this board's token: a Cloud key can be rotated or its
+      // project not ready. Quote it rather than guess.
+      return [
+        close.reason
+          ? `the relay refused this device's credentials: ${close.reason}`
+          : "the relay refused this device's credentials without giving a reason",
+        "the same ones would be refused again, so the agent is not retrying",
+        "sort out what the reason names, then restart max-agent",
+        "this board's own credential is MAX_RELAY_TOKEN in /etc/max/agent.env"
+      ].join("; ");
+    default:
+      return undefined;
+  }
 }
 
 export async function routeDeviceCommand(options: {
@@ -139,20 +176,6 @@ export function runPoweroffCommand(options: { spawn?: PoweroffSpawn; log?: (line
     log(`[device] shutdown failed to start: ${error.message}; the board is still up`);
   });
   child.unref();
-}
-
-/**
- * Applies playback volume on the ES8326B mixer. Resolves false if amixer did not
- * exit cleanly, so Max never claims a volume change that did not happen.
- */
-function setAlsaVolume(device: string, level: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const percent = Math.round(Math.min(1, Math.max(0, level)) * 100);
-    const card = device.includes(":") ? (device.split(":")[1]?.split(",")[0] ?? "0") : "0";
-    const child = spawn("amixer", ["-c", card, "sset", "Playback", `${percent}%`]);
-    child.on("exit", (code) => resolve(code === 0));
-    child.on("error", () => resolve(false));
-  });
 }
 
 export type VisionEventRouterOptions = {
@@ -389,6 +412,7 @@ function start(): void {
 
   const dispatcherOptions = {
     vision,
+    getVolume: () => getAlsaVolume(config.alsaPlayback),
     setVolume: (level: number) => setAlsaVolume(config.alsaPlayback, level),
     previewPort: config.visionPreviewPort,
     poweroff
@@ -446,7 +470,7 @@ function start(): void {
         );
       }
     },
-    onClosed: (idle) => {
+    onClosed: (close) => {
       closeNavigationSession();
       advertiser.setToken(null);
       playback.flush();
@@ -454,7 +478,18 @@ function start(): void {
       // re-enable it rather than resume from a stale toggle left on from
       // before the drop.
       stopWatchOnClose(vision);
-      const decision = reconnectDecision(shuttingDown, idle, gateOpen);
+      const diagnosis = terminalCloseDiagnosis(close);
+      if (diagnosis !== undefined) {
+        // Nothing brings the session back from here: not the backoff below,
+        // and not the voice gate. The agent stays up so the HUD keeps showing
+        // the reason — exiting would only make systemd restart it into the
+        // same refusal two seconds later.
+        waitingForVoice = false;
+        console.log(`[relay] ${diagnosis}`);
+        publishHud({ type: "error", message: diagnosis });
+        return;
+      }
+      const decision = reconnectDecision(shuttingDown, close, gateOpen);
       if (decision === "never") return;
       if (decision === "wait-for-voice") {
         waitingForVoice = true;

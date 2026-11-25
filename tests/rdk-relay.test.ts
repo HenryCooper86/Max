@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { IDLE_CLOSE_CODE, PROTOCOL_VERSION } from "../shared/agent";
+import { IDLE_CLOSE_CODE, PROTOCOL_VERSION, USAGE_LIMIT_CLOSE_CODE } from "../shared/agent";
 import { buildSessionStart, loadConfig, nextBackoffMs, relayEndpoint } from "../rdk/agent/src/relay";
 
 const BASE_ENV = { MAX_RELAY_URL: "ws://localhost:8787/agent" } as NodeJS.ProcessEnv;
@@ -176,5 +176,11 @@ describe("nextBackoffMs", () => {
 describe("idle close contract", () => {
   it("uses the shared code the relay actually sends", () => {
     expect(IDLE_CLOSE_CODE).toBe(4001);
+  });
+});
+
+describe("usage-limit close contract", () => {
+  it("uses the shared code the relay actually sends", () => {
+    expect(USAGE_LIMIT_CLOSE_CODE).toBe(4003);
   });
 });

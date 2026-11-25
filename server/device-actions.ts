@@ -76,8 +76,8 @@ export const DEVICE_ACTION_TIERS: Record<DeviceActionName, DeviceActionTier> = {
 export type IntentExtractor = (text: string) => DeviceCommand | null;
 
 /**
- * Actions whose detection is restricted to a specific client platform, keyed
- * by the platform string the session reports at `session.start`.
+ * Actions whose detection is restricted to certain client platforms, each one
+ * listed by the platform string the session reports at `session.start`.
  *
  * `camera.look` is the first entry: it requires the relay to dispatch a
  * `device.command` that fetches a live frame, and only the embedded board's
@@ -90,15 +90,20 @@ export type IntentExtractor = (text: string) => DeviceCommand | null;
  * dispatched to, so it is absent from this map and detected everywhere, as
  * before.
  */
-const PLATFORM_RESTRICTED_ACTIONS: Partial<Record<DeviceActionName, string>> = {
-  "camera.look": "embedded",
+const PLATFORM_RESTRICTED_ACTIONS: Partial<Record<DeviceActionName, readonly string[]>> = {
+  "camera.look": ["embedded"],
   // Phones cannot poweroff, and an older app build receiving an unknown
   // action would sit out the result timeout in silence.
-  "system.shutdown": "embedded",
-  "gallery.describe": "ios",
+  "system.shutdown": ["embedded"],
+  // Describing a capture uploads it from the rider's photo library, which only
+  // the phones have: both apps decode the command and answer with
+  // `vision.frames` (Android: the "gallery.describe" branch of DeviceActions.kt).
+  // The board has no library (EMBEDDED_CAPABILITIES refuses it) and a web
+  // session has no handler at all.
+  "gallery.describe": ["ios", "android"],
   // Proactive scene watching (V-C) drives the embedded board's own camera
   // loop; a phone has no such loop to toggle.
-  "vision.watch": "embedded"
+  "vision.watch": ["embedded"]
 };
 
 /**
@@ -119,8 +124,8 @@ const PLATFORM_RESTRICTED_ACTIONS: Partial<Record<DeviceActionName, string>> = {
 export function extractDeviceCommandForPlatform(text: string, platform: string | undefined): DeviceCommand | null {
   const command = extractDeviceCommand(text);
   if (!command) return null;
-  const requiredPlatform = PLATFORM_RESTRICTED_ACTIONS[command.action];
-  if (requiredPlatform && platform !== requiredPlatform) return null;
+  const allowedPlatforms = PLATFORM_RESTRICTED_ACTIONS[command.action];
+  if (allowedPlatforms && !allowedPlatforms.includes(platform ?? "")) return null;
   return command;
 }
 

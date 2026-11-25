@@ -774,6 +774,36 @@ reconnects in a loop with no explanation. Accepts the operator `RELAY_AUTH_TOKEN
 or a `sess_…` login token. Keep `/etc/max/agent.env` at mode 600; `provision.sh`
 does, and `deploy.sh` refuses to activate a release if it is not `root:root:600`.
 
+**Two closes are final, and the agent stops reconnecting on them.** The relay
+closes with **4003** when the account's voice minutes are used up — a spent
+monthly allowance, a Max Cloud balance, a project's minutes limit — and would
+refuse every new session the same way until that changes — and with **1008**
+when it refuses this board's credentials: a `sess_…` login token that has been
+signed out, revoked or expired, a `sess_…` token where the relay insists on its
+own token before a board may register a device, and the other cases in the
+close-code table of [docs/protocol.md](../docs/protocol.md). (A board cannot run
+on a Max Cloud project at all: the relay registers no devices for Cloud project
+sessions and refuses them with 1008 `device registration unauthorized`.) The
+agent has the one token it read
+from `/etc/max/agent.env` and no way to fetch another, so a retry could only
+repeat the refusal. It stays up, so the HUD keeps answering; it writes the
+cause, quoting the relay's own close reason, to the journal and to the HUD's
+error line; and neither the backoff nor the rider's voice reopens the session:
+
+```bash
+journalctl -u max-agent | grep '^\[relay\]'
+[relay] closed code=4003 reason=usage limit reached
+[relay] voice minutes used up (usage limit reached); the relay refuses every new session until the allowance resets or the balance or limit is raised; the agent is not reconnecting: restart max-agent once it has
+[relay] closed code=1008 reason=signed out
+[relay] the relay refused this device's credentials: signed out; the same ones would be refused again, so the agent is not retrying; sort out what the reason names, then restart max-agent; this board's own credential is MAX_RELAY_TOKEN in /etc/max/agent.env
+```
+
+Restart `max-agent` once the minutes are back — the monthly allowance has
+reset, the Max Cloud balance has been topped up, the project's minutes limit
+has been raised — or after sorting out what a 1008 reason names. Every other
+close — 1006, 1011, a plain 1000 — is still an ordinary drop and reconnects on
+the usual backoff (1 s, doubling, up to 30 s).
+
 Run it through systemd rather than by hand; `nohup`/`setsid` over SSH does not
 reliably survive the session:
 
@@ -937,6 +967,21 @@ they are the only honest channel, since the deterministic "好的，10秒后关�
 line is as inert as every other one. The relay dispatches `system.shutdown`
 to the embedded platform only — a phone never receives it. After the final
 tone, give the board ~15 s before cutting power.
+
+**Voice volume — "Max，大声一点" / "小声一点".** Moves the ALSA `Playback`
+level of the card `RDK_ALSA_PLAYBACK` names: the agent reads it with
+`amixer get`, steps it, and writes it back with `amixer sset`. Playback has
+seven levels, the quietest at one seventh of the range and the loudest at full
+— the phones keep an audible floor too (iOS `PlaybackVolumeController`, Android
+`nextVoiceGain`) — so a board at full takes six "小声一点" to reach the
+quietest. It never reaches zero: Max, navigation prompts and spoken hazard
+alerts all play through this control. One more step at either end changes
+nothing and is reported as a failure, so Max never announces a change nobody
+can hear, and a mixer that cannot be read is not stepped. The levels are not
+matched to the phones by loudness: the codec's percent-to-decibel curve is not
+in this repository, so listen on a real board — in particular to how quiet the
+lowest level really is — before changing `VOLUME_LEVELS` in
+`rdk/agent/src/device/dispatch.ts`.
 
 ## Service hardening
 

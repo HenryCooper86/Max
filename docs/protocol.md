@@ -66,7 +66,12 @@ Requests to any path other than `/agent` and `/companion` are dropped without a 
 | 1008 | relay  | Policy: a logged-in user signed out, their session expired or the account was deleted, or a client sent a device registration without the relay token. Do not retry with the same credentials; fetch a new token first, and retry at most once. The web SDK does exactly that. |
 | 1011 | relay  | The voice backend failed to start. An `error` event comes first. Reconnect with backoff.                                                                                                                                                                                       |
 | 4001 | relay  | Final: the session is over and the client should not reconnect. Either idle (no client traffic for `RELAY_IDLE_TIMEOUT_MS`, default 10 minutes), or the relay ended the conversation and sent [`session.ended`](#sessionended) first.                                          |
-| 4003 | relay  | Voice minutes used up: the account's monthly allowance is spent (see [usage and billing](usage-and-billing.md)). New connections are refused the same way until the month ends. Do not reconnect.                                                                              |
+| 4003 | relay  | Voice minutes used up: a spent monthly allowance, a Max Cloud balance or a project's minutes limit (see [usage and billing](usage-and-billing.md)). New connections are refused until the allowance resets, the balance is topped up or the limit is raised. Do not reconnect. |
+
+The RDK agent ([`rdk/agent`](../rdk/README.md)) and the reference device client
+([`examples/device-client/max_device.py`](../examples/device-client/max_device.py)) are each given one token and have
+no way to fetch another, so for them 4003 and 1008 are final: both stop reconnecting and log the cause, quoting the
+relay's close reason. The agent stays up and shows it on its HUD until it is restarted; the reference client exits.
 
 The relay pings every `RELAY_HEARTBEAT_MS` (default 30 s) and drops a client that does not answer. Any WebSocket library
 answers pings on its own. A client that sends nothing at all (no events, no audio) is idle in the sense above, so a
@@ -534,7 +539,8 @@ relay is configured for one. A website or app can leave them out and ignore them
 Notes:
 
 - `device.command` asks the device to do something (take a photo, set the volume). Answer every command with exactly
-  one `device.result`; silence past the relay's timeout counts as failure.
+  one `device.result`; silence past the relay's timeout counts as failure. `volume.set` is always a step, with
+  `args.direction` set to `up` or `down`; no client is asked for an absolute level.
 - A `deviceId` in `session.start` (registering an embedded board) is accepted only on a connection that used the relay
   token or on an open relay. Otherwise the relay closes with 1008.
 - The phone companion link uses a separate `/companion` endpoint that needs a user login, not a session token.

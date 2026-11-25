@@ -98,7 +98,7 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
       { rider: "你能看到什么", agent: "前方视野清楚，路况正常。", latencyBase: 95 },
       { rider: "前面那个路牌写的什么", agent: "我看看，稍后告诉你路牌上写的什么。", latencyBase: 100 },
       // Exercises the keyless gallery.describe demo path (spec V-B): on iOS
-      // this dispatches a real device.command and the client answers with a
+      // and Android this dispatches a real device.command and the client answers with a
       // chunked vision.frames set, assembled and described at zero
       // credential cost via createMockVisionProvider — see server/vision.ts
       // and server/vision-frames.ts.

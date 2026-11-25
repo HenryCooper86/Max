@@ -14,6 +14,11 @@ device has to do:
 | **Interruption**: stop the assistant when the wearer speaks       | `Device._interrupt`, `InterruptionGuard`  |
 | **Reconnect**: come back after a dropped link                     | `Device.run`, `backoff_seconds`           |
 
+It does not come back when the relay says not to: after close code 4003 (the voice minutes are used up) or 1008 (the
+relay refused its credentials) it logs why, quoting the relay's reason, and exits. A Max Cloud project refused as not
+ready (close reason `project not ready`) stops it too: add the project's model key in the console, then start the
+client again. After 4001 (a quiet session closed) it waits before reconnecting.
+
 The audio rules it follows are in [the audio contract](../../docs/audio/contract.md).
 
 ## Run it

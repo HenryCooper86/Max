@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // doubao-camera-frame.test.ts's top-of-file comment for why the mock targets
 // server/vision's selectVisionProvider rather than a stubbed global fetch.
 //
-// gallery.describe is gated to the "ios" platform (device-actions.ts's
+// gallery.describe is gated to the phone platforms, "ios" and "android" (device-actions.ts's
 // PLATFORM_RESTRICTED_ACTIONS), so sessions here start with platform "ios"
 // instead of camera-frame's "embedded".
 //

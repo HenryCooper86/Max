@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildSessionStart,
+  classifyClose,
   createRelayClient,
   defaultSocketOptions,
   HANDSHAKE_TIMEOUT_MS,
+  type RelayClose,
+  type RelayCloseKind,
   type SocketLike
 } from "../rdk/agent/src/relay";
+import { USAGE_LIMIT_CLOSE_CODE } from "../shared/agent";
 import type { RdkConfig } from "../rdk/agent/src/config";
 
 const CONFIG = {
@@ -182,11 +186,11 @@ describe("createRelayClient lifecycle", () => {
 
   it("a stale socket's late close does not stomp the live socket's ready flag", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
-    const closedCalls: boolean[] = [];
+    const closedCalls: RelayCloseKind[] = [];
     const client = createRelayClient(
       CONFIG,
       DEVICE_ID,
-      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      { ...HANDLERS, onClosed: (close) => closedCalls.push(close.kind) },
       {
         wsFactory: () => {
           const socket = fakeSocket();
@@ -211,20 +215,21 @@ describe("createRelayClient lifecycle", () => {
     expect(sockets[1]!.sent.some((item) => Buffer.isBuffer(item))).toBe(true);
     // the live socket's own close must still drive reconnection normally.
     sockets[1]!.emit("close", 1000, Buffer.alloc(0));
-    expect(closedCalls).toEqual([false]);
+    expect(closedCalls).toEqual(["dropped"]);
   });
 
-  it("an intentional disconnect still delivers onClosed(true) when the close lands", () => {
+  it("an intentional disconnect still delivers an intentional close when it lands", () => {
     // disconnect() used to null the socket synchronously, so its own close —
     // which ws delivers asynchronously — failed the stale-socket guard and
-    // onClosed(true) never fired. Unobservable while shutdown() exits the
-    // process immediately, and a trap for any later graceful-shutdown work.
+    // the intentional close never reached onClosed. Unobservable while
+    // shutdown() exits the process immediately, and a trap for any later
+    // graceful-shutdown work.
     const socket = fakeSocket();
-    const closedCalls: boolean[] = [];
+    const closedCalls: RelayCloseKind[] = [];
     const client = createRelayClient(
       CONFIG,
       DEVICE_ID,
-      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      { ...HANDLERS, onClosed: (close) => closedCalls.push(close.kind) },
       { wsFactory: () => socket, log: () => {} }
     );
     client.connect();
@@ -235,7 +240,7 @@ describe("createRelayClient lifecycle", () => {
     // The close event arrives after disconnect() has already returned.
     socket.readyState = 3;
     socket.emit("close", 1000, Buffer.alloc(0));
-    expect(closedCalls).toEqual([true]);
+    expect(closedCalls).toEqual(["intentional"]);
   });
 
   it("a reconnect between disconnect and its late close keeps the old close stale", () => {
@@ -243,11 +248,11 @@ describe("createRelayClient lifecycle", () => {
     // fresh socket replaces the closing one, the old close must not fire
     // onClosed or clobber the live socket's ready state.
     const sockets: ReturnType<typeof fakeSocket>[] = [];
-    const closedCalls: boolean[] = [];
+    const closedCalls: RelayCloseKind[] = [];
     const client = createRelayClient(
       CONFIG,
       DEVICE_ID,
-      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      { ...HANDLERS, onClosed: (close) => closedCalls.push(close.kind) },
       {
         wsFactory: () => {
           const socket = fakeSocket();
@@ -276,11 +281,11 @@ describe("createRelayClient lifecycle", () => {
   it("a handshake that dies before open still reaches the close path and can reconnect", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
     const lines: string[] = [];
-    const closedCalls: boolean[] = [];
+    const closedCalls: RelayCloseKind[] = [];
     const client = createRelayClient(
       CONFIG,
       DEVICE_ID,
-      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      { ...HANDLERS, onClosed: (close) => closedCalls.push(close.kind) },
       {
         wsFactory: () => {
           const socket = fakeSocket();
@@ -297,11 +302,69 @@ describe("createRelayClient lifecycle", () => {
     sockets[0]!.emit("close", 1006, Buffer.alloc(0));
     expect(lines.some((line) => line.includes("Opening handshake has timed out"))).toBe(true);
     expect(lines.some((line) => line.includes("closed code=1006"))).toBe(true);
-    expect(closedCalls).toEqual([false]);
+    expect(closedCalls).toEqual(["dropped"]);
     // The already-open guard must not still be blocking: the wedged socket's
     // close nulled it out, so a fresh connect() creates a new socket.
     client.connect();
     expect(sockets.length).toBe(2);
+  });
+});
+
+describe("relay close contract", () => {
+  it.each([
+    [USAGE_LIMIT_CLOSE_CODE, "usage-limit", "usage limit reached"],
+    [1008, "credentials", "signed out"]
+  ] as const)("hands a close %s to onClosed as %s, with the relay's reason", (code, kind, reason) => {
+    const closed: RelayClose[] = [];
+    const socket = fakeSocket();
+    const client = createRelayClient(
+      CONFIG,
+      DEVICE_ID,
+      { ...HANDLERS, onClosed: (close) => closed.push(close) },
+      { wsFactory: () => socket, log: () => {} }
+    );
+    client.connect();
+    socket.emit("close", code, Buffer.from(reason));
+    expect(closed).toEqual([{ kind, reason }]);
+  });
+
+  it("hands an idle close to onClosed as idle", () => {
+    const closed: RelayClose[] = [];
+    const socket = fakeSocket();
+    const client = createRelayClient(
+      CONFIG,
+      DEVICE_ID,
+      { ...HANDLERS, onClosed: (close) => closed.push(close) },
+      { wsFactory: () => socket, log: () => {} }
+    );
+    client.connect();
+    socket.emit("close", 4001, Buffer.from("idle timeout"));
+    expect(closed).toEqual([{ kind: "idle", reason: "idle timeout" }]);
+  });
+});
+
+describe("classifyClose", () => {
+  it("maps the codes the relay closes with to what they mean for reconnecting", () => {
+    expect(classifyClose(4001, false, "idle timeout")).toEqual({ kind: "idle", reason: "idle timeout" });
+    expect(classifyClose(USAGE_LIMIT_CLOSE_CODE, false, "usage limit reached")).toEqual({
+      kind: "usage-limit",
+      reason: "usage limit reached"
+    });
+    expect(classifyClose(1008, false, "signed out")).toEqual({ kind: "credentials", reason: "signed out" });
+    expect(classifyClose(1008, false)).toEqual({ kind: "credentials", reason: "" });
+  });
+
+  it("treats every other code as a drop", () => {
+    for (const code of [1000, 1001, 1005, 1006, 1011, 1013]) {
+      expect(classifyClose(code, false, "").kind).toBe("dropped");
+    }
+  });
+
+  it("lets a disconnect we asked for outrank the code", () => {
+    expect(classifyClose(USAGE_LIMIT_CLOSE_CODE, true, "usage limit reached")).toEqual({
+      kind: "intentional",
+      reason: "usage limit reached"
+    });
   });
 });
 

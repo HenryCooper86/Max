@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { DEVICE_ACTION_TIERS, type DeviceActionName } from "../server/device-actions";
 import type {
@@ -43,6 +44,9 @@ const fixtures = vi.hoisted(() => ({
   playbackWrite: vi.fn(() => true),
   playbackRank: 0,
   hudClose: vi.fn(),
+  spawn: vi.fn(),
+  gateOpen: false,
+  captureOnFrame: undefined as ((frame: Int16Array) => void) | undefined,
   signalHandlers: new Map<string, (...args: unknown[]) => void>()
 }));
 
@@ -59,6 +63,10 @@ vi.mock("node:net", () => ({
     }
   }
 }));
+
+// Only the ALSA volume helper and "Max，关机" start a process; a test that
+// needs one gives `spawn` an implementation.
+vi.mock("node:child_process", () => ({ spawn: fixtures.spawn }));
 
 vi.mock("../rdk/agent/src/config", () => ({
   loadConfig: () => ({
@@ -85,7 +93,10 @@ vi.mock("../rdk/agent/src/device/identity", () => ({
 }));
 
 vi.mock("../rdk/agent/src/audio/capture", () => ({
-  createCapture: () => ({ start: vi.fn(), stop: fixtures.captureStop })
+  createCapture: (options: { onFrame: (frame: Int16Array) => void }) => {
+    fixtures.captureOnFrame = options.onFrame;
+    return { start: vi.fn(), stop: fixtures.captureStop };
+  }
 }));
 
 vi.mock("../rdk/agent/src/audio/playback", () => ({
@@ -103,7 +114,7 @@ vi.mock("../rdk/agent/src/audio/reference", () => ({
   createReferenceSink: () => ({ write: vi.fn(), flush: vi.fn(), close: vi.fn() })
 }));
 
-vi.mock("../rdk/agent/src/audio/voice-gate", () => ({ createVoiceGate: () => () => false }));
+vi.mock("../rdk/agent/src/audio/voice-gate", () => ({ createVoiceGate: () => () => fixtures.gateOpen }));
 vi.mock("../rdk/agent/src/audio/barge-in", () => ({
   createBargeInGuard: () => ({ request: vi.fn(), observe: vi.fn() })
 }));
@@ -133,9 +144,9 @@ vi.mock("../rdk/agent/src/relay", async (importOriginal) => {
       let generation = 0;
       fixtures.relayHandlers = {
         ...handlers,
-        onClosed: (idle) => {
+        onClosed: (close) => {
           generation += 1;
-          handlers.onClosed(idle);
+          handlers.onClosed(close);
         }
       };
       return {
@@ -311,6 +322,28 @@ function phoneFix(sequence: number): PhoneLocationEvent {
 async function flush(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+/** What `amixer -c 0 get Playback` prints with the mixer at its ceiling. */
+const AMIXER_AT_CEILING = [
+  "Simple mixer control 'Playback',0",
+  "  Capabilities: pvolume",
+  "  Playback channels: Front Left - Front Right",
+  "  Limits: Playback 0 - 255",
+  "  Mono:",
+  "  Front Left: Playback 255 [100%] [0.00dB]",
+  "  Front Right: Playback 255 [100%] [0.00dB]",
+  ""
+].join("\n");
+
+/** The child `spawn("amixer", …)` hands back: prints its output, then closes. */
+function amixerChild(stdout: string): EventEmitter & { stdout: EventEmitter } {
+  const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter() });
+  setImmediate(() => {
+    child.stdout.emit("data", Buffer.from(stdout));
+    child.emit("close", 0);
+  });
+  return child;
 }
 
 describe("routeDeviceCommand", () => {
@@ -569,8 +602,8 @@ describe("start navigation lifecycle wiring", () => {
         typeof event === "object" && event !== null && (event as { type?: string }).type === "nav.request"
     );
     const pendingRequest = oldRequests.at(-1)!;
-    handlers!.onClosed(true);
-    handlers!.onClosed(true);
+    handlers!.onClosed({ kind: "idle", reason: "idle timeout" });
+    handlers!.onClosed({ kind: "idle", reason: "idle timeout" });
     await flush();
     expect(firstController.close).toHaveBeenCalledTimes(1);
     expect(firstSource.close).toHaveBeenCalledTimes(1);
@@ -640,7 +673,7 @@ describe("start navigation lifecycle wiring", () => {
       )
     ).toEqual([{ type: "device.result", commandId: "start-2", status: "ok" }]);
 
-    handlers!.onClosed(false);
+    handlers!.onClosed({ kind: "dropped", reason: "" });
     expect(secondController.close).toHaveBeenCalledTimes(1);
     expect(fixtures.sources[1]!.close).toHaveBeenCalledTimes(1);
     handlers!.onReady();
@@ -657,6 +690,74 @@ describe("start navigation lifecycle wiring", () => {
     expect(thirdController.states.at(-1)?.phase).toBe("idle");
   });
 
+  it("steps the board's playback volume when the relay asks for quieter", async () => {
+    // The command extractDeviceCommand sends for "Max, 小声一点". Until the
+    // dispatcher read `direction` this came back `failed` every time, and
+    // nothing on the board touched the mixer at all.
+    fixtures.spawn.mockImplementation((_command: string, args: string[]) =>
+      amixerChild(args.includes("get") ? AMIXER_AT_CEILING : "")
+    );
+    fixtures.relayHandlers!.onEvent({
+      type: "device.command",
+      commandId: "quieter-1",
+      action: "volume.set",
+      args: { direction: "down" },
+      tier: DEVICE_ACTION_TIERS["volume.set"]
+    });
+    await vi.waitFor(() =>
+      expect(fixtures.relayEvents).toContainEqual({ type: "device.result", commandId: "quieter-1", status: "ok" })
+    );
+    expect(fixtures.spawn.mock.calls).toEqual([
+      ["amixer", ["-c", "0", "get", "Playback"]],
+      ["amixer", ["-c", "0", "sset", "Playback", "86%"]]
+    ]);
+  });
+
+  it("keeps reconnecting after an ordinary drop", () => {
+    vi.useFakeTimers();
+    try {
+      const connects = fixtures.relayConnects;
+      fixtures.relayHandlers!.onClosed({ kind: "dropped", reason: "" });
+      vi.advanceTimersByTime(1_000);
+      expect(fixtures.relayConnects).toBe(connects + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops for good on a close the relay would repeat, and says why", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.useFakeTimers();
+    try {
+      const connects = fixtures.relayConnects;
+      fixtures.gateOpen = true;
+      fixtures.relayHandlers!.onClosed({ kind: "usage-limit", reason: "usage limit reached" });
+      // Speech is what brings an idle helmet back. It must not bring this one
+      // back: the relay refuses every new session until the minutes are restored.
+      fixtures.captureOnFrame!(new Int16Array(320));
+      vi.advanceTimersByTime(2_000);
+      expect(fixtures.relayConnects).toBe(connects);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("[relay] voice minutes used up (usage limit reached)"));
+      expect(fixtures.hudPublishes.at(-1)).toMatchObject({
+        lastError: expect.stringContaining("the agent is not reconnecting: restart max-agent once it has")
+      });
+    } finally {
+      vi.useRealTimers();
+      log.mockRestore();
+    }
+    // Leave a live session for the shutdown test below.
+    fixtures.relayHandlers!.onReady();
+  });
+
+  it("puts the relay's own reason on the HUD when it refuses this board", () => {
+    fixtures.relayHandlers!.onClosed({ kind: "credentials", reason: "session expired" });
+    const expected =
+      "the relay refused this device's credentials: session expired; the same ones would be refused again, so the agent is not retrying; " +
+      "sort out what the reason names, then restart max-agent; this board's own credential is MAX_RELAY_TOKEN in /etc/max/agent.env";
+    expect(fixtures.hudPublishes.at(-1)).toMatchObject({ lastError: expected });
+    fixtures.relayHandlers!.onReady();
+  });
+
   it("process shutdown closes the live source and controller exactly once", () => {
     const currentSource = fixtures.sources.at(-1)!;
     const currentController = fixtures.controllers.at(-1)!;
@@ -664,7 +765,7 @@ describe("start navigation lifecycle wiring", () => {
     expect(shutdown).toBeDefined();
 
     shutdown!();
-    fixtures.relayHandlers!.onClosed(true);
+    fixtures.relayHandlers!.onClosed({ kind: "intentional", reason: "" });
 
     expect(currentController.close).toHaveBeenCalledTimes(1);
     expect(currentSource.close).toHaveBeenCalledTimes(1);

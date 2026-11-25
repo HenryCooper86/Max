@@ -50,6 +50,25 @@ FRAME_SAMPLES = 320  # 20 ms at 16 kHz
 FRAME_BYTES = FRAME_SAMPLES * 2
 FRAME_SECONDS = FRAME_SAMPLES / MIC_RATE
 IDLE_CLOSE_CODE = 4001  # the relay closed a quiet session; do not reconnect at once
+USAGE_LIMIT_CLOSE_CODE = 4003  # the account's voice minutes are used up; do not reconnect
+POLICY_CLOSE_CODE = 1008  # the relay refused the credentials; do not retry with the same ones
+
+# What the client says before it stops, for each close it must not come back
+# from (docs/protocol.md, "Close codes"). The relay's own close reason is quoted
+# after the cause: for 1008 only the relay knows whether the session expired,
+# the account was deleted, a key was rotated or a project is not ready. This
+# client is given one token on its command line and has no way to fetch another,
+# so refused credentials are as final as an empty allowance.
+FINAL_CLOSES = {
+    USAGE_LIMIT_CLOSE_CODE: (
+        "voice minutes used up ({reason}); the relay will refuse every connection until the allowance resets "
+        "or the balance or limit is raised. This client is not reconnecting: start it again once it has."
+    ),
+    POLICY_CLOSE_CODE: (
+        "the relay refused this device's credentials: {reason}; the same ones would be refused again, "
+        "so this client is not retrying. Start it again once what the reason names is sorted out."
+    ),
+}
 
 
 # --------------------------------------------------------------------------
@@ -366,21 +385,30 @@ class Device:
 
         attempt = 0
         while True:
-            closed_idle = False
+            close_code = None
+            close_reason = None
             try:
                 url = relay_url(self.settings.relay, self.settings.token)
                 async with websockets.connect(url, ping_interval=15, ping_timeout=15, max_size=None) as socket:
                     attempt = 0  # a successful connection resets the backoff
                     await self._session(socket)
-                    closed_idle = socket.close_code == IDLE_CLOSE_CODE
+                    close_code, close_reason = socket.close_code, socket.close_reason
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # refused, dropped, timed out: all end up here
                 self.log(f"[link] {type(error).__name__}: {error}")
-                closed_idle = getattr(getattr(error, "rcvd", None), "code", None) == IDLE_CLOSE_CODE
+                # A close the relay started arrives as an exception carrying its close frame.
+                received = getattr(error, "rcvd", None)
+                close_code, close_reason = getattr(received, "code", None), getattr(received, "reason", None)
             self.speaker.flush()  # nothing half-said survives a dropped link
 
-            if closed_idle:
+            final = FINAL_CLOSES.get(close_code)
+            if final:
+                # Coming straight back would only be refused the same way, and
+                # nothing on this device can wait that out. Say why, then stop.
+                self.log(f"[link] {final.format(reason=close_reason or 'no reason given')}")
+                return
+            if close_code == IDLE_CLOSE_CODE:
                 # The relay hung up because nobody was talking. Coming straight
                 # back would only be hung up on again: wait for a voice.
                 self.log("[link] idle; waiting for speech before reconnecting")

@@ -7,6 +7,8 @@ the real connection code: capture, playback, interruption and reconnect.
 """
 
 import asyncio
+import contextlib
+import io
 import json
 import math
 import os
@@ -90,10 +92,12 @@ class PureParts(unittest.TestCase):
 class ScriptedRelay:
     """A stand-in relay: says what a real one says, records what it is sent."""
 
-    def __init__(self, plan=None, on_started=None, drop_first=False):
+    def __init__(self, plan=None, on_started=None, drop_first=False, refuse=None, reason="refused"):
         self.plan = plan or {"wakeGate": "relay", "silenceFill": False, "bargeIn": "relay"}
         self.on_started = on_started
         self.drop_first = drop_first
+        self.refuse = refuse  # a close code: turn every session away with it
+        self.reason = reason  # the close reason that goes with it, as a real relay sends
         self.starts = []
         self.audio_started = 0
         self.frames = 0
@@ -118,6 +122,11 @@ class ScriptedRelay:
             event = json.loads(message)
             if event["type"] == "session.start":
                 self.starts.append(event)
+                if self.refuse is not None:
+                    # As a real relay does: say why in an error event, then close.
+                    await socket.send(json.dumps({"type": "error", "message": "refused"}))
+                    await socket.close(code=self.refuse, reason=self.reason)
+                    return
                 await socket.send(json.dumps({"type": "session.started", "provider": "test", "audio": self.plan}))
                 if first:
                     await socket.close(code=1011)  # the link drops mid-session
@@ -137,10 +146,10 @@ class Sessions(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.directory.cleanup()
 
-    def device(self, relay, audio=None, tail=1.0):
-        settings = Settings(relay=f"ws://127.0.0.1:{relay.port}/agent", audio=audio or DeviceAudio(), verbose=False)
+    def device(self, relay, audio=None, tail=1.0, **settings):
+        options = dict(relay=f"ws://127.0.0.1:{relay.port}/agent", audio=audio or DeviceAudio(), verbose=False)
         mic = WavMic(self.wav, tail_seconds=tail)
-        return Device(settings, mic, WavSpeaker(None)), mic
+        return Device(Settings(**{**options, **settings}), mic, WavSpeaker(None)), mic
 
     async def run_for(self, device, seconds):
         try:
@@ -210,6 +219,42 @@ class Sessions(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(relay.audio_started, 1)  # audio flows on the second link
                 self.assertGreater(relay.frames, 10)
                 self.assertGreaterEqual(device.speaker.flushes, 1)  # nothing half-said survives
+        finally:
+            max_device.backoff_seconds = original
+
+    async def test_stops_instead_of_reconnecting_when_the_voice_minutes_are_used_up(self):
+        # The relay answers every new connection this way until the minutes are restored, so
+        # a reconnect would only be refused again.
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said):
+            async with ScriptedRelay(refuse=4003, reason="usage limit reached") as relay:
+                device, _ = self.device(relay, verbose=True)
+                await asyncio.wait_for(device.run(), 2.0)  # it returns instead of looping
+        self.assertEqual(relay.connections, 1)
+        self.assertIn("voice minutes used up (usage limit reached)", said.getvalue())
+        self.assertIn("This client is not reconnecting: start it again once it has", said.getvalue())
+
+    async def test_stops_instead_of_retrying_credentials_the_relay_refused(self):
+        # The relay's reason is quoted as it stands: only the relay knows
+        # whether the session expired, the account was deleted or a key rotated.
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said):
+            async with ScriptedRelay(refuse=1008, reason="session expired") as relay:
+                device, _ = self.device(relay, verbose=True)
+                await asyncio.wait_for(device.run(), 2.0)
+        self.assertEqual(relay.connections, 1)
+        self.assertIn("the relay refused this device's credentials: session expired", said.getvalue())
+        self.assertIn("so this client is not retrying", said.getvalue())
+
+    async def test_keeps_retrying_a_refusal_that_may_clear(self):
+        # 1013 asks to be tried again later. Only 4003 and 1008 are final.
+        original = max_device.backoff_seconds
+        max_device.backoff_seconds = lambda attempt: 0.05
+        try:
+            async with ScriptedRelay(refuse=1013) as relay:
+                device, _ = self.device(relay, tail=3.0)
+                await self.run_for(device, 0.5)
+                self.assertGreaterEqual(relay.connections, 3)  # it keeps coming back
         finally:
             max_device.backoff_seconds = original
 

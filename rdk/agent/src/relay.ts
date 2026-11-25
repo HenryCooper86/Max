@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import {
   IDLE_CLOSE_CODE,
   PROTOCOL_VERSION,
+  USAGE_LIMIT_CLOSE_CODE,
   type AgentEvent,
   type SessionMemorySnapshot,
   type SessionStartEvent
@@ -14,6 +15,10 @@ export type { RdkConfig };
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
+/** The relay's policy close (docs/protocol.md, "Close codes"): it refused the
+ *  connection's credentials. Only the relay sends it, so it has no shared
+ *  constant beside IDLE_CLOSE_CODE. */
+const POLICY_CLOSE_CODE = 1008;
 /** If the TCP connect succeeds but the WS upgrade never completes (coverage
  *  drop mid-handshake, half-open NAT), `ws` waits forever with no `close` and
  *  no backoff scheduled — the agent goes silently mute. Bounding the
@@ -23,6 +28,41 @@ export const HANDSHAKE_TIMEOUT_MS = 15_000;
 
 export function nextBackoffMs(attempt: number): number {
   return Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt);
+}
+
+/** Why the connection ended, as far as its close code says (docs/protocol.md,
+ *  "Close codes"). */
+export type RelayCloseKind =
+  /** We called `disconnect()`. */
+  | "intentional"
+  /** 4001: the relay freed an idle session on purpose. */
+  | "idle"
+  /** Anything else, 1006 included: the link dropped. */
+  | "dropped"
+  /** 4003: the account's voice minutes are used up — a spent monthly
+   *  allowance, a Max Cloud balance, a project's minutes limit — and stay
+   *  used up until that changes elsewhere. */
+  | "usage-limit"
+  /** 1008: the relay refused the connection's credentials. */
+  | "credentials";
+
+export type RelayClose = {
+  kind: RelayCloseKind;
+  /** The relay's close reason; empty when it sent none. */
+  reason: string;
+};
+
+/**
+ * What a close code means for getting the session back. An intentional
+ * disconnect outranks the code: ws reports whatever the peer happened to
+ * answer with, and none of it is a verdict on this agent.
+ */
+export function classifyClose(code: number, intentional: boolean, reason = ""): RelayClose {
+  if (intentional) return { kind: "intentional", reason };
+  if (code === IDLE_CLOSE_CODE) return { kind: "idle", reason };
+  if (code === USAGE_LIMIT_CLOSE_CODE) return { kind: "usage-limit", reason };
+  if (code === POLICY_CLOSE_CODE) return { kind: "credentials", reason };
+  return { kind: "dropped", reason };
 }
 
 /**
@@ -79,9 +119,11 @@ export type RelayHandlers = {
   onEvent(event: AgentEvent): void;
   onVoice(pcm: Int16Array): void;
   onReady(): void;
-  /** `idle` is true when the relay closed us with IDLE_CLOSE_CODE, which must
-   *  NOT trigger an automatic reconnect — the local voice gate re-arms instead. */
-  onClosed(idle: boolean): void;
+  /** How the connection ended. `idle` must NOT trigger an automatic
+   *  reconnect — the local voice gate re-arms instead. `usage-limit` and
+   *  `credentials` are final: the relay would answer a retry exactly as it
+   *  answered the connection that just closed. */
+  onClosed(close: RelayClose): void;
 };
 
 export type RelayClient = {
@@ -236,12 +278,13 @@ export function createRelayClient(
       }
       const code = args[0] as number;
       const reason = args[1] as Buffer;
-      const detail = reason && reason.length > 0 ? ` reason=${reason.toString("utf8")}` : "";
+      const text = reason && reason.length > 0 ? reason.toString("utf8") : "";
+      const detail = text ? ` reason=${text}` : "";
       log(`[relay] closed code=${code}${detail}`);
       if (socket === current) {
         ready = false;
         socket = null;
-        handlers.onClosed(code === IDLE_CLOSE_CODE || intentional);
+        handlers.onClosed(classifyClose(code, intentional, text));
       }
     });
 
@@ -261,7 +304,7 @@ export function createRelayClient(
       socket?.close();
       // The socket stays set: ws delivers `close` asynchronously, and nulling
       // here made that event fail the `socket === current` guard — so an
-      // intentional close never reached onClosed(true). The close handler
+      // intentional close never reached onClosed. The close handler
       // nulls it; sendFrame/sendEvent are already gated on readyState, which
       // close() moves off OPEN synchronously.
     },

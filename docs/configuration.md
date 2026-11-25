@@ -3,7 +3,8 @@
 Two places configure the relay:
 
 - **`assistant.config.json`**: who the assistant is, what it does and how it looks. It is safe to keep in version
-  control. `npm run setup` writes it interactively, and admins can edit most of it at Admin → Studio.
+  control. `npm run setup` writes it interactively (run again, it changes only what it asks about and keeps the rest),
+  and admins can edit most of it at Admin → Studio.
 - **Environment variables** (`.env`): secrets, the voice backend, and how the relay runs. Start from `.env.example`,
   which documents every variable.
 

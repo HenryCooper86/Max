@@ -71,8 +71,11 @@ that works with almost any chat model (`pipeline`), or models on your own hardwa
 
 ## 5. Put the agent on a page
 
-Any page can load the widget from the relay. Save this as `test.html` and open it through any local web server (for
-example `npx serve .`), because browsers only allow the microphone on `http://localhost` or HTTPS:
+Any page can load the widget from the relay. Save this as `test.html` in a new, empty folder outside this checkout and
+open it through a local web server, because browsers only allow the microphone on `http://localhost` or HTTPS. For
+example, run `npx serve -l tcp://127.0.0.1:3000` in that folder and open <http://localhost:3000/test.html>. A static
+server publishes every file in the folder it serves, including `.env` files, and by default `serve` listens on every
+network interface, so never point it at the checkout:
 
 ```html
 <!doctype html>

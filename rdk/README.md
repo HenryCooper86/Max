@@ -817,7 +817,9 @@ Prerequisites on the board, once (these stay manual because they are
 distribution packages, see the appendix): Node 22, `alsa-utils`, a built
 `rdk/aec/max-aec` and the rendered ADAS alert clips in `/opt/max` (the first
 release is installed by hand; every later deploy carries them over and refuses
-to proceed without them).
+to proceed without them), and the AEC build tools (`g++`, `pkg-config`,
+`libwebrtc-audio-processing-dev`, `libasound2-dev`) for releases that change
+`rdk/aec`.
 
 ```bash
 export RDK_HOST=root@board.example.com     # an ssh target; no credentials in the repository
@@ -844,10 +846,13 @@ yet.
    root-owned `/opt/max.stage-<sha>`; ignored and untracked files never travel and
    the live checkout is never mirrored over. A stage left by a failed attempt is
    removed first (the path is rebuilt from the SHA and compared exactly).
-3. **Verify and build** (`remote/build.sh`). Copies the native AEC executable
-   and the armed ADAS alert clips from the live release, checks them with
-   `cmp`/`diff -qr`, then `npm ci` and `npm run build` in the stage. A missing
-   AEC binary or an empty alert set blocks activation.
+3. **Verify and build** (`remote/build.sh`). Copies the armed ADAS alert clips
+   from the live release, and the native AEC executable too while
+   `rdk/aec/Makefile` and `rdk/aec/src` are unchanged; a release that changes
+   them gets `max-aec` compiled on the board from the staged sources. Checks
+   the copies with `cmp`/`diff -qr`, then `npm ci` and `npm run build` in the
+   stage. A missing AEC binary, an AEC build failure or an empty alert set
+   blocks activation.
 4. **Swap, prove, roll back** (`remote/activate.sh`). Checks owners and modes
    (`root:root:755` release, `700` identity directory, `600` identity file and
    `agent.env`), moves `/opt/max` to `/opt/max.previous-<sha>-<timestamp>` and the

@@ -625,10 +625,12 @@ npm run test:release-gate
 
 Before merging, reviewers must record the local `npm run check` and
 `npm audit --omit=dev` results in the pull request. The live release-gate command remains
-available for an operator to run manually; set `TESTING_GATE_EXPECTED_BUILD` to
-the exact candidate SHA. It passes only after an administrator has approved that
-same build, so a passing metric snapshot without an audited release approval
-cannot authorize a deployment.
+available for an operator to run manually. It needs the exact candidate SHA: set
+`TESTING_GATE_EXPECTED_BUILD`, or run it in a CI job, where it takes `CI_COMMIT_SHA` (GitLab) or
+`GITHUB_SHA` (GitHub Actions); without one it refuses to decide. It passes only after an administrator has approved
+that same build, so a passing metric snapshot without an audited release approval
+cannot authorize a deployment. `deploy-lightsail.command` runs it before building when `TESTING_GATE_URL` is set
+(in `deploy.local.env` or the environment) and deploys nothing unless it passes for the commit being deployed.
 
 Native releases must carry the actual commit:
 

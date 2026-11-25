@@ -596,6 +596,83 @@ describe("reviewed RDK release operations", () => {
   });
 });
 
+describe("RDK board build step", () => {
+  /** A live release and a stage for remote/build.sh, with stand-ins for the
+   *  root-only and GNU-only commands it runs, and a `make` that records its
+   *  calls and builds a max-aec only when MAKE_SUCCEEDS is set. */
+  function boardBuild(stageAecSource: string) {
+    const sandbox = realpathSync(mkdtempSync(join(tmpdir(), "max-rdk-build-test-")));
+    temporaryDirectories.push(sandbox);
+    const sha = "a".repeat(40);
+    const root = join(sandbox, "max");
+    const stage = `${root}.stage-${sha}`;
+    for (const [tree, source] of [
+      [root, "int main() { return 0; }\n"],
+      [stage, stageAecSource]
+    ] as const) {
+      mkdirSync(join(tree, "rdk", "aec", "src"), { recursive: true });
+      writeFileSync(join(tree, "rdk", "aec", "Makefile"), "max-aec:\n");
+      writeFileSync(join(tree, "rdk", "aec", "src", "main.cpp"), source);
+    }
+    writeFileSync(join(root, "rdk", "aec", "max-aec"), "#!/bin/sh\necho live\n");
+    chmodSync(join(root, "rdk", "aec", "max-aec"), 0o755);
+    mkdirSync(join(root, "rdk", "audio", "alerts"), { recursive: true });
+    writeFileSync(join(root, "rdk", "audio", "alerts", "forward-collision.wav"), "armed clip\n");
+
+    const bin = join(sandbox, "bin");
+    const makeLog = join(sandbox, "make.log");
+    mkdirSync(bin);
+    const realInstall = execFileSync("bash", ["-c", "command -v install"], { encoding: "utf8" }).trim();
+    const realFind = execFileSync("bash", ["-c", "command -v find"], { encoding: "utf8" }).trim();
+    const shims: Record<string, string> = {
+      // Ownership needs root, which the test does not have.
+      chown: "exit 0",
+      install: `args=(); while [ "$#" -gt 0 ]; do case $1 in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac; done\nexec '${realInstall}' "\${args[@]}"`,
+      stat: "echo root:root:755",
+      // BSD find has no -readable; the fixture's files are all readable.
+      find: `args=(); for arg in "$@"; do [ "$arg" = -readable ] || args+=("$arg"); done\nexec '${realFind}' "\${args[@]}"`,
+      npm: "exit 0",
+      make: `echo "$@" >> '${makeLog}'\n[ -n "\${MAKE_SUCCEEDS:-}" ] || exit 2\nprintf '#!/bin/sh\\necho rebuilt\\n' > "$2/max-aec" && chmod 755 "$2/max-aec"`
+    };
+    for (const [name, body] of Object.entries(shims)) {
+      writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`);
+      chmodSync(join(bin, name), 0o755);
+    }
+    const run = (env: Record<string, string> = {}) =>
+      spawnSync("bash", [join(repositoryRoot, "rdk/remote/build.sh"), stage, sha], {
+        encoding: "utf8",
+        env: { PATH: `${bin}:${process.env.PATH ?? ""}`, HOME: sandbox, RDK_REMOTE_ROOT: root, ...env }
+      });
+    const stagedAec = join(stage, "rdk", "aec", "max-aec");
+    const makeCalls = () => (existsSync(makeLog) ? readFileSync(makeLog, "utf8").trim().split("\n") : []);
+    return { run, stagedAec, makeCalls };
+  }
+
+  it("carries the live max-aec over when its sources did not change", () => {
+    const board = boardBuild("int main() { return 0; }\n");
+    const result = board.run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(board.makeCalls()).toEqual([]);
+    expect(readFileSync(board.stagedAec, "utf8")).toContain("echo live");
+  });
+
+  it("compiles max-aec from the stage when the release changes its sources", () => {
+    const board = boardBuild("int main() { return 1; }\n");
+    const result = board.run({ MAKE_SUCCEEDS: "1" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(board.makeCalls()).toHaveLength(1);
+    expect(readFileSync(board.stagedAec, "utf8")).toContain("echo rebuilt");
+  });
+
+  it("blocks the release when changed AEC sources do not build", () => {
+    const board = boardBuild("int main() { return 1; }\n");
+    const result = board.run();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("max-aec did not build");
+    expect(existsSync(board.stagedAec)).toBe(false);
+  });
+});
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }

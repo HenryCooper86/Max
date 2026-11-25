@@ -6,11 +6,20 @@ import { evaluateTestingReleaseDecision } from "./testing-release-decision";
 const baseUrl = (process.env.TESTING_GATE_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 const token = process.env.TESTING_GATE_TOKEN?.trim() ?? "";
 const outputPath = process.env.TESTING_GATE_REPORT?.trim();
-const expectedBuild = (process.env.TESTING_GATE_EXPECTED_BUILD ?? process.env.CI_COMMIT_SHA)?.trim();
+// The candidate build: set explicitly, or the commit the CI job runs for (GitLab, then GitHub Actions).
+const expectedBuild = (
+  process.env.TESTING_GATE_EXPECTED_BUILD ??
+  process.env.CI_COMMIT_SHA ??
+  process.env.GITHUB_SHA
+)?.trim();
 const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), 15_000);
 
 try {
+  // Without a candidate the build comparison would pass for any build the relay reports.
+  if (!expectedBuild) {
+    throw new Error("No candidate build: set TESTING_GATE_EXPECTED_BUILD to the commit being released");
+  }
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
   const [response, operationsResponse] = await Promise.all([
     fetch(`${baseUrl}/testing/summary`, { headers, signal: controller.signal }),

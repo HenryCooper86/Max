@@ -10,6 +10,11 @@
 #   LIGHTSAIL_HOST=ubuntu@your-server
 #   LIGHTSAIL_HEALTH_URL=https://your-domain/health
 #   LIGHTSAIL_READY_URL=https://your-domain/ready
+#
+# Optional: with TESTING_GATE_URL (and TESTING_GATE_TOKEN if the QA relay needs
+# one) set, the deploy first asks that relay's release gate whether this exact
+# commit passed live-agent testing and was approved, and stops if not. See
+# docs/live-agent-testing.md. Without it the deploy says so and goes ahead.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -77,6 +82,8 @@ fi
 # validated by mktemp before it is registered for recursive cleanup.
 DEPLOY_STAGE="$(mktemp -d /tmp/max-deploy.XXXXXX)"
 DEPLOY_ACTIVATED="off"
+# The release serving before this deploy, read from /health just before activation; what a rollback must bring back.
+PREVIOUS_COMMIT=""
 REMOTE_NEXT_DIR=""
 REMOTE_PREVIOUS_DIR="${REMOTE_APP_DIR}.previous"
 REMOTE_FAILED_DIR=""
@@ -84,9 +91,48 @@ cleanup() {
   local exit_status=$?
   if [[ "$exit_status" -ne 0 && "$DEPLOY_ACTIVATED" == "on" ]]; then
     echo "==> Deployment failed after activation; restoring the previous release" >&2
+    local rolled_back="on"
     ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
       "set -e; rm -rf '$REMOTE_FAILED_DIR'; mv '$REMOTE_APP_DIR' '$REMOTE_FAILED_DIR'; mv '$REMOTE_PREVIOUS_DIR' '$REMOTE_APP_DIR'; pm2 restart max --update-env; rm -rf '$REMOTE_FAILED_DIR'" \
-      || echo "Automatic rollback failed; inspect $HOST immediately." >&2
+      || rolled_back="off"
+    if [[ "$rolled_back" != "on" ]]; then
+      # The release that just failed may still be the one answering: nothing below may call it the previous one.
+      echo "Automatic rollback failed; $GIT_COMMIT may still be serving. Inspect $HOST immediately." >&2
+    else
+      # pm2 restarting is not the previous release serving: wait until /ready reports it, with no issues.
+      local restored="off"
+      for _ in {1..20}; do
+        if curl --fail --silent --connect-timeout 5 --max-time 8 "$READY_URL" 2>/dev/null |
+          FAILED_COMMIT="$GIT_COMMIT" PREVIOUS_COMMIT="$PREVIOUS_COMMIT" node -e '
+            let body = "";
+            process.stdin.on("data", (chunk) => (body += chunk));
+            process.stdin.on("end", () => {
+              try {
+                const ready = JSON.parse(body);
+                const build = ready.build?.gitCommit;
+                const expected = process.env.PREVIOUS_COMMIT;
+                const valid = ready.ok === true && Array.isArray(ready.issues) && ready.issues.length === 0 &&
+                  (expected ? build === expected : build !== process.env.FAILED_COMMIT);
+                process.exit(valid ? 0 : 1);
+              } catch {
+                process.exit(1);
+              }
+            });
+          '; then
+          restored="on"
+          break
+        fi
+        sleep 2
+      done
+      if [[ "$restored" == "on" && -n "$PREVIOUS_COMMIT" ]]; then
+        echo "==> The previous release ($PREVIOUS_COMMIT) is back and ready." >&2
+      elif [[ "$restored" == "on" ]]; then
+        # Without the pre-deploy build there is nothing to match: some other build is ready, which one is unproven.
+        echo "Rollback UNVERIFIED: a build other than $GIT_COMMIT reports ready at $READY_URL, but which release was serving before this deploy is unknown (its /health gave no build). Check $HOST." >&2
+      else
+        echo "The previous release was put back but does not report ready${PREVIOUS_COMMIT:+ as $PREVIOUS_COMMIT} at $READY_URL; the site may be down. Inspect $HOST immediately." >&2
+      fi
+    fi
   fi
   [[ "$DEPLOY_STAGE" == /tmp/max-deploy.* ]] && rm -rf "$DEPLOY_STAGE"
   trap - EXIT
@@ -105,13 +151,32 @@ printf '{\n  "gitCommit": "%s",\n  "deployedAt": "%s"\n}\n' \
   "$GIT_COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$DEPLOY_STAGE/build-info.json"
 echo "==> Build stamp: $GIT_COMMIT"
 
-# Build the exact archived commit locally. The Lightsail instance is deliberately
-# small and can be OOM-killed by TypeScript/Vite; it only needs runtime packages.
-if [[ ! -d node_modules ]]; then
-  echo "Local node_modules is missing; run npm ci before deploying." >&2
-  exit 1
+# Build the exact archived commit locally, with the packages its own lockfile
+# names: a clean install, not this checkout's node_modules, which may belong to
+# another commit. The Lightsail instance is deliberately small and can be
+# OOM-killed by TypeScript/Vite; it only needs runtime packages.
+echo "==> 1/4 Installing the archived commit's packages"
+(
+  cd "$DEPLOY_STAGE"
+  npm ci --no-audit --no-fund --prefer-offline
+)
+if [[ -n "${TESTING_GATE_URL:-}" ]]; then
+  echo "==> Release gate at $TESTING_GATE_URL for $GIT_COMMIT"
+  # The gate runs inside the stage, which is deleted afterwards: a relative report path is kept in the checkout.
+  if [[ -n "${TESTING_GATE_REPORT:-}" && "$TESTING_GATE_REPORT" != /* ]]; then
+    TESTING_GATE_REPORT="$(pwd)/$TESTING_GATE_REPORT"
+    export TESTING_GATE_REPORT
+  fi
+  (
+    cd "$DEPLOY_STAGE"
+    TESTING_GATE_EXPECTED_BUILD="$GIT_COMMIT" npx --no-install tsx scripts/testing-release-gate.ts
+  ) || {
+    echo "Release gate refused $GIT_COMMIT (or could not be reached); nothing was deployed." >&2
+    exit 1
+  }
+else
+  echo "==> No release gate configured (TESTING_GATE_URL); deploying without live-agent test approval."
 fi
-ln -s "$(pwd)/node_modules" "$DEPLOY_STAGE/node_modules"
 echo "==> 1/4 Building archived commit locally"
 (
   cd "$DEPLOY_STAGE"
@@ -136,6 +201,11 @@ rsync -azc --delete \
 echo "==> 3/4 Installing runtime deps and activating the staged release"
 ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
   "set -e; if [ -f '$REMOTE_APP_DIR/.env' ]; then cp -p '$REMOTE_APP_DIR/.env' '$REMOTE_NEXT_DIR/.env'; fi; cd '$REMOTE_NEXT_DIR'; npm ci --omit=dev --no-audit --no-fund"
+# Which release is serving now, so a rollback can be checked against it. Unknown (empty) if /health does not say.
+PREVIOUS_COMMIT="$(curl --fail --silent --connect-timeout 5 --max-time 8 "$HEALTH_URL" 2>/dev/null |
+  node -e 'let b = ""; process.stdin.on("data", (c) => (b += c)); process.stdin.on("end", () => {
+    try { const c = JSON.parse(b).build?.gitCommit; if (typeof c === "string") process.stdout.write(c); } catch {}
+  });' || true)"
 ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
   "set -e; test -d '$REMOTE_APP_DIR'; test -d '$REMOTE_NEXT_DIR'; rm -rf '$REMOTE_PREVIOUS_DIR'; mv '$REMOTE_APP_DIR' '$REMOTE_PREVIOUS_DIR'; if ! mv '$REMOTE_NEXT_DIR' '$REMOTE_APP_DIR'; then mv '$REMOTE_PREVIOUS_DIR' '$REMOTE_APP_DIR'; exit 1; fi"
 DEPLOY_ACTIVATED="on"

@@ -731,6 +731,24 @@ MAX_VOICE_GATE_RMS=900
 MAX_VOICE_GATE_MS=400
 ```
 
+Each `session.start` also carries the release's build (`gitCommit`, the first 12
+characters of the `.rdk-release-sha` that `deploy.sh` stamps into `/opt/max`,
+and `appVersion`, `max-rdk@<package version>`) and the link the default route
+uses (`networkType`: `wifi`, `ethernet`, `cellular` or `unknown`, read from
+`/proc/net/route` at each connect), so embedded runs can be told apart by build
+and network in the testing statistics. A board under test can add the same QA
+attribution the phones send; leave them out otherwise:
+
+```bash
+MAX_TESTER_ID=bench-2                      # who or which bench ran it
+MAX_TESTER_REGION=Asia/Shanghai
+MAX_TESTING_CAMPAIGN_ID=release-readiness
+MAX_TESTING_TEST_CASE_ID=baseline-live-session
+MAX_TESTING_RUN_ID=                        # from the release run in Admin → Testing
+MAX_TESTING_ASSIGNMENT_ID=
+# MAX_RELEASE_ROOT=/opt/max                # where the release and its .rdk-release-sha live
+```
+
 Both units run under `WatchdogSec=30`: the agent heartbeats while mic frames
 flow, the sidecar while camera frames do, so a wedged-but-alive process is
 restarted instead of impersonating a healthy one. `StartLimitIntervalSec=0`
@@ -888,7 +906,12 @@ close`, and no `[agent] uncaught exception`/`unhandled rejection`), the release
    holder is reported as "interrupted; the board is on release X". If the status
    file cannot be written (full disk), `deploy.sh` falls back to the script's exit
    status plus the active release. The five most recent log/status pairs are kept;
-   older ones are removed after a successful run.
+   older ones are removed after a successful run. So are release trees: a
+   successful activation keeps the previous release it just moved aside and the
+   newest `/opt/max.failed-*`, and removes older `/opt/max.previous-*` and
+   `/opt/max.failed-*` directories (only exact canonical names, never a symlink),
+   which otherwise filled the board's storage one release at a time. A rolled-back
+   activation removes none.
 
 `deploy.sh --no-hardening` installs no drop-ins and removes any installed earlier.
 Re-running for the commit that is already active does nothing. Keep the previous

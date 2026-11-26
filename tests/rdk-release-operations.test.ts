@@ -137,8 +137,12 @@ describe("reviewed RDK release operations", () => {
     expect(activate).toContain('[ "$STAGE" = "$ROOT.stage-$SHA" ]');
     expect(activate).toContain('[ "$FAILED" = "$ROOT.failed-$SHA-$stamp" ]');
     expect(stage).toContain('[ "$STAGE" = "$ROOT.stage-$SHA" ]');
-    for (const script of [deploy, build, activate]) expect(script).not.toMatch(/\brm -rf\b/);
+    for (const script of [deploy, build]) expect(script).not.toMatch(/\brm -rf\b/);
     expect(stage.match(/\brm -rf\b.*/g)).toEqual(['rm -rf -- "$STAGE"']);
+    // activate.sh deletes only old release trees, each name checked against the canonical shape and refused if a
+    // link (the fake-board tests below exercise it).
+    expect(activate.match(/\brm -rf\b.*/g)).toEqual(['rm -rf -- "$d"', 'rm -rf -- "$d"']);
+    expect(activate.match(/\[ -d "\$d" \] && \[ ! -L "\$d" \] \|\| continue/g)).toHaveLength(2);
   });
 
   it("states the transport encryption boundary truthfully", () => {
@@ -596,7 +600,8 @@ describe("reviewed RDK release operations", () => {
   });
 });
 
-describe("RDK board build step", () => {
+// Each case runs the real build.sh through several shell stand-ins: seconds on a busy CI runner, like the fake board below.
+describe("RDK board build step", { timeout: 20_000 }, () => {
   /** A live release and a stage for remote/build.sh, with stand-ins for the
    *  root-only and GNU-only commands it runs, and a `make` that records its
    *  calls and builds a max-aec only when MAKE_SUCCEEDS is set. */
@@ -1233,6 +1238,42 @@ describe("rdk/remote/activate.sh on a fake board", { timeout: 20_000 }, () => {
     expect(result.stdout + result.stderr).toBe("");
     expect(statSync(board.logFile).mode & 0o777).toBe(0o600);
     expect(board.read(board.deviceIdFile)).toBe("rdk-fixture\n");
+  });
+
+  it("keeps one previous and the newest failed release, and removes older trees", () => {
+    const board = fakeBoard({ newReleaseBroken: false });
+    const older = (kind: string, sha: string, stamp: string, mtime: number) => {
+      const directory = `${board.root}.${kind}-${sha}-${stamp}`;
+      mkdirSync(join(directory, "node_modules"), { recursive: true });
+      utimesSync(directory, mtime, mtime);
+      return directory;
+    };
+    const oldPrevious = older("previous", "b".repeat(40), "20250101000000", 1_000);
+    const olderFailed = older("failed", "c".repeat(40), "20250102000000", 2_000);
+    const newerFailed = older("failed", "d".repeat(40), "20250103000000", 3_000);
+    // Not the canonical shape, or a link: never touched.
+    const odd = `${board.root}.previous-notasha`;
+    mkdirSync(odd);
+    const link = `${board.root}.previous-${"e".repeat(40)}-20250104000000`;
+    symlinkSync(odd, link);
+
+    const result = board.run();
+    expect(result.status, board.log()).toBe(0);
+    expect(existsSync(board.previous)).toBe(true);
+    expect(existsSync(oldPrevious)).toBe(false);
+    expect(existsSync(olderFailed)).toBe(false);
+    expect(existsSync(newerFailed)).toBe(true);
+    expect(existsSync(odd)).toBe(true);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(board.log()).toContain(`removing an older previous release: ${oldPrevious}`);
+  });
+
+  it("removes no release tree when the activation is rolled back", () => {
+    const board = fakeBoard({ newReleaseBroken: true });
+    const oldPrevious = `${board.root}.previous-${"b".repeat(40)}-20250101000000`;
+    mkdirSync(oldPrevious);
+    expect(board.run().status).toBe(1);
+    expect(existsSync(oldPrevious)).toBe(true);
   });
 
   it("rolls back automatically when the new release never reports a ready session", () => {

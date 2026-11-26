@@ -163,6 +163,35 @@ prune_old_runs() {
   return 0
 }
 
+# Keeps one previous release, the one this activation just moved aside (it is
+# the rollback until acceptance is complete), and the newest failed release, for
+# diagnosis. Older ones are whole trees with their own node_modules, and each
+# activation used to leave one more, until the board's storage filled and the
+# next build or a recording failed. A name is removed only when it is exactly
+# the canonical shape (root, kind, SHA, timestamp) and not a symlink. Only the
+# lock holder calls it, after a successful activation.
+prune_old_releases() {
+  local d kept_failed=""
+  for d in "$ROOT".previous-*; do
+    [ -d "$d" ] && [ ! -L "$d" ] || continue
+    [[ ${d#"$ROOT".previous-} =~ ^[0-9a-f]{40}-[0-9]{14}$ ]] || continue
+    [ "$d" != "$PREVIOUS" ] || continue
+    say "removing an older previous release: $d"
+    rm -rf -- "$d"
+  done
+  while IFS= read -r d; do
+    [ -d "$d" ] && [ ! -L "$d" ] || continue
+    [[ ${d#"$ROOT".failed-} =~ ^[0-9a-f]{40}-[0-9]{14}$ ]] || continue
+    if [ -z "$kept_failed" ]; then
+      kept_failed=$d
+      continue
+    fi
+    say "removing an older failed release: $d"
+    rm -rf -- "$d"
+  done < <(ls -1dt -- "$ROOT".failed-* 2>/dev/null || true)
+  return 0
+}
+
 # From here on nothing is written to the ssh channel. Stale files are removed
 # (rm never follows a link) and recreated with noclobber, which refuses to open
 # anything that appears in between, a planted symlink included.
@@ -380,6 +409,7 @@ main() {
     say "WARNING: $SHA is active and healthy, but the agent could not reach the relay; check the relay URL, token and network"
     say "the previous release is kept at $PREVIOUS"
     prune_old_runs
+    prune_old_releases
     set_status activated-relay-unreachable
     exit 3
   fi
@@ -404,6 +434,7 @@ main() {
   say "device identity: stable"
   say "activated $SHA; the previous release is kept at $PREVIOUS until acceptance is complete"
   prune_old_runs
+  prune_old_releases
   set_status activated
 }
 

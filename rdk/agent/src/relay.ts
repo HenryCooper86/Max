@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import WebSocket from "ws";
 import {
   IDLE_CLOSE_CODE,
@@ -95,10 +97,55 @@ export function relayEndpoint(config: Pick<RdkConfig, "relayUrl" | "relayToken">
   return { url, headers: token ? { Authorization: `Bearer ${token}` } : {} };
 }
 
+/**
+ * Which kind of link the default route goes out on, read from the kernel's
+ * routing table (/proc/net/route): the QA cohort a session is compared within.
+ * The board may sit on Wi-Fi, a USB tether or bench Ethernet, and used to
+ * report "wifi" whatever it was on, which put cellular field runs in the
+ * Wi-Fi cohort.
+ */
+export function defaultRouteNetworkType(routeTable: string): "wifi" | "ethernet" | "cellular" | "unknown" {
+  // Columns: Iface Destination Gateway Flags RefCnt Use Metric ... Destination 00000000 is a default route and flag
+  // 0x1 is RTF_UP. With several (Wi-Fi and a tether), the kernel uses the lowest metric, whatever the line order.
+  let best: { iface: string; metric: number } | undefined;
+  for (const line of routeTable.split("\n").slice(1)) {
+    const [iface, destination, , flags, , , metricText] = line.trim().split(/\s+/);
+    if (!iface || destination !== "00000000" || !(Number.parseInt(flags ?? "0", 16) & 1)) continue;
+    const metric = Number.parseInt(metricText ?? "0", 10) || 0;
+    if (!best || metric < best.metric) best = { iface, metric };
+  }
+  if (!best) return "unknown";
+  if (/^(wlan|wl)/.test(best.iface)) return "wifi";
+  if (/^(eth|en)/.test(best.iface)) return "ethernet";
+  if (/^(wwan|rmnet|ppp|usb)/.test(best.iface)) return "cellular";
+  return "unknown";
+}
+
+/** The build a release root holds: the reviewed SHA deploy.sh stamped into it, and the kit's version. */
+export function releaseIdentity(releaseRoot: string): { appVersion?: string; gitCommit?: string } {
+  const identity: { appVersion?: string; gitCommit?: string } = {};
+  try {
+    const sha = fs.readFileSync(path.join(releaseRoot, ".rdk-release-sha"), "utf8").trim();
+    if (/^[0-9a-f]{40}$/.test(sha)) identity.gitCommit = sha.slice(0, 12);
+  } catch {
+    /* not a deployed release (a checkout on the bench): no commit to report */
+  }
+  try {
+    const manifest: unknown = JSON.parse(fs.readFileSync(path.join(releaseRoot, "package.json"), "utf8"));
+    if (manifest && typeof manifest === "object" && "version" in manifest && typeof manifest.version === "string") {
+      identity.appVersion = `max-rdk@${manifest.version}`;
+    }
+  } catch {
+    /* no manifest in the release root: leave the version out rather than guess */
+  }
+  return identity;
+}
+
 export function buildSessionStart(
   config: RdkConfig,
   deviceId: string,
-  memory?: SessionMemorySnapshot
+  memory?: SessionMemorySnapshot,
+  environment: { networkType?: string; appVersion?: string; gitCommit?: string } = {}
 ): SessionStartEvent {
   const event: SessionStartEvent = {
     type: "session.start",
@@ -108,10 +155,13 @@ export function buildSessionStart(
     protocol: PROTOCOL_VERSION,
     deviceId,
     deviceLabel: "RDK X5",
-    networkType: "wifi"
+    networkType: environment.networkType ?? "unknown",
+    // QA attribution, as the phones and the web app send it, when agent.env names a test run.
+    ...config.testing
   };
+  if (environment.appVersion) event.appVersion = environment.appVersion;
+  if (environment.gitCommit) event.gitCommit = environment.gitCommit;
   if (memory) event.memory = memory;
-  void config;
   return event;
 }
 
@@ -160,6 +210,8 @@ export type RelayClientOptions = {
   setInterval?: typeof globalThis.setInterval;
   clearInterval?: typeof globalThis.clearInterval;
   log?: (line: string) => void;
+  /** The kernel routing table, read at each connect (the link may change between sessions). */
+  readRouteTable?: () => string;
 };
 
 const SOCKET_CONNECTING = 0;
@@ -190,6 +242,17 @@ export function createRelayClient(
   let ready = false;
   let memory: SessionMemorySnapshot | undefined;
   let intentional = false;
+  // The release does not change while the agent runs; the link may, so it is read per connect.
+  const identity = releaseIdentity(config.releaseRoot);
+  const readRouteTable =
+    options.readRouteTable ??
+    (() => {
+      try {
+        return fs.readFileSync("/proc/net/route", "utf8");
+      } catch {
+        return "";
+      }
+    });
 
   const log = options.log ?? ((line: string) => console.log(line));
   // The factory uses the options it is handed rather than rebuilding them, so
@@ -218,7 +281,8 @@ export function createRelayClient(
 
     current.on("open", () => {
       if (socket !== current) return;
-      current.send(JSON.stringify(buildSessionStart(config, deviceId, memory)));
+      const networkType = defaultRouteNetworkType(readRouteTable());
+      current.send(JSON.stringify(buildSessionStart(config, deviceId, memory, { ...identity, networkType })));
       awaitingPong = false;
       liveness = timers.set(() => {
         if (socket !== current) return;

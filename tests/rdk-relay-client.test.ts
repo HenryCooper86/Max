@@ -1,6 +1,10 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildSessionStart,
+  defaultRouteNetworkType,
   classifyClose,
   createRelayClient,
   defaultSocketOptions,
@@ -15,8 +19,10 @@ import type { RdkConfig } from "../rdk/agent/src/config";
 const CONFIG = {
   relayUrl: "wss://relay.example/agent",
   relayToken: "tok",
-  insecureTls: false
-} as RdkConfig;
+  insecureTls: false,
+  releaseRoot: "/nonexistent-release-root",
+  testing: {}
+} as unknown as RdkConfig;
 
 function fakeSocket() {
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -46,6 +52,58 @@ const DEVICE_ID = "rdk-123e4567-e89b-42d3-a456-426614174000";
 describe("buildSessionStart", () => {
   it("includes the already-loaded RDK identity", () => {
     expect(buildSessionStart(CONFIG, DEVICE_ID).deviceId).toBe(DEVICE_ID);
+  });
+
+  it("reports the network the default route uses, not always wifi", () => {
+    const table = (iface: string, flags = "0003") =>
+      `Iface\tDestination\tGateway\tFlags\n${iface}\t0010A8C0\t00000000\t0001\n${iface}\t00000000\t0101A8C0\t${flags}\n`;
+    expect(defaultRouteNetworkType(table("wlan0"))).toBe("wifi");
+    expect(defaultRouteNetworkType(table("eth0"))).toBe("ethernet");
+    expect(defaultRouteNetworkType(table("usb0"))).toBe("cellular");
+    expect(defaultRouteNetworkType(table("wlan0", "0002"))).toBe("unknown"); // route not up
+    expect(defaultRouteNetworkType("")).toBe("unknown");
+    // Wi-Fi and a USB tether both up: the lower metric wins, whichever line comes first.
+    const header = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\n";
+    const wifi = "wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\n";
+    const tether = "usb0\t00000000\t012AA8C0\t0003\t0\t0\t100\n";
+    expect(defaultRouteNetworkType(header + wifi + tether)).toBe("cellular");
+    expect(defaultRouteNetworkType(header + tether + wifi)).toBe("cellular");
+  });
+
+  it("sends the release's build identity, the link and the test run it is under", () => {
+    const releaseRoot = mkdtempSync(join(tmpdir(), "rdk-release-"));
+    try {
+      mkdirSync(releaseRoot, { recursive: true });
+      writeFileSync(join(releaseRoot, ".rdk-release-sha"), `${"ab12".repeat(10)}\n`);
+      writeFileSync(join(releaseRoot, "package.json"), JSON.stringify({ version: "0.2.0" }));
+      const config = {
+        ...CONFIG,
+        releaseRoot,
+        testing: { testerId: "bench-2", testingRunId: "run-7" }
+      } as RdkConfig;
+      const socket = fakeSocket();
+      const client = createRelayClient(config, DEVICE_ID, HANDLERS, {
+        wsFactory: () => socket,
+        log: () => {},
+        readRouteTable: () => "Iface\tDestination\tGateway\tFlags\nusb0\t00000000\t0101A8C0\t0003\n",
+        setInterval: (() => 0) as unknown as typeof setInterval,
+        clearInterval: () => {}
+      });
+      client.connect();
+      socket.readyState = 1;
+      socket.emit("open");
+      const start = JSON.parse(String(socket.sent[0])) as Record<string, unknown>;
+      expect(start).toMatchObject({
+        gitCommit: "ab12ab12ab12",
+        appVersion: "max-rdk@0.2.0",
+        networkType: "cellular",
+        testerId: "bench-2",
+        testingRunId: "run-7"
+      });
+      client.disconnect();
+    } finally {
+      rmSync(releaseRoot, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1,3 +1,13 @@
+import type { SessionStartEvent } from "../../../shared/agent";
+
+/** QA attribution a board under test sends in `session.start`, as the phones and the web app do. */
+export type RdkTesting = Partial<
+  Pick<
+    SessionStartEvent,
+    "testerId" | "testerRegion" | "testingCampaignId" | "testingTestCaseId" | "testingRunId" | "testingAssignmentId"
+  >
+>;
+
 export type RdkConfig = {
   relayUrl: string;
   /** Operator relay token. The relay refuses the /agent upgrade with 401 once
@@ -62,6 +72,10 @@ export type RdkConfig = {
    */
   adasAudio: boolean;
   adasAudioDir: string;
+  /** The installed release (deploy.sh stamps its SHA there as .rdk-release-sha), for the build identity it reports. */
+  releaseRoot: string;
+  /** Set only from the MAX_TESTER_* / MAX_TESTING_* variables that are present. */
+  testing: RdkTesting;
 };
 
 function requireString(env: NodeJS.ProcessEnv, key: string): string {
@@ -178,6 +192,17 @@ export function loadConfig(
     aecSuppression: optionalNumber(env, "MAX_AEC_SUPPRESSION", 2),
     aecDump: optionalString(env, "MAX_AEC_DUMP", ""),
     adasAudio: optionalFlag(env, "MAX_ADAS_AUDIO"),
-    adasAudioDir: optionalString(env, "MAX_ADAS_AUDIO_DIR", "/opt/max/rdk/audio/alerts")
+    adasAudioDir: optionalString(env, "MAX_ADAS_AUDIO_DIR", "/opt/max/rdk/audio/alerts"),
+    releaseRoot: optionalString(env, "MAX_RELEASE_ROOT", "/opt/max"),
+    testing: Object.fromEntries(
+      Object.entries({
+        testerId: env.MAX_TESTER_ID,
+        testerRegion: env.MAX_TESTER_REGION,
+        testingCampaignId: env.MAX_TESTING_CAMPAIGN_ID,
+        testingTestCaseId: env.MAX_TESTING_TEST_CASE_ID,
+        testingRunId: env.MAX_TESTING_RUN_ID,
+        testingAssignmentId: env.MAX_TESTING_ASSIGNMENT_ID
+      }).flatMap(([key, value]) => (value?.trim() ? [[key, value.trim()]] : []))
+    )
   };
 }

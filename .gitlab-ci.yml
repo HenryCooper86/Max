@@ -22,7 +22,8 @@ web:check:
   script:
     - npm ci
     - npm run check
-    - npm audit --omit=dev --audit-level=low
+    # The runner installs through a mirror that has no audit service, so the audit asks npm's own registry.
+    - npm audit --omit=dev --audit-level=low --registry=https://registry.npmjs.org
 
 rdk:vision-gate:
   stage: test

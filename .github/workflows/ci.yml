@@ -185,7 +185,7 @@ jobs:
       - uses: android-actions/setup-android@v4
         with:
           # Install only what is needed (v4 defaults to platform-tools). Match AGP's SDK selection.
-          packages: "platform-tools platforms;android-36.1 build-tools;36.0.0"
+          packages: "platform-tools platforms;android-37.2 build-tools;36.0.0"
       # MainLaunchTest's Robolectric runtime (about 200 MB) is fetched into ~/.m2, which `cache: gradle` leaves out.
       - uses: actions/cache@v6
         with:

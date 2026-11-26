@@ -407,7 +407,8 @@ or IP address in the URL. Release builds use the default Android trust policy.
   tokens, the emergency contact, crash settings, captures and their metadata never leave the phone.
 - The launcher and system labels default to English (`res/values/`), with Chinese in
   `res/values-zh/`, matching the in-app language rule (Chinese only for Chinese system locales).
-- The app targets API 36 and compiles against Android 16 QPR2 (36.1), matching the 2026 Play gate.
+- The app targets API 36, matching the 2026 Play gate, and compiles against Android SDK Platform 37.2, which its
+  AndroidX, Compose and OkHttp versions require.
 - Keep the foreground-service notification clear and user-visible for Android policy compliance.
 
 ## Remaining validation and follow-ups

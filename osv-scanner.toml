@@ -3,7 +3,7 @@
 
 [[IgnoredVulns]]
 id = "GHSA-8474-xrp6-wh69"
-ignoreUntil = 2027-02-26
+effectiveUntil = 2027-02-26
 reason = """activesupport safe_constantize DoS, fixed only in 8.0.5.2. Only CocoaPods uses activesupport, on a \
 developer's machine during pod install, never with untrusted input, and the latest cocoapods-core requires \
 activesupport < 8. Take 8.x as soon as CocoaPods allows it."""

@@ -12041,7 +12041,19 @@ button.opsCard:disabled {
   background: var(--scrim);
 }
 
+/* The dimmed area around the dialog closes it on a click. Fixed to the
+   viewport, so it still covers the page when a tall dialog is scrolled; the
+   dialog is positioned after it and so is painted above. */
+.cxScrimClose {
+  position: fixed;
+  inset: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
 .cxDialog {
+  position: relative;
   display: grid;
   width: min(100%, 440px);
   gap: 16px;

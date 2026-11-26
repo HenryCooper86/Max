@@ -121,6 +121,18 @@ describe("production warning playback", () => {
     expect(context.sources[2]!.stop).toHaveBeenCalledOnce();
   });
 
+  it("reports a barge-in only when asked, so a cut the relay has moved on from leaves the turn alone", async () => {
+    const { playback, interrupted } = setup();
+    await playback.ensurePlaybackContext();
+    playback.playPcm16(new ArrayBuffer(960));
+    playback.stopAgentSpeech(false);
+    expect(contexts[0]!.sources[0]!.stop).toHaveBeenCalledOnce();
+    expect(interrupted).not.toHaveBeenCalled();
+    playback.playPcm16(new ArrayBuffer(960));
+    playback.stopAgentSpeech();
+    expect(interrupted).toHaveBeenCalledOnce();
+  });
+
   it("defers ordinary browser speech until the warning completes and barge-in cancels the deferred reply", async () => {
     const { playback, speech } = setup();
     await playback.ensurePlaybackContext();

@@ -8,6 +8,15 @@ import { shouldKeepPolling, toMillis, TOPUP_POLL_MS } from "./poll";
 
 type Phase = "pending" | "paid" | "closed";
 
+/** What Tab reaches inside the dialog, in order. Of a group of radio buttons
+ *  only the chosen one is a Tab stop; the others are reached with the arrows. */
+function tabStops(dialog: HTMLElement): HTMLElement[] {
+  const controls = dialog.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled])");
+  return Array.from(controls).filter(
+    (element) => !(element instanceof HTMLInputElement && element.type === "radio" && !element.checked)
+  );
+}
+
 function providerLabel(provider: Provider, say: (zh: string, en: string) => string): string {
   return provider === "wechat"
     ? "微信支付 WeChat Pay"
@@ -41,10 +50,13 @@ function QrImage({ value, label }: { value: string; label: string }) {
 /** Pick a pack and a way to pay, show the QR code, and wait for the money. */
 export function TopUpDialog({
   session,
+  opener,
   onClose,
   onPaid
 }: {
   session: Session;
+  /** The control that opened the dialog; it gets the focus back when this closes. */
+  opener: HTMLElement;
   onClose: () => void;
   onPaid: () => void;
 }) {
@@ -80,13 +92,32 @@ export function TopUpDialog({
   }, [api, token, fail]);
 
   useEffect(() => {
-    dialogRef.current?.focus();
+    const dialog = dialogRef.current;
+    dialog?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const stops = tabStops(dialog);
+      const first = stops[0];
+      const last = stops[stops.length - 1];
+      const active = document.activeElement;
+      // The dialog itself holds the focus at first, or it has slipped out to
+      // the page behind: Tab starts over inside either way.
+      const outside = active === dialog || !dialog.contains(active);
+      if (outside || (event.shiftKey ? active === first : active === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (opener.isConnected) opener.focus();
+    };
+  }, [onClose, opener]);
 
   // Ask about the order every two seconds until it is paid, closed, past its
   // expiry, or this dialog goes away.
@@ -138,7 +169,16 @@ export function TopUpDialog({
   const packLabel = (item: Pack) => formatYuan(item.fen);
 
   return (
-    <div className="cxScrim" onClick={onClose}>
+    <div className="cxScrim">
+      {/* The dimmed area around the dialog closes it. It is a real button: the
+          visible Close button and Escape are the keyboard's way to do that. */}
+      <button
+        type="button"
+        className="cxScrimClose"
+        aria-label={say("关闭", "Close")}
+        tabIndex={-1}
+        onClick={onClose}
+      />
       <div
         className="cxDialog"
         role="dialog"
@@ -146,7 +186,6 @@ export function TopUpDialog({
         aria-labelledby="cx-topup-title"
         tabIndex={-1}
         ref={dialogRef}
-        onClick={(event) => event.stopPropagation()}
       >
         <div className="cxRow spread">
           <h2 id="cx-topup-title">{say("充值", "Top up")}</h2>

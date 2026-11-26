@@ -624,7 +624,17 @@ export type AgentEvent =
       resume?: string;
     }
   | { type: "connection"; state: ConnectionState; detail: string }
-  | { type: "status"; state: string; detail: string }
+  | {
+      type: "status";
+      state: string;
+      detail: string;
+      /** On `hearing`: the relay itself cut the reply (a truncation, an
+       *  announcement, a guardrail, a typed turn), not the user's voice, so a
+       *  client that confirms barge-ins against its own microphone stops at
+       *  once. Absent when a speech detector heard the user, and from relays
+       *  older than the marker (docs/audio/contract.md). */
+      cause?: "relay";
+    }
   | {
       type: "transcript";
       turnId: string;

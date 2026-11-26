@@ -259,7 +259,7 @@ The fix is two-part, and both halves matter:
   queued reference is dropped.
 - A relay barge-in is honoured only if the local voice gate — reading the
   already-cancelled mic — heard the rider within 600 ms
-  (`rdk/agent/src/audio/barge-in.ts`). Doubao's VAD gets a second opinion from
+  (`shared/barge-in.ts`). Doubao's VAD gets a second opinion from
   a signal the canceller has cleaned.
 
 **If echo ever returns, read the helper's log first.** It prints levels either

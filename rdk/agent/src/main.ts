@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { Socket } from "node:net";
 import { createAlertPlayer } from "./audio/alert-player";
 import { createCapture } from "./audio/capture";
-import { createBargeInGuard } from "./audio/barge-in";
 import { rms } from "./audio/dsp";
 import { applyCrosstalk } from "./audio/mixer";
 import { getAlsaVolume, setAlsaVolume } from "./audio/volume";
@@ -29,6 +28,7 @@ import { createRelayClient, nextBackoffMs, type RelayClose, type RelayCloseKind 
 import { createVisionClient, type VisionClient, type VisionEvent } from "./vision-client";
 import { startHeartbeat } from "./watchdog";
 import type { AgentEvent, DeviceResultEvent } from "../../../shared/agent";
+import { createBargeInGuard } from "../../../shared/barge-in";
 import { NAV_FABRICATION_CLEAR_DETAIL } from "../../../shared/nav-fabrication";
 
 const VISION_RECONNECT_MS = 2_000;
@@ -436,11 +436,12 @@ function start(): void {
         advertiser.setToken(event.token);
       }
       if (event.type === "status" && event.state === "hearing") {
-        if (event.detail === NAV_FABRICATION_CLEAR_DETAIL) {
-          // The relay caught the model fabricating navigation — not rider
-          // speech, so there is no mic signal to corroborate and never will
-          // be. Flush unconditionally: whatever fabricated audio is already
-          // queued or playing must stop now, the same way a confirmed
+        if (event.detail === NAV_FABRICATION_CLEAR_DETAIL || event.cause === "relay") {
+          // The relay cut the reply itself: caught the model fabricating
+          // navigation, a guardrail stop, an announcement or a typed turn
+          // (`cause: "relay"`). Not rider speech, so there is no mic signal to
+          // corroborate and never will be. Flush unconditionally: whatever is
+          // already queued or playing must stop now, the same way a confirmed
           // barge-in below does.
           playback.flush();
         } else {

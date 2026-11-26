@@ -106,7 +106,7 @@ The embedded RDK X5 client runs the helmet audio, camera, local HUD, and ADAS de
 - Browser text-to-speech fallback when Doubao returns reply text but no audio.
 - `女声 / 男声` voice toggle that picks the live Doubao speaker, plus a 语气 personality selector (极简 / 友好 / 技术 / 领航).
 - Boosted, soft-limited playback so the agent is loud enough at the helmet speaker without the harsh clipping of a hard gain (web compressor; iOS/Android per-sample soft limiter).
-- Barge-in: agent speech stops as soon as the rider talks.
+- Barge-in: agent speech stops as soon as the rider talks. Where the relay's audio plan says `bargeIn: "confirm"` (no echo cancellation), the web app, the board and the reference client first check that their own microphone heard the rider, so the assistant's own voice from the speaker cannot cut it off; a cut the relay makes itself (`cause: "relay"`) stops speech at once.
 - Server-issued turn and delivery IDs keep partial/final transcript updates together and make TTS fallback exactly-once across reconnects and repeated text.
 - Automatic WebSocket reconnect with exponential backoff if the relay drops.
 - Generated event contracts keep TypeScript, Kotlin, and Swift event names and required fields synchronized from one JSON Schema.

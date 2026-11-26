@@ -41,34 +41,39 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
 
   // Barge-in: silence whatever the agent is currently saying so the rider can
   // interrupt. Covers both browser TTS and queued Doubao voice audio.
-  const stopAgentSpeech = useCallback(() => {
-    // Only report a barge-in when the agent was audibly saying something —
-    // this runs on every rider ASR partial, and claiming "已打断 Max" while
-    // Max was silent fought the server's hearing/asr turn states.
-    const wasSpeaking =
-      warningPlayer.isActive() ||
-      spokenWarningRef.current ||
-      playbackSourcesRef.current.length > 0 ||
-      ("speechSynthesis" in window && window.speechSynthesis.speaking);
-    deferredSpeechRef.current = null;
-    warningGenerationRef.current += 1;
-    spokenWarningRef.current = false;
-    warningPlayer.stop();
-    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-    for (const source of playbackSourcesRef.current) {
-      try {
-        source.onended = null;
-        source.stop();
-      } catch {
-        /* source already finished */
+  // `reportInterrupted` is false for a cut the relay has already moved on
+  // from, where "已打断 Max，继续听你说" would contradict the newer turn state.
+  const stopAgentSpeech = useCallback(
+    (reportInterrupted = true) => {
+      // Only report a barge-in when the agent was audibly saying something —
+      // this runs on every rider ASR partial, and claiming "已打断 Max" while
+      // Max was silent fought the server's hearing/asr turn states.
+      const wasSpeaking =
+        warningPlayer.isActive() ||
+        spokenWarningRef.current ||
+        playbackSourcesRef.current.length > 0 ||
+        ("speechSynthesis" in window && window.speechSynthesis.speaking);
+      deferredSpeechRef.current = null;
+      warningGenerationRef.current += 1;
+      spokenWarningRef.current = false;
+      warningPlayer.stop();
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      for (const source of playbackSourcesRef.current) {
+        try {
+          source.onended = null;
+          source.stop();
+        } catch {
+          /* source already finished */
+        }
       }
-    }
-    playbackSourcesRef.current = [];
-    if (playbackContextRef.current) {
-      playbackCursorRef.current = playbackContextRef.current.currentTime;
-    }
-    if (wasSpeaking && transmittingRef.current) onInterrupted();
-  }, [onInterrupted, transmittingRef, warningPlayer]);
+      playbackSourcesRef.current = [];
+      if (playbackContextRef.current) {
+        playbackCursorRef.current = playbackContextRef.current.currentTime;
+      }
+      if (reportInterrupted && wasSpeaking && transmittingRef.current) onInterrupted();
+    },
+    [onInterrupted, transmittingRef, warningPlayer]
+  );
 
   // Browser-TTS fallback, used when Doubao returns reply text but no audio.
   const speakNow = useCallback(

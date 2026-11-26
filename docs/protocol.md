@@ -135,23 +135,29 @@ When the user starts speaking, the relay sends `status` with `state: "hearing"`.
 playback at once and drop any audio you have not yet played. The relay has already stopped generating. This is what
 makes the conversation feel interruptible.
 
+The relay sends the same `hearing` when it cuts the reply itself (to announce something, because a guardrail stopped
+the answer, or because the user typed over it), with `cause: "relay"`. No speech detector is behind it, so stop
+playback at once, whatever `audio.bargeIn` says.
+
 The `audio.bargeIn` field of `session.started` can be `"confirm"` for devices that told the relay they hear their own
-speaker. Then verify with your own microphone before cutting playback. The full rules, including how a device
-declares what its hardware already does in `session.start.audio`, are in [the audio contract](audio/contract.md).
+speaker. Then a `hearing` without `cause: "relay"` is confirmed with the device's own microphone before cutting
+playback. The full rules, including how a device declares what its hardware already does in `session.start.audio`,
+are in [the audio contract](audio/contract.md).
 
 #### Status values
 
-`status` carries `state` and a human-readable `detail`. The states a UI should know:
+`status` carries `state`, a human-readable `detail`, and on `hearing` an optional `cause` (see [Barge-in](#barge-in)).
+The states a UI should know:
 
-| State       | Meaning                                         |
-| ----------- | ----------------------------------------------- |
-| `ready`     | The session is up and waiting.                  |
-| `listening` | Microphone is open and waiting.                 |
-| `hearing`   | The user is speaking. Stop playback (barge-in). |
-| `thinking`  | The user finished; the assistant is working.    |
-| `speaking`  | The assistant is replying.                      |
-| `degraded`  | The backend had a problem and is recovering.    |
-| `closed`    | The backend session ended.                      |
+| State       | Meaning                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| `ready`     | The session is up and waiting.                                                                         |
+| `listening` | Microphone is open and waiting.                                                                        |
+| `hearing`   | The user is speaking. Stop playback (barge-in). With `cause: "relay"`, the relay cut the reply itself. |
+| `thinking`  | The user finished; the assistant is working.                                                           |
+| `speaking`  | The assistant is replying.                                                                             |
+| `degraded`  | The backend had a problem and is recovering.                                                           |
+| `closed`    | The backend session ended.                                                                             |
 
 Treat unknown states as informational.
 
@@ -325,7 +331,7 @@ The answer to a `tool.call`. Send exactly one per call, within 15 seconds.
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `connection`      | Link state: `{ state, detail }`. `state` is `relay` right after connecting.                                              |
 | `session.started` | The backend is ready: `{ provider, mode, capabilities, protocol?, audio? }`.                                             |
-| `status`          | `{ state, detail }`. See [Status values](#status-values).                                                                |
+| `status`          | `{ state, detail, cause? }`. See [Status values](#status-values).                                                        |
 | `transcript`      | What the user said or the assistant says. See [Transcripts](#transcripts).                                               |
 | `tool.call`       | Run one of your client tools. See [Tools](#tools).                                                                       |
 | `tool.activity`   | Progress of any tool call, for a UI.                                                                                     |

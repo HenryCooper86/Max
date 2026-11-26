@@ -442,7 +442,12 @@ class Device:
                     await socket.send(json.dumps({"type": "audio.start"}))
                     sender = asyncio.ensure_future(self._send_microphone(socket))
                 elif kind == "status" and event.get("state") == "hearing":
-                    await self._interrupt()
+                    if event.get("cause") == "relay":
+                        # The relay cut the reply itself (a guardrail, an announcement, a
+                        # typed turn): there is no speech for this microphone to confirm.
+                        self.speaker.flush()
+                    else:
+                        await self._interrupt()
                 elif kind == "hazard.alert" and event.get("interrupt"):
                     self.speaker.flush()  # a safety alert always cuts in
                 elif kind == "transcript" and event.get("final"):

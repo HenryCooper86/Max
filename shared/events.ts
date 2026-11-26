@@ -7,7 +7,7 @@
 // are ignored, not errors, so older clients tolerate newer relays).
 
 import { ADAS_DIRECTIONS, ADAS_THREATS, type AdasDirection, type AdasSeverity, type AdasThreat } from "./adas";
-import type { AgentEvent, ConnectionState, NavManeuver, ProviderCapabilities } from "./agent";
+import type { AgentEvent, AudioPlan, ConnectionState, NavManeuver, ProviderCapabilities } from "./agent";
 import type { DemoScenario, RideMode } from "./ride";
 import { MAX_MEMORY_DESTINATION_CHARS } from "./session";
 import { SERVER_EVENT_REQUIRED_FIELDS, SERVER_EVENT_TYPES } from "./generated/agent-protocol";
@@ -23,6 +23,8 @@ const RIDE_MODES = new Set(["ride", "stop", "navigation", "emergency"]);
 const DEMO_SCENARIOS = new Set(["commute", "wind", "fuel", "group", "emergency", "adas", "crash"]);
 const MEMORY_LANGUAGES = new Set(["zh", "en"]);
 const RESPONSE_MODES = new Set(["concise", "normal", "emergency"]);
+const WAKE_GATES = new Set(["relay", "device", "off"]);
+const BARGE_IN_MODES = new Set(["relay", "confirm"]);
 const NETWORK_STATES = new Set(["online", "degraded", "offline"]);
 const ADAS_THREAT_SET = new Set<string>(ADAS_THREATS);
 const ADAS_DIRECTION_SET = new Set<string>(ADAS_DIRECTIONS);
@@ -62,6 +64,11 @@ function enumOrUndefined<T extends string>(value: unknown, allowed: Set<string>)
   return isString(value) && allowed.has(value) ? (value as T) : undefined;
 }
 
+/** Optional boolean: kept only when the relay sent one. */
+function booleanOrUndefined(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function isGeoPoint(value: unknown): value is { lat: number; lon: number } {
   return isRecord(value) && isFiniteNumber(value.lat) && isFiniteNumber(value.lon);
 }
@@ -94,6 +101,8 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
       // Build a sanitized object like every other branch — returning the raw
       // record let unchecked capability values (and extra fields) into state.
       const raw = value.capabilities;
+      // The optional flags stay absent (not false) when a relay does not send
+      // them: "older than tool support" is not "this backend has no tools".
       const capabilities: ProviderCapabilities = {
         serverVad: raw.serverVad === true,
         synthesizedAudio: raw.synthesizedAudio === true,
@@ -102,13 +111,34 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
         voiceSelection: raw.voiceSelection === true,
         weatherContext: raw.weatherContext === true,
         sessionMemory: raw.sessionMemory === true,
-        emergencyMode: raw.emergencyMode === true
+        emergencyMode: raw.emergencyMode === true,
+        tools: booleanOrUndefined(raw.tools),
+        textInput: booleanOrUndefined(raw.textInput),
+        imageInput: booleanOrUndefined(raw.imageInput),
+        videoInput: booleanOrUndefined(raw.videoInput)
       };
+      // The audio plan, the protocol version and the resume id are the
+      // relay's own facts, added to every backend's announcement
+      // (server/session-controller.ts). A relay older than them sends none.
       return {
         type: "session.started",
         provider: value.provider,
         mode: value.mode as "mock" | "live",
-        capabilities
+        capabilities,
+        protocol:
+          typeof value.protocol === "number" && Number.isInteger(value.protocol) && value.protocol >= 1
+            ? value.protocol
+            : undefined,
+        // Field by field, with the audio contract's defaults for what is
+        // missing or unknown: a plan this client cannot read acts as no plan.
+        audio: isRecord(value.audio)
+          ? {
+              wakeGate: enumOrUndefined<AudioPlan["wakeGate"]>(value.audio.wakeGate, WAKE_GATES) ?? "relay",
+              silenceFill: value.audio.silenceFill === true,
+              bargeIn: enumOrUndefined<AudioPlan["bargeIn"]>(value.audio.bargeIn, BARGE_IN_MODES) ?? "relay"
+            }
+          : undefined,
+        resume: isString(value.resume) && value.resume ? value.resume : undefined
       };
     }
 
@@ -120,7 +150,14 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
 
     case "status": {
       if (!isString(value.state) || !isString(value.detail)) return null;
-      return { type: "status", state: value.state, detail: value.detail };
+      return {
+        type: "status",
+        state: value.state,
+        detail: value.detail,
+        // Only the marker's one value means anything; anything else is a
+        // newer relay's and is dropped rather than passed through unchecked.
+        cause: value.cause === "relay" ? "relay" : undefined
+      };
     }
 
     case "transcript": {

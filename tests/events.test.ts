@@ -37,6 +37,69 @@ describe("validateAgentEvent", () => {
     });
   });
 
+  it("keeps the audio plan, protocol, resume id and newer capability flags of session.started", () => {
+    const event = validateAgentEvent({
+      type: "session.started",
+      provider: "doubao",
+      mode: "live",
+      capabilities: { serverVad: true, tools: true, textInput: false, imageInput: true, videoInput: false },
+      protocol: 1,
+      resume: "rsm_0123456789abcdef",
+      audio: { wakeGate: "device", silenceFill: true, bargeIn: "confirm" }
+    });
+    expect(event).toMatchObject({
+      type: "session.started",
+      protocol: 1,
+      resume: "rsm_0123456789abcdef",
+      audio: { wakeGate: "device", silenceFill: true, bargeIn: "confirm" },
+      capabilities: {
+        serverVad: true,
+        synthesizedAudio: false,
+        tools: true,
+        textInput: false,
+        imageInput: true,
+        videoInput: false
+      }
+    });
+  });
+
+  it("leaves a capability flag a relay never sent absent, which is not the same as false", () => {
+    const older = validateAgentEvent({ type: "session.started", provider: "mock", mode: "mock", capabilities: {} });
+    const sent = validateAgentEvent({
+      type: "session.started",
+      provider: "mock",
+      mode: "mock",
+      capabilities: { tools: false }
+    });
+    if (older?.type !== "session.started" || sent?.type !== "session.started")
+      throw new Error("session.started was dropped");
+    expect(older).toMatchObject({ capabilities: { serverVad: false, synthesizedAudio: false } });
+    expect(older.capabilities.tools).toBeUndefined();
+    expect(sent.capabilities.tools).toBe(false);
+  });
+
+  it("drops a protocol, resume id or audio plan it cannot vouch for, and reads an unknown plan as the default", () => {
+    const base = { type: "session.started", provider: "mock", mode: "mock", capabilities: {} };
+    for (const protocol of [0, -1, 1.5, "1", null]) {
+      expect(validateAgentEvent({ ...base, protocol }), JSON.stringify(protocol)).toMatchObject({
+        protocol: undefined
+      });
+    }
+    expect(validateAgentEvent({ ...base, resume: "" })).toMatchObject({ resume: undefined });
+    expect(validateAgentEvent({ ...base, resume: 7 })).toMatchObject({ resume: undefined });
+    expect(validateAgentEvent({ ...base, audio: "confirm" })).toMatchObject({ audio: undefined });
+    expect(
+      validateAgentEvent({ ...base, audio: { wakeGate: "shout", silenceFill: "yes", bargeIn: "maybe" } })
+    ).toMatchObject({ audio: { wakeGate: "relay", silenceFill: false, bargeIn: "relay" } });
+  });
+
+  it("keeps the relay's own marker on a status and drops any cause it does not know", () => {
+    const hearing = { type: "status", state: "hearing", detail: "回答已停止" };
+    expect(validateAgentEvent({ ...hearing, cause: "relay" })).toMatchObject({ state: "hearing", cause: "relay" });
+    expect(validateAgentEvent({ ...hearing, cause: "user" })).toMatchObject({ cause: undefined });
+    expect(validateAgentEvent(hearing)).toMatchObject({ cause: undefined });
+  });
+
   it("rejects transcripts with a bad speaker or missing text", () => {
     expect(
       validateAgentEvent({

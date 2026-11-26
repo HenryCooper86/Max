@@ -439,6 +439,53 @@ afterEach(async () => {
 });
 
 describe("EvidenceWorkspace navigation state", () => {
+  it("moves between the session detail tabs with the arrow keys and Home/End, selecting each tab it lands on", async () => {
+    const selected = session("keys-session", "keys-key", "keys", "pass", "");
+    const focus = vi.fn();
+    const getElementById = vi.fn(() => ({ focus }));
+    vi.stubGlobal("document", { getElementById });
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={agent()}
+          user={user({ role: "reviewer" })}
+          data={data([selected], [tester("keys-key", "keys", { pass: 1, watch: 0, fail: 0 })])}
+        />
+      );
+    });
+    const selectedTabs = () =>
+      renderer!.root
+        .findAll((node) => node.type === "button" && node.props.role === "tab" && node.props["aria-selected"] === true)
+        .map(text);
+    const press = (label: string, key: string) => {
+      const preventDefault = vi.fn();
+      act(() => tabButton(renderer!, label).props.onKeyDown({ key, preventDefault }));
+      return preventDefault;
+    };
+
+    expect(selectedTabs()).toEqual(["对话"]);
+    getElementById.mockClear();
+    expect(press("对话", "ArrowRight").mock.calls).toHaveLength(1);
+    expect(selectedTabs()).toEqual(["复核"]);
+    expect(getElementById).toHaveBeenLastCalledWith("evidence-tab-review");
+    expect(focus).toHaveBeenCalledOnce();
+    // The ends wrap round.
+    press("复核", "ArrowRight");
+    expect(selectedTabs()).toEqual(["对话"]);
+    press("对话", "ArrowLeft");
+    expect(selectedTabs()).toEqual(["复核"]);
+    press("复核", "Home");
+    expect(selectedTabs()).toEqual(["对话"]);
+    press("对话", "End");
+    expect(selectedTabs()).toEqual(["复核"]);
+    // Any other key is left to the button.
+    expect(press("复核", "Enter")).not.toHaveBeenCalled();
+    expect(selectedTabs()).toEqual(["复核"]);
+  });
+
   it("clears scoped evidence drafts and auto-selects allowed evidence after a reviewer becomes a tester", async () => {
     const reviewerSession = session("reviewer-session", "reviewer-key", "reviewer", "fail", "审核员备注");
     const testerSession = session("tester-session", "tester-key", "tester", "pass", "测试员备注");

@@ -115,7 +115,7 @@ vi.mock("../rdk/agent/src/audio/reference", () => ({
 }));
 
 vi.mock("../rdk/agent/src/audio/voice-gate", () => ({ createVoiceGate: () => () => fixtures.gateOpen }));
-vi.mock("../rdk/agent/src/audio/barge-in", () => ({
+vi.mock("../shared/barge-in", () => ({
   createBargeInGuard: () => ({ request: vi.fn(), observe: vi.fn() })
 }));
 vi.mock("../rdk/agent/src/audio/mixer", () => ({ applyCrosstalk: async () => true }));
@@ -487,6 +487,17 @@ describe("start navigation lifecycle wiring", () => {
     active.interruptOrdinaryPlayback();
     expect(fixtures.playbackFlush).toHaveBeenCalledOnce();
     expect(fixtures.playbackFlush.mock.calls[0]).toHaveLength(0);
+  });
+
+  it("cuts the reply at once when the relay cut it itself, and waits for the mic otherwise", () => {
+    const handlers = fixtures.relayHandlers!;
+    fixtures.playbackFlush.mockClear();
+    // The barge-in guard is a stub that never confirms: an untagged hearing must not flush on its own.
+    handlers.onEvent({ type: "status", state: "hearing", detail: "" });
+    expect(fixtures.playbackFlush).not.toHaveBeenCalled();
+    // A guardrail stop, an announcement or a typed turn: no rider speech for the mic to confirm.
+    handlers.onEvent({ type: "status", state: "hearing", detail: "回答已停止", cause: "relay" });
+    expect(fixtures.playbackFlush).toHaveBeenCalledOnce();
   });
 
   it("publishes coordinate-free companion and navigation HUD snapshots in owner order", () => {

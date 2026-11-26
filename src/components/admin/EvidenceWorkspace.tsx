@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { scenarioLabel } from "../../../shared/ride";
 import {
   TESTING_CAMPAIGNS,
@@ -1321,6 +1321,32 @@ export function EvidenceWorkspace({
     writeEvidenceUrl({ tab: tab === "conversation" ? null : tab });
   };
 
+  // The tabs on offer right now, in order.
+  const detailTabs: DetailTab[] = [
+    "conversation",
+    ...(technicalMode ? (["diagnostics"] as DetailTab[]) : []),
+    ...(canReview ? (["review"] as DetailTab[]) : [])
+  ];
+  // The WAI-ARIA tabs pattern: the arrow keys and Home/End move to another
+  // tab and select it.
+  const onDetailTabKey = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const last = detailTabs.length - 1;
+    const next =
+      event.key === "ArrowRight"
+        ? (index + 1) % detailTabs.length
+        : event.key === "ArrowLeft"
+          ? (index + last) % detailTabs.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? last
+              : undefined;
+    if (next === undefined) return;
+    event.preventDefault();
+    setDetailTabWithUrl(detailTabs[next]!);
+    document.getElementById(`evidence-tab-${detailTabs[next]}`)?.focus();
+  };
+
   const purgeDraftsForSessions = (sessionIds: string[]) => {
     let changed = false;
     for (const sessionId of sessionIds) {
@@ -2040,32 +2066,8 @@ export function EvidenceWorkspace({
                 ) : null}
               </div>
               {noticeElement}
-              <div
-                className="evidenceTabs"
-                role="tablist"
-                aria-label={localized(language, "会话视图", "Session view")}
-                onKeyDown={(event) => {
-                  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                  const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
-                  const index = tabs.indexOf(document.activeElement as HTMLButtonElement);
-                  const next =
-                    event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? tabs.length - 1
-                        : (index + (event.key === "ArrowLeft" ? -1 : 1) + tabs.length) % tabs.length;
-                  event.preventDefault();
-                  tabs[next]?.focus();
-                  tabs[next]?.click();
-                }}
-              >
-                {(
-                  [
-                    "conversation",
-                    ...(technicalMode ? (["diagnostics"] as DetailTab[]) : []),
-                    ...(canReview ? (["review"] as DetailTab[]) : [])
-                  ] as DetailTab[]
-                ).map((tab) => (
+              <div className="evidenceTabs" role="tablist" aria-label={localized(language, "会话视图", "Session view")}>
+                {detailTabs.map((tab, index) => (
                   <button
                     key={tab}
                     type="button"
@@ -2076,6 +2078,7 @@ export function EvidenceWorkspace({
                     className={detailTab === tab ? "active" : ""}
                     aria-selected={detailTab === tab}
                     onClick={() => setDetailTabWithUrl(tab)}
+                    onKeyDown={(event) => onDetailTabKey(event, index)}
                   >
                     {tab === "conversation"
                       ? localized(language, "对话", "Conversation")

@@ -60,8 +60,9 @@ function ConsoleHeader({ onLogout }: { onLogout?: () => void }) {
 function Dashboard({ session }: { session: Session }) {
   const say = useSay();
   const data = useConsoleData(session);
-  const [topUp, setTopUp] = useState(false);
-  const closeTopUp = useCallback(() => setTopUp(false), []);
+  // The button that opened the top-up dialog, so that it can return the focus there.
+  const [topUpOpener, setTopUpOpener] = useState<HTMLButtonElement | null>(null);
+  const closeTopUp = useCallback(() => setTopUpOpener(null), []);
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   return (
     <div className="cxStack">
@@ -73,7 +74,7 @@ function Dashboard({ session }: { session: Session }) {
           {say("重试", "Retry")}
         </button>
       )}
-      <BalanceCard me={data.me} onTopUp={() => setTopUp(true)} />
+      <BalanceCard me={data.me} onTopUp={setTopUpOpener} />
       <ProjectsSection
         session={session}
         projects={data.projects}
@@ -88,7 +89,9 @@ function Dashboard({ session }: { session: Session }) {
       {data.me ? (
         <p className="cxMuted">{say(`已登录：${data.me.customer.email}`, `Signed in as ${data.me.customer.email}`)}</p>
       ) : null}
-      {topUp ? <TopUpDialog session={session} onClose={closeTopUp} onPaid={data.refreshMoney} /> : null}
+      {topUpOpener ? (
+        <TopUpDialog session={session} opener={topUpOpener} onClose={closeTopUp} onPaid={data.refreshMoney} />
+      ) : null}
     </div>
   );
 }

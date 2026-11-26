@@ -483,6 +483,21 @@
             },
             "resume": {
               "type": "string"
+            },
+            "audio": {
+              "type": "object",
+              "properties": {
+                "wakeGate": {
+                  "enum": ["relay", "device", "off"]
+                },
+                "silenceFill": {
+                  "type": "boolean"
+                },
+                "bargeIn": {
+                  "enum": ["relay", "confirm"]
+                }
+              },
+              "required": ["wakeGate", "silenceFill", "bargeIn"]
             }
           },
           "required": ["type", "provider", "mode", "capabilities"]
@@ -515,6 +530,9 @@
             },
             "detail": {
               "type": "string"
+            },
+            "cause": {
+              "enum": ["relay"]
             }
           },
           "required": ["type", "state", "detail"]

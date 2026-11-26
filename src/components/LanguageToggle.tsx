@@ -1,5 +1,12 @@
-import { createContext, useContext, useMemo, useState, type PropsWithChildren } from "react";
-import { createTranslator, persistLanguage, readStoredLanguage, type Language, type Translator } from "../lib/i18n";
+import { createContext, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
+import {
+  applyDocumentLanguage,
+  createTranslator,
+  persistLanguage,
+  readStoredLanguage,
+  type Language,
+  type Translator
+} from "../lib/i18n";
 
 type LanguageContextValue = {
   language: Language;
@@ -15,6 +22,11 @@ export function LanguageProvider({ children }: PropsWithChildren) {
     setLanguageState(next);
     persistLanguage(next);
   };
+  // index.html declares Chinese. Keep what assistive technology reads in step
+  // with the chosen language, on first load and on every switch.
+  useEffect(() => {
+    applyDocumentLanguage(language);
+  }, [language]);
   const value = useMemo(() => ({ language, setLanguage, t: createTranslator(language) }), [language]);
 
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;

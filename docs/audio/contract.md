@@ -49,13 +49,13 @@ happen on the device, because only the device has the speaker signal.
 
 Events that matter for audio:
 
-| Event                                 | What to do                                                                                                   |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `session.started`                     | The relay is ready. Read `audio` (the plan, below), then send `audio.start`.                                 |
-| `status` with `state: "hearing"`      | The wearer started speaking. Stop playing the assistant: drop everything not yet played. See "Interruption". |
-| `hazard.alert` with `interrupt: true` | A safety alert. Stop the assistant at once, unconditionally.                                                 |
-| `transcript`                          | What was heard and said, for a display or a log.                                                             |
-| `error`                               | Log it.                                                                                                      |
+| Event                                 | What to do                                                                                                                                                         |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `session.started`                     | The relay is ready. Read `audio` (the plan, below), then send `audio.start`.                                                                                       |
+| `status` with `state: "hearing"`      | The wearer started speaking, or the relay cut the reply itself (`cause: "relay"`). Stop playing the assistant: drop everything not yet played. See "Interruption". |
+| `hazard.alert` with `interrupt: true` | A safety alert. Stop the assistant at once, unconditionally.                                                                                                       |
+| `transcript`                          | What was heard and said, for a display or a log.                                                                                                                   |
+| `error`                               | Log it.                                                                                                                                                            |
 
 ## Saying what the device already does
 
@@ -122,6 +122,9 @@ assistant cut itself off, and can loop.
   device's own microphone was loud at about the same moment. The reference
   client uses three consecutive 20 ms frames above its speech threshold,
   within 0.6 s, and waits up to 0.3 s for them.
+- `cause: "relay"` on the `hearing` status: the relay cut the reply itself (it is about to announce something, a
+  guardrail stopped the answer, or the wearer typed). No wearer's voice is behind it, so stop playback at once,
+  whatever `bargeIn` says.
 
 The relay sets `confirm` when a device declares `echoCancellation: false` and
 its speaker is anything but `sealed`.
@@ -147,14 +150,14 @@ credential. Pass it as `?token=…` on the `/agent` address.
 So you can compare your device with ones that work. "Platform" means the
 operating system's voice processing, not ours.
 
-|                          | Web                                        | iOS                                | Android                                                   | RDK X5 board                                                |
-| ------------------------ | ------------------------------------------ | ---------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------- |
-| Capture                  | Browser, resampled to 16 kHz in a worklet  | AVAudioEngine, converted to 16 kHz | AudioRecord at 16 kHz, voice-communication source         | ALSA at 48 kHz, decimated to 16 kHz                         |
-| Frames                   | 20 ms                                      | 20 ms                              | 20 ms                                                     | 20 ms                                                       |
-| Echo cancellation        | Platform (`echoCancellation`)              | Platform (voice-processing I/O)    | Platform (`AcousticEchoCanceler`, when the phone has one) | WebRTC audio processing, fed the played signal as reference |
-| Noise suppression        | Platform                                   | Platform (implied by voice mode)   | Platform (`NoiseSuppressor`)                              | WebRTC, high                                                |
-| Gain control             | Platform                                   | Platform (implied)                 | Not enabled                                               | WebRTC, adaptive digital                                    |
-| Stops sending in silence | No                                         | No                                 | No                                                        | No                                                          |
-| Wake word on the device  | No                                         | No                                 | No                                                        | No                                                          |
-| Cuts the reply on        | `hearing`, or any transcript of the wearer | same                               | same                                                      | `hearing`, confirmed by its own microphone                  |
-| Declares `audio`         | Yes: what the browser reports              | Not yet                            | Not yet                                                   | Not yet                                                     |
+|                          | Web                                                                                      | iOS                                | Android                                                   | RDK X5 board                                                |
+| ------------------------ | ---------------------------------------------------------------------------------------- | ---------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------- |
+| Capture                  | Browser, resampled to 16 kHz in a worklet                                                | AVAudioEngine, converted to 16 kHz | AudioRecord at 16 kHz, voice-communication source         | ALSA at 48 kHz, decimated to 16 kHz                         |
+| Frames                   | 20 ms                                                                                    | 20 ms                              | 20 ms                                                     | 20 ms                                                       |
+| Echo cancellation        | Platform (`echoCancellation`)                                                            | Platform (voice-processing I/O)    | Platform (`AcousticEchoCanceler`, when the phone has one) | WebRTC audio processing, fed the played signal as reference |
+| Noise suppression        | Platform                                                                                 | Platform (implied by voice mode)   | Platform (`NoiseSuppressor`)                              | WebRTC, high                                                |
+| Gain control             | Platform                                                                                 | Platform (implied)                 | Not enabled                                               | WebRTC, adaptive digital                                    |
+| Stops sending in silence | No                                                                                       | No                                 | No                                                        | No                                                          |
+| Wake word on the device  | No                                                                                       | No                                 | No                                                        | No                                                          |
+| Cuts the reply on        | `hearing` or a transcript of the wearer, confirmed by its own microphone under `confirm` | same                               | same                                                      | `hearing`, confirmed by its own microphone                  |
+| Declares `audio`         | Yes: what the browser reports                                                            | Not yet                            | Not yet                                                   | Not yet                                                     |

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createBargeInGuard } from "../rdk/agent/src/audio/barge-in";
+import { createBargeInGuard } from "../shared/barge-in";
 
 const BASE = { rmsThreshold: 900, windowMs: 600, minFrames: 3, graceMs: 300 };
 

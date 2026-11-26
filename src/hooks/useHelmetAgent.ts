@@ -9,14 +9,17 @@ import { useLanguage } from "../components/LanguageToggle";
 import {
   IDLE_CLOSE_CODE,
   type AgentHealth,
+  type AudioPlan,
   type ConnectionState,
   type ProviderCapabilities,
   type VoiceEqualizer,
   type VoiceEqualizerOptions,
   type VoicePersonality
 } from "../../shared/agent";
+import { createBargeInGuard } from "../../shared/barge-in";
 import { validateAgentEvent } from "../../shared/events";
 import { detectLanguage } from "../../shared/language";
+import { NAV_FABRICATION_CLEAR_DETAIL } from "../../shared/nav-fabrication";
 import { MOCK_ROUTE } from "../../shared/nav-fixtures";
 import {
   defaultTestCaseForCampaign,
@@ -34,6 +37,8 @@ import {
 } from "../../shared/ride";
 import type { Weather } from "../types";
 import {
+  BARGE_IN_HEARD_WITHIN_MS,
+  BARGE_IN_MIC_RMS,
   DEFAULT_CAPABILITIES,
   DEFAULT_MEMORY,
   DEFAULT_PACKET_STATS,
@@ -279,6 +284,19 @@ export function useHelmetAgent() {
     })
   );
 
+  // How the current relay session wants an interruption confirmed
+  // (session.started.audio.bargeIn): "relay", its word is final, until a
+  // session announces otherwise. That is also what a relay without the audio
+  // contract gets.
+  const bargeInModeRef = useRef<AudioPlan["bargeIn"]>("relay");
+  // `bargeIn: "confirm"`: the relay asks for it when the browser reports no
+  // echo cancellation, because its detector may then be hearing our own
+  // speaker. The cut waits for our microphone to hear the wearer as well.
+  const [bargeInGuard] = useState(() =>
+    createBargeInGuard({ rmsThreshold: BARGE_IN_MIC_RMS, windowMs: BARGE_IN_HEARD_WITHIN_MS })
+  );
+  // Stable, so the capture graph's message handler is built once.
+  const observeMicFrame = useCallback((rms: number) => bargeInGuard.observe(rms), [bargeInGuard]);
   const {
     voiceLevel,
     getMicAnalyser,
@@ -289,7 +307,7 @@ export function useHelmetAgent() {
     releaseMic,
     setTrackEnabled,
     resetFrameWindow
-  } = useMicCapture({ socketRef, transmittingRef, providerReadyRef });
+  } = useMicCapture({ socketRef, transmittingRef, providerReadyRef, onFrameRms: observeMicFrame });
   const audioProcessingRef = useRef(audioProcessing);
   useEffect(() => {
     audioProcessingRef.current = audioProcessing;
@@ -535,6 +553,24 @@ export function useHelmetAgent() {
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
     providerReadyRef.current = false;
+    // Each session announces its own plan.
+    bargeInModeRef.current = "relay";
+
+    /** Barge-in: the relay heard the wearer over the agent's speech. Under
+     *  `bargeIn: "confirm"` the cut waits for our microphone to agree. */
+    const requestBargeIn = () => {
+      if (bargeInModeRef.current !== "confirm") {
+        stopAgentSpeech();
+        return;
+      }
+      // The guard confirms at once when the microphone has already heard the
+      // wearer, and from a later frame when it has not. By then the relay has
+      // often moved on to "thinking": cut the leftover reply, and leave the
+      // turn's state and status to the relay's events.
+      let confirmedAtOnce = true;
+      bargeInGuard.request(() => stopAgentSpeech(confirmedAtOnce));
+      confirmedAtOnce = false;
+    };
 
     socket.addEventListener("open", () => {
       reconnectAttemptsRef.current = 0;
@@ -622,6 +658,7 @@ export function useHelmetAgent() {
           setProvider(event.provider);
           setSessionProvider(event.provider);
           setCapabilities(event.capabilities);
+          bargeInModeRef.current = event.audio?.bargeIn ?? "relay";
           isLiveRef.current = event.mode !== "mock";
           setConnectionState("ready");
           setStatus(event.mode === "mock" ? "模拟路线已启用" : "豆包实时语音在线");
@@ -632,7 +669,12 @@ export function useHelmetAgent() {
         }
         if (event.type === "status") {
           setStatus(event.detail);
-          if (event.state === "hearing") stopAgentSpeech();
+          if (event.state === "hearing") {
+            // A reply the relay cut itself has no wearer's voice behind it to
+            // confirm: stop now, whatever the plan says.
+            if (event.cause === "relay" || event.detail === NAV_FABRICATION_CLEAR_DETAIL) stopAgentSpeech();
+            else requestBargeIn();
+          }
           if (event.state === "connecting") setConnectionState("provider");
           if (event.state === "ready") setConnectionState("ready");
           if (event.state === "closed") setConnectionState("offline");
@@ -640,7 +682,7 @@ export function useHelmetAgent() {
         }
         if (event.type === "transcript") {
           if (event.speaker === "rider") {
-            stopAgentSpeech();
+            requestBargeIn();
           }
           pushTranscript(event.speaker, event.text, event.final !== false, event.turnId, event.deliveryId);
           if (event.speaker === "agent" && (event.useBrowserSpeech ?? event.final !== false)) {
@@ -837,6 +879,7 @@ export function useHelmetAgent() {
       setStatus("连接错误");
     });
   }, [
+    bargeInGuard,
     navController,
     musicController,
     playPcm16,

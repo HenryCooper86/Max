@@ -24,6 +24,12 @@ export const PLAYBACK_SAMPLE_RATE = 24000;
 // gain keeps loud peaks from clipping. Mirrored by PcmPlayer on iOS/Android.
 export const PLAYBACK_GAIN = 2.0;
 export const MAX_RECONNECT_ATTEMPTS = 6;
+// Confirming a barge-in against our own microphone (docs/audio/contract.md,
+// "Interruption"): three consecutive 20 ms frames louder than this count as the
+// wearer speaking, and stay valid for this long. The figure is the contract's
+// reference client's (about -31 dBFS of PCM16).
+export const BARGE_IN_MIC_RMS = 900;
+export const BARGE_IN_HEARD_WITHIN_MS = 600;
 
 export const DEFAULT_RIDE_CONTEXT: RideHudContext = {
   mode: "navigation",

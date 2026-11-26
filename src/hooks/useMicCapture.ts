@@ -13,11 +13,22 @@ type Params = {
   socketRef: MutableRefObject<WebSocket | null>;
   transmittingRef: MutableRefObject<boolean>;
   providerReadyRef: MutableRefObject<boolean>;
+  /** Loudness of every captured 20 ms frame, as the relay receives it. */
+  onFrameRms: (rms: number) => void;
 };
 
 const MAX_SOCKET_BUFFERED_BYTES = 256 * 1024;
 
-export function useMicCapture({ socketRef, transmittingRef, providerReadyRef }: Params) {
+/** Loudness of a captured frame: the root mean square of its PCM16 samples,
+ *  on the 0–32768 scale the audio contract's speech thresholds use. */
+function frameRms(pcm: ArrayBuffer): number {
+  const samples = new Int16Array(pcm);
+  let sum = 0;
+  for (let index = 0; index < samples.length; index += 1) sum += samples[index]! * samples[index]!;
+  return Math.sqrt(sum / samples.length);
+}
+
+export function useMicCapture({ socketRef, transmittingRef, providerReadyRef, onFrameRms }: Params) {
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [packetStats, setPacketStats] = useState<PacketStats>(DEFAULT_PACKET_STATS);
   const [audioProcessing, setAudioProcessing] = useState<AudioProcessingState>(DEFAULT_AUDIO_PROCESSING);
@@ -108,6 +119,7 @@ export function useMicCapture({ socketRef, transmittingRef, providerReadyRef }: 
         workletNode.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
           const message = event.data;
           if (message.type === "frame") {
+            onFrameRms(frameRms(message.pcm));
             if (!transmittingRef.current) return;
             const socket = socketRef.current;
             if (
@@ -189,7 +201,7 @@ export function useMicCapture({ socketRef, transmittingRef, providerReadyRef }: 
         throw error;
       }
     }
-  }, [providerReadyRef, socketRef, transmittingRef]);
+  }, [onFrameRms, providerReadyRef, socketRef, transmittingRef]);
 
   const releaseMic = useCallback(() => {
     transmittingRef.current = false;

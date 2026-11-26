@@ -424,3 +424,13 @@ export function persistLanguage(
     // UI preference persistence is best effort; the active language still applies.
   }
 }
+
+/** Tells assistive technology which language the page is in. index.html ships
+ *  declaring Chinese; a visitor who chose English must not have the page read
+ *  as Chinese. Does nothing where there is no document (tests, SSR). */
+export function applyDocumentLanguage(
+  language: Language,
+  root: { lang: string } | undefined = typeof document === "undefined" ? undefined : document.documentElement
+): void {
+  if (root) root.lang = language;
+}

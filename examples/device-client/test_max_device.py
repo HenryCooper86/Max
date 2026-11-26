@@ -199,6 +199,20 @@ class Sessions(unittest.IsolatedAsyncioTestCase):
             # Confirmed once (speech), ignored once (silence: the relay heard the speaker).
             self.assertEqual(device.speaker.flushes, 1)
 
+    async def test_a_cut_the_relay_makes_itself_needs_no_confirmation(self):
+        plan = {"wakeGate": "relay", "silenceFill": False, "bargeIn": "confirm"}
+
+        async def cut_while_quiet(socket):
+            await asyncio.sleep(1.9)  # the file is over and the mic has been quiet for most of a second
+            await socket.send(json.dumps({"type": "status", "state": "hearing", "detail": "", "cause": "relay"}))
+
+        async with ScriptedRelay(plan=plan, on_started=cut_while_quiet) as relay:
+            audio = DeviceAudio(echo_cancellation=False, speaker="open")
+            device, _ = self.device(relay, audio=audio, tail=3.0)
+            await self.run_for(device, 2.6)
+            # A guardrail stop or an announcement: the reply is cut although nobody spoke.
+            self.assertEqual(device.speaker.flushes, 1)
+
     async def test_a_voice_gated_device_sends_speech_only(self):
         async with ScriptedRelay() as relay:
             device, _ = self.device(relay, audio=DeviceAudio(voice_gate=True), tail=2.0)

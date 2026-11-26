@@ -1,17 +1,20 @@
 /**
- * Decides whether a barge-in reported by the relay is really the rider.
+ * Decides whether a barge-in reported by the relay is really the wearer
+ * (docs/audio/contract.md, "Interruption"). Shared by the clients that
+ * confirm interruptions against their own microphone: the RDK agent and the
+ * web app.
  *
- * Doubao's VAD runs on the uplink, so it fires on whatever we send it —
- * including echo the canceller failed to remove. Acting on that unconditionally
- * is what made the echo loop self-sustaining, because each barge-in reset the
- * canceller. Requiring corroboration from our own mic, after cancellation,
- * gives a second opinion on a cleaned signal.
+ * The relay's speech detector runs on the uplink, so it fires on whatever we
+ * send it — including echo of the assistant that nothing cancelled. Acting on
+ * that unconditionally is what made the echo loop self-sustaining (on the RDK
+ * helmet, because each barge-in reset the canceller). Requiring corroboration
+ * from our own mic gives a second opinion on the signal we actually sent.
  *
- * It deliberately does NOT reuse createVoiceGate. That gate waits for 400 ms of
- * sustained speech before it opens, which is right for deciding a parked helmet
- * should reopen a session and far too slow here: the relay's event arrives
- * ~100-200 ms after speech starts and is sent once per turn, so a slow witness
- * misses the interruption entirely.
+ * It deliberately does NOT reuse the RDK's createVoiceGate. That gate waits
+ * for 400 ms of sustained speech before it opens, which is right for deciding
+ * a parked helmet should reopen a session and far too slow here: the relay's
+ * event arrives ~100-200 ms after speech starts and is sent once per turn, so
+ * a slow witness misses the interruption entirely.
  *
  * Either side may notice first, so both orders are handled. If our mic already
  * heard the rider, the barge-in is honoured at once. If the relay is first, the

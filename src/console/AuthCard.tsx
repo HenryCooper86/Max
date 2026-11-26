@@ -1,9 +1,10 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { INVITE_REQUEST_URL } from "../lib/pricing";
 import { ApiError, type CloudApi } from "./api";
 import { useSay } from "./hooks";
 
 type Mode = "signup" | "login";
+const MODES: readonly Mode[] = ["signup", "login"];
 const MIN_PASSWORD_LENGTH = 10;
 
 /** The invitation code in the page address (`/console?invite=cinv_…`), if any. */
@@ -54,6 +55,31 @@ export function AuthCard({
     }
   };
 
+  const chooseMode = (value: Mode) => {
+    setMode(value);
+    setError("");
+  };
+
+  // The WAI-ARIA tabs pattern: the arrow keys and Home/End move to another
+  // tab and select it. Only the selected tab is in the Tab order.
+  const onTabKey = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const last = MODES.length - 1;
+    const next =
+      event.key === "ArrowRight"
+        ? (index + 1) % MODES.length
+        : event.key === "ArrowLeft"
+          ? (index + last) % MODES.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? last
+              : undefined;
+    if (next === undefined) return;
+    event.preventDefault();
+    chooseMode(MODES[next]!);
+    document.getElementById(`cx-tab-${MODES[next]}`)?.focus();
+  };
+
   return (
     <section className="cxCard cxAuth" aria-labelledby="cx-auth-title">
       <h1 id="cx-auth-title">{say("Max Cloud 控制台", "Max Cloud console")}</h1>
@@ -64,7 +90,7 @@ export function AuthCard({
         )}
       </p>
       <div className="cxTabs" role="tablist" aria-label={say("账户", "Account")}>
-        {(["signup", "login"] as const).map((value) => (
+        {MODES.map((value, index) => (
           <button
             key={value}
             type="button"
@@ -72,11 +98,10 @@ export function AuthCard({
             id={`cx-tab-${value}`}
             aria-selected={mode === value}
             aria-controls="cx-auth-panel"
+            tabIndex={mode === value ? 0 : -1}
             className={mode === value ? "active" : undefined}
-            onClick={() => {
-              setMode(value);
-              setError("");
-            }}
+            onClick={() => chooseMode(value)}
+            onKeyDown={(event) => onTabKey(event, index)}
           >
             {value === "signup" ? say("创建账户", "Create account") : say("登录", "Log in")}
           </button>

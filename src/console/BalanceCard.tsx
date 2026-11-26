@@ -2,7 +2,14 @@ import type { Me } from "./api";
 import { formatYuan, wholeMinutes } from "./format";
 import { useSay } from "./hooks";
 
-export function BalanceCard({ me, onTopUp }: { me: Me | null; onTopUp: () => void }) {
+export function BalanceCard({
+  me,
+  onTopUp
+}: {
+  me: Me | null;
+  /** Gets the button that asked, so the dialog can return the focus to it. */
+  onTopUp: (opener: HTMLButtonElement) => void;
+}) {
   const say = useSay();
   return (
     <section className="cxCard cxBalance" aria-labelledby="cx-balance">
@@ -20,7 +27,7 @@ export function BalanceCard({ me, onTopUp }: { me: Me | null; onTopUp: () => voi
             : ""}
         </p>
       </div>
-      <button className="siteButton" type="button" onClick={onTopUp}>
+      <button className="siteButton" type="button" onClick={(event) => onTopUp(event.currentTarget)}>
         {say("充值", "Top up")}
       </button>
     </section>

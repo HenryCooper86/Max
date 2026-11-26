@@ -80,6 +80,12 @@ final class AgentSession: NSObject, ObservableObject {
         var networkWaiting = false
         /// A relay-side tool (a lookup) is running for the current turn.
         var toolActivityBusy = false
+        /// The assistant's agent the conversation is with (agent.changed); nil until the
+        /// relay names one, so nil while it is with the one every conversation starts with.
+        var activeAgent: String? = nil
+        /// Said once a hands-free session when the relay speaks a newer protocol than this
+        /// app (docs/protocol.md, Versions), and kept for 设置 → 诊断.
+        var protocolWarning: String? = nil
         /// A short-lived line for the HUD (device heat, Low Power Mode).
         var transientNotice: String? = nil
         /// The phone is critically hot: decorative animation stops too.
@@ -202,6 +208,13 @@ final class AgentSession: NSObject, ObservableObject {
     private var testingAssignmentId = ""
     private var reconnectPolicy = ReconnectPolicy()
     private var reconnectWorkItem: DispatchWorkItem?
+    /// The relay's id for the conversation (session.started.resume), sent back as
+    /// session.start.resume on a reconnect inside this hands-free session so the conversation
+    /// carries on instead of greeting again (docs/protocol.md, Resuming). Cleared when the
+    /// session ends: the next one is a new conversation.
+    private var resumeId: String?
+    /// The newer-relay warning has been shown for this hands-free session.
+    private var protocolWarned = false
     /// True once the microphone actually started for this session; recovery
     /// restarts capture only if there was capture to restart.
     private var captureStarted = false
@@ -525,6 +538,7 @@ final class AgentSession: NSObject, ObservableObject {
         // before the first fix of the new session arrives.
         rideSpeed.reset()
         reconnectPolicy.reset()
+        protocolWarned = false
         captureStarted = false
         audioSuspended = false
         toolActivity.reset()
@@ -554,6 +568,8 @@ final class AgentSession: NSObject, ObservableObject {
             $0.audioRecoveryFailed = false
             $0.networkWaiting = false
             $0.toolActivityBusy = false
+            $0.activeAgent = nil
+            $0.protocolWarning = nil
         }
         #if DEBUG
         if syntheticAudioQA {
@@ -642,6 +658,7 @@ final class AgentSession: NSObject, ObservableObject {
     /// Deactivates hands-free: stop the mic, restore routing, close the relay.
     func stop() {
         guard lifecycle.stop() else { return }
+        resumeId = nil
         invalidateDeviceCommands()
         stopCameraForSession()
         // Before the socket goes: the relay is told the video is over.
@@ -1054,7 +1071,8 @@ final class AgentSession: NSObject, ObservableObject {
             networkType: nativeNetworkType(),
             memory: current.sessionMemory,
             voiceProvider: current.voiceProvider,
-            language: VisorTheme.shared.language.rawValue
+            language: VisorTheme.shared.language.rawValue,
+            resume: resumeId
         ))) { _ in }
         // The guided tour lives in the provider instance, so a fresh session
         // must be told about it again (mirrors the web client's open handler).
@@ -1250,8 +1268,7 @@ final class AgentSession: NSObject, ObservableObject {
         reconnectPolicy.reset()
         stop()
         update {
-            // An idle session ended normally; the other closes are failures.
-            if close != .idleEnded { $0.connection = .degraded }
+            if close.isFailure { $0.connection = .degraded }
             $0.statusText = close.statusText
             // Refused credentials get the HTTP 401 treatment: the UI opens
             // the account settings, and a sign-in restarts hands-free.
@@ -1263,7 +1280,7 @@ final class AgentSession: NSObject, ObservableObject {
 
     private func handleEvent(_ event: AgentEvent) {
         switch event {
-        case let .sessionStarted(provider, mode, capabilities):
+        case let .sessionStarted(provider, mode, capabilities, resume, relayProtocol):
             withTransportLock { socketOpen = true }
             imageLimiter.reset()
             // A session that takes no video ends what is on; one that does starts its pacing afresh.
@@ -1282,6 +1299,9 @@ final class AgentSession: NSObject, ObservableObject {
                 $0.connection = .ready
                 $0.statusText = mode == "mock" ? L("st.mockRoute") : L("st.doubaoLive")
             }
+            // A reconnect sends this back, so the conversation carries on (docs/protocol.md, Resuming).
+            resumeId = resume
+            warnIfRelayIsAhead(relayProtocol)
             onCrash { $0.socketBecameReady() }
 
         case let .connection(connState, detail):
@@ -1414,9 +1434,37 @@ final class AgentSession: NSObject, ObservableObject {
                 webSocket?.send(.string(reply)) { _ in }
             }
 
+        case let .unsupportedDeviceCommand(commandId, reason):
+            // Answered at once: nothing is run, so nothing can be locked, hot or refused.
+            webSocket?.send(.string(buildDeviceResult(commandId: commandId, result: .unsupported(reason)))) { _ in }
+
+        case let .sessionEnded(reason):
+            // The relay ends the conversation itself (docs/protocol.md, session.ended) and
+            // closes with 4001 right after, once the last of its speech has had time to play.
+            // Nothing is left to reconnect to, so hands-free ends as for a final close, with
+            // the reason the event carries.
+            endHandsFree(for: .conversationEnded(reason: reason))
+
+        case let .agentChanged(agent):
+            update {
+                $0.activeAgent = agent
+                $0.statusText = L("st.agentChanged", ("agent", agent))
+            }
+
         case .unhandled:
             break
         }
+    }
+
+    /// Mirrors the web SDK's protocol_mismatch warning (docs/protocol.md, Versions): a relay
+    /// ahead of this app may send events it ignores, so the rider is told to update, once per
+    /// hands-free session. A relay that is behind, or too old to say, needs nothing from the app.
+    private func warnIfRelayIsAhead(_ relayProtocol: Int?) {
+        guard !protocolWarned, let relay = relayProtocol, relay > protocolVersion else { return }
+        protocolWarned = true
+        let warning = L("st.protocolMismatch", ("relay", String(relay)), ("ours", String(protocolVersion)))
+        update { $0.protocolWarning = warning }
+        showTransientNotice(warning)
     }
 
     /// Runs `body` while holding the transport lock. Every write to `webSocket`,
@@ -1610,12 +1658,15 @@ final class AgentSession: NSObject, ObservableObject {
 /// reconnecting with the same account would only be refused again. Mirrors
 /// FinalRelayClose in android/.../AgentSession.kt.
 enum FinalRelayClose: Equatable {
-    /// 4001: the session sat idle, or the relay ended the conversation.
+    /// 4001: the session sat idle, or the relay ended the conversation without saying so first.
     case idleEnded
     /// 4003: the account's voice minutes are used up until next month.
     case minutesUsedUp
     /// 1008: the relay refused the credentials (signed out, expired or revoked).
     case credentialsRejected
+    /// The relay ended the conversation itself and said why (docs/protocol.md, session.ended),
+    /// then closes with 4001.
+    case conversationEnded(reason: String)
 
     init?(_ closeCode: Int) {
         switch closeCode {
@@ -1626,13 +1677,35 @@ enum FinalRelayClose: Equatable {
         }
     }
 
+    /// An idle session, or a conversation the relay ended, is not a failure; the refused
+    /// closes are.
+    var isFailure: Bool {
+        switch self {
+        case .idleEnded, .conversationEnded: return false
+        case .minutesUsedUp, .credentialsRejected: return true
+        }
+    }
+
     /// What the HUD says once the session has ended.
     var statusText: String {
         switch self {
         case .idleEnded: return L("st.idleEnded")
         case .minutesUsedUp: return L("st.minutesUsedUp")
         case .credentialsRejected: return L("st.signInAgain")
+        case let .conversationEnded(reason): return relayEndedStatusText(reason)
         }
+    }
+}
+
+/// What the HUD says for why the relay ended a conversation (docs/protocol.md, session.ended).
+/// Only the reasons this build knows are worded; the relay's own text is never shown.
+func relayEndedStatusText(_ reason: String) -> String {
+    switch reason {
+    case "idle": return L("st.idleEnded")
+    case "agent": return L("st.endedByAgent")
+    case "max_duration": return L("st.endedMaxDuration")
+    // A reason from a newer relay is still an end; only the wording is general.
+    default: return L("st.endedByRelay")
     }
 }
 

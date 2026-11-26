@@ -52,4 +52,40 @@ class FinalRelayCloseTest {
         assertTrue(FinalRelayClose.CREDENTIALS_REJECTED.failed)
         assertEquals(FinalRelayClose.CREDENTIALS_REJECTED, FinalRelayClose.entries.single { it.authRequired })
     }
+
+    @Test
+    fun `a conversation the relay ends is final and says which reason it gave`() {
+        assertEquals(FinalRelayClose.IDLE_ENDED, FinalRelayClose.forSessionEnd("idle", crashActive = false))
+        assertEquals(FinalRelayClose.ENDED_BY_AGENT, FinalRelayClose.forSessionEnd("agent", crashActive = false))
+        assertEquals(FinalRelayClose.ENDED_AT_MAX_DURATION, FinalRelayClose.forSessionEnd("max_duration", crashActive = false))
+        // A reason from a newer relay is still an end, worded generally.
+        assertEquals(FinalRelayClose.ENDED, FinalRelayClose.forSessionEnd("something new", crashActive = false))
+        assertEquals(FinalRelayClose.ENDED, FinalRelayClose.forSessionEnd("ended", crashActive = false))
+    }
+
+    @Test
+    fun `under a crash incident the relay ending the conversation leaves the reconnect budget in charge`() {
+        // Its alert still needs the relay, as with a bare idle close.
+        for (reason in listOf("idle", "agent", "max_duration", "something new")) {
+            assertNull(reason, FinalRelayClose.forSessionEnd(reason, crashActive = true))
+        }
+    }
+
+    @Test
+    fun `a relay-ended conversation says why without showing the relay's text and is not a failure`() {
+        assertEquals("对话已结束，需要时请重新开启免提", tr(FinalRelayClose.ENDED_BY_AGENT.status))
+        assertEquals("对话已到最长时长，请重新开启免提", tr(FinalRelayClose.ENDED_AT_MAX_DURATION.status))
+        assertEquals("对话已结束，请重新开启免提", tr(FinalRelayClose.ENDED.status))
+        assertEquals(tr(Str.STATUS_IDLE_ENDED), tr(FinalRelayClose.forSessionEnd("idle", crashActive = false)!!.status))
+        Localization.forTest(AppLanguage.EN)
+        assertEquals("The assistant ended the conversation. Start hands-free again to talk", tr(FinalRelayClose.ENDED_BY_AGENT.status))
+        assertEquals("The conversation reached its time limit. Start hands-free again", tr(FinalRelayClose.ENDED_AT_MAX_DURATION.status))
+        assertEquals("The conversation ended. Start hands-free again", tr(FinalRelayClose.ENDED.status))
+        val ended = listOf(
+            FinalRelayClose.IDLE_ENDED, FinalRelayClose.ENDED_BY_AGENT,
+            FinalRelayClose.ENDED_AT_MAX_DURATION, FinalRelayClose.ENDED
+        )
+        ended.forEach { assertFalse(it.name, it.failed) }
+        assertEquals(ended, FinalRelayClose.entries.filterNot { it.failed })
+    }
 }

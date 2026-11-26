@@ -385,7 +385,10 @@ struct NavRouteData: Equatable {
 }
 
 enum AgentEvent {
-    case sessionStarted(provider: String, mode: String, capabilities: ProviderCapabilities)
+    /// `resume` is the relay's id for the conversation, to send back on a reconnect; nil on
+    /// relays older than resumption. `relayProtocol` is the relay's wire protocol version; nil
+    /// on relays older than the version handshake.
+    case sessionStarted(provider: String, mode: String, capabilities: ProviderCapabilities, resume: String?, relayProtocol: Int?)
     case connection(state: String, detail: String)
     case status(state: String, detail: String)
     case transcript(turnId: String, deliveryId: String, speaker: Speaker, text: String, final: Bool, useBrowserSpeech: Bool?)
@@ -396,6 +399,10 @@ enum AgentEvent {
     case telemetryUpdate(Telemetry)
     case hazardAlert(HazardAlert)
     case deviceCommand(DeviceCommand)
+    /// A device.command this app cannot carry out as sent: an action it has never heard of
+    /// (`action.unknown`), or a known one whose arguments it cannot read (`action.invalid`).
+    /// The relay wants exactly one device.result either way, and counts silence as a failure.
+    case unsupportedDeviceCommand(commandId: String, reason: String)
     case crashAck(incidentId: String, status: CrashAckStatus, detail: String?)
     case crashSimulate
     case error(message: String)
@@ -405,6 +412,10 @@ enum AgentEvent {
     /// A client-tool call. This app declares no client tools, so one arriving
     /// is unexpected; it still gets the single answer the protocol requires.
     case toolCall(callId: String, name: String)
+    /// The relay is ending the conversation and says why (docs/protocol.md, session.ended).
+    case sessionEnded(reason: String)
+    /// The conversation moved to another of the assistant's agents (docs/protocol.md, agent.changed).
+    case agentChanged(agent: String)
     /// Event types this client does not consume.
     case unhandled
 }
@@ -417,8 +428,11 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
         return .unhandled
     }
     let type = json["type"] as? String ?? ""
-    guard let requiredFields = serverEventRequiredFields[type],
-          requiredFields.allSatisfy({ json[$0] != nil }) else { return .unhandled }
+    guard let requiredFields = serverEventRequiredFields[type] else { return .unhandled }
+    // A device command is answered even when a required field is missing: the relay wants a
+    // device.result for every command it issues, and counts silence as a failure.
+    let skipsRequiredFields = type == ServerEventTypes.deviceCommand
+    guard skipsRequiredFields || requiredFields.allSatisfy({ json[$0] != nil }) else { return .unhandled }
 
     func str(_ key: String, _ fallback: String = "") -> String { json[key] as? String ?? fallback }
     func int(_ key: String, _ fallback: Int = 0) -> Int {
@@ -431,6 +445,8 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
     switch type {
     case ServerEventTypes.sessionStarted:
         let caps = json["capabilities"] as? [String: Any] ?? [:]
+        // An id is only worth keeping if it can be sent back.
+        let resume = json["resume"] as? String
         return .sessionStarted(
             provider: str("provider", "unknown"),
             mode: str("mode", "mock"),
@@ -447,7 +463,9 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
                 textInput: caps["textInput"] as? Bool ?? false,
                 imageInput: caps["imageInput"] as? Bool ?? false,
                 videoInput: caps["videoInput"] as? Bool ?? false
-            )
+            ),
+            resume: resume?.isEmpty == false ? resume : nil,
+            relayProtocol: jsonInteger(json["protocol"])
         )
 
     case ServerEventTypes.connection:
@@ -530,13 +548,24 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
         ))
 
     case ServerEventTypes.deviceCommand:
+        // A command id the relay itself would refuse cannot be answered (its device.result check).
+        let commandId = str("commandId")
+        guard !commandId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, commandId.count <= 120 else {
+            return .unhandled
+        }
         let args = json["args"] as? [String: Any] ?? [:]
-        guard let action = parseDeviceAction(str("action"), args) else { return .unhandled }
-        return .deviceCommand(DeviceCommand(
-            commandId: str("commandId"),
-            action: action,
-            tier: DeviceActionTier(rawValue: str("tier", "low")) ?? .low
-        ))
+        switch parseDeviceAction(str("action"), args) {
+        case let .action(action):
+            return .deviceCommand(DeviceCommand(
+                commandId: commandId,
+                action: action,
+                tier: DeviceActionTier(rawValue: str("tier", "low")) ?? .low
+            ))
+        case .unknownAction:
+            return .unsupportedDeviceCommand(commandId: commandId, reason: "action.unknown")
+        case .invalidArguments:
+            return .unsupportedDeviceCommand(commandId: commandId, reason: "action.invalid")
+        }
 
     case ServerEventTypes.error:
         return .error(message: str("message", "Voice relay failed"))
@@ -578,6 +607,13 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
     case ServerEventTypes.toolCall:
         return .toolCall(callId: str("callId"), name: str("name"))
 
+    case ServerEventTypes.sessionEnded:
+        return .sessionEnded(reason: str("reason", "ended"))
+
+    case ServerEventTypes.agentChanged:
+        guard let agent = json["agent"] as? String, !agent.isEmpty else { return .unhandled }
+        return .agentChanged(agent: agent)
+
     default:
         return .unhandled
     }
@@ -590,6 +626,19 @@ private func numberValue(_ any: Any?) -> Double? {
     if let d = any as? Double { return d }
     if let n = any as? Int { return Double(n) }
     return nil
+}
+
+/// A JSON `true` or `false` and nothing else: JSONSerialization bridges the numbers 0 and 1 to
+/// Bool as well, and a command's `on` or `start` must really be a boolean.
+private func jsonBoolean(_ value: Any?) -> Bool? {
+    guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+    return number.boolValue
+}
+
+/// A JSON whole number and nothing else: `true` bridges to 1, and a fraction is no version.
+private func jsonInteger(_ value: Any?) -> Int? {
+    guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+    return Int(exactly: number.doubleValue)
 }
 
 /// Parses a `{lat, lon}` object into a coordinate; nil when either field is
@@ -634,6 +683,10 @@ private func parseManeuverSteps(_ any: Any?) -> [ManeuverStep]? {
     return result
 }
 
+/// The wire protocol this app speaks (PROTOCOL_VERSION in shared/agent.ts): sent as
+/// session.start `protocol`, and compared with the relay's own in session.started.
+let protocolVersion = 1
+
 /// Client → server session.start payload (validated by server/session-controller.ts).
 func buildSessionStart(
     voiceGender: VoiceGender,
@@ -656,12 +709,15 @@ func buildSessionStart(
     memory: SessionMemory? = nil,
     voiceProvider: String? = nil,
     /// The app's effective language ("zh" / "en"); the key is omitted when nil.
-    language: String? = nil
+    language: String? = nil,
+    /// The relay's `session.started.resume` of the conversation being reconnected to
+    /// (docs/protocol.md, Resuming); omitted when nil, so a new conversation starts fresh.
+    resume: String? = nil
 ) -> String {
     var payload: [String: Any] = [
         "type": "session.start",
-        // Optional protocol version; the relay logs mismatches with it.
-        "protocol": 1,
+        // The relay logs a mismatch with its own version, and answers with it in session.started.
+        "protocol": protocolVersion,
         "sampleRate": MicStreamer.sampleRate,
         "channels": 1,
         "voiceGender": voiceGender.wire,
@@ -682,6 +738,8 @@ func buildSessionStart(
     if let deviceLabel, !deviceLabel.isEmpty { payload["deviceLabel"] = deviceLabel }
     if let browserLanguage, !browserLanguage.isEmpty { payload["browserLanguage"] = browserLanguage }
     if let networkType, !networkType.isEmpty { payload["networkType"] = networkType }
+    // Only a reconnect carries the conversation on; the relay drops an id it cannot use.
+    if let resume, !resume.isEmpty { payload["resume"] = resume }
     payload["platform"] = "ios"
     if let lat, let lon {
         payload["lat"] = lat
@@ -702,48 +760,67 @@ func buildSessionStart(
     return String(data: data, encoding: .utf8) ?? "{}"
 }
 
-/// Guided-demo toggle (mock provider tours the scenario catalog hands-off).
-/// Maps the wire action name plus its args onto a typed DeviceAction. An
-/// unknown action or malformed args yields nil, which the caller turns into
-/// `.unhandled` — a newer relay must never crash an older client.
-func parseDeviceAction(_ name: String, _ args: [String: Any]) -> DeviceAction? {
+/// What a device.command's action name and arguments parsed into.
+enum DeviceCommandParse: Equatable {
+    case action(DeviceAction)
+
+    /// An action this app has never heard of, from a relay newer than it. A newer relay
+    /// must never crash or stall an older client.
+    case unknownAction
+
+    /// A known action whose arguments are missing or of the wrong kind. Nothing is guessed:
+    /// a torch asked to switch on with no `on` must not switch off, and a recording asked
+    /// to start with no `start` must not stop.
+    case invalidArguments
+}
+
+/// Maps the wire action name plus its args onto a typed DeviceAction, or says why it cannot.
+func parseDeviceAction(_ name: String, _ args: [String: Any]) -> DeviceCommandParse {
     switch name {
     case "torch.set":
-        return .torchSet(on: args["on"] as? Bool ?? false)
+        guard let on = jsonBoolean(args["on"]) else { return .invalidArguments }
+        return .action(.torchSet(on: on))
     case "volume.set":
         guard let raw = args["direction"] as? String,
-              let direction = VolumeDirection(rawValue: raw) else { return nil }
-        return .volumeSet(direction: direction)
+              let direction = VolumeDirection(rawValue: raw) else { return .invalidArguments }
+        return .action(.volumeSet(direction: direction))
     case "music.control":
         guard let raw = args["control"] as? String,
-              let control = MusicControl(rawValue: raw) else { return nil }
-        return .musicControl(control: control, app: args["app"] as? String)
+              let control = MusicControl(rawValue: raw) else { return .invalidArguments }
+        // No app named means the rider's own player; a value of another kind is not a name.
+        guard args["app"] == nil || args["app"] is String else { return .invalidArguments }
+        return .action(.musicControl(control: control, app: args["app"] as? String))
     case "sms.compose":
-        guard let recipient = args["name"] as? String, let body = args["body"] as? String else { return nil }
-        return .smsCompose(name: recipient, body: body)
+        guard let recipient = args["name"] as? String, let body = args["body"] as? String else { return .invalidArguments }
+        return .action(.smsCompose(name: recipient, body: body))
     case "call.dial":
         let name = args["name"] as? String
         let number = args["number"] as? String
-        if name == nil && number == nil { return nil }
-        return .callDial(name: name, number: number)
+        if name == nil && number == nil { return .invalidArguments }
+        return .action(.callDial(name: name, number: number))
     case "destination.show":
-        guard let query = args["query"] as? String, !query.isEmpty else { return nil }
-        return .destinationShow(query: query)
+        guard let query = args["query"] as? String, !query.isEmpty else { return .invalidArguments }
+        return .action(.destinationShow(query: query))
     case "camera.photo":
-        return .cameraPhoto
+        return .action(.cameraPhoto)
     case "camera.record":
-        return .cameraRecord(start: args["start"] as? Bool ?? false)
+        guard let start = jsonBoolean(args["start"]) else { return .invalidArguments }
+        return .action(.cameraRecord(start: start))
     case "gallery.open":
-        return .galleryOpen
+        return .action(.galleryOpen)
     case "gallery.describe":
-        return .galleryDescribe(kind: args["kind"] as? String ?? "latest", question: args["question"] as? String)
+        // No kind named is the latest capture, the relay's own default.
+        guard args["kind"] == nil || args["kind"] is String else { return .invalidArguments }
+        let kind = args["kind"] as? String ?? "latest"
+        guard ["latest", "photo", "video"].contains(kind) else { return .invalidArguments }
+        return .action(.galleryDescribe(kind: kind, question: args["question"] as? String))
     case "navigation.start":
-        guard let query = args["query"] as? String, !query.isEmpty else { return nil }
-        return .navigationStart(query: query)
+        guard let query = args["query"] as? String, !query.isEmpty else { return .invalidArguments }
+        return .action(.navigationStart(query: query))
     case "navigation.stop":
-        return .navigationStop
+        return .action(.navigationStop)
     default:
-        return nil
+        return .unknownAction
     }
 }
 

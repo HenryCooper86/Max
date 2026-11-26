@@ -262,6 +262,9 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
   music reaches only Apple Music and the local library, never 网易云/QQ音乐; SMS is refused above
   5 km/h. Contact numbers never leave the device, and spoken contact names are redacted from stored
   QA transcripts.
+  A command the app cannot carry out is answered at once with `unsupported`: `action.unknown` for
+  an action it has never heard of (a newer relay's), `action.invalid` for one whose arguments it
+  cannot read. Nothing is guessed: `torch.set` without `on` is refused, not read as "off".
 - Music commands reveal an in-app player with track/artist, previous, play/pause, next,
   and an embedded Apple Music library picker. Touch and voice share the system music queue;
   no Music-app URL is opened. Media access denial, an empty queue, and preparation errors
@@ -287,6 +290,16 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
   then says why the session ended. After 1008 the account settings open, as after an HTTP 401, and
   a sign-in restarts hands-free. The app has no silent token refresh, so dead credentials are never
   retried.
+- A dropped link resumes the conversation. The relay's `session.started` carries a `resume` id
+  (docs/protocol.md, Resuming); the app keeps it for as long as hands-free lasts and sends it back in
+  every later `session.start`, so the conversation carries on with its history and its agent instead
+  of greeting again. It is forgotten when hands-free ends (rider stop, 4001, 4003, 1008): the next
+  session is a new conversation. Relays older than resumption send no id and get none back.
+- `session.ended` ends hands-free at once, as the idle close does, and the status under 设置 → 诊断
+  says why the relay ended the conversation (the assistant finished it, the rider stayed silent, or
+  the maximum duration was reached). `agent.changed` names the active agent on the status line. When
+  the relay speaks a newer protocol than the app, the status line and a short banner say so once per
+  hands-free session, and 设置 → 诊断 keeps the line.
 - Interruption recovery: a phone call or Siri pauses capture and playback (the relay session stays
   open, with `audio.stop`/`audio.start` around the pause) and the HUD says so. When the interruption
   ends the session resumes even if iOS omits `shouldResume`, because a rider cannot reach the phone to

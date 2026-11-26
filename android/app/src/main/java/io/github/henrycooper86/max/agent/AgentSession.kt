@@ -123,7 +123,13 @@ class AgentSession(
          *  tag the wrong turn). MAX_VALUE = nothing flaggable (offline). */
         val feedbackFloorId: Int = Int.MAX_VALUE,
         /** The camera is on and the assistant is being sent what it shows (live video). */
-        val videoActive: Boolean = false
+        val videoActive: Boolean = false,
+        /** The assistant's agent the conversation is with (agent.changed); null until the relay
+         *  names one, so null while it is with the one every conversation starts with. */
+        val activeAgent: String? = null,
+        /** Said once a hands-free session when the relay speaks a newer protocol than this app
+         *  (docs/protocol.md, Versions), and kept for diagnostics. */
+        val protocolWarning: String? = null
     ) {
         /** 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx). */
         val fusedHazard: HazardLevel
@@ -206,6 +212,15 @@ class AgentSession(
      * can cancel it — otherwise it would resurrect the session (and clobber
      * intentionalClose) after the rider ended hands-free inside that window. */
     private var restartJob: Job? = null
+    /** The relay's id for the conversation (session.started.resume), sent back as session.start.resume
+     *  on a reconnect inside this hands-free session so the conversation carries on instead of
+     *  greeting again (docs/protocol.md, Resuming). Cleared when the session ends: the next one is
+     *  a new conversation. Read and written on OkHttp threads and the main thread. */
+    @Volatile
+    private var resumeId: String? = null
+    /** The newer-relay warning has been shown for this hands-free session. */
+    @Volatile
+    private var protocolWarned = false
     /** Pure generation gate for async location/microphone startup. */
     private val lifecycle = SessionLifecycle()
     /** Bumped on each hazard alert so a stale auto-clear can't dismiss a newer one. */
@@ -459,6 +474,10 @@ class AgentSession(
         audioStartPending = false
         rideSpeed.reset()
         spokenDeliveryIds.clear()
+        protocolWarned = false
+        // Nothing of the last conversation carries over, its resume id included: one can be left
+        // behind by a session.started that was handled after the last stop() cleared it.
+        resumeId = null
         deviceScope.launch { deviceCommandIds.clear(); answeredToolCalls.clear() }
 
         // In-helmet Bluetooth headset routing; playback follows the same path.
@@ -483,7 +502,9 @@ class AgentSession(
                 audioPaused = false,
                 voiceCaptureDown = false,
                 toolStatus = null,
-                extrasShed = false
+                extrasShed = false,
+                activeAgent = null,
+                protocolWarning = null
             )
         }
         if (!syntheticCapture) {
@@ -582,6 +603,7 @@ class AgentSession(
 
     /** Deactivates hands-free: stop the mic, restore routing, close the relay. */
     fun stop(force: Boolean = false) {
+        resumeId = null
         hudCast.stop()
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) { deviceScope.launch { stop(force) }; return }
         music.stopPlayback()
@@ -624,6 +646,9 @@ class AgentSession(
         webSocket?.close(1000, "rider stopped")
         socketOpen = false
         webSocket = null
+        // Cleared again now that the socket is retired, so a session.started handled on its thread
+        // between the first clear and here does not outlive the session.
+        resumeId = null
         stopCapture()
         tts?.stop()
         // Release (not just flush) so the next session can pick a new audio route.
@@ -919,7 +944,8 @@ class AgentSession(
                         browserLanguage = Locale.getDefault().toLanguageTag(),
                         networkType = nativeNetworkType(),
                         memory = current.sessionMemory,
-                        voiceProvider = current.voiceProvider
+                        voiceProvider = current.voiceProvider,
+                        resume = resumeId
                     )
                 )
                 // The guided tour lives in the provider instance, so a fresh session
@@ -1030,6 +1056,9 @@ class AgentSession(
             endHandsFree(generation, finalClose)
             return
         }
+        // 4001 ends the conversation for good (docs/protocol.md): what reconnects after it, a crash
+        // alert's retries included, starts a new conversation rather than resuming the ended one.
+        if (closeCode == IDLE_CLOSE_CODE) resumeId = null
 
         // The relay answered but refused the WebSocket upgrade. Retrying can't
         // fix either case: 401 means a login token is required (accounts are
@@ -1109,6 +1138,17 @@ class AgentSession(
             })
     }
 
+    /** Mirrors the web SDK's protocol_mismatch warning (docs/protocol.md, Versions): a relay
+     *  ahead of this app may send events it ignores, so the rider is told to update, once per
+     *  hands-free session. A relay that is behind, or too old to say, needs nothing from the app.
+     *  Returns the line to show, or null when there is nothing to say. */
+    private fun protocolMismatchWarning(relayProtocol: Int?): String? {
+        val relay = relayProtocol ?: return null
+        if (protocolWarned || relay <= PROTOCOL_VERSION) return null
+        protocolWarned = true
+        return tr(Str.STATUS_PROTOCOL_MISMATCH, "relay" to relay, "ours" to PROTOCOL_VERSION)
+    }
+
     // ---- event handling ----------------------------------------------------
 
     private fun handleEvent(event: AgentEvent, sourceSocket: WebSocket) {
@@ -1123,13 +1163,19 @@ class AgentSession(
                 rideSpeed.onSessionMode(event.mode)
                 if (audioStartPending && transmitting && !audioPaused) { audioStartPending = false; sourceSocket.send(AUDIO_START_EVENT) }
                 deviceScope.launch { if (sourceSocket === webSocket && !syntheticCapture) crash.controller.ready() }
+                // A reconnect sends this back, so the conversation carries on (docs/protocol.md, Resuming).
+                resumeId = event.resume
+                // Said in the same update as READY: a status read right after READY already shows it.
+                val warning = protocolMismatchWarning(event.relayProtocol)
                 _state.update {
                     it.copy(
                         provider = event.provider,
                         isLive = event.mode != "mock",
                         capabilities = event.capabilities,
                         connection = ConnectionState.READY,
-                        statusText = if (event.mode == "mock") tr(Str.STATUS_MOCK_ON) else tr(Str.STATUS_DOUBAO_ON)
+                        statusText = warning
+                            ?: if (event.mode == "mock") tr(Str.STATUS_MOCK_ON) else tr(Str.STATUS_DOUBAO_ON),
+                        protocolWarning = warning ?: it.protocolWarning
                     )
                 }
             }
@@ -1214,7 +1260,7 @@ class AgentSession(
                 }
                 val source = sourceSocket
                 val job = deviceScope.launch {
-                    if (source !== webSocket || !state.value.handsFree || event.commandId.isBlank()) return@launch
+                    if (source !== webSocket || !state.value.handsFree) return@launch
                     if (!deviceCommandIds.add(event.commandId)) return@launch
                     if (deviceCommandIds.size > 512) deviceCommandIds.remove(deviceCommandIds.first())
                     if (event.action.startsWith("navigation.") || event.action == "destination.show") {
@@ -1244,6 +1290,24 @@ class AgentSession(
                     if (answeredToolCalls.size > 512) answeredToolCalls.remove(answeredToolCalls.first())
                     sourceSocket.send(reply)
                 }
+            }
+
+            is AgentEvent.SessionEnded -> {
+                // The relay ends the conversation itself (docs/protocol.md, session.ended) and
+                // closes with 4001 right after, once the last of its speech has had time to play:
+                // nothing is left to reconnect to, so hands-free ends as for a final close, with
+                // the reason the event carries. Under a crash incident its alert still needs the
+                // relay, so the close that follows takes the reconnect path, as a bare 4001 does.
+                val close = FinalRelayClose.forSessionEnd(event.reason, crashActive = crash.controller.active) ?: return
+                val generation = lifecycle.current() ?: return
+                // This socket's end is settled here, so its own close callback must not overwrite
+                // the reason with the idle line.
+                closedSocket = sourceSocket
+                endHandsFree(generation, close)
+            }
+
+            is AgentEvent.AgentChanged -> _state.update {
+                it.copy(activeAgent = event.agent, statusText = tr(Str.STATUS_AGENT_CHANGED, "agent" to event.agent))
             }
 
             AgentEvent.Unhandled -> Unit
@@ -1766,15 +1830,21 @@ internal fun ttsLocaleFor(text: String): Locale =
  * ios/.../AgentSession.swift.
  */
 internal enum class FinalRelayClose(val status: Str, val authRequired: Boolean = false) {
-    /** 4001: the session sat idle, or the relay ended the conversation. */
+    /** 4001: the session sat idle, or the relay ended the conversation without saying so first. */
     IDLE_ENDED(Str.STATUS_IDLE_ENDED),
     /** 4003: the account's voice minutes are used up until next month. */
     MINUTES_USED_UP(Str.STATUS_MINUTES_USED_UP),
     /** 1008: the relay refused the credentials (signed out, expired or revoked). */
-    CREDENTIALS_REJECTED(Str.STATUS_SIGN_IN_AGAIN, authRequired = true);
+    CREDENTIALS_REJECTED(Str.STATUS_SIGN_IN_AGAIN, authRequired = true),
+    /** session.ended: the assistant ended a finished conversation. */
+    ENDED_BY_AGENT(Str.STATUS_ENDED_BY_AGENT),
+    /** session.ended: the conversation reached its maximum duration. */
+    ENDED_AT_MAX_DURATION(Str.STATUS_ENDED_AT_MAX_DURATION),
+    /** session.ended with a reason this build does not know (a newer relay's). */
+    ENDED(Str.STATUS_ENDED);
 
-    /** An idle session ended normally; the other closes are failures. */
-    val failed: Boolean get() = this != IDLE_ENDED
+    /** A conversation that ended is not a failure; the refused closes are. */
+    val failed: Boolean get() = this == MINUTES_USED_UP || this == CREDENTIALS_REJECTED
 
     companion object {
         /**
@@ -1789,5 +1859,18 @@ internal enum class FinalRelayClose(val status: Str, val authRequired: Boolean =
             AgentSession.UNAUTHORIZED_CLOSE_CODE -> CREDENTIALS_REJECTED
             else -> null
         }
+
+        /**
+         * The final close a session.ended event announces, or null when the close that follows it
+         * should still go to the reconnect budget: under a crash incident the alert needs the
+         * relay, as with a bare idle close. Only the reasons this build knows are worded; the
+         * relay's own text is never shown.
+         */
+        fun forSessionEnd(reason: String, crashActive: Boolean): FinalRelayClose? = when (reason) {
+            "idle" -> IDLE_ENDED
+            "agent" -> ENDED_BY_AGENT
+            "max_duration" -> ENDED_AT_MAX_DURATION
+            else -> ENDED
+        }.takeUnless { crashActive }
     }
 }

@@ -44,13 +44,15 @@ class DeviceActions(
     val galleryRequest = mutableGalleryRequest.asStateFlow()
 
     suspend fun execute(command: AgentEvent.DeviceCommand, isCurrent: () -> Boolean, send: (String) -> Boolean): DeviceResult {
+        // Refused as sent before anything is unlocked, asked for or switched: the relay counts
+        // silence as a failure after 8 s, and no state of this phone can make such a command work.
+        unsupportedDeviceCommandReason(command.action, command.args)?.let { return DeviceResult.unsupported(it) }
         // Music stop must not queue behind a song that is still preparing or
         // a camera/contact operation waiting for a result.
         if (command.action == "music.control") {
             if (host == null || (context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked)
                 return DeviceResult.failed("device.locked")
             if (!isCurrent()) return DeviceResult.failed("action.cancelled")
-            if (!validDeviceArguments(command.action, command.args)) return DeviceResult.unsupported("action.invalid")
             loadRefusal(command.action, command.args, load())?.let { return it }
             return music.execute(command.args["control"] as String, command.args["app"] as? String)
         }
@@ -58,7 +60,6 @@ class DeviceActions(
             val host = host ?: return@withLock DeviceResult.failed("device.locked")
             if (!isCurrent()) return@withLock DeviceResult.failed("action.cancelled")
             if ((context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked) return@withLock DeviceResult.failed("device.locked")
-            if (!validDeviceArguments(command.action, command.args)) return@withLock DeviceResult.unsupported("action.invalid")
             loadRefusal(command.action, command.args, load())?.let { return@withLock it }
             val args = command.args
             suspend fun permission(name: String): Boolean = host.requestPermission(name) && isCurrent() && this.host === host

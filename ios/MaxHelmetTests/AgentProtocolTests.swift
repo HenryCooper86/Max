@@ -153,11 +153,66 @@ final class AgentProtocolTests: XCTestCase {
         XCTAssertEqual(command.action, .musicControl(control: .play, app: "网易云音乐"))
     }
 
-    func testIgnoresUnknownActionRatherThanCrashing() {
-        let event = parseAgentEvent("""
-        {"type":"device.command","commandId":"c4","action":"vehicle.unlock","args":{},"tier":"high"}
-        """)
-        guard case .unhandled = event else { return XCTFail("Expected unhandled for an unknown action") }
+    /// The relay counts a command with no answer as a failure after 8 s, so an action this
+    /// app has never heard of (a newer relay's) is answered at once instead of dropped.
+    func testUnknownActionIsAnsweredUnsupportedAtOnce() throws {
+        let event = parseAgentEvent(#"{"type":"device.command","commandId":"c4","action":"vehicle.unlock","args":{},"tier":"high"}"#)
+        guard case let .unsupportedDeviceCommand(commandId, reason) = event else {
+            return XCTFail("Expected an unsupported device command, got \(event)")
+        }
+        XCTAssertEqual(commandId, "c4")
+        XCTAssertEqual(reason, "action.unknown")
+        let reply = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(buildDeviceResult(commandId: commandId, result: .unsupported(reason)).utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(reply["type"] as? String, "device.result")
+        XCTAssertEqual(reply["commandId"] as? String, "c4")
+        XCTAssertEqual(reply["status"] as? String, "unsupported")
+        XCTAssertEqual(reply["reason"] as? String, "action.unknown")
+    }
+
+    func testMalformedArgumentsAreRefusedInsteadOfDefaulted() {
+        func refusal(_ action: String, _ args: String) -> String? {
+            let json = #"{"type":"device.command","commandId":"c","action":"\#(action)","args":\#(args),"tier":"low"}"#
+            guard case let .unsupportedDeviceCommand(_, reason) = parseAgentEvent(json) else { return nil }
+            return reason
+        }
+        // A torch with no `on`, or one of the wrong kind, used to read as "off". The numbers 0 and
+        // 1 are not booleans either, though JSONSerialization bridges them to Bool.
+        for args in [#"{}"#, #"{"on":"true"}"#, #"{"on":1}"#, #"{"on":0}"#] {
+            XCTAssertEqual(refusal("torch.set", args), "action.invalid", args)
+        }
+        // A recording with no `start` used to read as "stop".
+        XCTAssertEqual(refusal("camera.record", "{}"), "action.invalid")
+        XCTAssertEqual(refusal("music.control", #"{"control":"play","app":3}"#), "action.invalid")
+        // A missing or misshapen envelope is malformed too: the relay still gets its one result.
+        for json in [
+            #"{"type":"device.command","commandId":"c","action":"torch.set"}"#,
+            #"{"type":"device.command","commandId":"c","action":"torch.set","args":"on","tier":"low"}"#
+        ] {
+            guard case let .unsupportedDeviceCommand(_, reason) = parseAgentEvent(json) else {
+                return XCTFail("Expected an answer for \(json)")
+            }
+            XCTAssertEqual(reason, "action.invalid", json)
+        }
+    }
+
+    /// A command id the relay's own device.result check refuses cannot be answered; sending
+    /// one would only draw an error back.
+    func testACommandIdTheRelayWouldRefuseIsNotAnswered() {
+        let overlong = String(repeating: "x", count: 121)
+        for json in [
+            #"{"type":"device.command","commandId":"","action":"torch.set","args":{},"tier":"low"}"#,
+            #"{"type":"device.command","commandId":"  ","action":"torch.set","args":{},"tier":"low"}"#,
+            #"{"type":"device.command","commandId":"\#(overlong)","action":"vehicle.unlock","args":{},"tier":"low"}"#
+        ] {
+            guard case .unhandled = parseAgentEvent(json) else { return XCTFail("Expected no answer for \(json)") }
+        }
+        // At the relay's limit the answer still goes out.
+        let atLimit = String(repeating: "x", count: 120)
+        guard case .unsupportedDeviceCommand = parseAgentEvent(
+            #"{"type":"device.command","commandId":"\#(atLimit)","action":"vehicle.unlock","args":{},"tier":"low"}"#
+        ) else { return XCTFail("Expected an answer at the relay's limit") }
     }
 
     func testBuildsDeviceResult() throws {
@@ -220,6 +275,105 @@ final class AgentProtocolTests: XCTestCase {
         """)
         guard case let .deviceCommand(command) = event else { return XCTFail("Expected device.command") }
         XCTAssertEqual(command.action, .navigationStop)
+    }
+
+    // MARK: - resuming, lifecycle events and the protocol version
+
+    func testSessionStartCarriesResumeOnlyWhenGiven() throws {
+        func payload(_ resume: String?) throws -> [String: Any] {
+            let json = buildSessionStart(
+                voiceGender: .female, voicePersonality: .concise, rideMode: .ride, scenario: .commute,
+                lat: nil, lon: nil, resume: resume
+            )
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        }
+        // A new conversation leaves it out; only a reconnect sends the id back.
+        XCTAssertNil(try payload(nil)["resume"])
+        XCTAssertNil(try payload("")["resume"], "an empty id is not sent")
+        XCTAssertEqual(try payload("rsm_Zk3p0xT1q8mYVw2n5HcA9rUe7LdJbG4s")["resume"] as? String, "rsm_Zk3p0xT1q8mYVw2n5HcA9rUe7LdJbG4s")
+    }
+
+    func testSessionStartedKeepsTheResumeIdAndTheRelayProtocol() {
+        guard case let .sessionStarted(_, _, _, resume, relayProtocol) = parseAgentEvent(
+            #"{"type":"session.started","provider":"openai","mode":"live","capabilities":{},"protocol":2,"resume":"rsm_abc"}"#
+        ) else { return XCTFail("Expected session.started") }
+        XCTAssertEqual(resume, "rsm_abc")
+        XCTAssertEqual(relayProtocol, 2)
+        // A relay older than resumption and the version handshake says neither.
+        guard case let .sessionStarted(_, _, _, olderResume, olderProtocol) = parseAgentEvent(
+            #"{"type":"session.started","provider":"openai","mode":"live","capabilities":{}}"#
+        ) else { return XCTFail("Expected session.started") }
+        XCTAssertNil(olderResume)
+        XCTAssertNil(olderProtocol)
+    }
+
+    func testSessionStartedKeepsOnlyAResumeIdThatCanBeSentBack() {
+        for json in [
+            #"{"type":"session.started","provider":"openai","mode":"live","capabilities":{},"resume":""}"#,
+            #"{"type":"session.started","provider":"openai","mode":"live","capabilities":{},"resume":17}"#
+        ] {
+            guard case let .sessionStarted(_, _, _, resume, _) = parseAgentEvent(json) else { return XCTFail("Expected session.started") }
+            XCTAssertNil(resume, json)
+        }
+    }
+
+    func testSessionStartedReadsTheRelayProtocolOnlyAsANumber() {
+        func relayProtocol(_ value: String) -> Int? {
+            guard case let .sessionStarted(_, _, _, _, version) = parseAgentEvent(
+                #"{"type":"session.started","provider":"openai","mode":"live","capabilities":{},"protocol":\#(value)}"#
+            ) else { return nil }
+            return version
+        }
+        XCTAssertEqual(relayProtocol("1"), 1)
+        XCTAssertEqual(relayProtocol("2"), 2)
+        XCTAssertEqual(relayProtocol("2.0"), 2, "a version written as a decimal still counts")
+        XCTAssertNil(relayProtocol("2.5"), "not a version")
+        XCTAssertNil(relayProtocol(#""2""#), "a string is not a version")
+        XCTAssertNil(relayProtocol("true"), "a boolean is not a version")
+    }
+
+    func testParsesSessionEndedAndAgentChanged() {
+        guard case let .sessionEnded(reason) = parseAgentEvent(#"{"type":"session.ended","reason":"max_duration"}"#) else {
+            return XCTFail("Expected session.ended")
+        }
+        XCTAssertEqual(reason, "max_duration")
+        guard case let .agentChanged(agent) = parseAgentEvent(#"{"type":"agent.changed","agent":"billing"}"#) else {
+            return XCTFail("Expected agent.changed")
+        }
+        XCTAssertEqual(agent, "billing")
+        // A reason that is not a string still ends the conversation, without a named cause.
+        guard case let .sessionEnded(unnamed) = parseAgentEvent(#"{"type":"session.ended","reason":null}"#) else {
+            return XCTFail("Expected session.ended")
+        }
+        XCTAssertEqual(unnamed, "ended")
+        // An agent that is not a name is no event.
+        guard case .unhandled = parseAgentEvent(#"{"type":"agent.changed","agent":""}"#) else { return XCTFail("Expected unhandled") }
+    }
+
+    func testARelayEndedConversationSaysWhyWithoutShowingRelayText() {
+        XCTAssertEqual(relayEndedStatusText("idle"), L("st.idleEnded"))
+        XCTAssertEqual(relayEndedStatusText("agent"), L("st.endedByAgent"))
+        XCTAssertEqual(relayEndedStatusText("max_duration"), L("st.endedMaxDuration"))
+        // A reason from a newer relay is still an end, worded generally; the text itself is never shown.
+        let unknown = relayEndedStatusText("something new")
+        XCTAssertEqual(unknown, L("st.endedByRelay"))
+        XCTAssertNotEqual(unknown, "something new")
+
+        let ended = FinalRelayClose.conversationEnded(reason: "agent")
+        XCTAssertEqual(ended.statusText, L("st.endedByAgent"))
+        XCTAssertFalse(ended.isFailure, "a conversation the relay ended is not a failure")
+        XCTAssertFalse(FinalRelayClose.idleEnded.isFailure)
+        XCTAssertTrue(FinalRelayClose.minutesUsedUp.isFailure)
+        XCTAssertTrue(FinalRelayClose.credentialsRejected.isFailure)
+    }
+
+    func testSessionStartDeclaresTheProtocolVersionItIsComparedAgainst() throws {
+        let json = buildSessionStart(
+            voiceGender: .female, voicePersonality: .concise, rideMode: .ride, scenario: .commute,
+            lat: nil, lon: nil
+        )
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(payload["protocol"] as? Int, protocolVersion)
     }
 }
 

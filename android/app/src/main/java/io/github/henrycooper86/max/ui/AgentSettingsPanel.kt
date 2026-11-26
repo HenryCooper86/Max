@@ -263,6 +263,8 @@ internal fun SettingsPanel(
                 Text("${it.asrMs} ms", color = c.text, style = VisorType.mono)
             }
         }
+        state.activeAgent?.let { SettingsRow(tr(Str.CURRENT_AGENT), supporting = it) }
+        state.protocolWarning?.let { SettingsRow(tr(Str.PROTOCOL), supporting = it) }
         SettingsRow(
             tr(Str.EXPORT_LOG),
             enabled = state.transcript.isNotEmpty(),

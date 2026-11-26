@@ -10,14 +10,20 @@ class DeviceActionsTest {
     @Test fun `preserves every action argument including explicit false`() {
         val event = parseAgentEvent("""{"type":"device.command","commandId":"c1","action":"torch.set","args":{"on":false},"tier":"execute"}""") as AgentEvent.DeviceCommand
         assertEquals(false, event.args["on"])
-        assertTrue(validDeviceArguments(event.action, event.args))
+        assertNull(unsupportedDeviceCommandReason(event.action, event.args))
     }
-    @Test fun `does not default malformed hardware commands to destructive actions`() {
-        assertFalse(validDeviceArguments("torch.set", emptyMap()))
-        assertFalse(validDeviceArguments("camera.record", mapOf("start" to "false")))
-        assertFalse(validDeviceArguments("volume.set", mapOf("direction" to "maximum")))
-        assertFalse(validDeviceArguments("music.control", mapOf("control" to "delete")))
-        assertFalse(validDeviceArguments("future.action", emptyMap()))
+    @Test fun `malformed hardware commands are refused, never defaulted to destructive actions`() {
+        // A torch with no `on` must not switch off; a recording with no `start` must not stop.
+        assertEquals("action.invalid", unsupportedDeviceCommandReason("torch.set", emptyMap()))
+        assertEquals("action.invalid", unsupportedDeviceCommandReason("camera.record", mapOf("start" to "false")))
+        assertEquals("action.invalid", unsupportedDeviceCommandReason("volume.set", mapOf("direction" to "maximum")))
+        assertEquals("action.invalid", unsupportedDeviceCommandReason("music.control", mapOf("control" to "delete")))
+        assertEquals("action.invalid", unsupportedDeviceCommandReason("music.control", mapOf("control" to "play", "app" to 3)))
+    }
+    @Test fun `an action this build has never heard of is refused as unknown`() {
+        // A newer relay's action is refused as such: the relay hears "unsupported" at once, not a timeout.
+        assertEquals("action.unknown", unsupportedDeviceCommandReason("future.action", emptyMap()))
+        assertEquals("action.unknown", unsupportedDeviceCommandReason("camera.look", mapOf("on" to true)))
     }
     @Test fun `all supported core actions accept their relay arguments`() {
         val commands = mapOf(
@@ -27,7 +33,29 @@ class DeviceActionsTest {
             "camera.photo" to emptyMap(), "camera.record" to mapOf("start" to false),
             "gallery.open" to emptyMap(), "gallery.describe" to mapOf("kind" to "video", "question" to "看到了什么")
         )
-        commands.forEach { (action, args) -> assertTrue(action, validDeviceArguments(action, args)) }
+        commands.forEach { (action, args) -> assertNull(action, unsupportedDeviceCommandReason(action, args)) }
+    }
+    @Test fun `a command id the relay would refuse is not answered`() {
+        for (json in listOf(
+            """{"type":"device.command","commandId":"","action":"torch.set","args":{"on":true},"tier":"low"}""",
+            """{"type":"device.command","commandId":"  ","action":"torch.set","args":{"on":true},"tier":"low"}""",
+            """{"type":"device.command","commandId":"${"x".repeat(121)}","action":"camera.look","args":{},"tier":"low"}"""
+        )) assertEquals(json, AgentEvent.Unhandled, parseAgentEvent(json))
+        // A missing or misshapen envelope is still answered, and so is an id at the relay's limit.
+        for (json in listOf(
+            """{"type":"device.command","commandId":"c","action":"torch.set"}""",
+            """{"type":"device.command","commandId":"c","action":"torch.set","args":"on","tier":"low"}""",
+            """{"type":"device.command","commandId":"${"x".repeat(120)}","action":"camera.look","args":{},"tier":"low"}"""
+        )) assertTrue(json, parseAgentEvent(json) is AgentEvent.DeviceCommand)
+        val missingArgs = parseAgentEvent("""{"type":"device.command","commandId":"c","action":"torch.set"}""") as AgentEvent.DeviceCommand
+        assertEquals("action.invalid", unsupportedDeviceCommandReason(missingArgs.action, missingArgs.args))
+    }
+    @Test fun `an unsupported command result carries its reason`() {
+        val json = JSONObject(DeviceResult.unsupported("action.unknown").json("cmd-9"))
+        assertEquals("device.result", json.getString("type"))
+        assertEquals("cmd-9", json.getString("commandId"))
+        assertEquals("unsupported", json.getString("status"))
+        assertEquals("action.unknown", json.getString("reason"))
     }
     @Test fun `unknown negative or moving speed refuses SMS`() {
         listOf(null, Double.NaN, Double.POSITIVE_INFINITY, -1.0, 5.0, 5.01, 42.0).forEach { assertFalse(safeToComposeMessage(it)) }

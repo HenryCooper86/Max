@@ -641,6 +641,12 @@ struct SettingsPanel: View {
                 )
             }
             VisorRow(title: L("set.diag.status"), subtitle: state.statusText)
+            if let agent = state.activeAgent {
+                VisorRow(title: L("set.diag.agent"), subtitle: agent)
+            }
+            if let warning = state.protocolWarning {
+                VisorRow(title: L("set.diag.protocol"), subtitle: warning)
+            }
             VisorChevronRow(title: L("set.diag.export"), enabled: hasTranscript) {
                 if hasTranscript { viewModel.exportTranscript() }
             }

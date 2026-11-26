@@ -169,6 +169,18 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
   then says why the session ended. After 1008 the account settings open, as after an HTTP 401, and
   a sign-in restarts hands-free. The app has no silent token refresh, so dead credentials are never
   retried.
+- A dropped link resumes the conversation. The relay's `session.started` carries a `resume` id
+  (docs/protocol.md, Resuming); the app keeps it for as long as hands-free lasts and sends it back in
+  every later `session.start`, so the conversation carries on with its history and its agent instead
+  of greeting again. It is forgotten when hands-free ends (rider stop, 4001, 4003, 1008): the next
+  session is a new conversation, crash-alert reconnects after a 4001 included. Relays older than
+  resumption send no id and get none back.
+- `session.ended` ends hands-free at once, as the idle close does, and the status under diagnostics
+  says why the relay ended the conversation (the assistant finished it, the rider stayed silent, or
+  the maximum duration was reached). It is not final while a crash incident is open, like a bare
+  4001: the alert still needs the relay. `agent.changed` names the active agent on the status line.
+  When the relay speaks a newer protocol than the app, the status line says so once per hands-free
+  session, and diagnostics keeps the line.
 - A microphone that stops working (a helmet headset that dies, a dead mic) switches voice off
   only: hands-free, the foreground service and crash detection stay on. Max says so once and
   retries the microphone on every audio-device change and every 15 s until it works. Phone calls
@@ -223,7 +235,7 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
   release builds require trusted TLS and block cleartext
 - Keystore-backed AES-GCM storage for relay/login tokens, including migration from older preferences
 - Release-run/test-case/assignment attribution with explicit Android platform and stamped git commit
-- Every supported device command returns a result: torch, Max voice volume, music, contact/number dialing, SMS composition, photo/video capture, gallery, and navigation. Unknown or malformed actions return an error instead of timing out. Dialing/SMS open the system confirmation UI; SMS is refused without known speed at or below 5 km/h.
+- Every supported device command returns a result: torch, Max voice volume, music, contact/number dialing, SMS composition, photo/video capture, gallery, and navigation. A command the app cannot carry out is answered at once with `unsupported`, whatever the lock state: `action.unknown` for an action it has never heard of (a newer relay's), `action.invalid` for one whose arguments it cannot read. Nothing is guessed: `torch.set` without `on` is refused, not read as "off". Dialing/SMS open the system confirmation UI; SMS is refused without known speed at or below 5 km/h.
 - App-owned music queue with play/pause/previous/next and close, available in both the HUD and full-screen map. Select multiple audio files through Android's document picker. Leaving Max, locking the screen, closing the card, or ending the session pauses playback; returning never resumes automatically. Stop cancels loading immediately, and voice skip succeeds only after the next file actually starts. Android does not integrate the protected Apple Music catalog or control another app's queue.
 - CameraX photos and silent video (no microphone input), with permission prompts, low-storage refusal, a ten-minute/1 GB recording limit, and stop-on-background behavior. Captures stay private until exported.
 - Max gallery with photo/video viewing, deletion confirmation, export to system Photos on Android 10+, system save/share on Android 8–9, and gallery.describe uploads using one photo or eight video frames. Photo previews respect EXIF orientation.
@@ -266,6 +278,8 @@ When changing shared web/server behavior, update Android at the same time:
 - Language detection and transcript normalization from `shared/language.ts` and `src/hooks/useHelmetAgent.ts`
 - Audio frame assumptions: uplink 16 kHz PCM16 mono, 320 samples / 20 ms; downlink 24 kHz PCM16
 - Reconnect/backoff behavior, barge-in behavior, and transcript JSON export payload
+- Conversation resume (`session.start.resume`), `session.ended`, `agent.changed`, the answers to commands the app
+  cannot carry out, and the newer-relay warning, as the web SDK does in `sdk/src/client.ts`
 - Self-signed test-server handling and relay URL defaults
 
 ## Architecture

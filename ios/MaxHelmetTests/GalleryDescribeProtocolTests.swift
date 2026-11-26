@@ -3,12 +3,15 @@ import XCTest
 
 final class GalleryDescribeProtocolTests: XCTestCase {
     func testParsesGalleryDescribe() {
-        XCTAssertEqual(parseDeviceAction("gallery.describe", ["kind": "photo"]), .galleryDescribe(kind: "photo", question: nil))
+        XCTAssertEqual(parseDeviceAction("gallery.describe", ["kind": "photo"]), .action(.galleryDescribe(kind: "photo", question: nil)))
         XCTAssertEqual(
             parseDeviceAction("gallery.describe", ["kind": "video", "question": "有什么"]),
-            .galleryDescribe(kind: "video", question: "有什么")
+            .action(.galleryDescribe(kind: "video", question: "有什么"))
         )
-        XCTAssertEqual(parseDeviceAction("gallery.describe", [:]), .galleryDescribe(kind: "latest", question: nil))
+        XCTAssertEqual(parseDeviceAction("gallery.describe", [:]), .action(.galleryDescribe(kind: "latest", question: nil)))
+        // A kind that is named but is not one of the three is refused, not read as the latest.
+        XCTAssertEqual(parseDeviceAction("gallery.describe", ["kind": "selfie"]), .invalidArguments)
+        XCTAssertEqual(parseDeviceAction("gallery.describe", ["kind": 3]), .invalidArguments)
     }
 
     func testRouteMapping() {

@@ -11,7 +11,7 @@ final class ImageInputTests: XCTestCase {
     func testSessionStartedSaysWhetherTheBackendTakesPictures() {
         func capabilities(_ json: String) -> ProviderCapabilities? {
             let event = parseAgentEvent(#"{"type":"session.started","provider":"openai","mode":"live","capabilities":\#(json)}"#)
-            guard case let .sessionStarted(_, _, capabilities) = event else { return nil }
+            guard case let .sessionStarted(_, _, capabilities, _, _) = event else { return nil }
             return capabilities
         }
         XCTAssertEqual(capabilities(#"{"textInput":true,"imageInput":true}"#)?.imageInput, true)

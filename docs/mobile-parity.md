@@ -1,6 +1,6 @@
 # iOS / Android core feature parity
 
-Audit and implementation pass: 2026-09-16; resilience pass: 2026-11-22 (see [that section](#resilience-pass-2026-11-22)); final relay closes: 2026-11-25 (see [the last section](#final-relay-closes-2026-11-25)). This records functional behavior, not a claim that hardware-dependent features have been certified on both platforms. The iOS implementation in this checkout is the reference, including the new in-app music controls.
+Audit and implementation pass: 2026-09-16; resilience pass: 2026-11-22 (see [that section](#resilience-pass-2026-11-22)); final relay closes: 2026-11-25 (see [that section](#final-relay-closes-2026-11-25)); conversation resume and relay lifecycle events: 2026-11-26 (see [the last section](#conversation-resume-and-relay-lifecycle-events-2026-11-26)). This records functional behavior, not a claim that hardware-dependent features have been certified on both platforms. The iOS implementation in this checkout is the reference, including the new in-app music controls.
 
 ## Architecture direction
 
@@ -200,5 +200,53 @@ the reason was only under 设置 → 诊断. This covers every error that ends a
 microphone permission), not only the two closes above.
 
 Tests: `RelayCloseTests` closes a real iOS `AgentSession` through a loopback relay and its own `URLSessionWebSocketTask`.
-`FinalRelayCloseTest` covers the Android classification on the JVM, because `AgentSession` needs a device to run. Neither
+`FinalRelayCloseTest` covers the Android classification on the JVM. Neither
 has been tried against a live relay that refuses a session.
+
+## Conversation resume and relay lifecycle events, 2026-11-26
+
+Both apps started a new conversation on every connection. A dropped link therefore reconnected into a fresh one: Max
+greeted again and had forgotten what was said. The relay has an answer for that, [resuming](protocol.md#resuming), and
+both apps now use it alike:
+
+- The relay's `session.started` carries a `resume` id. The app keeps it for as long as hands-free lasts and sends it
+  back in every later `session.start` of that hands-free session, so the conversation carries on with its history and
+  its agent and without a new greeting. A restart for a settings change resumes too: the rider changed a setting, not
+  the conversation.
+- The id is forgotten when hands-free ends, by the rider or on a final close (4001, 4003, 1008). The next session is a
+  new conversation. On Android, a crash incident's reconnects after a 4001 start a new conversation as well.
+- Relays older than resumption send no id and get none back. One the relay cannot use (malformed, unknown or expired)
+  is dropped by the relay, which starts fresh and sends a new id.
+
+`session.ended` and `agent.changed` are generated constants that both apps used to drop:
+
+- **`session.ended`.** The relay ends the conversation itself and says why: the assistant finished it (`agent`), the
+  rider stayed silent through every check-in (`idle`), or it reached its maximum duration (`max_duration`). Hands-free
+  ends at once, as for the idle close, and the status under diagnostics says which it was. A reason the app does not
+  know still ends the session, worded generally; the relay's own text is never shown. On Android it is not final while
+  a crash incident is open, like a bare 4001: the alert still needs the relay.
+- **`agent.changed`.** The app records the active agent and the status line says the conversation moved to it.
+
+A device command the app cannot carry out is answered instead of dropped. iOS used to drop it, so the relay waited
+out its 8-second timeout and then spoke a generic failure:
+
+- An action the app has never heard of, from a newer relay (`camera.look`, `system.shutdown`), is answered
+  `unsupported` with reason `action.unknown`.
+- A known action with arguments the app cannot read is answered `unsupported` with reason `action.invalid`. Nothing is
+  guessed: `torch.set` without `on` no longer reads as "off", and `camera.record` without `start` no longer reads as
+  "stop".
+- The answer goes out at once, before anything is unlocked, asked for or switched. A command whose id the relay would
+  refuse (blank, or over 120 characters) is not answered, because that would only draw an error back.
+
+Android already answered `action.invalid` for both cases, and only once the phone was unlocked and an activity was
+attached. It now tells the two apart and answers whatever the lock state.
+
+When the relay speaks a newer protocol than the app (`session.started.protocol` above the app's version 1), the status
+line says so once per hands-free session (with a short banner on iOS), and diagnostics keeps the line for the rest of
+the session. A relay that is behind, or too old to say, needs nothing from the app.
+
+Tests: iOS `RelayResumeTests` and `RelayLifecycleStateTests` run a real `AgentSession` against a loopback relay that
+speaks the WebSocket protocol. Android `AgentSessionRelayLifecycleTest` runs a real `AgentSession` under Robolectric
+against the same kind of relay, with an injected capture that runs nothing; `DeviceActionsExecuteTest` covers the
+answers to commands the app cannot carry out, and `AgentProtocolTest` and `FinalRelayCloseTest` the parsers and the
+classification. None of this has been tried against a live relay that resumes a conversation.

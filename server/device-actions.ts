@@ -81,14 +81,14 @@ export type IntentExtractor = (text: string) => DeviceCommand | null;
  *
  * `camera.look` is the first entry: it requires the relay to dispatch a
  * `device.command` that fetches a live frame, and only the embedded board's
- * dispatcher implements that action (`rdk/agent/src/device/dispatch.ts`). On
- * iOS an action with no local handler falls through to `.unhandled`, which
- * never sends a `device.result` back — the rider then sits through the full
- * `DEVICE_RESULT_TIMEOUT_MS` in silence before a generic timeout line, instead
- * of getting an ordinary spoken answer from the model. Every other
- * `DeviceActionName` already has a real handler on every platform it is
- * dispatched to, so it is absent from this map and detected everywhere, as
- * before.
+ * dispatcher implements that action (`rdk/agent/src/device/dispatch.ts`). The
+ * current iOS and Android apps answer an action they have no handler for with
+ * `unsupported` (`action.unknown`) at once, but an older app build drops it,
+ * and the rider then sits through the full `DEVICE_RESULT_TIMEOUT_MS` in
+ * silence before a generic timeout line, instead of getting an ordinary spoken
+ * answer from the model. Every other `DeviceActionName` already has a real
+ * handler on every platform it is dispatched to, so it is absent from this map
+ * and detected everywhere, as before.
  */
 const PLATFORM_RESTRICTED_ACTIONS: Partial<Record<DeviceActionName, readonly string[]>> = {
   "camera.look": ["embedded"],
@@ -514,6 +514,7 @@ const FAILURE_SPEECH: Record<string, string> = {
   "permission.musicControl": "请先在音乐卡片上点控制音乐应用，按提示授权后再试。",
   "gallery.uploadFailed": "照片或视频上传失败，请检查连接后再试。",
   "action.invalid": "这个设备操作暂时不支持。",
+  "action.unknown": "这个设备操作暂时不支持。",
   "device.unavailable": "设备暂时无法完成这个操作，请检查权限后再试。",
   "permission.device": "没有执行这个操作所需的设备权限，请在系统设置中检查。",
   // Shared by the phone's destination.show device action and the relay's own

@@ -7,7 +7,7 @@ final class TypedInputProtocolTests: XCTestCase {
 
     func testSessionStartedParsesTextInputAndToolsCapabilities() {
         let event = parseAgentEvent(#"{"type":"session.started","provider":"openai","mode":"live","capabilities":{"serverVad":true,"tools":true,"textInput":true}}"#)
-        guard case let .sessionStarted(_, _, capabilities) = event else { return XCTFail("expected session.started, got \(event)") }
+        guard case let .sessionStarted(_, _, capabilities, _, _) = event else { return XCTFail("expected session.started, got \(event)") }
         XCTAssertTrue(capabilities.textInput)
         XCTAssertTrue(capabilities.tools)
         XCTAssertTrue(capabilities.serverVad)
@@ -15,7 +15,7 @@ final class TypedInputProtocolTests: XCTestCase {
 
     func testOlderRelaysWithoutTheNewCapabilitiesReportThemOff() {
         let event = parseAgentEvent(#"{"type":"session.started","provider":"doubao","mode":"live","capabilities":{"serverVad":true}}"#)
-        guard case let .sessionStarted(_, _, capabilities) = event else { return XCTFail("expected session.started") }
+        guard case let .sessionStarted(_, _, capabilities, _, _) = event else { return XCTFail("expected session.started") }
         XCTAssertFalse(capabilities.textInput)
         XCTAssertFalse(capabilities.tools)
     }

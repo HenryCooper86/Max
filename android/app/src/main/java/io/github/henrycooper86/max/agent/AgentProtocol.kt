@@ -221,7 +221,16 @@ data class SessionMemory(
 
 /** Server → client JSON events (shared/agent.ts AgentEvent). */
 sealed interface AgentEvent {
-    data class SessionStarted(val provider: String, val mode: String, val capabilities: ProviderCapabilities) : AgentEvent
+    /** `resume` is the relay's id for the conversation, to send back on a reconnect; null on relays
+     *  older than resumption. `relayProtocol` is the relay's wire protocol version; null on relays
+     *  older than the version handshake. */
+    data class SessionStarted(
+        val provider: String,
+        val mode: String,
+        val capabilities: ProviderCapabilities,
+        val resume: String?,
+        val relayProtocol: Int?
+    ) : AgentEvent
     data class Connection(val state: String, val detail: String) : AgentEvent
     data class Status(val state: String, val detail: String) : AgentEvent
     data class Transcript(
@@ -298,6 +307,11 @@ sealed interface AgentEvent {
     /** A request to run a client tool. This app declares none, so each one is answered with an error. */
     data class ToolCall(val callId: String, val name: String) : AgentEvent
 
+    /** The relay is ending the conversation and says why (docs/protocol.md, session.ended). */
+    data class SessionEnded(val reason: String) : AgentEvent
+    /** The conversation moved to another of the assistant's agents (docs/protocol.md, agent.changed). */
+    data class AgentChanged(val agent: String) : AgentEvent
+
     /** Event types this client does not consume. */
     data object Unhandled : AgentEvent
 }
@@ -323,12 +337,16 @@ fun parseAgentEvent(text: String): AgentEvent {
     val json = JSONObject(text)
     val type = json.optString("type")
     val requiredFields = SERVER_EVENT_REQUIRED_FIELDS[type] ?: return AgentEvent.Unhandled
-    if (requiredFields.any { !json.has(it) }) return AgentEvent.Unhandled
+    // A device command is answered even when a required field is missing: the relay wants a
+    // device.result for every command it issues, and counts silence as a failure.
+    if (type != ServerEventTypes.DEVICE_COMMAND && requiredFields.any { !json.has(it) }) return AgentEvent.Unhandled
     return when (type) {
         "crash.ack" -> AgentEvent.CrashAck(json.optString("incidentId"), json.optString("status"), json.optString("detail").ifEmpty { null })
         "crash.simulate" -> AgentEvent.CrashSimulate
         ServerEventTypes.SESSION_STARTED -> {
             val caps = json.optJSONObject("capabilities")
+            // An id is only worth keeping if it can be sent back.
+            val resume = json.opt("resume") as? String
             AgentEvent.SessionStarted(
                 provider = json.optString("provider", "unknown"),
                 mode = json.optString("mode", "mock"),
@@ -345,7 +363,9 @@ fun parseAgentEvent(text: String): AgentEvent {
                     textInput = caps?.optBoolean("textInput", false) ?: false,
                     imageInput = caps?.optBoolean("imageInput", false) ?: false,
                     videoInput = caps?.optBoolean("videoInput", false) ?: false
-                )
+                ),
+                resume = resume?.takeIf { it.isNotEmpty() },
+                relayProtocol = (json.opt("protocol") as? Number)?.toInt()
             )
         }
 
@@ -432,9 +452,12 @@ fun parseAgentEvent(text: String): AgentEvent {
         ServerEventTypes.ERROR -> AgentEvent.ErrorEvent(json.optString("message", "Voice relay failed"))
 
         ServerEventTypes.DEVICE_COMMAND -> {
+            // A command id the relay itself would refuse cannot be answered (its device.result check).
+            val commandId = json.optString("commandId")
+            if (commandId.isBlank() || commandId.length > 120) return AgentEvent.Unhandled
             val args = json.optJSONObject("args") ?: JSONObject()
             AgentEvent.DeviceCommand(
-                commandId = json.optString("commandId"),
+                commandId = commandId,
                 action = json.optString("action"),
                 query = args.optString("query").ifEmpty { null },
                 args = args.keys().asSequence().associateWith { key -> args.opt(key).takeUnless { it == JSONObject.NULL } }
@@ -478,6 +501,13 @@ fun parseAgentEvent(text: String): AgentEvent {
             callId = json.optString("callId"),
             name = json.optString("name")
         )
+
+        ServerEventTypes.SESSION_ENDED -> AgentEvent.SessionEnded(json.opt("reason") as? String ?: "ended")
+        ServerEventTypes.AGENT_CHANGED -> {
+            // An agent that is not a name is no event.
+            val agent = json.opt("agent") as? String
+            if (agent.isNullOrEmpty()) AgentEvent.Unhandled else AgentEvent.AgentChanged(agent)
+        }
 
         else -> AgentEvent.Unhandled
     }
@@ -546,7 +576,10 @@ fun buildSessionStart(
     memory: SessionMemory? = null,
     voiceProvider: String? = null,
     /** The app's effective language, "zh" or "en"; the key is omitted when null so older relays are unaffected. */
-    language: String? = null
+    language: String? = null,
+    /** The relay's `session.started.resume` of the conversation being reconnected to (docs/protocol.md,
+     *  Resuming); omitted when null, so a new conversation starts fresh. */
+    resume: String? = null
 ): String =
     JSONObject().apply {
         put("type", "session.start")
@@ -588,6 +621,8 @@ fun buildSessionStart(
                 }
             )
         }
+        // Only a reconnect carries the conversation on; the relay drops an id it cannot use.
+        resume?.takeIf { it.isNotEmpty() }?.let { put("resume", it) }
     }.toString()
 
 /** Guided-demo toggle (mock provider tours the scenario catalog hands-off). */

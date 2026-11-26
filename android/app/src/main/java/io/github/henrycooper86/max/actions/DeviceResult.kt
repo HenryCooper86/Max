@@ -14,18 +14,28 @@ data class DeviceResult(val status: String, val reason: String? = null, val deta
     }
 }
 
-/** Reject malformed commands before touching hardware or opening another app. */
-fun validDeviceArguments(action: String, args: Map<String, Any?>): Boolean = when (action) {
-    "torch.set" -> args["on"] is Boolean
-    "volume.set" -> args["direction"] in setOf("up", "down")
-    "music.control" -> args["control"] in setOf("play", "pause", "next", "previous") &&
-        (args["app"] == null || args["app"] is String)
-    "call.dial" -> listOf("name", "number").any { (args[it] as? String)?.isNotBlank() == true }
-    "sms.compose" -> (args["name"] as? String)?.isNotBlank() == true && (args["body"] as? String)?.isNotBlank() == true
-    "camera.record" -> args["start"] is Boolean
-    "camera.photo", "gallery.open" -> true
-    "gallery.describe" -> args["kind"] == null || args["kind"] in setOf("latest", "photo", "video")
-    else -> false
+/**
+ * Why a device.command cannot run as sent, or null when its arguments are valid (docs/protocol.md,
+ * Wearable extensions): `action.invalid` for an action this app carries out whose arguments it cannot
+ * read, `action.unknown` for an action it has never heard of. Malformed arguments are never
+ * defaulted: `camera.record` without `start` must not stop a recording, and `torch.set` without
+ * `on` must not switch the torch off.
+ */
+fun unsupportedDeviceCommandReason(action: String, args: Map<String, Any?>): String? = when (action) {
+    "torch.set" -> if (args["on"] is Boolean) null else "action.invalid"
+    "volume.set" -> if (args["direction"] in setOf("up", "down")) null else "action.invalid"
+    "music.control" ->
+        if (args["control"] in setOf("play", "pause", "next", "previous") && (args["app"] == null || args["app"] is String)) null
+        else "action.invalid"
+    "call.dial" -> if (listOf("name", "number").any { (args[it] as? String)?.isNotBlank() == true }) null else "action.invalid"
+    "sms.compose" ->
+        if ((args["name"] as? String)?.isNotBlank() == true && (args["body"] as? String)?.isNotBlank() == true) null
+        else "action.invalid"
+    "camera.record" -> if (args["start"] is Boolean) null else "action.invalid"
+    "camera.photo", "gallery.open" -> null
+    "gallery.describe" -> if (args["kind"] == null || args["kind"] in setOf("latest", "photo", "video")) null else "action.invalid"
+    // An action this build has never heard of, from a newer relay.
+    else -> "action.unknown"
 }
 
 /**

@@ -107,6 +107,8 @@ extension LocalizationTable {
         ("set.diag.timing", "时序", "Timing"),
         ("set.diag.timingValue", "ASR {asr} · 思考 {think} · 首音 {first} · 总计 {total}ms", "ASR {asr} · think {think} · first audio {first} · total {total} ms"),
         ("set.diag.status", "状态", "Status"),
+        ("set.diag.protocol", "协议", "Protocol"),
+        ("set.diag.agent", "当前助手", "Agent"),
         ("set.diag.export", "导出日志", "Export log"),
         ("set.diag.clear", "清空日志", "Clear log"),
         ("set.kind.demo", "演示", "Demo"),

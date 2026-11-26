@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-11-26 — 0.2.1, dependency upgrades and our own dependency audit
+
+- The kit is 0.2.1. Its tag ran the release workflow end to end for the first time: the whole CI, then the Android job,
+  then a draft holding the unsigned APK and AAB.
+- Dependabot is off. In its place the **Dependency audit** workflow runs osv-scanner over every lockfile on each push
+  to `main`, each pull request and every Monday; `osv-scanner.toml` lists the one advisory accepted on purpose
+  (activesupport, which only CocoaPods uses and cannot move past 7.2 yet) with its reason and a date to look again.
+  CocoaPods itself has no advisory data anywhere, so the AMap pods are checked by hand (docs/security.md).
+- Android: AGP 9.5.3, core-ktx 1.19.1, lifecycle 2.11.1, Compose BOM 2026.11.01 and OkHttp 5.5.1, which need
+  `compileSdk` 37.2 (`targetSdk` stays 36). Gradle dependency locking is on, so the audit sees the Android tree, and a
+  dependency changes only with `--write-locks`. Fifteen known vulnerabilities in transitive dependencies are fixed by
+  constraints that name each advisory: guava in the app (pulled in by the AMap SDK) and guava, commons-lang3,
+  httpclient, Bouncy Castle, jose4j and jdom2 in the test, lint and build tooling. JUnit stays on 4 and Kotlin on
+  2.4.21 (2.5 is not yet stable).
+- iOS: AMap3DMap-NO-IDFA 11.3.100, AMapFoundation-NO-IDFA 1.9.4, activesupport 7.2.4, json 3.2.0.
+- Speech server: mlx-audio 0.6.8, openai 3.59.0 (development), uv 0.13.10 and the latest python:3.12 image.
+- npm: @types/node 26.6.11, @types/react 19.3.3, vitest 5.1.2; everything else was already current. typescript-eslint
+  stays on 8.72.0 with the minimatch override until its optional TypeScript 7 peer accepts a stable release.
+
 ## 2026-11-26 — Account recovery, release builds and loose ends
 
 - Pushing a kit tag (`v*`) now attaches the Android app to the draft GitHub release, not only the kit and SDK. The

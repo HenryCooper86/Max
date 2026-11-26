@@ -30,12 +30,12 @@ private final class ClosingRelay {
     /// Starts listening and returns once the port is known.
     func start() async throws {
         listener.start(queue: queue)
-        // NWListener publishes its port only once it is listening.
-        let deadline = Date().addingTimeInterval(5)
-        while listener.port == nil, Date() < deadline {
+        // NWListener reports `.any` (port 0) until it is actually listening: wait for a real port, not just any.
+        let deadline = Date().addingTimeInterval(10)
+        while (listener.port?.rawValue ?? 0) == 0, Date() < deadline {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
-        guard listener.port != nil else {
+        guard (listener.port?.rawValue ?? 0) != 0 else {
             throw URLError(.cannotConnectToHost, userInfo: [NSLocalizedDescriptionKey: "The loopback relay did not start listening"])
         }
     }

@@ -176,12 +176,13 @@ final class LoopbackRelay {
     /// Starts listening and returns once the port is known.
     func start() async throws {
         listener.start(queue: queue)
-        // NWListener publishes its port only once it is listening.
-        let deadline = Date().addingTimeInterval(5)
-        while listener.port == nil, Date() < deadline {
+        // NWListener reports `.any` (port 0) until it is actually listening, so a nil check is not enough: a test
+        // that read the port too early dialled 127.0.0.1:0 and timed out (seen on the CI runner). Wait for a real port.
+        let deadline = Date().addingTimeInterval(10)
+        while (listener.port?.rawValue ?? 0) == 0, Date() < deadline {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
-        guard listener.port != nil else {
+        guard (listener.port?.rawValue ?? 0) != 0 else {
             throw URLError(.cannotConnectToHost, userInfo: [NSLocalizedDescriptionKey: "The loopback relay did not start listening"])
         }
     }

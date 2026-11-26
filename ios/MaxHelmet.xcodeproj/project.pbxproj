@@ -35,7 +35,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		7B0000000000000000000001 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+		7B0000000000000000000001 /* Exceptions for "MaxHelmet" folder in "MaxHelmet" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"Info-Debug.plist",
@@ -46,8 +46,29 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		7A0000000000000000000001 /* MaxHelmet */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (7B0000000000000000000001 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = MaxHelmet; sourceTree = "<group>"; };
-		7C0000000000000000000001 /* MaxHelmetTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = MaxHelmetTests; sourceTree = "<group>"; };
+		7A0000000000000000000001 /* MaxHelmet */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				7B0000000000000000000001 /* Exceptions for "MaxHelmet" folder in "MaxHelmet" target */,
+			);
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = MaxHelmet;
+			sourceTree = "<group>";
+		};
+		7C0000000000000000000001 /* MaxHelmetTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = MaxHelmetTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -272,13 +293,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-MaxHelmet/Pods-MaxHelmet-resources-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Copy Pods Resources";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-MaxHelmet/Pods-MaxHelmet-resources-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;

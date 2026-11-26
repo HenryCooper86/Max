@@ -1,7 +1,7 @@
 PODS:
-  - AMap3DMap-NO-IDFA (11.2.100):
+  - AMap3DMap-NO-IDFA (11.3.100):
     - AMapFoundation-NO-IDFA (>= 1.9.0)
-  - AMapFoundation-NO-IDFA (1.9.1)
+  - AMapFoundation-NO-IDFA (1.9.4)
 
 DEPENDENCIES:
   - AMap3DMap-NO-IDFA (~> 11.2)
@@ -12,8 +12,8 @@ SPEC REPOS:
     - AMapFoundation-NO-IDFA
 
 SPEC CHECKSUMS:
-  AMap3DMap-NO-IDFA: 439e67a50a683ea71b72a949882dcdf55f1cf2cd
-  AMapFoundation-NO-IDFA: b59e0f5bd904e747b34171f1f690e22e0003acaa
+  AMap3DMap-NO-IDFA: 996f6311bf1f5a55a91716f76260b18169d9a278
+  AMapFoundation-NO-IDFA: 239ad28b37ec224c2f32ac9f6bbea61eb1d8d3b9
 
 PODFILE CHECKSUM: 3f09c9460312de09bb44d0d3910a66b22305dfef
 

@@ -1,5 +1,159 @@
 # Changelog
 
+## 2026-11-26 — Second round of gap fixes
+
+- `/ready` now checks that Max Cloud's database can be opened, read and written, and answers `503` with
+  `cloud-storage-unavailable` when it cannot: it reads a customer and commits one probe write, at most once a minute.
+  Before, a full, locked or unwritable `cloud.sqlite` still answered ready while signups, sessions and payments failed.
+- Public payment notifications (`POST /cloud/pay/:provider/notify`) are now limited to 16 KB and 600 a minute per
+  address, counted before the body is read, so a flood of forged notifications cannot crowd out live audio. A
+  notification refused for the limit is answered exactly as a failed one is, which both providers retry (WeChat Pay up
+  to 15 times over about a day, Alipay 8 times over about 25 hours); the sweep and the console's polling still credit
+  the order.
+- Starting a top-up is throttled: at most 10 a minute per customer and 60 a minute per address, so a customer whose
+  provider keeps failing cannot hammer the merchant API. The five-open-order count and the insert now happen in one
+  transaction, so two relays sharing a database cannot both take the last place.
+- Deleting a Max Cloud project now erases everything its deletion need not keep, in the same transaction: its
+  transcripts and saved revisions, and on its row its project key, model key, webhook secret, trace headers,
+  assistant name, instructions, greeting, Studio settings, public embed id, monthly minutes limit and revision. It
+  used to keep all of that indefinitely. A deleted project keeps only its id, its owner, its name, its backend and its
+  dates (created, deleted, first website conversation), which is what the activation metrics and past usage need;
+  projects deleted by earlier releases have the rest erased the next time the database is opened.
+- A running Max Cloud session no longer runs on through a store outage: after its checks have failed for 30 seconds
+  (its checkpoint writes included) it is closed with `1013` and the clear reason "cloud store unavailable", and is
+  charged in full once the database is back. A Studio test gets the same 30 seconds and a message of its own. The most
+  a customer can go past what they had, outage included, is now 30 seconds plus one check interval per open session.
+- A customer's balance is now kept on the customer's row (`balance_fen`) and moved by every ledger entry in the same
+  transaction, and the month's free seconds are summed from a covering index, so the 5-second check no longer sums a
+  customer's whole ledger on the live-audio thread. Older databases are filled from their ledger when first opened.
+- The page tells assistive technology which language it is in. `index.html` declares Chinese, and switching to
+  English changed only the visible copy, so a screen reader went on reading English pages with Chinese pronunciation
+  rules. `<html lang>` now follows the chosen language from the first render and on every switch, on the public site,
+  the app and the console.
+- The console's top-up dialog keeps the keyboard inside it. Tab and Shift+Tab now wrap from its last control to its
+  first and back, and focus that has left the dialog is brought back in; it used to move on into the page behind.
+  When the dialog closes (Escape, its Close button or a click on the dimmed area) the focus returns to the "Top up"
+  button that opened it, which is also what that button now hands to the dialog, so it holds for a mouse click too.
+  The dimmed area is a real button instead of a click handler on a plain `div`.
+- The console's account card follows the tabs pattern keyboard and screen-reader users expect: only the selected tab
+  is in the Tab order, and the arrow keys and Home/End move to a tab and select it. The arrow keys did nothing
+  before. The session view's tabs in the admin Evidence workspace, which already had the keys, handle them on the
+  tabs now rather than on the tab list.
+- The web app honours `bargeIn: "confirm"` from the audio contract. The relay asks for it when the browser reports
+  no echo cancellation, because its speech detector may then be hearing Max's own voice from the speaker; the app
+  still cut Max's reply on every `hearing` status and every rider transcript, whatever the plan said, which is the
+  echo loop the plan exists to stop. Under `confirm` the cut now waits for the app's own microphone to hear the
+  wearer as well (three consecutive 20 ms frames, within 0.6 s before the relay's event or 0.3 s after it), the rule
+  the RDK agent and the reference client already use. A reply the relay stopped itself is not held up that way: a
+  `hearing` status carries `cause: "relay"` when the relay cut the answer (a guardrail, an announcement it is about
+  to make, a turn the wearer typed), and the app stops at once on it, as on the fabrication guard's own `hearing`.
+  A cut the microphone agrees to only after the relay has moved on just silences what is left of the reply: the
+  turn's state stays as the relay's events describe it. See `docs/protocol.md` and `docs/audio/contract.md`.
+- `validateAgentEvent` keeps what `session.started` says beyond its first four fields. It dropped the audio plan (so
+  the app could never see `confirm`), the protocol version and the resume id, and the optional capability flags
+  (`tools`, `textInput`, `imageInput`, `videoInput`) with them. They pass through now, absent when the relay does not
+  send them, and a plan or version the validator cannot vouch for falls back to the audio contract's defaults.
+- `createBargeInGuard` has moved from `rdk/agent/src/audio/barge-in.ts` to `shared/barge-in.ts`: the RDK agent and
+  the web app share it.
+- The React hooks rules now lint the SDK's `useVoiceAgent` hook too (`sdk/src/react.ts`); only `src/` was covered,
+  and it needed no change. `eslint-plugin-jsx-a11y` is still not a dependency: its newest release (6.10.2) supports
+  ESLint up to 9 and this repository is on 10, so adding it makes `npm ci` fail. Run anyway, installed without
+  saving, over `src/**/*.tsx` it reported 13 issues: the top-up dialog's dimmed area and the Evidence workspace's
+  tab list (fixed above), and eight that stand. Three are deliberate, and will need a justified disable once the
+  plugin supports ESLint 10: the keyboard-scrollable code blocks in `InstallTab`, the key in `KeyReveal` (the
+  by-hand fallback the copy button names when the clipboard refuses), and the project name field taking the focus
+  once a template is chosen. The other five are the voice sample and recording players in `VoicesPanel`: the text
+  that is spoken in them never reaches the browser, so captions for them are work on the voices API.
+- The relay's two rate limiters keep a bounded table: each remembers at most 10,000 addresses, and a check costs the
+  same however many have been seen. Both kept every address of the last minute and, past 10,000 entries, scanned the
+  whole table on each new attempt, so an attacker rotating addresses (which IPv6 makes cheap) grew the relay's memory
+  and made every unauthenticated attempt slower. The window is still a true sliding one. The trade-off is in
+  `docs/security.md`: when a table is full, the address that has gone longest without an attempt is forgotten and
+  starts with a fresh count, refused attempts counting as attempts. So an address that used up its allowance can buy
+  it back only by staying quiet while 10,000 other addresses appear, which costs it more than it gains, one that keeps
+  trying stays limited, and a newcomer is never refused because a table is full.
+- A chat model or speech server that stalls no longer holds a reply open for ever on `pipeline`, `local` and
+  `max-speech`. Each request to it has two deadlines: `PIPELINE_FIRST_BYTE_MS` (30 s) for the first byte of the answer,
+  counted from the request, and `PIPELINE_STALL_MS` (15 s) for the silence between two bytes; `LOCAL_FIRST_BYTE_MS`
+  defaults to 60 s because a local model may first have to be loaded. When one passes the request is aborted and the
+  reply ends with the error the session already reports, a `status` event with state `degraded` such as "Chat model
+  sent nothing for 30 seconds", so the wearer is told and the conversation's silence clock runs again. Before, the
+  conversation waited on the stalled reply indefinitely: the idle check does not fire while a reply is under way, and
+  neither chat nor text-to-speech had a timeout. `0` turns a deadline off, and `PIPELINE_LLM_FIRST_BYTE_MS`,
+  `PIPELINE_TTS_STALL_MS` and the like set one for a stage alone.
+- Loading the tools again (a Studio save) or stopping the relay cancels the knowledge embedding job that is under
+  way: its requests are aborted, it makes no new one and writes nothing more to the cache, while what it had saved
+  stays for the next start. Every save used to start another job and none was ever stopped, so repeated saves ran
+  duplicate embedding requests, and a job from a replaced config could rewrite `vectors.bin` after the newer one had.
+- The knowledge base stops reading a folder once it has 500 files that will load, instead of walking the whole tree
+  and discarding the rest afterwards, and takes the first 5,000 entries of any one folder in name order. A file too
+  large to load takes no place, the first file that does not fit in the 20 MiB ends the walk, and the log names what
+  was left out. Before, a large folder was scanned to its end on every start, files that could not load used up places
+  under the 500, and a folder of many thousands of entries was read whole.
+- Tool output is capped at 16 KiB of UTF-8, with the `…[truncated]` marker inside the cap and never cut in the
+  middle of a character. The cap counted 16,384 UTF-16 code units and then put the marker outside it, so ASCII output
+  went past 16 KiB and Chinese or emoji output could be about three times larger.
+- A dropped connection can be resumed on every backend a software assistant uses. The keyless demo and Doubao used to
+  take the resume id and then start a fresh conversation. The demo now keeps what was said for the next reconnect and
+  does not greet again. Doubao gets the earlier turns as its dialog context when the session starts (complete
+  question-and-answer pairs, the last 20) and is told in its system role to carry on without greeting again, and it
+  records the turns of a software assistant as they are said. `docs/conversations.md` and `docs/backends.md` say how
+  each backend does it.
+- Every `hearing` status the relay sends for a cut of its own carries `cause: "relay"`: on the live backends a tool
+  result it is about to report, a guardrail stop and a typed turn; on Doubao a location answer, a device result, the
+  navigation fabrication guard's clear and a turn prompt. The ones for the wearer's voice carry none.
+- The RDK agent and the reference device client stop a reply at once on a `hearing` with `cause: "relay"`, as the web
+  app does. Under `bargeIn: "confirm"` they used to wait for their own microphone even when nobody spoke, so a
+  guardrail-stopped reply played on.
+- The RDK agent reports its real build and link in `session.start`: `gitCommit` from the `.rdk-release-sha` that
+  `deploy.sh` stamps into the release, `appVersion` (`max-rdk@<version>`), and `networkType` from the interface of the
+  default route (`wifi`, `ethernet`, `cellular` or `unknown`) instead of always `wifi`. `MAX_TESTER_ID`,
+  `MAX_TESTING_RUN_ID` and the other `MAX_TESTER_*`/`MAX_TESTING_*` variables in `/etc/max/agent.env` add the QA
+  attribution the phones send. See `rdk/README.md`.
+- An RDK activation that succeeds keeps the previous release it moved aside and the newest failed release, and removes
+  older `/opt/max.previous-*` and `/opt/max.failed-*` trees (exact canonical names only, never a symlink). Each
+  activation used to leave one more whole tree, with its own `node_modules`, until the board's storage filled. A
+  rolled-back activation removes none.
+- `npm run pack:sdk` installs the tarball it packed into an empty project, imports `max-voice-agent`,
+  `max-voice-agent/react` and `max-voice-agent/widget` by name and type-checks a consumer of all three, so a broken
+  `exports` path, a missing chunk or a missing `.d.ts` fails before publishing. Maintainers publish the tarball the
+  release workflow attached to the draft, not a local build (`sdk/README.md`).
+- Pushing a release tag runs every job of the cross-platform CI (browsers, speech server, both container images,
+  Android, iOS and the device client) before the draft is made; it used to run only `npm run check`.
+- CI builds the relay's own Docker image and starts it: it must come up healthy and ready, as the unprivileged user,
+  and serve the SDK. Its base image is pinned by digest (`node:22.23.5-slim@sha256:…`), as the speech server's are.
+- `npm run check:protocol` also fails when `protocol/agent-events.schema.json` and the event types in
+  `shared/agent.ts` disagree, which it could not see before. The schema gains the fields that had drifted: the QA,
+  build, voice and ride fields of `session.start`, the audio metrics of `testing.metric` and `metric`, and the newer
+  fields of `weather`, `ride.context` and `session.memory`. `hazard.report` names `handoverMs`, as the relay reads it,
+  where the schema said `latencyMs`.
+- `npm run check` type-checks the operational scripts in `scripts/` (`check:scripts`), which no check covered.
+- GitLab CI also runs `npm audit` and the device-client tests. Its runner has no browsers, Docker or uv, so the browser
+  tests, the speech server and the container images stay GitHub-only; `.gitlab-ci.yml` says so.
+- The iOS and Android apps **resume a conversation after a dropped link**. Each kept only the first conversation of a
+  hands-free session, so a reconnect started a fresh one: Max greeted again and had forgotten what was said. Both now
+  keep the `resume` id the relay sends in `session.started` and send it back in every later `session.start` of the same
+  hands-free session, as the web SDK does (`docs/protocol.md`, Resuming), the restart a settings change makes
+  included. The id is forgotten when hands-free ends, by the rider or on a final close (4001, 4003, 1008), so the next
+  session is a new conversation; on Android a crash incident's reconnects after a 4001 start a new one too. Relays
+  older than resumption send no id and get none back.
+- Both apps act on `session.ended` and `agent.changed`, which they used to drop. `session.ended` ends hands-free at
+  once, as the idle close does, and the status under diagnostics says why the relay ended the conversation (the
+  assistant finished it, the rider stayed silent, or the maximum duration was reached); a reason the app does not know
+  is still an end, worded generally, and the relay's own text is never shown. On Android it is not final while a crash
+  incident is open, like a bare 4001. `agent.changed` records the active agent, names it on the status line and lists
+  it under diagnostics.
+- iOS **answers device commands it cannot carry out** instead of dropping them. The relay counts a command with no
+  answer as a failure after 8 seconds, so an action the app had never heard of (a newer relay's `camera.look`, for
+  one) left the rider waiting, and a malformed one could run as something else: `torch.set` without `on` switched
+  the torch off, and `camera.record` without `start` stopped a recording. Both are now answered at once with
+  `unsupported`: `action.unknown` for the first, `action.invalid` for the second. Android answered `action.invalid`
+  for both, and only once the phone was unlocked and an activity attached; it now tells them apart and answers
+  whatever the lock state. A command whose id the relay would refuse is not answered on either.
+- Both apps **warn when the relay speaks a newer protocol** than they do (`session.started.protocol` above their
+  version 1), as the web SDK's `protocol_mismatch` does: once per hands-free session on the status line, and for the
+  rest of the session under diagnostics. Before, a newer relay's unknown events were ignored without a word.
+
 ## 2026-11-25 — Fixes from a gap review
 
 - Max Cloud's database syncs every change to disk before the relay goes on (`synchronous = FULL`). It used the

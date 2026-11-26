@@ -570,7 +570,7 @@ requires-dist = [
     { name = "jaconv", specifier = "==0.5.0" },
     { name = "kokoro-onnx", specifier = "==0.6.1" },
     { name = "misaki", extras = ["zh"], specifier = "==0.9.4" },
-    { name = "mlx-audio", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = "==0.6.7" },
+    { name = "mlx-audio", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = "==0.6.8" },
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = "==0.4.3" },
     { name = "mojimoji", specifier = "==0.0.13" },
     { name = "numpy", specifier = "==2.5.5" },
@@ -585,7 +585,7 @@ provides-extras = ["mlx"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "openai", specifier = "==3.57.0" },
+    { name = "openai", specifier = "==3.59.0" },
     { name = "pytest", specifier = "==9.2.0" },
     { name = "pytest-asyncio", specifier = "==1.5.0" },
     { name = "ruff", specifier = "==0.17.6" },
@@ -649,7 +649,7 @@ wheels = [
 
 [[package]]
 name = "mlx-audio"
-version = "0.6.7"
+version = "0.6.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -669,9 +669,9 @@ dependencies = [
     { name = "transformers", extra = ["chat-template"] },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/89/41/27f00f70ed41426b357695ee007a6aee4306c8555af0bd33bdd6e98a4eaa/mlx_audio-0.6.7.tar.gz", hash = "sha256:5b22c94a7ffd4512a90f533e062b8344469a5f35d8ecd0a8467c27ef9cd162f1", size = 2321084, upload-time = "2026-11-19T16:51:43.49Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/3f/4e6556969fe43848761e893f97f5b385df2d431965b57d9a1f02e8f3780c/mlx_audio-0.6.8.tar.gz", hash = "sha256:bb933528d7e1ec4d3c26de2bc5ba7dc3af9e2f40123902cfd9996591399be597", size = 2332168, upload-time = "2026-11-23T20:22:59.026Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7d/fd/45df0ef1d0709bb3b69881d62cbeea6ca1dca65a1c54cb831de031c8e52b/mlx_audio-0.6.7-py3-none-any.whl", hash = "sha256:ed7c2abc5d20d9eadf33086e222ce51bf3c4be77384dc55a8c5729485bbc1b56", size = 2790482, upload-time = "2026-11-19T16:51:41.347Z" },
+    { url = "https://files.pythonhosted.org/packages/58/17/13693b5b9cf46fcf059b15be5ec752d8c0d150b2d77b6aebeaf1eaa8cc18/mlx_audio-0.6.8-py3-none-any.whl", hash = "sha256:65b85dae7f42440253674db6db9ffa6b64c3f76a67214144a3a3d426474730d9", size = 2803225, upload-time = "2026-11-23T20:22:57.418Z" },
 ]
 
 [[package]]
@@ -796,7 +796,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "3.57.0"
+version = "3.59.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -806,9 +806,9 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/90/b2/97780581dab39384d1de4bc15f1f6cbaff26ce965a46c23a10bd948b71a8/openai-3.57.0.tar.gz", hash = "sha256:5a0a89d6a542efc85e2a8cec701ca9265b795d578c777828e10fafdf80e333b6", size = 2425150, upload-time = "2026-11-20T01:28:43.575Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/ca/d9d1549c71723eb8fd2af7173b1c22ed065d10107b1b6438453a1b3f2ae2/openai-3.59.0.tar.gz", hash = "sha256:e4e57d5c28bed6efe6483c9f61ba59be13fa16edde4b771cdaf5c7ca70bc9ff1", size = 2429198, upload-time = "2026-11-24T19:19:44.198Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/40/0475208a470f90a1d3e94b41382678b44f311c2ea2a317228531e2193567/openai-3.57.0-py3-none-any.whl", hash = "sha256:f97bc74024c06ced8428b56c4a3594066709d3082779bf9d0b4b6092fbf587a8", size = 2451809, upload-time = "2026-11-20T01:28:41.48Z" },
+    { url = "https://files.pythonhosted.org/packages/76/05/a7afe3729b624e2a19215463c73778208a916e57eb7d33e0fb885bba8160/openai-3.59.0-py3-none-any.whl", hash = "sha256:e613537ac5f082c58f652a536ed4215b19a29d360c4348cca86f0e563f7a0b1f", size = 2454193, upload-time = "2026-11-24T19:19:42.189Z" },
 ]
 
 [[package]]

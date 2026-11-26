@@ -78,12 +78,12 @@ export const PLANS: readonly Plan[] = [
         zh: "一行代码嵌入网站，安装诊断帮你排查连接问题",
         en: "One-line website embed with installation diagnostics"
       },
-      { zh: "托管中继：TLS、扩容和更新都由我们负责", en: "Hosted relay with TLS, scaling and updates handled" },
+      { zh: "托管中继：TLS 和更新都由我们负责", en: "Hosted relay with TLS and updates handled" },
       {
         zh: "使用你自己的 OpenAI、Gemini 或 xAI 密钥，模型费用直接付给他们",
         en: "Your own OpenAI, Gemini or xAI key: model costs go straight to them"
       },
-      { zh: "按用户的用量统计和上限", en: "Usage per user, with limits you set" },
+      { zh: "按项目的用量统计和每月分钟上限", en: "Usage per project, with a monthly minutes limit you set" },
       {
         zh: "同样的 SDK 和协议，随时可以改回自己部署",
         en: "Same SDK and protocol: move to self-hosting any time"
@@ -181,8 +181,8 @@ export const PRICING_FAQ: readonly Question[] = [
   {
     question: { zh: "我可以向自己的客户收费吗？", en: "Can I charge my own customers?" },
     answer: {
-      zh: "可以。中继会按用户统计用量、执行你设的上限，并把每次会话的用量发送到你的计费系统。",
-      en: "Yes. The relay counts usage per user, enforces limits you set, and can send each session's usage to your billing system."
+      zh: "可以。自行部署的中继会按用户统计用量、执行你设的上限，并把每次会话的用量发送到你的计费系统。Max Cloud 按项目统计用量和上限。",
+      en: "Yes. A self-hosted relay counts usage per user, enforces limits you set, and can send each session's usage to your billing system. Max Cloud counts and caps usage per project."
     }
   }
 ];

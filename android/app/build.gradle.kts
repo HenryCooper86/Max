@@ -5,6 +5,12 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Pin the full dependency graph so osv-scanner can audit it without Dependabot.
+// Any dependency upgrade must regenerate the locks: ./gradlew ... --write-locks
+dependencyLocking {
+    lockAllConfigurations()
+}
+
 val localConfig = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
@@ -67,8 +73,8 @@ if (!releaseSigningConfigured && releaseSigning.values.any { it != null }) {
 android {
     namespace = "io.github.henrycooper86.max"
     compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
+        version = release(37) {
+            minorApiLevel = 2
         }
     }
 
@@ -159,4 +165,51 @@ dependencies {
     // directly. Never reaches the production classpath. Authorized exception,
     // plan Tech Stack line (2026-08-08-nav-android-plan-c), Task 3.
     testImplementation("org.json:json:20260814")
+
+    // Transitive versions pinned to the latest fixed releases; osv-scanner reads the
+    // lockfiles these feed. Regenerate with `./gradlew ... --write-locks` after changing.
+    constraints {
+        // App runtime/compile classpaths: the AMap SDK pulls an old guava -android build.
+        implementation("com.google.guava:guava:33.8.0-android") {
+            because("GHSA-xxph-c9ww-hj94: guava < 33.7.2; AMap 3dmap-location-search brings 33.3.1-android (32.0.1-android at compile time)")
+        }
+        // Test-only (Robolectric) transitive deps, never shipped in the APK.
+        testImplementation("com.google.guava:guava:33.8.0-jre") {
+            because("GHSA-xxph-c9ww-hj94: guava < 33.7.2; keep the JVM test runtime on the fixed -jre build")
+        }
+        testImplementation("org.apache.commons:commons-lang3:3.22.0") {
+            because("GHSA-j288-q9x7-2f5v: commons-lang3 < 3.18.0; Robolectric brings 3.16.0")
+        }
+        testImplementation("org.apache.httpcomponents:httpclient:4.5.14") {
+            because("GHSA-7r82-7xv7-xcpj: httpclient < 4.5.13; Robolectric brings 4.5.6")
+        }
+        testImplementation("org.bouncycastle:bcprov-jdk18on:1.87") {
+            because("GHSA-9pwp-9qqc-pr26, GHSA-qp49-qgx5-5m26: bcprov < 1.85; Robolectric brings 1.80.2")
+        }
+        testImplementation("org.bouncycastle:bcpkix-jdk18on:1.87") {
+            because("GHSA-wg6q-6289-32hp: bcpkix < 1.84; Robolectric brings 1.80.2")
+        }
+        testImplementation("org.bouncycastle:bcutil-jdk18on:1.87") {
+            because("Align bcutil with the fixed bcprov/bcpkix pulled by Robolectric")
+        }
+        // Lint tooling (androidLintTool), build-time only.
+        add("androidLintTool", "com.google.guava:guava:33.8.0-jre") {
+            because("GHSA-xxph-c9ww-hj94: guava < 33.7.2; AGP lint tool brings 33.4.0-jre")
+        }
+        add("androidLintTool", "org.apache.commons:commons-lang3:3.22.0") {
+            because("GHSA-j288-q9x7-2f5v: commons-lang3 < 3.18.0; AGP lint tool brings 3.16.0")
+        }
+        add("androidLintTool", "org.apache.httpcomponents:httpclient:4.5.14") {
+            because("GHSA-7r82-7xv7-xcpj: httpclient < 4.5.13; AGP lint tool brings 4.5.6")
+        }
+        add("androidLintTool", "org.bouncycastle:bcprov-jdk18on:1.87") {
+            because("GHSA-9pwp-9qqc-pr26, GHSA-qp49-qgx5-5m26: bcprov < 1.85; AGP lint tool brings 1.80.2")
+        }
+        add("androidLintTool", "org.bouncycastle:bcpkix-jdk18on:1.87") {
+            because("GHSA-wg6q-6289-32hp: bcpkix < 1.84; AGP lint tool brings 1.80.2")
+        }
+        add("androidLintTool", "org.bouncycastle:bcutil-jdk18on:1.87") {
+            because("Align bcutil with the fixed bcprov/bcpkix pulled by the AGP lint tool")
+        }
+    }
 }

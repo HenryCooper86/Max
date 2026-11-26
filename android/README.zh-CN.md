@@ -7,8 +7,8 @@ Android 客户端使用 Kotlin 和 Jetpack Compose，通过与网页、iOS 相�
 ## 环境要求
 
 - Android Studio 及其自带的 JBR/JDK。Gradle 需要 JDK 17–21，不要使用 Homebrew Java 25 或更新版本。
-- Android SDK Platform 36.1；Android 8.0（API 26）或更新版本的设备或模拟器。
-- 仓库使用 Gradle Wrapper 9.9.2、Android Gradle Plugin 9.5.2、Kotlin 2.4.21 和 Compose BOM 2026.06.01。
+- Android SDK Platform 37.2；Android 8.0（API 26）或更新版本的设备或模拟器。
+- 仓库使用 Gradle Wrapper 9.9.2、Android Gradle Plugin 9.5.3、Kotlin 2.4.21 和 Compose BOM 2026.11.01。
 
 ## 构建与检查
 
@@ -29,6 +29,10 @@ ANDROID_HOME="$HOME/Library/Android/sdk" \
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 ./gradlew testDebugUnitTest lintDebug
 ```
+
+依赖版本已锁定（App 的 debug/release classpath 锁在 `app/gradle.lockfile`，AGP/Kotlin 插件依赖锁在
+`buildscript-gradle.lockfile`），以便关闭 Dependabot 后用 `osv-scanner` 审计完整依赖图。升级任何依赖后，用
+`./gradlew --write-locks` 重新生成锁文件并提交变更；锁不一致时构建会按设计失败。
 
 ### 发布产物
 

@@ -21,9 +21,9 @@ Phone (this app)                        Mac / test server
 ## Requirements
 
 - Android Studio with its bundled JBR/JDK. Gradle requires JDK 17-21; avoid Homebrew Java 25+.
-- Android SDK with platform 36.1.
+- Android SDK with platform 37.2.
 - A device or emulator running Android 8.0+ (API 26+)
-- Gradle wrapper 9.9.2, Android Gradle Plugin 9.5.2, Kotlin 2.4.21, Compose BOM 2026.06.01.
+- Gradle wrapper 9.9.2, Android Gradle Plugin 9.5.3, Kotlin 2.4.21, Compose BOM 2026.11.01.
 
 ## Build
 
@@ -137,6 +137,11 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 `./gradlew test` also starts the real app once with no emulator: `MainLaunchTest` opens `MainActivity` and its view
 model under Robolectric (Android 15, animations off). Its Android runtime (about 200 MB) is downloaded to
 `~/.m2/repository` on the first run.
+
+Dependency versions are locked (`app/gradle.lockfile` for the app's debug/release classpaths and
+`buildscript-gradle.lockfile` for AGP/Kotlin plugin deps) so `osv-scanner` can audit the full graph now that
+Dependabot is off. After upgrading any dependency, regenerate the locks with `./gradlew --write-locks` and commit the
+changed lockfiles; a lock mismatch fails the build by design.
 
 ## Run against the relay
 

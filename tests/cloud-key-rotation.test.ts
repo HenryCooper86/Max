@@ -3,13 +3,16 @@
 // key, and a relay started with the wrong key says so instead of quietly
 // telling every customer to add a model key.
 import { randomBytes } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cloudReadinessIssues, cloudReadinessWarnings, cloudUnreadableSecrets, projectRuntime } from "../server/cloud";
 import { setCloudClock } from "../server/cloud/context";
 import { createProject, patchProject, revealWebhookSecret, signup } from "../server/cloud/customers";
 import { checkStoredSecrets, reencryptStoredSecrets, resetCloudKeyCheck } from "../server/cloud/keyring";
 import { decryptModelKey, encryptModelKey, secretKeyId } from "../server/cloud/secrets";
-import { liveProject, resetCloudDatabase, updateProject } from "../server/cloud/store";
+import { immediate, liveProject, resetCloudDatabase, updateProject } from "../server/cloud/store";
 
 const OLD = randomBytes(32);
 const NEW = randomBytes(32);
@@ -181,5 +184,80 @@ describe("rotating CLOUD_SECRET_KEY", () => {
     await projectWithSecrets();
     useKeys(OLD, "not-a-key");
     expect(cloudReadinessIssues()).toEqual(["cloud-secret-key-previous-invalid"]);
+  });
+});
+
+describe("the database on /ready", () => {
+  let directory = "";
+  let file = "";
+
+  beforeEach(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "max-cloud-ready-"));
+    file = path.join(directory, "cloud.sqlite");
+    resetCloudDatabase(file);
+  });
+
+  afterEach(() => {
+    resetCloudDatabase(":memory:");
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  /** The timestamp the readiness probe last wrote: undefined until it has run. */
+  const probe = () =>
+    immediate(
+      (db) => (db.prepare("SELECT at FROM cloud_storage_probe WHERE id = 1").get() as { at: number } | undefined)?.at
+    );
+
+  it("is read and written before the relay is called ready, and probed again at most once a minute", async () => {
+    await projectWithSecrets();
+    expect(probe()).toBeUndefined();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      expect(cloudReadinessIssues()).toEqual([]);
+      expect(probe()).toBe(1_000_000);
+      // A load balancer asks every few seconds: the write is not repeated each time.
+      expect(cloudReadinessIssues()).toEqual([]);
+      expect(probe()).toBe(1_000_000);
+      now.mockReturnValue(2_000_000);
+      clock += 60_000;
+      expect(cloudReadinessIssues()).toEqual([]);
+      expect(probe()).toBe(2_000_000);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("is reported when the database can be read but not written, and clears once it can", async () => {
+    await projectWithSecrets();
+    immediate((db) => db.exec("PRAGMA query_only = ON"));
+    expect(cloudReadinessIssues()).toEqual(["cloud-storage-unavailable"]);
+    resetCloudDatabase(file); // a fresh connection, read-write again
+    resetCloudKeyCheck();
+    expect(cloudReadinessIssues()).toEqual([]);
+  });
+
+  it("is reported when the database file cannot be opened", async () => {
+    await projectWithSecrets();
+    resetCloudDatabase(file);
+    fs.rmSync(file, { force: true });
+    fs.mkdirSync(file); // a directory where the database file should be
+    expect(cloudReadinessIssues()).toEqual(["cloud-storage-unavailable"]);
+    fs.rmdirSync(file);
+    resetCloudDatabase(file);
+    resetCloudKeyCheck();
+    expect(cloudReadinessIssues()).toEqual([]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)("is reported when its file and folder are read-only", async () => {
+    await projectWithSecrets();
+    resetCloudDatabase(file);
+    fs.chmodSync(file, 0o400);
+    fs.chmodSync(directory, 0o500);
+    expect(cloudReadinessIssues()).toEqual(["cloud-storage-unavailable"]);
+    fs.chmodSync(directory, 0o700);
+    fs.chmodSync(file, 0o600);
+    resetCloudDatabase(file);
+    resetCloudKeyCheck();
+    expect(cloudReadinessIssues()).toEqual([]);
   });
 });

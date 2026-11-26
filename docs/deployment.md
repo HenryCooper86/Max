@@ -229,17 +229,18 @@ and `max_relay_build_info`. Counters start from zero when the process starts, wh
 With Max Cloud on, it also exports the billing counters. Alert on the second one: it means finished sessions could not
 be written to the ledger (they are kept and retried, but something is wrong with the database or its disk).
 
-| Counter                                        | Counts                                                                |
-| ---------------------------------------------- | --------------------------------------------------------------------- |
-| `max_cloud_sessions_booked_total`              | Finished sessions written to the ledger.                              |
-| `max_cloud_booking_failures_total`             | Failed attempts to write one; the session is kept and retried.        |
-| `max_cloud_bookings_retried_total`             | Sessions booked by a retry after a failed first attempt.              |
-| `max_cloud_sessions_recovered_total`           | Sessions left by a stopped relay, booked up to their last checkpoint. |
-| `max_cloud_topups_credited_total`              | Paid top-ups credited to a balance.                                   |
-| `max_cloud_topups_refused_total`               | Verified payments that could not be credited.                         |
-| `max_cloud_sessions_killed_key_rotation_total` | Sessions closed because the project key was rotated or deleted.       |
-| `max_cloud_spend_cap_refusals_total`           | Tokens or sessions refused, or closed, by a project's monthly limit.  |
-| `max_cloud_secrets_unreadable`                 | Stored secrets no configured key can read (a gauge; 0 is healthy).    |
+| Counter                                            | Counts                                                                       |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `max_cloud_sessions_booked_total`                  | Finished sessions written to the ledger.                                     |
+| `max_cloud_booking_failures_total`                 | Failed attempts to write one; the session is kept and retried.               |
+| `max_cloud_bookings_retried_total`                 | Sessions booked by a retry after a failed first attempt.                     |
+| `max_cloud_sessions_recovered_total`               | Sessions left by a stopped relay, booked up to their last checkpoint.        |
+| `max_cloud_topups_credited_total`                  | Paid top-ups credited to a balance.                                          |
+| `max_cloud_topups_refused_total`                   | Verified payments that could not be credited.                                |
+| `max_cloud_sessions_killed_key_rotation_total`     | Sessions closed because the project key was rotated or deleted.              |
+| `max_cloud_spend_cap_refusals_total`               | Tokens or sessions refused, or closed, by a project's monthly limit.         |
+| `max_cloud_sessions_ended_store_unavailable_total` | Sessions closed after 30 s of failed checks: the database could not be used. |
+| `max_cloud_secrets_unreadable`                     | Stored secrets no configured key can read (a gauge; 0 is healthy).           |
 
 ## Scaling
 

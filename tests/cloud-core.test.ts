@@ -1,28 +1,37 @@
 import { DEFAULT_STUDIO } from "../shared/cloud-studio";
 import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chargeSession, cloudEnabled, projectForApiKey, projectRuntime, remainingSeconds } from "../server/cloud";
 import { bookedSeconds, ORDER_LIFETIME_MS, secondsForFen, usageCharge } from "../server/cloud/billing";
 import { setCloudClock, setCloudPaymentProviders } from "../server/cloud/context";
 import { cloudCounters } from "../server/cloud/counters";
 import { createProject, patchProject, rotateProjectKey, deleteProject, signup } from "../server/cloud/customers";
+import { checkStoredSecrets } from "../server/cloud/keyring";
 import type { PaidOrder, PaymentProvider, QrOrder } from "../server/cloud/payments";
-import { decryptModelKey, encryptModelKey } from "../server/cloud/secrets";
+import { saveStudioDraft, studioRelease } from "../server/cloud/revisions";
+import { decryptModelKey, encryptModelKey, hashToken } from "../server/cloud/secrets";
 import {
   backupDatabase,
+  closePendingOrder,
   immediate,
   insertConversation,
-  insertOrder,
+  insertPendingOrder,
   ledgerEntries,
   liveProject,
   orderById,
+  pendingOrders,
   projectConversations,
   recentlyClosedOrders,
   resetCloudDatabase,
-  type OrderRow
+  studioActivation,
+  type OrderRow,
+  type ProjectRow,
+  usageSummary
 } from "../server/cloud/store";
 import {
   createTopup,
@@ -433,6 +442,55 @@ describe("top-ups", () => {
     expect((await createTopup(customerId, { pack: "cny50", provider: "wechat" })).ok).toBe(true);
   });
 
+  it("gives the last open place to one relay only, when two share the database", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "max-cloud-orders-"));
+    const file = path.join(directory, "cloud.sqlite");
+    try {
+      resetCloudDatabase(file);
+      const { fake, customerId } = await pendingOrder();
+      for (let index = 0; index < 3; index += 1) {
+        expect((await createTopup(customerId, { pack: "cny50", provider: "wechat" })).ok).toBe(true);
+      }
+      // A second process sharing the database (a second relay) takes the fifth place and holds its write a moment.
+      const other = spawn(
+        process.execPath,
+        [
+          "--no-warnings",
+          "--input-type=module",
+          "-e",
+          [
+            'import { DatabaseSync } from "node:sqlite";',
+            "const db = new DatabaseSync(process.argv[1]);",
+            'db.exec("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE");',
+            "db.prepare(\"INSERT INTO orders (id, customer_id, provider, pack, amount_fen, status, created_at, expires_at) VALUES ('mc_other_relay', ?, 'wechat', 'cny50', 5000, 'pending', 1, ?)\").run(process.argv[2], Date.now() + 60_000);",
+            'process.stdout.write("held\\n");',
+            'setTimeout(() => { db.exec("COMMIT"); db.close(); }, 600);'
+          ].join("\n"),
+          file,
+          customerId
+        ],
+        { stdio: ["ignore", "pipe", "ignore"] }
+      );
+      const held = Promise.withResolvers<void>();
+      other.stdout!.setEncoding("utf8");
+      other.stdout!.on("data", (chunk) => {
+        if (chunk.includes("held")) held.resolve();
+      });
+      other.on("exit", (code) => held.reject(new Error(`the other relay left early (${code})`)));
+      await held.promise;
+      // This relay waits for that write, then counts again: the place is taken, and no provider call is made.
+      expect(await createTopup(customerId, { pack: "cny50", provider: "wechat" })).toMatchObject({
+        ok: false,
+        status: 429
+      });
+      expect(fake.created).toHaveLength(4);
+      expect(pendingOrders(10)).toHaveLength(5);
+    } finally {
+      resetCloudDatabase();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   describe("the sweep", () => {
     afterEach(() => {
       vi.restoreAllMocks();
@@ -453,18 +511,24 @@ describe("top-ups", () => {
       expiresAt: number,
       provider = "wechat"
     ): void {
-      insertOrder({
-        id: orderNumber(index),
-        customer_id: customerId,
-        provider,
-        pack: "cny200",
-        amount_fen: 20_000,
-        status,
-        provider_txn_id: null,
-        created_at: expiresAt - ORDER_LIFETIME_MS,
-        paid_at: null,
-        expires_at: expiresAt
-      });
+      const id = orderNumber(index);
+      insertPendingOrder(
+        {
+          id,
+          customer_id: customerId,
+          provider,
+          pack: "cny200",
+          amount_fen: 20_000,
+          status: "pending",
+          provider_txn_id: null,
+          created_at: expiresAt - ORDER_LIFETIME_MS,
+          paid_at: null,
+          expires_at: expiresAt
+        },
+        Number.POSITIVE_INFINITY,
+        clock
+      );
+      if (status === "closed") closePendingOrder(id);
     }
 
     it("credits a payment nobody is polling for, once its provider confirms it", async () => {
@@ -867,5 +931,153 @@ describe("deleting a project", () => {
     expect(deleteProject(customerId, project.id)).toEqual({ ok: true, value: { ok: true } });
     expect(liveProject(project.id, customerId)).toBeUndefined();
     expect(projectConversations(project.id, customerId, 10)).toEqual([]);
+  });
+
+  /** A project with something in every field its owner can fill, a draft saved, and a copy of its key in that draft. */
+  function projectWithEverything(customerId: string) {
+    const created = newProject(customerId);
+    const { project } = created;
+    const tool = { name: "lookup", description: "Look it up", url: "https://tools.example.com/lookup", parameters: [] };
+    const saved = patchProject(customerId, project.id, {
+      modelKey: "sk-live-secret",
+      tracesHeaders: "x-api-key=private",
+      assistantName: "Ava",
+      instructions: "Answer in one line.",
+      greeting: "Hi!",
+      monthlyMinutesCap: 100,
+      studio: { ...project.studio, tools: [tool] }
+    });
+    if (!saved.ok) throw new Error(saved.error);
+    const release = studioRelease(customerId, project.id);
+    if (!release.ok) throw new Error(release.error);
+    const draft = saveStudioDraft(customerId, project.id, {
+      baseRevision: release.value.liveRevision,
+      draftRevision: null,
+      patch: { greeting: "Hi there" }
+    });
+    if (!draft.ok) throw new Error(draft.error);
+    return created;
+  }
+
+  const rowOf = (id: string) =>
+    immediate((db) => db.prepare("SELECT * FROM projects WHERE id = ?").get(id)) as ProjectRow;
+  const snapshotsOf = (id: string) =>
+    immediate(
+      (db) => (db.prepare("SELECT COUNT(*) AS n FROM studio_snapshots WHERE project_id = ?").get(id) as { n: number }).n
+    );
+
+  /** The whole row of a deleted project: what the activation metrics and past usage need, and nothing else. */
+  const tombstone = (project: { id: string }) => ({
+    id: project.id,
+    customer_id: expect.any(String),
+    name: "Shop",
+    backend: "openai",
+    key_hash: `deleted:${project.id}`,
+    key_prefix: "",
+    model_key_enc: null,
+    assistant_name: "",
+    instructions: "",
+    greeting: "",
+    created_at: clock,
+    deleted_at: clock,
+    studio: "{}",
+    public_id: null,
+    webhook_secret_enc: null,
+    traces_headers_enc: null,
+    monthly_minutes_cap: null,
+    first_website_conversation_at: null,
+    studio_revision: null
+  });
+
+  it("erases everything a deleted project need not keep with it, or nothing when it cannot be erased", async () => {
+    const customerId = await newCustomer();
+    const { project, apiKey } = projectWithEverything(customerId);
+    // With a live revision, as a project published from the Studio has: erasing it makes the relay's own trigger keep
+    // a copy of the row as it was, which the deletion has to take as well.
+    immediate((db) => db.prepare("UPDATE projects SET studio_revision = 'rev_live' WHERE id = ?").run(project.id));
+    chargeSession({ customerId, projectId: project.id, sessionId: "s-before", seconds: 30, endedAt: clock });
+    // Everything its owner saved is on the row, and the saved draft holds a copy of the key.
+    expect(rowOf(project.id)).toMatchObject({
+      key_hash: hashToken(apiKey),
+      key_prefix: apiKey.slice(0, 8),
+      model_key_enc: expect.any(String),
+      assistant_name: "Ava",
+      instructions: "Answer in one line.",
+      greeting: "Hi!",
+      studio: expect.stringContaining("tools.example.com/lookup"),
+      public_id: project.publicId,
+      webhook_secret_enc: expect.any(String),
+      traces_headers_enc: expect.any(String),
+      monthly_minutes_cap: 100,
+      deleted_at: null
+    });
+    expect(snapshotsOf(project.id)).toBe(1);
+
+    // It cannot be erased (the disk is full, say): nothing is half deleted.
+    immediate((db) =>
+      db.exec(
+        "CREATE TRIGGER broken BEFORE UPDATE OF key_hash ON projects BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END"
+      )
+    );
+    expect(() => deleteProject(customerId, project.id)).toThrow(/database or disk is full/);
+    expect(rowOf(project.id)).toMatchObject({
+      deleted_at: null,
+      model_key_enc: expect.any(String),
+      key_hash: hashToken(apiKey)
+    });
+    expect(projectForApiKey(apiKey)?.projectId).toBe(project.id);
+    immediate((db) => db.exec("DROP TRIGGER broken"));
+
+    expect(deleteProject(customerId, project.id)).toEqual({ ok: true, value: { ok: true } });
+    // What stays is exactly what the activation metrics and past usage need.
+    expect(rowOf(project.id)).toEqual(tombstone(project));
+    expect(snapshotsOf(project.id)).toBe(0);
+    expect(projectForApiKey(apiKey)).toBeUndefined();
+    expect(checkStoredSecrets().total).toBe(0);
+    expect(studioActivation(clock).newProjects).toBe(1);
+    expect(usageSummary(customerId, "2026-11").projects).toEqual([
+      { projectId: project.id, name: "Shop", seconds: 30, chargedFen: 0 }
+    ]);
+  });
+
+  it("has a project deleted by an earlier release erased the next time the database is opened", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "max-cloud-purge-"));
+    const file = path.join(directory, "cloud.sqlite");
+    try {
+      resetCloudDatabase(file);
+      const customerId = await newCustomer();
+      const { project } = projectWithEverything(customerId);
+      const live = newProject(customerId, "Still here");
+
+      // A release before a deletion erased anything only marks the row, live revision and all: everything stays.
+      const older = new DatabaseSync(file);
+      try {
+        older.exec("PRAGMA busy_timeout = 5000");
+        older
+          .prepare("UPDATE projects SET deleted_at = ?, studio_revision = 'rev_then' WHERE id = ?")
+          .run(clock, project.id);
+      } finally {
+        older.close();
+      }
+
+      resetCloudDatabase(file); // the relay starts again: the purge runs
+      expect(rowOf(project.id)).toEqual(tombstone(project));
+      expect(snapshotsOf(project.id)).toBe(0);
+      // A project that stayed live is untouched, and both count for the activation metrics.
+      expect(rowOf(live.project.id)).toMatchObject({
+        key_hash: hashToken(live.apiKey),
+        studio_revision: null,
+        deleted_at: null
+      });
+      expect(studioActivation(clock).newProjects).toBe(2);
+
+      // Opening it again changes nothing.
+      resetCloudDatabase(file);
+      expect(rowOf(project.id)).toEqual(tombstone(project));
+      expect(snapshotsOf(project.id)).toBe(0);
+    } finally {
+      resetCloudDatabase(":memory:");
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

@@ -31,7 +31,12 @@ Data lives in `cloud.sqlite` in the relay's data folder (`STUDIO_DIR`, default `
 other data. Each change is written to disk before the relay goes on, so a top-up that has been credited stays credited
 through a crash of the operating system or a power failure. Back the data up together with `CLOUD_SECRET_KEY`, and
 take the database's copy with the command in [Backup and restore](#backup-and-restore): the file is in use while the
-relay runs, and one copied by hand can be caught half written.
+relay runs, and one copied by hand can be caught half written. A customer's balance is kept on the customer's row
+(`balance_fen`) and moved by every ledger entry in the same transaction, so the relay never sums the ledger to know a
+balance; a database from an earlier release is filled from its ledger when it is first opened. With Max Cloud on,
+`/ready` reads the database and writes one row to it at most once a minute, and answers `503` with
+`cloud-storage-unavailable` when it cannot be opened, read or written: with that, signups, sessions and payments all
+fail.
 
 ## Invitations
 
@@ -288,8 +293,12 @@ Limits that keep one account from affecting everyone else:
 - **Balance.** A session starts only when the customer has at least 5 seconds left, counting every session they have
   open, and all their sessions are checked every 5 seconds. When the time is used up they are closed with code `4003`
   ("Your Max Cloud balance is used up. Top up in the console."). A balance can go negative by at most one check
-  interval (5 seconds) per open session. What is billed, and when, is in
-  [usage and billing](usage-and-billing.md#max-cloud-billing).
+  interval (5 seconds) per open session. While the database is down (a full disk, a locked or corrupted file), new
+  sessions are refused with code `1013`, and a running session, a Studio test included, is ended the same way once its
+  checks have failed one after the other for 30 seconds ("Max Cloud could not check this conversation's balance for 30
+  seconds, so it has ended it."): nobody talks on money that cannot be checked, and the most a customer can go past
+  what they had, outage included, is 30 seconds plus one check interval per open session. What is billed, and when,
+  is in [usage and billing](usage-and-billing.md#max-cloud-billing).
 - **5 simultaneous sessions** per customer; a sixth is refused with code `1013`.
 - **Session tokens:** at most 120 minted per minute per project, at most 200 live per project, and 1,000 characters of
   `context`. Cloud tokens are kept apart from the relay's own, so no customer can push them out.
@@ -397,7 +406,12 @@ written with. To change the key (it leaked, someone who knew it left, or as rout
 
 4. Remove `CLOUD_SECRET_KEY_PREVIOUS` and restart. Destroy the old key.
 
-Secrets of deleted projects are not re-encrypted; they become unreadable with the old key, which nothing needs.
+Deleting a project erases everything its deletion need not keep, in the same transaction: its transcripts and saved
+revisions, and on its row its project key, model key, webhook secret, trace headers, assistant name, instructions,
+greeting, Studio settings, public embed id, monthly minutes limit and revision. A deleted project keeps only what the
+activation metrics and past usage need: its id, its owner, its name, its backend, when it was created and deleted,
+and when it first answered a website conversation. So there are no secrets of deleted projects to re-encrypt. A
+project deleted by an earlier release has the same things erased the next time the database is opened.
 
 If the relay starts with a `CLOUD_SECRET_KEY` that decrypts none of the stored secrets, across more than one project
 (it was changed by mistake, or lost), it logs an error saying so and `/ready` answers `503` with the issue
@@ -472,6 +486,19 @@ for each configured provider, and balances are credited automatically and exactl
 Every notification's signature is verified, the paid amount must match the order, and an order is credited once
 however often the provider repeats the notification. A payment confirmed just after its order expired is still
 credited, so a customer is never charged without receiving balance.
+
+A notification is at most 16 KB, and one address may send at most 600 a minute: each is verified on the relay's own
+process, so a flood of forged notifications cannot crowd out live audio. Whatever is refused — a bad signature, a wrong
+amount, or either limit — is answered exactly as a failed notification is, which both providers treat as "send it
+again": WeChat Pay repeats a notification it has not been answered 200 or 204 at the intervals 15 s/15 s/30 s/3 m/
+10 m/20 m/30 m/30 m/30 m/60 m/3 h/3 h/3 h/6 h/6 h, up to 15 times, and Alipay repeats one it has not been answered
+`success` eight times over about 25 hours. A notification refused for any reason is still no lost payment: the sweep
+and the customer's own polling credit the order through the query API.
+
+Behind a reverse proxy, that limit needs `RELAY_TRUST_PROXY=on` ([configuration](configuration.md#security-and-access)):
+with it off, every notification comes from the proxy's address and they all share one bucket of 600 a minute. One
+refused for that is sent again by the provider, and the sweep credits the order meanwhile, so credit is delayed, never
+lost.
 
 A notification that never arrives is not a lost payment. The relay also asks each provider every minute about the
 orders that are still unpaid, credits what the provider confirms, and closes an expired order that was not paid. It

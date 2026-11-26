@@ -18,7 +18,9 @@ const NAMES = [
   /** A running session was closed because its project key was rotated or the project deleted. */
   "max_cloud_sessions_killed_key_rotation_total",
   /** A token or session was refused, or a session closed, by a project's monthly minutes limit. */
-  "max_cloud_spend_cap_refusals_total"
+  "max_cloud_spend_cap_refusals_total",
+  /** A running session was closed because the store could not be used for 30 seconds, so its cost was unknown. */
+  "max_cloud_sessions_ended_store_unavailable_total"
 ] as const;
 
 export type CloudCounter = (typeof NAMES)[number];

@@ -115,6 +115,24 @@ function rateLimited(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
+/**
+ * Top-up orders a customer may start in a minute. Each is a call on the
+ * payment provider's API, so a customer whose provider keeps failing cannot
+ * retry without end.
+ */
+const TOPUPS_PER_MINUTE_PER_CUSTOMER = 10;
+/** The same from one address, for all of its customers. */
+const TOPUPS_PER_MINUTE_PER_ADDRESS = 60;
+
+/** Whether the signed-in customer may start another top-up order now. */
+function topupAllowed(req: Request, customerId: string): boolean {
+  const at = Date.now();
+  return (
+    checkAuthRateLimit(`customer:${customerId}`, at, "cloud-topup", TOPUPS_PER_MINUTE_PER_CUSTOMER) &&
+    checkAuthRateLimit(clientAddress(req), at, "cloud-topup", TOPUPS_PER_MINUTE_PER_ADDRESS)
+  );
+}
+
 function requireCustomer(req: Request, res: Response, next: NextFunction): void {
   const token = bearerToken(req);
   const customer = token ? customerForToken(token) : undefined;
@@ -496,7 +514,13 @@ export function registerCloudRoutes(app: express.Express): void {
 
   api.post(
     "/topups",
-    handle(async (req, res) => send(res, await createTopup(customerOf(res).id, body(req)), 201))
+    handle(async (req, res) => {
+      if (!topupAllowed(req, customerOf(res).id)) {
+        res.status(429).json({ ok: false, error: "Too many top-up attempts. Try again in a minute." });
+        return;
+      }
+      send(res, await createTopup(customerOf(res).id, body(req)), 201);
+    })
   );
   api.get(
     "/topups/:orderId",
@@ -552,7 +576,22 @@ export function registerEmbedRoutes(app: express.Express): void {
 
 // --- payments ---------------------------------------------------------------------
 
-const rawNotificationBody = express.raw({ type: "*/*", limit: "64kb" });
+/**
+ * The most a payment notification may weigh. A WeChat Pay one is an envelope
+ * round an encrypted transaction of a dozen fields (about 2 KB, its
+ * documentation's example included), and an Alipay one a form of about twenty
+ * parameters whose documented lengths add up to a few KB. Five times that
+ * leaves room for what the providers add; anything larger is not a
+ * notification. One that were larger is answered as refused, and the payment
+ * is still credited through the provider's query API (topups.ts).
+ */
+const NOTIFICATION_BODY_LIMIT = "16kb";
+/**
+ * Payment notifications one address may send in a minute. The providers send
+ * one per paid order, and retry from a few addresses (docs/cloud.md).
+ */
+const NOTIFICATIONS_PER_MINUTE = 600;
+const rawNotificationBody = express.raw({ type: "*/*", limit: NOTIFICATION_BODY_LIMIT });
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
@@ -599,6 +638,13 @@ export function registerCloudPaymentRoutes(app: express.Express): void {
         if (!res.headersSent) res.status(accepted ? 200 : 500).end();
       }
     };
+    // Counted before the body is read, so a flood from one address costs one short answer per request and no
+    // verification. It gets the answer of a refused notification, which both providers send again later.
+    if (!checkAuthRateLimit(clientAddress(req), Date.now(), "cloud-pay-notify", NOTIFICATIONS_PER_MINUTE)) {
+      log.warn("payment notification refused: too many from one address", { provider: provider.id });
+      answer(false);
+      return;
+    }
     rawNotificationBody(req, res, (parseError?: unknown) => {
       if (parseError) {
         log.warn("payment notification unreadable", { provider: provider.id });

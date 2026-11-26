@@ -181,6 +181,12 @@ the metering above, because there money changes hands:
   customer can go at most 5 seconds per open session past what they had.
 - **A crash loses at most 5 seconds.** Sessions are checkpointed every 5 seconds; a session cut off by a crash or a
   killed relay is booked up to its last checkpoint once the relay that ran it has been silent for a minute.
+- **A store outage ends sessions after 30 seconds.** While the database cannot be read or written, the 5-second check
+  cannot see a balance, so new sessions are refused (code `1013`) and a running session, a Studio test included, is
+  closed the same way once its checks have failed one after the other for 30 seconds, with "Max Cloud could not check
+  this conversation's balance for 30 seconds, so it has ended it." It is charged in full once the database is back.
+  The most a customer can go past what they had, even through an outage, is 30 seconds plus one check interval per
+  open session.
 - **Nothing is lost when the database refuses a write.** A session whose booking fails (a full disk, a locked
   database) is kept and booked by a later retry, every 15 seconds, exactly once.
 

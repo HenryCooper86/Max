@@ -1,8 +1,9 @@
 // Max Cloud's SQLite store ($STUDIO_DIR/cloud.sqlite): customers, their login
 // sessions, projects, the money ledger and top-up orders. Every SQL statement
-// of Max Cloud lives here. Balances change only through ledger rows, and the
-// two writes that move money (booking a session, crediting a paid order) each
-// run in one BEGIN IMMEDIATE transaction, idempotent on UNIQUE(kind, ref).
+// of Max Cloud lives here. Balances change only through ledger rows, which a
+// trigger applies to the customer's `balance_fen` in the same transaction, and
+// the two writes that move money (booking a session, crediting a paid order)
+// each run in one BEGIN IMMEDIATE transaction, idempotent on UNIQUE(kind, ref).
 
 import type { InstallSignalKind } from "../../shared/studio-install";
 import type { StudioActivation } from "../../shared/cloud-studio";
@@ -21,6 +22,8 @@ export type CustomerRow = {
   email: string;
   password_hash: string;
   password_salt: string;
+  /** The sum of the customer's ledger in fen, kept on the row by the trigger ledger_entry_moves_balance. */
+  balance_fen: number;
   created_at: number;
 };
 
@@ -75,6 +78,38 @@ export type LedgerRow = {
 
 const MAX_SESSIONS_PER_CUSTOMER = 20;
 
+/**
+ * What deleting a project erases from its row: everything but what the
+ * activation metrics and past usage need, which are its id, its owner, its
+ * name, its backend (the schema has no neutral value for it) and its dates.
+ * The Studio settings can hold addresses with tokens in them, and the rest is
+ * what its owner wrote. `key_hash` can hold no NULL (it is NOT NULL and
+ * UNIQUE), so it becomes a value no key hashes to; every other column goes
+ * back to what a project has before its owner fills it in.
+ */
+const ERASED = {
+  key_hash: "'deleted:' || id",
+  key_prefix: "''",
+  model_key_enc: "NULL",
+  webhook_secret_enc: "NULL",
+  traces_headers_enc: "NULL",
+  assistant_name: "''",
+  instructions: "''",
+  greeting: "''",
+  studio: "'{}'",
+  public_id: "NULL",
+  monthly_minutes_cap: "NULL",
+  studio_revision: "NULL"
+} as const;
+/** The same, as what an UPDATE sets the columns to. */
+const ERASE_TO = Object.entries(ERASED)
+  .map(([column, value]) => `${column} = ${value}`)
+  .join(", ");
+/** The same, as the condition that a row still holds any of it. */
+const NOT_ERASED = Object.entries(ERASED)
+  .map(([column, value]) => `${column} IS NOT (${value})`)
+  .join(" OR ");
+
 let databaseInstance: DatabaseSync | null = null;
 let pathOverride: string | undefined;
 
@@ -100,6 +135,18 @@ function secureDatabaseFiles(filePath: string): void {
   secureTestingFileSync(filePath);
   secureTestingFileSync(`${filePath}-wal`);
   secureTestingFileSync(`${filePath}-shm`);
+}
+
+/** Whether a deleted project still holds, on its row or in a saved revision, anything that deleting erases. */
+function deletedProjectNotErased(db: DatabaseSync): boolean {
+  return (
+    db.prepare(`SELECT 1 FROM projects WHERE deleted_at IS NOT NULL AND (${NOT_ERASED}) LIMIT 1`).get() !== undefined ||
+    db
+      .prepare(
+        "SELECT 1 FROM studio_snapshots WHERE project_id IN (SELECT id FROM projects WHERE deleted_at IS NOT NULL) LIMIT 1"
+      )
+      .get() !== undefined
+  );
 }
 
 function database(): DatabaseSync {
@@ -167,7 +214,7 @@ function database(): DatabaseSync {
         UNIQUE (kind, ref)
       );
       CREATE INDEX IF NOT EXISTS idx_ledger_customer ON ledger(customer_id, id);
-      CREATE INDEX IF NOT EXISTS idx_ledger_customer_month ON ledger(customer_id, kind, month);
+      CREATE INDEX IF NOT EXISTS idx_ledger_customer_month_free ON ledger(customer_id, kind, month, free_seconds);
       CREATE TABLE IF NOT EXISTS orders (
         id TEXT PRIMARY KEY,
         customer_id TEXT NOT NULL REFERENCES customers(id),
@@ -181,6 +228,10 @@ function database(): DatabaseSync {
         expires_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id, created_at);
+      CREATE TABLE IF NOT EXISTS cloud_storage_probe (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS cloud_invites (
         code TEXT PRIMARY KEY,
         note TEXT NOT NULL DEFAULT '',
@@ -283,13 +334,15 @@ function database(): DatabaseSync {
           'greeting',OLD.greeting,'studio',OLD.studio
         ),OLD.model_key_enc,OLD.traces_headers_enc);
       END;
-      CREATE TEMP TRIGGER IF NOT EXISTS studio_project_deleted AFTER UPDATE OF deleted_at ON projects
-      WHEN NEW.deleted_at IS NOT NULL
-      BEGIN DELETE FROM studio_snapshots WHERE project_id = OLD.id; END;
     `);
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_public_id ON projects(public_id)");
-    // A project's minutes this month, read by its spend limit every few seconds while it talks.
-    db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_project_month ON ledger(project_id, kind, month)");
+    // The ledger reads of the 5-second check (server/cloud/live.ts) are covered by their indexes: a customer's free
+    // seconds this month and a project's minutes this month are summed from the index alone, not row by row from
+    // the table. Both indexes were narrower, as idx_ledger_customer_month and idx_ledger_project_month: those are
+    // dropped, so that no database keeps both.
+    db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_project_month_seconds ON ledger(project_id, kind, month, seconds)");
+    db.exec("DROP INDEX IF EXISTS idx_ledger_project_month");
+    db.exec("DROP INDEX IF EXISTS idx_ledger_customer_month");
     // Orders by status and expiry, read once a minute by the top-up sweep. The index was called idx_orders_pending
     // before the sweep read closed orders too: drop that one, so that no database keeps both.
     db.exec("DROP INDEX IF EXISTS idx_orders_pending");
@@ -305,6 +358,31 @@ function database(): DatabaseSync {
     );
     if (!conversationColumns.has("analysis")) db.exec("ALTER TABLE conversations ADD COLUMN analysis TEXT NULL");
     if (!conversationColumns.has("answer_ms")) db.exec("ALTER TABLE conversations ADD COLUMN answer_ms INTEGER NULL");
+    const customerColumns = new Set(
+      (db.prepare("PRAGMA table_info(customers)").all() as { name: string }[]).map((column) => column.name)
+    );
+    if (!customerColumns.has("balance_fen")) {
+      // One write transaction from the column to the ledger sum that fills it, with the trigger that keeps that sum
+      // created in between: no ledger entry, from whichever relay or script it comes, is missed by either.
+      db.exec(`
+        BEGIN IMMEDIATE;
+        ALTER TABLE customers ADD COLUMN balance_fen INTEGER NOT NULL DEFAULT 0;
+        CREATE TRIGGER ledger_entry_moves_balance AFTER INSERT ON ledger BEGIN
+          UPDATE customers SET balance_fen = balance_fen + NEW.amount_fen WHERE id = NEW.customer_id; END;
+        UPDATE customers SET balance_fen = (SELECT COALESCE(SUM(amount_fen), 0) FROM ledger WHERE customer_id = customers.id);
+        COMMIT;
+      `);
+    }
+    // A project deleted before everything a deletion erases was erased with it (softDeleteProject) is erased the first
+    // time the database is opened after that. Nothing is written once none is left, so a read-only database still opens.
+    if (deletedProjectNotErased(db)) {
+      db.exec(`
+        BEGIN IMMEDIATE;
+        UPDATE projects SET ${ERASE_TO} WHERE deleted_at IS NOT NULL AND (${NOT_ERASED});
+        DELETE FROM studio_snapshots WHERE project_id IN (SELECT id FROM projects WHERE deleted_at IS NOT NULL);
+        COMMIT;
+      `);
+    }
   } catch (error) {
     db.close();
     throw error;
@@ -329,6 +407,30 @@ export function immediate<T>(work: (db: DatabaseSync) => T): T {
       /* the transaction is already gone */
     }
     throw error;
+  }
+}
+
+// --- readiness --------------------------------------------------------------------
+
+/**
+ * Why the database cannot be read and written, for the readiness probe
+ * (keyring.ts); undefined while it can be both. The read proves a table can be
+ * read. The write proves a change reaches the disk, which only a commit can (a
+ * rolled-back transaction proves just that the write lock could be taken), so
+ * one row of cloud_storage_probe is rewritten and committed. Its caller makes
+ * the probe at most once a minute, which keeps /ready cheap.
+ */
+export function cloudStorageProblem(): string | undefined {
+  try {
+    immediate((db) => {
+      db.prepare("SELECT id FROM customers LIMIT 1").get();
+      db.prepare(
+        "INSERT INTO cloud_storage_probe (id, at) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET at = excluded.at"
+      ).run(Date.now());
+    });
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
   }
 }
 
@@ -652,25 +754,34 @@ export function replaceProjectKey(projectId: string, customerId: string, keyHash
 }
 
 /**
- * Deletes a project together with its transcripts, in one transaction: both
- * happen or neither does, so a failure in between (a full disk) leaves the
- * project live for a retry to delete, and never a deleted project whose
- * conversations linger. The row stays, marked `deleted_at`, for the
- * activation metrics. False when there is no such live project.
+ * Deletes a project in one transaction with everything its deletion erases
+ * (ERASED), its transcripts and its saved revisions included. All happen or
+ * none does, so a failure in between (a full disk) leaves the project live for
+ * a retry to delete, and never a deleted project whose conversations linger or
+ * whose keys could still be used. The row stays, marked `deleted_at`, with what
+ * the activation metrics and past usage need of it. False when there is no
+ * such live project.
  */
 export function softDeleteProject(projectId: string, customerId: string, at: number): boolean {
   return immediate((db) => {
     const deleted = db
-      .prepare("UPDATE projects SET deleted_at = ? WHERE id = ? AND customer_id = ? AND deleted_at IS NULL")
+      .prepare(
+        `UPDATE projects SET deleted_at = ?, ${ERASE_TO} WHERE id = ? AND customer_id = ? AND deleted_at IS NULL`
+      )
       .run(at, projectId, customerId);
     if (deleted.changes !== 1) return false;
     db.prepare("DELETE FROM conversations WHERE project_id = ? AND customer_id = ?").run(projectId, customerId);
+    // After the update, since erasing a live revision makes the relay's trigger keep a copy of the row as it was.
+    db.prepare("DELETE FROM studio_snapshots WHERE project_id = ?").run(projectId);
     return true;
   });
 }
 
 // --- ledger ---------------------------------------------------------------------
+// Every entry inserted here moves its customer's balance_fen with it: the
+// trigger ledger_entry_moves_balance does so in the transaction of the insert.
 
+/** Covered by idx_ledger_customer_month_free: summed from the index, without reading the entries. */
 function freeSecondsUsedIn(db: DatabaseSync, customerId: string, month: string): number {
   const row = db
     .prepare(
@@ -680,11 +791,15 @@ function freeSecondsUsedIn(db: DatabaseSync, customerId: string, month: string):
   return row.used;
 }
 
+/**
+ * A customer's balance in fen: the sum of their ledger, kept on their row by
+ * the trigger, so that one row is read and not the whole ledger. 0 for a
+ * customer there is no row for, as the sum of no entries was.
+ */
 function balanceIn(db: DatabaseSync, customerId: string): number {
-  const row = db
-    .prepare("SELECT COALESCE(SUM(amount_fen), 0) AS fen FROM ledger WHERE customer_id = ?")
-    .get(customerId) as { fen: number };
-  return row.fen;
+  const row = db.prepare("SELECT balance_fen FROM customers WHERE id = ?").get(customerId) as
+    { balance_fen: number } | undefined;
+  return row?.balance_fen ?? 0;
 }
 
 /** Balance in fen and free seconds left in the month of `at`. */
@@ -839,25 +954,41 @@ export function usageSummary(customerId: string, month: string): UsageSummary {
 
 // --- orders -----------------------------------------------------------------------
 
-export function insertOrder(row: OrderRow): void {
-  database()
-    .prepare(
-      `INSERT INTO orders (id, customer_id, provider, pack, amount_fen, status, provider_txn_id, created_at, paid_at,
-         expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      row.id,
-      row.customer_id,
-      row.provider,
-      row.pack,
-      row.amount_fen,
-      row.status,
-      row.provider_txn_id,
-      row.created_at,
-      row.paid_at,
-      row.expires_at
-    );
+/** Stores an order as `row` says. */
+function insertOrderIn(db: DatabaseSync, row: OrderRow): void {
+  db.prepare(
+    `INSERT INTO orders (id, customer_id, provider, pack, amount_fen, status, provider_txn_id, created_at, paid_at,
+       expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    row.id,
+    row.customer_id,
+    row.provider,
+    row.pack,
+    row.amount_fen,
+    row.status,
+    row.provider_txn_id,
+    row.created_at,
+    row.paid_at,
+    row.expires_at
+  );
+}
+
+/**
+ * Stores a pending order unless the customer already holds `limit` unpaid,
+ * unexpired ones; false then. The only way an order is stored: the count and
+ * the insert are one transaction, so two relays sharing the database (or a
+ * relay and a script) cannot both take the last place.
+ */
+export function insertPendingOrder(row: OrderRow, limit: number, at: number): boolean {
+  return immediate((db) => {
+    const { count } = db
+      .prepare("SELECT COUNT(*) AS count FROM orders WHERE customer_id = ? AND status = 'pending' AND expires_at > ?")
+      .get(row.customer_id, at) as { count: number };
+    if (count >= limit) return false;
+    insertOrderIn(db, row);
+    return true;
+  });
 }
 
 export function orderById(orderId: string): OrderRow | undefined {
@@ -929,14 +1060,6 @@ export function creditOrder(
     ).run(order.customer_id, order.amount_fen, order.id, monthOf(at), at);
     return "credited";
   });
-}
-
-/** Pending orders of a customer that have not expired yet. */
-export function openOrderCount(customerId: string, at: number): number {
-  const row = database()
-    .prepare("SELECT COUNT(*) AS count FROM orders WHERE customer_id = ? AND status = 'pending' AND expires_at > ?")
-    .get(customerId, at) as { count: number };
-  return row.count;
 }
 
 export function customerExists(customerId: string): boolean {

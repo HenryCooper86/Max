@@ -114,41 +114,34 @@ export function cloudSessionStarted(session: { sessionId: string; customerId: st
 /**
  * A project session is still running, with `seconds` billable so far (a
  * checkpoint, every few seconds). True when its row had to be written again,
- * which means part of the session may already be in the ledger.
+ * which means part of the session may already be in the ledger. Throws when
+ * the checkpoint cannot be written: its caller (live.ts) then counts the
+ * store as unavailable, instead of the session running on with nothing to
+ * book for it should the relay crash.
  */
 export function cloudSessionAlive(
   session: { sessionId: string; customerId: string; projectId: string },
   seconds: number
 ): boolean {
-  try {
-    const outcome = touchLiveSession({
-      ...session,
-      instanceId: cloudInstanceId(),
-      at: now(),
-      seconds: Math.max(0, seconds)
-    });
-    if (outcome === "restored") {
-      // Its start was never recorded, or another relay took it for abandoned
-      // (this one stalled, or the database did) and booked it up to its last
-      // checkpoint. The close books whatever the ledger does not hold yet.
-      log.warn("a running session's checkpoint row was missing and has been written again", {
-        sessionId: session.sessionId
-      });
-      return true;
-    }
-  } catch {
-    /* the close or the next checkpoint records it */
-  }
-  return false;
+  const outcome = touchLiveSession({
+    ...session,
+    instanceId: cloudInstanceId(),
+    at: now(),
+    seconds: Math.max(0, seconds)
+  });
+  if (outcome !== "restored") return false;
+  // Its start was never recorded, or another relay took it for abandoned
+  // (this one stalled, or the database did) and booked it up to its last
+  // checkpoint. The close books whatever the ledger does not hold yet.
+  log.warn("a running session's checkpoint row was missing and has been written again", {
+    sessionId: session.sessionId
+  });
+  return true;
 }
 
-/** Seconds of a session the ledger already holds (booked early as abandoned); 0 when it cannot be read. */
+/** Seconds of a session the ledger already holds (booked early as abandoned). Throws when the ledger cannot be read. */
 export function secondsAlreadyBooked(sessionId: string): number {
-  try {
-    return sessionSecondsBooked(sessionId);
-  } catch {
-    return 0;
-  }
+  return sessionSecondsBooked(sessionId);
 }
 
 /** Deletes a booked session's row; a row left behind is retried and found already booked. */
@@ -241,19 +234,13 @@ export function remainingSeconds(customerId: string, at?: number, running?: Read
   return funds.freeSecondsLeft + secondsForFen(funds.fen) - unbookedSeconds({ customerId }, running);
 }
 
-/** Seconds of not-yet-booked sessions of a customer or project, leaving out `running`. */
+/** Seconds of not-yet-booked sessions of a customer or project, leaving out `running`. Throws when they cannot be read. */
 export function unbookedSeconds(
   scope: { customerId: string } | { projectId: string },
   running?: ReadonlySet<string>
 ): number {
-  let rows: LiveSessionRow[];
-  try {
-    rows = liveSessionRows(scope);
-  } catch {
-    return 0;
-  }
   let seconds = 0;
-  for (const row of rows) {
+  for (const row of liveSessionRows(scope)) {
     if (running?.has(row.session_id)) continue;
     // A session booked early as abandoned and still running has a row again:
     // only what the ledger does not hold yet is unbooked.

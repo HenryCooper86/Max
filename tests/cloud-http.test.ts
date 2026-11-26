@@ -984,6 +984,100 @@ describe("top-ups over HTTP", () => {
     expect(((await call("GET", "/cloud/api/me", { token })).body.balance as { fen: number }).fen).toBe(0);
   });
 
+  it("reads at most 16 KB of a notification, answering the rest as ones to be sent again", async () => {
+    process.env.CLOUD_PUBLIC_URL = "https://max.example.com";
+    setCloudPaymentProviders([fakeProvider("wechat").provider, fakeProvider("alipay").provider]);
+    const { token } = await signupCustomer();
+    const order = async (provider: string): Promise<string> => {
+      const response = await call("POST", "/cloud/api/topups", { token, json: { pack: "cny50", provider } });
+      const orderId = response.body.orderId;
+      if (typeof orderId !== "string") throw new Error("no order id");
+      return orderId;
+    };
+    const wechat = await order("wechat");
+    const alipay = await order("alipay");
+
+    const fits = { orderId: wechat, providerTxnId: "t1", amountFen: 5000, padding: "" };
+    fits.padding = "x".repeat(16 * 1024 - JSON.stringify(fits).length);
+    expect(Buffer.byteLength(JSON.stringify(fits))).toBe(16 * 1024);
+    expect((await notify("wechat", fits)).status).toBe(204);
+
+    const larger = { orderId: alipay, providerTxnId: "t2", amountFen: 5000, padding: "" };
+    larger.padding = "x".repeat(16 * 1024 + 1 - JSON.stringify(larger).length);
+    expect(Buffer.byteLength(JSON.stringify(larger))).toBe(16 * 1024 + 1);
+    const refused = await notify("alipay", larger);
+    // Answered as a failed notification is: this fake provider answers 400, the real Alipay 200 "fail", and both
+    // make the provider resend it (docs/cloud.md).
+    expect([refused.status, refused.text]).toEqual([400, '{"code":"FAIL","message":"refused"}']);
+
+    expect(((await call("GET", "/cloud/api/me", { token })).body.balance as { fen: number }).fen).toBe(5000);
+    expect((await call("GET", `/cloud/api/topups/${alipay}`, { token })).body).toEqual({ status: "pending" });
+  });
+
+  it("verifies at most 600 notifications a minute from one address, and answers the rest as ones to send again", async () => {
+    const { provider } = fakeProvider("wechat");
+    const alipay = fakeProvider("alipay").provider;
+    const parsed = vi.spyOn(provider, "parseNotification");
+    setCloudPaymentProviders([provider, alipay]);
+    const quiet = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const send = (route: string) =>
+        call("POST", route, { raw: "{}", headers: { "Content-Type": "application/json" } });
+      for (let attempt = 0; attempt < 600; attempt += 1) await send("/cloud/pay/wechat/notify");
+      expect(parsed).toHaveBeenCalledTimes(600);
+      const over = await send("/cloud/pay/wechat/notify");
+      expect([over.status, over.text]).toEqual([400, '{"code":"FAIL","message":"refused"}']);
+      // The budget is the address's, so Alipay's route from it is limited too, and answered as a retried notification.
+      const alipayOver = await send("/cloud/pay/alipay/notify");
+      expect([alipayOver.status, alipayOver.text]).toEqual([400, '{"code":"FAIL","message":"refused"}']);
+      expect(parsed).toHaveBeenCalledTimes(600);
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it("throttles top-up attempts per customer and per address", async () => {
+    const broken = fakeProvider("wechat");
+    broken.provider.createQrOrder = async () => {
+      throw new Error("provider down");
+    };
+    const created = vi.spyOn(broken.provider, "createQrOrder");
+    setCloudPaymentProviders([broken.provider]);
+    process.env.CLOUD_PUBLIC_URL = "https://max.example.com";
+    const quiet = vi.spyOn(console, "log").mockImplementation(() => {});
+    const attempt = (token: string) =>
+      call("POST", "/cloud/api/topups", { token, json: { pack: "cny50", provider: "wechat" } });
+    try {
+      const first = await signupCustomer();
+      for (let index = 0; index < 10; index += 1) expect((await attempt(first.token)).status).toBe(502);
+      const limited = await attempt(first.token);
+      expect([limited.status, limited.body.error]).toEqual([429, "Too many top-up attempts. Try again in a minute."]);
+      expect(created).toHaveBeenCalledTimes(10);
+
+      // Five more customers use up the address's sixty attempts a minute.
+      for (let customer = 1; customer <= 5; customer += 1) {
+        const { token } = await signupCustomer();
+        for (let index = 0; index < 10; index += 1) expect((await attempt(token)).status).toBe(502);
+      }
+      expect(created).toHaveBeenCalledTimes(60);
+      const seventh = await signupCustomer();
+      expect((await attempt(seventh.token)).status).toBe(429);
+      expect(created).toHaveBeenCalledTimes(60);
+
+      // A minute later the first customer may try again.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(Date.now() + 60_000);
+        expect((await attempt(first.token)).status).toBe(502);
+        expect(created).toHaveBeenCalledTimes(61);
+      } finally {
+        vi.useRealTimers();
+      }
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
   it("closes an expired order when it is read", async () => {
     const wechat = fakeProvider("wechat");
     const { token, order } = await customerWithOrder([wechat]);

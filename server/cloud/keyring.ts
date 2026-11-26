@@ -8,7 +8,7 @@ import { createLogger } from "../logger";
 import { cloudPreviousSecretKeyInvalid, cloudSecretKey, cloudSecretKeys, now } from "./context";
 import { tracesHeadersScope, webhookSecretScope } from "./customers";
 import { decryptModelKey, encryptModelKey, secretKeyId, storedSecretKeyId } from "./secrets";
-import { projectSecrets, replaceProjectSecret, type EncryptedSecretColumn } from "./store";
+import { cloudStorageProblem, projectSecrets, replaceProjectSecret, type EncryptedSecretColumn } from "./store";
 
 const log = createLogger("cloud");
 
@@ -116,13 +116,18 @@ function keysFingerprint(): string {
 }
 
 /**
- * Problems with CLOUD_SECRET_KEY for the readiness probe. Only a key that
- * reads none of the stored secrets, across more than one project, fails it:
- * that relay cannot serve any customer and should not take traffic (a deploy
- * with the wrong key stops there). Unreadable rows among readable ones, or in
- * a single project (one customer's secret saved under a key since lost says
- * nothing about the key configured now), are logged but do not take the whole
- * relay out of service. Checked at most once a minute.
+ * Problems with Max Cloud for the readiness probe. Each means the relay can
+ * serve no customer and should not take traffic, so a deploy stops there.
+ * Checked at most once a minute.
+ *
+ *  - The database cannot be opened, read or written (cloud-storage-unavailable):
+ *    with it, signups, sessions and payments all fail.
+ *  - A CLOUD_SECRET_KEY that reads none of the stored secrets, across more than
+ *    one project (cloud-secret-key-mismatch).
+ *
+ * Unreadable rows among readable ones, or in a single project (one customer's
+ * secret saved under a key since lost says nothing about the key configured
+ * now), are logged but do not take the whole relay out of service.
  */
 export function cloudReadinessIssues(): string[] {
   if (!cloudSecretKey()) return [];
@@ -134,15 +139,23 @@ export function cloudReadinessIssues(): string[] {
     issues.push("cloud-secret-key-previous-invalid");
     log.error("CLOUD_SECRET_KEY_PREVIOUS is set but is not 32 bytes in hex or base64, so it is ignored");
   }
+  const unavailable = (problem: unknown): string[] => {
+    issues.push("cloud-storage-unavailable");
+    log.error(
+      "Max Cloud's database cannot be opened, read or written, so no customer can sign up, talk or be credited until it can. Repair it, or restore a backup (docs/cloud.md, Backup and restore)",
+      { message: problem instanceof Error ? problem.message : String(problem) }
+    );
+    cached = { at, fingerprint, issues, unreadable: cached?.unreadable ?? 0 };
+    return issues;
+  };
+  // One probe reads a customer and writes a row (store.ts); the other reads every live project's secrets.
+  const problem = cloudStorageProblem();
+  if (problem) return unavailable(problem);
   let report: StoredSecretsReport;
   try {
     report = checkStoredSecrets();
   } catch (error) {
-    log.warn("stored secrets could not be checked", {
-      message: error instanceof Error ? error.message : String(error)
-    });
-    cached = { at, fingerprint, issues, unreadable: cached?.unreadable ?? 0 };
-    return issues;
+    return unavailable(error);
   }
   const changed = !cached || cached.fingerprint !== fingerprint;
   const unreadableProjects = new Set(report.unreadable.map((entry) => entry.projectId));

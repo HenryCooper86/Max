@@ -41,6 +41,14 @@ const log = createLogger("cloud");
  *  balance a session may start with, and so how far past its money a customer
  *  can go: one interval per open session. */
 export const CLOUD_CHECK_INTERVAL_MS = 5_000;
+/**
+ * How long a session's checks may fail one after the other on the store before
+ * it is ended. A failure that passes costs nothing (the close books the whole
+ * session), but while the store is down nobody can see what a session costs,
+ * so it may not run on for ever: this and one check interval more is the most
+ * a customer can go past what they have when the database is down.
+ */
+export const CLOUD_STORE_OUTAGE_MS = 30_000;
 /** Simultaneous sessions per customer. */
 const SESSIONS_PER_CUSTOMER = 5;
 /** Of those, at most this many from the public embed, which anyone visiting a listed website (or anyone
@@ -54,11 +62,22 @@ const BALANCE_MESSAGE = "Your Max Cloud balance is used up. Top up in the consol
 const LIMIT_MESSAGE =
   "This Max Cloud agent has used its minutes for this month. Its owner can raise the limit in the console.";
 const REVOKED_MESSAGE = "This Max Cloud project key was rotated or the project was deleted.";
+const STORE_MESSAGE =
+  "Max Cloud could not check this conversation's balance for 30 seconds, so it has ended it. Start a new one in a moment.";
+const PREVIEW_STORE_MESSAGE =
+  "Max Cloud could not be reached for 30 seconds, so this Studio test was ended. Start it again in a moment.";
 const PREVIEW_UNAVAILABLE: CloudRefusal = {
   code: 1008,
   message: "This Studio revision is unavailable. Refresh the console and start a new test.",
   reason: "Studio revision unavailable"
 };
+/**
+ * 1013 (Try Again Later), not the 4003 of a used-up balance: nothing is wrong
+ * with the account, and a client that reconnects is admitted as soon as the
+ * store answers again. The message names what was ended: a conversation or a
+ * Studio test.
+ */
+const STORE_UNAVAILABLE = { code: 1013, reason: "cloud store unavailable" } as const;
 
 export type CloudRefusal = { code: number; message: string; reason: string };
 
@@ -266,6 +285,8 @@ export function openCloudSession(
   let previewUpstreamReady = false;
   let refused = false;
   let closedSeconds: number | undefined;
+  /** When this session's checks began to fail on the store, one after the other; undefined while they succeed. */
+  let storeFailingSince: number | undefined;
 
   const refuse = (refusal: CloudRefusal): CloudRefusal => {
     signal(installRefusalKind(refusal));
@@ -350,12 +371,12 @@ export function openCloudSession(
       if (refused || closedSeconds !== undefined) return undefined;
       const at = now();
       recordWebsiteAnswer();
-      const restored = cloudSessionAlive(
-        { sessionId, customerId: grant.customerId, projectId: grant.projectId },
-        session.clock.seconds(at)
-      );
-      if (restored) session.bookedEarly = true;
       try {
+        const restored = cloudSessionAlive(
+          { sessionId, customerId: grant.customerId, projectId: grant.projectId },
+          session.clock.seconds(at)
+        );
+        if (restored) session.bookedEarly = true;
         if (!cloudEnabled() || liveProjectByKeyHash(grant.keyHash)?.id !== grant.projectId) {
           countCloud("max_cloud_sessions_killed_key_rotation_total");
           return refuse({ code: 1008, message: REVOKED_MESSAGE, reason: "project revoked" });
@@ -377,13 +398,24 @@ export function openCloudSession(
         if (customerSecondsLeft(grant.customerId, at) <= 0) {
           return refuse({ code: USAGE_LIMIT_CLOSE_CODE, message: BALANCE_MESSAGE, reason: "balance used up" });
         }
+        storeFailingSince = undefined;
       } catch (error) {
-        // The next check can retry for production conversations. Studio previews require a valid revision.
-        log.warn("cloud session check skipped: the store could not be read", {
+        if (storeFailingSince === undefined) storeFailingSince = at;
+        log.warn("cloud session check skipped: the store could not be used", {
           sessionId,
+          failingForMs: at - storeFailingSince,
           message: error instanceof Error ? error.message : String(error)
         });
-        if (preview) return refuse(PREVIEW_UNAVAILABLE);
+        // A session outlasts a store that is down for a moment, a Studio test included: nothing is lost by waiting,
+        // since the close books the whole session. One that stays down for CLOUD_STORE_OUTAGE_MS ends the session, as
+        // a used-up balance does.
+        if (at - storeFailingSince >= CLOUD_STORE_OUTAGE_MS) {
+          countCloud("max_cloud_sessions_ended_store_unavailable_total");
+          log.error("cloud session ended: the store could not be used for 30 seconds, so its cost was unknown", {
+            sessionId
+          });
+          return refuse({ ...STORE_UNAVAILABLE, message: preview ? PREVIEW_STORE_MESSAGE : STORE_MESSAGE });
+        }
       }
       return undefined;
     },

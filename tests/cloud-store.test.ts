@@ -10,7 +10,14 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProject, signup } from "../server/cloud/customers";
-import { adjustBalance, backupDatabase, immediate, insertOrder, resetCloudDatabase } from "../server/cloud/store";
+import {
+  adjustBalance,
+  backupDatabase,
+  closePendingOrder,
+  immediate,
+  insertPendingOrder,
+  resetCloudDatabase
+} from "../server/cloud/store";
 
 const require = createRequire(import.meta.url);
 const tsxImport = pathToFileURL(require.resolve("tsx")).href;
@@ -156,18 +163,24 @@ describe("the settle script", () => {
 
   /** Stores an order closed as unpaid a day ago. */
   function closedOrder(customerId: string, provider: string) {
-    insertOrder({
-      id: ORDER,
-      customer_id: customerId,
-      provider,
-      pack: "cny200",
-      amount_fen: 20_000,
-      status: "closed",
-      provider_txn_id: null,
-      created_at: Date.now() - 2 * 86_400_000,
-      paid_at: null,
-      expires_at: Date.now() - 86_400_000
-    });
+    const at = Date.now();
+    insertPendingOrder(
+      {
+        id: ORDER,
+        customer_id: customerId,
+        provider,
+        pack: "cny200",
+        amount_fen: 20_000,
+        status: "pending",
+        provider_txn_id: null,
+        created_at: at - 2 * 86_400_000,
+        paid_at: null,
+        expires_at: at - 86_400_000
+      },
+      Number.POSITIVE_INFINITY,
+      at
+    );
+    closePendingOrder(ORDER);
   }
 
   it("refuses an order the relay has no record of, and one whose provider is not configured", async () => {

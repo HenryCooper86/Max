@@ -180,6 +180,7 @@ export async function signup(
     email,
     password_hash: await hashPassword(passwordInput, salt),
     password_salt: salt,
+    balance_fen: 0,
     created_at: now()
   };
   if (openSignup() && !INVITE_CODE.test(invite)) {
@@ -516,7 +517,7 @@ export function rotateProjectKey(
 }
 
 export function deleteProject(customerId: string, projectId: string): Result<{ ok: true }> {
-  // Its transcripts go with it, in the same transaction (store.ts).
+  // Its transcripts and its secrets go with it, in the same transaction (store.ts).
   if (!softDeleteProject(projectId, customerId, now())) return fail(404, "Project not found.");
   return { ok: true, value: { ok: true } };
 }

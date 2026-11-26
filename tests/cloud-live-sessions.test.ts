@@ -27,6 +27,7 @@ import {
 } from "../server/cloud/customers";
 import {
   CLOUD_CHECK_INTERVAL_MS,
+  CLOUD_STORE_OUTAGE_MS,
   admitCloudSession,
   openCloudSession,
   projectLimitRefusal,
@@ -399,6 +400,26 @@ function leaveSeconds(customerId: string, projectId: string, seconds: number): v
 const status = (state: string) => ({ type: "status", state, detail: "" });
 const counter = (name: string) => cloudCounters()[name] ?? 0;
 
+/** Silences the expected logs of a store outage, returning a restorer. */
+const silence = () => {
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  return () => {
+    log.mockRestore();
+    error.mockRestore();
+  };
+};
+
+/** Runs SQL on a second connection to the relay's database, as another relay (or a fault) would. */
+function onDatabase(file: string, sql: string): void {
+  const db = new DatabaseSync(file);
+  try {
+    db.exec(sql);
+  } finally {
+    db.close();
+  }
+}
+
 describe("the billed time", () => {
   it("starts when the voice model is ready, not when the socket connects", async () => {
     const { grant } = await setup();
@@ -619,15 +640,165 @@ describe("checkpoints and checks", () => {
     expect(counter("max_cloud_sessions_killed_key_rotation_total")).toBe(killed + 1);
   });
 
-  it("refuse a new session, but never cut off a running one, when the store cannot be read", async () => {
-    const { grant } = await setup();
-    const session = openCloudSession("s-db", grant, "203.0.113.5");
-    session.observe(status("ready"));
-    resetCloudDatabase(os.tmpdir()); // a directory: every query now fails
-    clock += 5_000;
-    expect(() => session.check()).not.toThrow();
-    expect(session.check()).toBeUndefined();
-    expect(admitCloudSession(grant, "203.0.113.6")).toMatchObject({ code: 1013, reason: "cloud store unavailable" });
+  it("refuses a new session at once, and ends a running one only once the store has been down for 30 seconds", async () => {
+    expect(CLOUD_STORE_OUTAGE_MS).toBe(30_000);
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "max-cloud-outage-"));
+    const file = path.join(directory, "cloud.sqlite");
+    try {
+      resetCloudDatabase(file);
+      const { grant } = await setup();
+      const session = openCloudSession("s-db", grant, "203.0.113.5");
+      session.observe(status("ready"));
+      const ended = counter("max_cloud_sessions_ended_store_unavailable_total");
+      resetCloudDatabase(directory); // a directory where the database file should be: every read and write fails
+      const quiet = silence();
+      try {
+        expect(admitCloudSession(grant, "203.0.113.6")).toMatchObject({
+          code: 1013,
+          reason: "cloud store unavailable"
+        });
+        for (let check = 1; check < 7; check += 1) {
+          clock += CLOUD_CHECK_INTERVAL_MS;
+          expect(() => session.check()).not.toThrow();
+          expect(session.check()).toBeUndefined(); // a blip is outlasted
+        }
+        clock += CLOUD_CHECK_INTERVAL_MS;
+        expect(session.check()).toMatchObject({
+          code: 1013,
+          reason: "cloud store unavailable",
+          message:
+            "Max Cloud could not check this conversation's balance for 30 seconds, so it has ended it. Start a new one in a moment."
+        });
+        expect(counter("max_cloud_sessions_ended_store_unavailable_total")).toBe(ended + 1);
+        expect(session.check()).toBeUndefined(); // reported once
+      } finally {
+        quiet();
+      }
+      // Once the store is back the whole session is charged, not just its last checkpoint.
+      resetCloudDatabase(file);
+      const before = remainingSeconds(grant.customerId);
+      expect(
+        cloudSessionEnded({
+          customerId: grant.customerId,
+          projectId: grant.projectId,
+          sessionId: "s-db",
+          seconds: session.close(),
+          endedAt: clock
+        })
+      ).toBe("booked");
+      expect(before - remainingSeconds(grant.customerId)).toBe(35);
+    } finally {
+      resetCloudDatabase(":memory:");
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("starts the 30 seconds again whenever a check succeeds", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "max-cloud-blip-"));
+    const file = path.join(directory, "cloud.sqlite");
+    try {
+      resetCloudDatabase(file);
+      const { grant } = await setup();
+      const session = openCloudSession("s-blips", grant, "203.0.113.5");
+      session.observe(status("ready"));
+      const quiet = silence();
+      try {
+        resetCloudDatabase(directory); // down
+        for (let check = 0; check < 3; check += 1) {
+          clock += CLOUD_CHECK_INTERVAL_MS;
+          expect(session.check()).toBeUndefined();
+        }
+        resetCloudDatabase(file); // back: a success clears the streak
+        clock += CLOUD_CHECK_INTERVAL_MS;
+        expect(session.check()).toBeUndefined();
+        resetCloudDatabase(directory); // down again
+        for (let check = 0; check < 6; check += 1) {
+          clock += CLOUD_CHECK_INTERVAL_MS;
+          expect(session.check()).toBeUndefined();
+        }
+        clock += CLOUD_CHECK_INTERVAL_MS; // 30 s since it went down again
+        expect(session.check()).toMatchObject({ code: 1013, reason: "cloud store unavailable" });
+      } finally {
+        quiet();
+      }
+      expect(session.close()).toBe(55);
+    } finally {
+      resetCloudDatabase(":memory:");
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("counts a checkpoint that cannot be written, and charges the session in full once it can", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "max-cloud-frozen-"));
+    const file = path.join(directory, "cloud.sqlite");
+    try {
+      resetCloudDatabase(file);
+      const { customerId, projectId, grant } = await setup();
+      const session = openCloudSession("s-frozen", grant, "203.0.113.5");
+      session.observe(status("ready"));
+      // The ledger, the balance and the project can all be read; only the checkpoint writes fail (a full disk, say).
+      onDatabase(
+        file,
+        "CREATE TRIGGER frozen_u BEFORE UPDATE ON live_sessions BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;" +
+          "CREATE TRIGGER frozen_i BEFORE INSERT ON live_sessions BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END"
+      );
+      const quiet = silence();
+      try {
+        for (let check = 1; check < 7; check += 1) {
+          clock += CLOUD_CHECK_INTERVAL_MS;
+          expect(session.check()).toBeUndefined();
+        }
+        clock += CLOUD_CHECK_INTERVAL_MS;
+        expect(session.check()).toMatchObject({ code: 1013, reason: "cloud store unavailable" });
+      } finally {
+        quiet();
+      }
+      onDatabase(file, "DROP TRIGGER frozen_u; DROP TRIGGER frozen_i");
+      const before = remainingSeconds(customerId);
+      expect(
+        cloudSessionEnded({ customerId, projectId, sessionId: "s-frozen", seconds: session.close(), endedAt: clock })
+      ).toBe("booked");
+      expect(before - remainingSeconds(customerId)).toBe(35);
+    } finally {
+      resetCloudDatabase(":memory:");
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("gives a Studio test the same 30 seconds, then ends it with a message of its own", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "max-cloud-preview-"));
+    const file = path.join(directory, "cloud.sqlite");
+    try {
+      resetCloudDatabase(file);
+      const { customerId, projectId } = await setup();
+      const initial = draft(customerId, projectId, "Draft greeting");
+      const minted = mintTestSession(customerId, projectId, initial.id);
+      if (!minted.ok) throw new Error(minted.error);
+      const grant = cloudSessionTokens.grant(minted.value.token)!.project!;
+      const session = openCloudSession("s-preview", grant, "203.0.113.5");
+      const quiet = silence();
+      try {
+        resetCloudDatabase(directory); // a directory where the database file should be: every read and write fails
+        for (let check = 1; check < 7; check += 1) {
+          clock += CLOUD_CHECK_INTERVAL_MS;
+          // Not at the first failure, and not as "this Studio revision is unavailable".
+          expect(session.check()).toBeUndefined();
+        }
+        clock += CLOUD_CHECK_INTERVAL_MS;
+        expect(session.check()).toEqual({
+          code: 1013,
+          reason: "cloud store unavailable",
+          message:
+            "Max Cloud could not be reached for 30 seconds, so this Studio test was ended. Start it again in a moment."
+        });
+        expect(session.check()).toBeUndefined(); // reported once
+      } finally {
+        quiet();
+      }
+    } finally {
+      resetCloudDatabase(":memory:");
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("keep a customer to 5 sessions at once", async () => {

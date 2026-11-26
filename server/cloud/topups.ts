@@ -14,8 +14,7 @@ import type { PaidOrder, PaymentProvider } from "./payments";
 import {
   closePendingOrder,
   creditOrder,
-  insertOrder,
-  openOrderCount,
+  insertPendingOrder,
   orderById,
   pendingOrders,
   recentlyClosedOrders,
@@ -94,9 +93,6 @@ export async function createTopup(customerId: string, body: Record<string, unkno
     return { ok: false, status: 503, error: "Top-ups are not available right now." };
   }
   const at = now();
-  if (openOrderCount(customerId, at) >= MAX_OPEN_ORDERS) {
-    return { ok: false, status: 429, error: "Too many unpaid top-ups. Pay or wait for one to expire." };
-  }
   const order: OrderRow = {
     id: newOrderId(at),
     customer_id: customerId,
@@ -109,8 +105,11 @@ export async function createTopup(customerId: string, body: Record<string, unkno
     paid_at: null,
     expires_at: at + ORDER_LIFETIME_MS
   };
-  // Stored before the provider hears of it, so no payable order is ever unknown here.
-  insertOrder(order);
+  // Stored before the provider hears of it, so no payable order is ever unknown here: not at all when the customer
+  // already holds five unpaid orders.
+  if (!insertPendingOrder(order, MAX_OPEN_ORDERS, at)) {
+    return { ok: false, status: 429, error: "Too many unpaid top-ups. Pay or wait for one to expire." };
+  }
   let qrCode: string;
   try {
     ({ qrCode } = await provider.createQrOrder({

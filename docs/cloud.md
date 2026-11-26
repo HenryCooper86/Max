@@ -530,6 +530,25 @@ that order, and the customer would be paid twice.
 In development (never with `NODE_ENV=production`), `CLOUD_PAYMENTS_TEST=on` adds a **Test payment** method: its QR code
 links to a page with a "Mark as paid" button, so the whole top-up flow can be tried with no money involved.
 
+### Before taking real money
+
+The signatures, notifications and order queries are tested with locally signed messages in each provider's format,
+not a live merchant account. Before the first customer pays, make one real payment per provider with your own account
+and check each step:
+
+1. Top up the smallest pack in the console and pay it with a real WeChat or Alipay wallet.
+2. The order turns paid within seconds (the notification) and the balance grows by exactly the pack.
+3. The relay log has a `top-up credited` line and no `paid order refused` line for it, and the provider's merchant
+   records show the same order id and amount.
+4. Create another order, stop the relay, pay it, and start the relay again: the order is credited within two minutes,
+   exactly once, by the provider's repeated notification or the relay's own sweep, whichever comes first.
+5. Let one more order expire unpaid: the provider shows it closed, and nothing is credited.
+6. Refund the test payments from the merchant platform. The relay does not handle refunds, so a refund made there
+   leaves the balance as it was: remove the credit with `npm run cloud:credit -- <email> -<amount> <refund id>`.
+
+With Alipay, steps 1 to 5 can be rehearsed first on the sandbox gateway (`ALIPAY_GATEWAY` above) with a sandbox
+buyer account. WeChat Pay has no sandbox for API v3, so its first check is a real payment.
+
 ## Prices
 
 ¥0.15 per minute, billed by the second, after 60,000 free seconds per customer per calendar month (UTC). Packs are

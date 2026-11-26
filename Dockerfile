@@ -8,8 +8,10 @@
 #   docker run --rm -p 8787:8787 --env-file .env -v voice-agent-data:/data voice-agent-kit
 
 # Node 22.13 or newer is required (node:sqlite). The slim (Debian) image is
-# used rather than Alpine so no dependency ever meets musl.
-ARG NODE_IMAGE=node:22-slim
+# used rather than Alpine so no dependency ever meets musl. Pinned by digest,
+# like the speech server's bases, so a rebuild of the same commit gets the same
+# Node and Debian packages; bump the tag and digest together.
+ARG NODE_IMAGE=node:22.23.5-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb
 
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app

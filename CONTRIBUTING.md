@@ -41,17 +41,18 @@ npm run check
 
 It runs these steps in order and stops at the first failure:
 
-| Step                | What it checks                                                                                                           |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `check:protocol`    | The generated protocol files match `protocol/agent-events.schema.json`.                                                  |
-| `format:check`      | Prettier formatting.                                                                                                     |
-| `lint`              | ESLint.                                                                                                                  |
-| `check:dead-code`   | `knip` finds unused files, exports and dependencies.                                                                     |
-| `check:rdk`         | Type check of the embedded board agent in `rdk/agent`.                                                                   |
-| `check:sdk`         | Type check of the browser SDK in `sdk/`.                                                                                 |
-| `test`              | The vitest suite.                                                                                                        |
-| `test:fault-matrix` | The testing evaluator's verdicts on altered golden sessions (latency, relay errors, unsafe replies). It starts no relay. |
-| `build`             | `tsc`, the web app build and the SDK build.                                                                              |
+| Step                | What it checks                                                                                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `check:protocol`    | The generated protocol files match `protocol/agent-events.schema.json`, and the schema matches the event types in `shared/agent.ts`. |
+| `format:check`      | Prettier formatting.                                                                                                                 |
+| `lint`              | ESLint.                                                                                                                              |
+| `check:dead-code`   | `knip` finds unused files, exports and dependencies.                                                                                 |
+| `check:rdk`         | Type check of the embedded board agent in `rdk/agent`.                                                                               |
+| `check:sdk`         | Type check of the browser SDK in `sdk/`.                                                                                             |
+| `check:scripts`     | Type check of the operational scripts in `scripts/` (setup, packing, release gate, agent tests, browser QA harness).                 |
+| `test`              | The vitest suite.                                                                                                                    |
+| `test:fault-matrix` | The testing evaluator's verdicts on altered golden sessions (latency, relay errors, unsafe replies). It starts no relay.             |
+| `build`             | `tsc`, the web app build and the SDK build.                                                                                          |
 
 Some jobs in CI need other toolchains (Python for `rdk/vision`, Android and iOS builds). You only need them if you change
 those areas. `npm run test:rdk-vision` runs the Python tests.

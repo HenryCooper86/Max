@@ -24,7 +24,10 @@ that do not set `import` all resolve it. There is no CommonJS build: a `require`
 declarations, and Node 22.12 and newer can `require()` an ES module anyway. If something goes wrong, see
 [troubleshooting](../docs/troubleshooting.md).
 
-Maintainers publish with `npm run pack:sdk && cd dist/sdk-package && npm publish`.
+Maintainers publish the tarball the release workflow built and checked, not a local build: pushing an `sdk-v<version>`
+tag runs `npm run pack:sdk` in CI (which installs the tarball into an empty project and imports and type-checks every
+entry) and attaches `max-voice-agent-<version>.tgz` to a draft release. Download it from that draft and run
+`npm publish max-voice-agent-<version>.tgz`, so what is published is byte for byte what was reviewed.
 
 **Without a build step**, load it from your relay, which serves the built files at `/sdk/`:
 

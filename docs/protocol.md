@@ -15,7 +15,8 @@ Sources of truth, in order of authority:
 
 Event names are also generated as constants for TypeScript (`shared/generated/agent-protocol.ts`), Kotlin and Swift.
 After changing the schema, run `npm run generate:protocol`. `npm run check:protocol` fails when the generated files are
-out of date.
+out of date, and when the schema and the types in `shared/agent.ts` disagree: an event or a payload field only one of
+them has, or a field the schema requires that the types leave optional.
 
 ## Connecting
 

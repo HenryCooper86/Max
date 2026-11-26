@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 type EventSchema = {
   title: string;
-  properties: { type: { const: string } };
+  properties: { type: { const: string } } & Record<string, unknown>;
   required?: string[];
 };
 
@@ -88,6 +89,133 @@ const outputs = new Map<string, string>([
   ["ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift", swiftOutput()]
 ]);
 
+/** The JSON value kinds a schema property allows, from its `type`, `enum` or `const`; undefined when it says none. */
+function schemaKinds(property: unknown): Set<string> | undefined {
+  if (!property || typeof property !== "object") return undefined;
+  const kinds = new Set<string>();
+  const add = (value: unknown) => kinds.add(value === null ? "null" : Array.isArray(value) ? "array" : typeof value);
+  if ("type" in property) {
+    for (const kind of Array.isArray(property.type) ? property.type : [property.type]) {
+      kinds.add(kind === "integer" ? "number" : String(kind));
+    }
+  }
+  if ("enum" in property && Array.isArray(property.enum)) property.enum.forEach(add);
+  if ("const" in property) add(property.const);
+  return kinds.size ? kinds : undefined;
+}
+
+/** The JSON value kinds a TypeScript property type can take (`undefined` from an optional field is not one). */
+function typeKinds(checker: ts.TypeChecker, type: ts.Type): Set<string> {
+  const kinds = new Set<string>();
+  for (const part of type.isUnion() ? type.types : [type]) {
+    if (part.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) continue;
+    if (part.flags & ts.TypeFlags.StringLike) kinds.add("string");
+    else if (part.flags & ts.TypeFlags.NumberLike) kinds.add("number");
+    else if (part.flags & ts.TypeFlags.BooleanLike) kinds.add("boolean");
+    else if (part.flags & ts.TypeFlags.Null) kinds.add("null");
+    else if (checker.isArrayType(part) || checker.isTupleType(part)) kinds.add("array");
+    else kinds.add("object");
+  }
+  return kinds;
+}
+
+/**
+ * Where the schema and the TypeScript event types in shared/agent.ts disagree:
+ * an event one side has and the other lacks, a field only one side names, a
+ * field whose JSON kind (string, number, object…) the schema does not allow, or
+ * a field the schema requires that the types leave optional. A union member it
+ * cannot read (no string-literal `type`) is reported rather than skipped. The schema claims to
+ * be the authoritative contract (docs/protocol.md), and the iOS, Android and
+ * board clients are written from it, so a payload field added to the types
+ * alone used to pass every check while no other client knew of it.
+ *
+ * Required-ness is checked one way only. The generated required lists make the
+ * native clients drop an event that lacks one of them, so the schema must never
+ * require what the relay may leave out; requiring less than the relay always
+ * sends is merely lenient, and tightening it would change what native clients
+ * accept.
+ */
+function payloadDrift(): string[] {
+  const typesFile = path.join(root, "shared/agent.ts");
+  const program = ts.createProgram([typesFile], { strict: true, target: ts.ScriptTarget.ES2022, noEmit: true });
+  const checker = program.getTypeChecker();
+  const source = program.getSourceFile(typesFile);
+  if (!source) throw new Error("shared/agent.ts could not be read");
+  const problems: string[] = [];
+  ts.forEachChild(source, (node) => {
+    if (!ts.isTypeAliasDeclaration(node)) return;
+    const side = node.name.text;
+    if (side !== "ClientEvent" && side !== "AgentEvent") return;
+    // Per event name: every field any variant has with its kinds, and the fields every variant requires.
+    const declared = new Map<string, { kinds: Map<string, Set<string>>; required: Set<string> }>();
+    const union = checker.getTypeAtLocation(node.name);
+    for (const member of union.isUnion() ? union.types : [union]) {
+      const discriminant = member.getProperty("type");
+      const literal = discriminant && checker.getTypeOfSymbolAtLocation(discriminant, node);
+      const names = literal ? (literal.isUnion() ? literal.types : [literal]) : [];
+      // A member this check cannot read would otherwise pass unchecked: say so instead.
+      if (!names.length || !names.every((name) => name.isStringLiteral())) {
+        problems.push(`${side} has a member whose "type" is not a string literal: ${checker.typeToString(member)}`);
+        continue;
+      }
+      for (const name of names) {
+        if (!name.isStringLiteral()) continue;
+        const memberRequired = new Set<string>();
+        const fields = new Map<string, Set<string>>();
+        for (const property of member.getProperties()) {
+          fields.set(property.name, typeKinds(checker, checker.getTypeOfSymbolAtLocation(property, node)));
+          if (!(property.flags & ts.SymbolFlags.Optional)) memberRequired.add(property.name);
+        }
+        const entry = declared.get(name.value);
+        if (!entry) {
+          declared.set(name.value, { kinds: fields, required: memberRequired });
+          continue;
+        }
+        for (const [field, kinds] of fields) {
+          const known = entry.kinds.get(field) ?? new Set<string>();
+          for (const kind of kinds) known.add(kind);
+          entry.kinds.set(field, known);
+        }
+        // Required only when every variant of the event requires it.
+        for (const field of entry.required) if (!memberRequired.has(field)) entry.required.delete(field);
+      }
+    }
+    const documented = new Map(schema.$defs[side].oneOf.map((event) => [event.properties.type.const, event]));
+    for (const [type, entry] of declared) {
+      const event = documented.get(type);
+      if (!event) {
+        problems.push(`${side} "${type}" is in shared/agent.ts but not in the schema`);
+        continue;
+      }
+      const schemaRequired = new Set(event.required ?? ["type"]);
+      for (const [name, kinds] of entry.kinds) {
+        if (!(name in event.properties)) {
+          problems.push(`${side} "${type}": field "${name}" is not in the schema`);
+          continue;
+        }
+        if (schemaRequired.has(name) && !entry.required.has(name)) {
+          problems.push(`${side} "${type}": the schema requires "${name}", which shared/agent.ts leaves optional`);
+        }
+        const allowed = schemaKinds(event.properties[name]);
+        const missing = allowed ? [...kinds].filter((kind) => !allowed.has(kind)) : [];
+        if (missing.length) {
+          problems.push(
+            `${side} "${type}": field "${name}" can be ${missing.join("/")} in shared/agent.ts, which the schema does not allow`
+          );
+        }
+      }
+      for (const name of Object.keys(event.properties)) {
+        if (!entry.kinds.has(name))
+          problems.push(`${side} "${type}": schema field "${name}" is not in shared/agent.ts`);
+      }
+    }
+    for (const type of documented.keys()) {
+      if (!declared.has(type)) problems.push(`${side} "${type}" is in the schema but not in shared/agent.ts`);
+    }
+  });
+  return problems;
+}
+
 const check = process.argv.includes("--check");
 let stale = false;
 for (const [relativePath, content] of outputs) {
@@ -104,4 +232,6 @@ for (const [relativePath, content] of outputs) {
   console.log(`Generated ${relativePath}`);
 }
 
-if (stale) process.exitCode = 1;
+const drift = payloadDrift();
+for (const problem of drift) console.error(`Protocol schema and shared/agent.ts disagree: ${problem}`);
+if (stale || drift.length) process.exitCode = 1;

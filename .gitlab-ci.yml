@@ -2,6 +2,11 @@
 # arm64): Node 22, Python 3.10, ffmpeg, JDK 17, the Android SDK, and the
 # AEC build deps are installed on the runner host. iOS is deliberately not
 # in CI: xcodebuild requires macOS, and this project runs Linux-only runners.
+#
+# GitHub Actions (.github/workflows/ci.yml) is the full gate. These jobs are
+# the ones this runner can do; it has no browsers, no Docker and no uv, so the
+# browser tests, the speech server and the two container images run only there.
+# Only GitLab builds the AEC binary.
 
 stages:
   - test
@@ -17,6 +22,7 @@ web:check:
   script:
     - npm ci
     - npm run check
+    - npm audit --omit=dev --audit-level=low
 
 rdk:vision-gate:
   stage: test
@@ -41,6 +47,14 @@ rdk:aec-build:
     paths:
       - rdk/aec/max-aec
     expire_in: 1 week
+
+# The Python reference client in examples/device-client, against a scripted relay.
+device-client:
+  stage: test
+  script:
+    - python3.10 -m venv .venv-device
+    - .venv-device/bin/python -m pip install --quiet 'websockets>=10'
+    - .venv-device/bin/python -m unittest discover -s examples/device-client -p 'test_*.py' -v
 
 # aapt2 is x86_64-only; the runner VM has amd64 multiarch libs so it runs
 # under Rosetta. The SDK licenses/platform live in the runner's ANDROID_HOME.

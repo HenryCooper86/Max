@@ -33,6 +33,7 @@ ios/Config/Secrets.xcconfig
 
 # Python tooling state (rdk/vision test suite)
 .venv/
+.venv-device/
 __pycache__/
 .pytest_cache/
 

@@ -7,6 +7,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # The release workflow runs every job here before it drafts a release.
+  workflow_call:
 
 permissions:
   contents: read
@@ -122,6 +124,41 @@ jobs:
           code=$?
           echo "exit code: $code"
           test "$code" -eq 64
+
+  # The production relay image: builds from the root Dockerfile and must come up healthy, as the non-root user,
+  # serving the SDK, with its data volume writable (/ready checks the stores under /data).
+  relay-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: max-relay:ci
+          cache-from: type=gha,scope=relay
+          cache-to: type=gha,scope=relay,mode=max
+      - name: The image starts healthy and ready
+        run: |
+          docker run -d --name relay -p 8787:8787 -e RELAY_AUTH_TOKEN=ci-relay-secret max-relay:ci
+          # As long as the Dockerfile's health policy allows (20 s start period, then up to three checks 30 s apart),
+          # stopping early once Docker has called it unhealthy or the container has exited.
+          status=starting
+          for _ in $(seq 1 60); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' relay 2>/dev/null || echo exited)
+            case $status in healthy | unhealthy | exited) break ;; esac
+            [ "$(docker inspect -f '{{.State.Running}}' relay)" = true ] || { status=exited; break; }
+            sleep 2
+          done
+          docker logs relay | tail -20
+          echo "health: $status"
+          test "$status" = healthy
+          curl --fail --silent http://localhost:8787/ready
+          curl --fail --silent --output /dev/null http://localhost:8787/sdk/voice-agent.iife.js
+          test "$(docker exec relay id -un)" = node
 
   # The Python reference client in examples/device-client, against a scripted relay.
   device-client:

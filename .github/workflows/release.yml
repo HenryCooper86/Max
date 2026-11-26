@@ -1,8 +1,9 @@
 name: Release draft
 
 # Pushing a tag prepares a draft GitHub release. Nothing is published from here:
-# a maintainer reviews the draft and publishes it, and publishes the SDK to npm
-# by hand (npm run pack:sdk && cd dist/sdk-package && npm publish).
+# a maintainer reviews the draft and publishes it. For the SDK, the tarball
+# attached to the draft (built and smoke-tested by npm run pack:sdk below) is
+# the one to publish: npm publish max-voice-agent-<version>.tgz.
 #
 #   v1.2.3      the kit; must match "version" in package.json
 #   sdk-v1.2.3  the web SDK; must match "version" in sdk/package.json
@@ -17,7 +18,13 @@ permissions:
   contents: write
 
 jobs:
+  # Every job of the cross-platform CI (relay, browsers, speech server and its image, relay image, devices,
+  # Android, iOS) must pass for the tagged commit before a draft is made, not only the web checks.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   draft:
+    needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -44,7 +51,7 @@ jobs:
             exit 1
           fi
       - run: npm ci
-      - run: npm run check
+      # `npm run check` already ran in the ci job above.
       - name: Pack the SDK
         if: steps.version.outputs.kind == 'sdk'
         run: npm run pack:sdk

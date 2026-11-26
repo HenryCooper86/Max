@@ -57,7 +57,30 @@
             "resume": {
               "type": "string",
               "maxLength": 64
-            }
+            },
+            "testerId": { "type": "string" },
+            "testerRegion": { "type": "string" },
+            "testingCampaignId": { "type": "string" },
+            "testingTestCaseId": { "type": "string" },
+            "testingRunId": { "type": "string" },
+            "testingAssignmentId": { "type": "string" },
+            "appVersion": { "type": "string" },
+            "gitCommit": { "type": "string" },
+            "deviceLabel": { "type": "string" },
+            "browserLanguage": { "type": "string" },
+            "networkType": { "type": "string" },
+            "platform": { "type": "string" },
+            "voiceGender": { "type": "string" },
+            "voicePersonality": { "type": "string" },
+            "voiceProvider": { "type": "string" },
+            "language": { "type": "string" },
+            "equalizer": { "type": "object" },
+            "audio": { "type": "object" },
+            "rideMode": { "type": "string" },
+            "scenario": { "type": "string" },
+            "lat": { "type": "number" },
+            "lon": { "type": "number" },
+            "memory": { "type": "object" }
           },
           "required": ["type", "sampleRate", "channels"]
         },
@@ -121,7 +144,12 @@
           "properties": {
             "type": {
               "const": "testing.metric"
-            }
+            },
+            "droppedFrames": { "type": "number" },
+            "outgoingFps": { "type": "number" },
+            "jitterMs": { "type": "number" },
+            "clippingPct": { "type": "number" },
+            "silencePct": { "type": "number" }
           },
           "required": ["type"]
         },
@@ -199,7 +227,7 @@
             "ttcSeconds": {
               "type": "number"
             },
-            "latencyMs": {
+            "handoverMs": {
               "type": "number"
             }
           },
@@ -576,7 +604,9 @@
             },
             "latencyMs": {
               "type": "number"
-            }
+            },
+            "droppedFrames": { "type": "number" },
+            "outgoingFps": { "type": "number" }
           },
           "required": ["type"]
         },
@@ -598,7 +628,9 @@
             },
             "isDay": {
               "type": ["boolean", "number"]
-            }
+            },
+            "riskLevel": { "type": "string" },
+            "riderAdvice": { "type": "string" }
           },
           "required": ["type", "description"]
         },
@@ -626,7 +658,11 @@
             },
             "glanceableFocus": {
               "type": "string"
-            }
+            },
+            "speedKmh": { "type": "number" },
+            "routePhase": { "type": "string" },
+            "network": { "enum": ["online", "degraded", "offline"] },
+            "batteryPct": { "type": "number" }
           },
           "required": ["type", "mode", "modeLabel", "scenario", "scenarioLabel", "hazardLevel", "glanceableFocus"]
         },
@@ -642,7 +678,9 @@
             },
             "responseMode": {
               "enum": ["concise", "normal", "emergency"]
-            }
+            },
+            "destination": { "type": "string" },
+            "lastIntent": { "type": "string" }
           },
           "required": ["type", "language", "responseMode"]
         },

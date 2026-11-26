@@ -356,6 +356,21 @@ user. Use them for things only the client can do (navigating, filling a form), n
 The relay does store session transcripts and per-user memory for QA and continuity in its data directory (see
 [deployment](deployment.md#data-directory)). Tell your users, and set retention to match your policy.
 
+## Dependencies
+
+Dependabot is off; dependencies are upgraded by hand, and two checks say when one must be:
+
+- `npm audit --omit=dev --audit-level=low` runs in CI on GitHub and GitLab for the relay and web app.
+- The **Dependency audit** workflow (`.github/workflows/dependency-audit.yml`) runs `osv-scanner` over every lockfile on
+  each push to `main`, each pull request and every Monday, so an advisory published after the last commit still turns
+  up. It covers npm (`package-lock.json`), the speech server (`speech-server/uv.lock`), the Python requirement files,
+  the iOS tooling gems (`ios/Gemfile.lock`) and the Android app (its Gradle `gradle.lockfile` files). A vulnerability
+  is accepted only in `osv-scanner.toml`, with a reason and a date to look again.
+
+CocoaPods has no trustworthy audit: OSV and GitHub's advisory database hold no CocoaPods data. The iOS pods (the AMap
+SDKs) are checked by hand when upgrading: `bundle exec pod outdated` in `ios/`, and the vendor's release notes for
+security fixes.
+
 ## Reporting a vulnerability
 
 Please do not open a public issue for a security problem. Follow the private process in [SECURITY.md](../SECURITY.md).

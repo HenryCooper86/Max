@@ -1,0 +1,36 @@
+name: Dependency audit
+
+# Dependabot is off: this is how the repository learns about vulnerable dependencies. osv-scanner reads every lockfile
+# (npm, the speech server's uv.lock, Python requirements, the iOS Gemfile.lock, Android's gradle.lockfile files) and
+# fails on a known vulnerability that osv-scanner.toml does not record a reason to accept. The weekly run catches
+# advisories published after the last commit. CocoaPods is not covered: OSV has no CocoaPods data (docs/security.md).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  osv-scanner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OSV_SCANNER_VERSION: 2.7.1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install osv-scanner
+        run: |
+          set -euo pipefail
+          base="https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}"
+          curl -fsSLo "$RUNNER_TEMP/osv-scanner_linux_amd64" "$base/osv-scanner_linux_amd64"
+          curl -fsSLo "$RUNNER_TEMP/SHA256SUMS" "$base/osv-scanner_SHA256SUMS"
+          (cd "$RUNNER_TEMP" && grep ' osv-scanner_linux_amd64$' SHA256SUMS | sha256sum -c -)
+          install -m 0755 "$RUNNER_TEMP/osv-scanner_linux_amd64" /usr/local/bin/osv-scanner
+      - name: Scan every lockfile
+        run: osv-scanner scan source --config=osv-scanner.toml -r .

@@ -18,7 +18,6 @@ import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -65,7 +64,12 @@ class AgentSessionRelayLifecycleTest {
             Thread.sleep(10)
         }
         shadowOf(Looper.getMainLooper()).idle()
-        assertTrue("timed out waiting for $what", condition())
+        if (condition()) return
+        val state = session.state.value
+        throw AssertionError(
+            "timed out waiting for $what: connection=${state.connection} status=\"${state.statusText}\" " +
+                "handsFree=${state.handsFree} connections=${relay.connectionCount} sessionStarts=${relay.sessionStarts().size}"
+        )
     }
 
     /** A capture that runs nothing: the relay transport is what these tests exercise. */

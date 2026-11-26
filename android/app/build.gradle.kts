@@ -111,6 +111,13 @@ android {
     testOptions {
         // Robolectric tests start the real app: the HUD needs the merged manifest and resources.
         unitTests.isIncludeAndroidResources = true
+        // A failure on CI should say why, not only the line it was at.
+        unitTests.all {
+            it.testLogging {
+                events("failed")
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+            }
+        }
     }
     // Reuse the canonical safety clips directly; no duplicated binary source files.
     sourceSets.getByName("main").assets.srcDir(rootProject.file("../public/audio"))

@@ -24,9 +24,9 @@ BUNDLE_GEMFILE="$ios_dir/Gemfile" bundle check
 
 cocoapods_version=$(BUNDLE_GEMFILE="$ios_dir/Gemfile" bundle exec pod --version)
 case "$cocoapods_version" in
-  1.16.*) ;;
+  1.17.*) ;;
   *)
-    echo "CocoaPods $cocoapods_version is unsupported; the reviewed minor is 1.16.x." >&2
+    echo "CocoaPods $cocoapods_version is unsupported; the reviewed minor is 1.17.x." >&2
     exit 1
     ;;
 esac

@@ -3,7 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { maxPassagesFromEnv } from "../server/knowledge-embeddings";
-import { buildServerTools } from "../server/tools/registry";
+import {
+  buildServerTools,
+  closeServerTools,
+  installServerTools,
+  serverTools,
+  setServerToolsForTests
+} from "../server/tools/registry";
 import type { ToolContext, ToolDefinition } from "../server/tools";
 
 const context = () => ({ sessionId: "s" }) as unknown as ToolContext;
@@ -154,5 +160,88 @@ describe("knowledge embeddings with the disk cache", () => {
     const header = fs.readFileSync(path.join(dir, "vectors.bin")).readUInt32LE(8);
     expect(header).toBe(5);
     expect(passageTexts(inputs)).toHaveLength(3);
+  });
+});
+
+describe("the embedding job of a tools build", () => {
+  const otherText = "# Refunds\n\nMoney comes back in 5 days.\n\n# Parking\n\nFree parking behind the shop.";
+  const refundReady = (tool: ToolDefinition) =>
+    vi.waitFor(async () => expect(await ask(tool, "money back")).toEqual(["Refunds"]));
+
+  afterEach(() => {
+    setServerToolsForTests();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  /** Answers `answers` requests, then holds the next one until its request is aborted, as fetch would. */
+  const holding = (answers: number) => {
+    const inputs: string[][] = [];
+    const answered = fakeRequest(inputs);
+    const held: AbortSignal[] = [];
+    const request = (async (url: string, init: RequestInit) => {
+      if (inputs.length < answers) return answered(url as never, init);
+      const { promise, reject } = Promise.withResolvers<Response>();
+      const signal = init.signal!;
+      held.push(signal);
+      signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      return promise;
+    }) as unknown as typeof fetch;
+    return { request, held };
+  };
+  /** `installServerTools` reads the environment and the global `fetch`: both are pointed at this test's own. */
+  const use = (request: typeof fetch) => {
+    vi.stubEnv("KNOWLEDGE_EMBEDDINGS_MODEL", "small");
+    vi.stubEnv("KNOWLEDGE_EMBEDDINGS_API_KEY", "k");
+    vi.stubEnv("KNOWLEDGE_EMBEDDINGS_CACHE", dir);
+    vi.stubGlobal("fetch", request);
+  };
+
+  it("is cancelled when a newer config is installed, and nothing of it reaches the cache after that", async () => {
+    const first = holding(0);
+    use(first.request);
+    await installServerTools({ knowledge: { text } });
+    await vi.waitFor(() => expect(first.held).toHaveLength(1));
+
+    const second = fakeRequest();
+    use(second);
+    await installServerTools({ knowledge: { text: otherText } });
+    expect(first.held[0]!.aborted).toBe(true);
+    await refundReady(serverTools()[0]!);
+    await vi.waitFor(() => expect(fs.readdirSync(dir)).toEqual(["vectors.bin"]));
+    // The cache is the newer job's, with its two passages: the cancelled job never got as far as writing.
+    expect(fs.readFileSync(path.join(dir, "vectors.bin")).readUInt32LE(12)).toBe(2);
+  });
+
+  it("is cancelled when the relay's tools are closed", async () => {
+    const endpoint = holding(0);
+    use(endpoint.request);
+    await installServerTools({ knowledge: { text } });
+    await vi.waitFor(() => expect(endpoint.held).toHaveLength(1));
+    closeServerTools();
+    expect(endpoint.held[0]!.aborted).toBe(true);
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it("keeps what a closed build saved before, and leaves the cache to the build that follows", async () => {
+    const first = holding(2);
+    const stalled = await buildServerTools(
+      { knowledge: { text } },
+      { env: env(), request: first.request, cacheDir: dir, embedJob: { batchSize: 1, concurrency: 1, saveEvery: 1 } }
+    );
+    // Both part files land before the build is closed, so the cancelled job has no write in flight.
+    await vi.waitFor(() => expect(fs.readdirSync(dir).filter((name) => name.startsWith("part-"))).toHaveLength(2));
+    expect(first.held).toHaveLength(1);
+    stalled.close();
+    expect(first.held[0]!.aborted).toBe(true);
+
+    const next = await buildServerTools(
+      { knowledge: { text: otherText } },
+      { env: env(), request: fakeRequest(), cacheDir: dir }
+    );
+    await refundReady(next.tools[0]!);
+    // The next build owns the cache: its compaction is what stands, with the part files gone.
+    await vi.waitFor(() => expect(fs.readdirSync(dir)).toEqual(["vectors.bin"]));
+    expect(fs.readFileSync(path.join(dir, "vectors.bin")).readUInt32LE(12)).toBe(2);
   });
 });

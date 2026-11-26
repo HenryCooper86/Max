@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- request bodies and recorded events are inspected structurally */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLogger } from "../server/logger";
-import { createChatLoop, type ChatLoop, type Speaker } from "../server/providers/live/chat-loop";
+import { createChatLoop, type ChatLoop, type ChatStage, type Speaker } from "../server/providers/live/chat-loop";
 import type { EngineEvents } from "../server/providers/live/engine";
 
 const log = createLogger({ level: "silent" } as never);
@@ -16,7 +16,7 @@ const toolPiece = (piece: Record<string, unknown>) => ({ choices: [{ delta: { to
 function setup(
   replies: Array<() => Response>,
   speakerParts: Partial<Speaker> = {},
-  stageParts: { reasoningEffort?: string } = {}
+  stageParts: Partial<Pick<ChatStage, "reasoningEffort" | "deadlines">> = {}
 ) {
   const chats: any[] = [];
   const seen: string[] = [];
@@ -770,5 +770,106 @@ describe("chat loop live video", () => {
     await first;
     await loop.reply("I mean the picture");
     expect(chats[0].messages.at(-1).content).toEqual([{ type: "text", text: "I mean the picture" }, imagePart("A")]);
+  });
+});
+
+describe("chat loop deadlines", () => {
+  const deadlines = { firstChunkMs: 2_000, stallMs: 1_000 };
+  const encoder = new TextEncoder();
+  const line = (content: string) => encoder.encode(`data: ${JSON.stringify(text(content))}\n\n`);
+  /** A stream that sends these pieces and then, like the body of a fetch, fails as soon as the request is aborted. */
+  const abortable = (signal: AbortSignal, ...pieces: Uint8Array[]) =>
+    new ReadableStream<Uint8Array>({
+      start(stream) {
+        pieces.forEach((piece) => stream.enqueue(piece));
+        signal.addEventListener("abort", () => stream.error(new DOMException("aborted", "AbortError")), {
+          once: true
+        });
+      }
+    });
+
+  afterEach(() => vi.useRealTimers());
+
+  it("ends a reply whose model never answers, and says how long it was silent", async () => {
+    vi.useFakeTimers();
+    const { loop, seen, request } = setup([], {}, { deadlines });
+    // As with fetch, the request is rejected by its own abort. That rejection must not be what the wearer is told.
+    request.mockImplementation(
+      (_url: unknown, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init!.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+            once: true
+          });
+        })
+    );
+    const done = loop.reply("hello");
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(seen).toEqual(["start"]);
+    await vi.advanceTimersByTimeAsync(1);
+    await done;
+    expect(seen).toEqual(["start", "error:Chat model sent nothing for 2 seconds", "done:false"]);
+  });
+
+  it("does not wait for a transport that ignores the abort", async () => {
+    vi.useFakeTimers();
+    const { loop, seen, request } = setup([], {}, { deadlines });
+    request.mockImplementation(() => new Promise<Response>(() => {}));
+    const done = loop.reply("hello");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await done;
+    expect(seen).toEqual(["start", "error:Chat model sent nothing for 2 seconds", "done:false"]);
+    expect(request.mock.calls[0]![1]!.signal!.aborted).toBe(true);
+  });
+
+  it("counts the time to the first byte from the request, the wait for the response head included", async () => {
+    vi.useFakeTimers();
+    const { loop, seen, request } = setup([], {}, { deadlines });
+    request.mockImplementation((_url: unknown, init?: RequestInit) => {
+      const { promise, resolve, reject } = Promise.withResolvers<Response>();
+      const signal = init!.signal!;
+      setTimeout(() => resolve(new Response(abortable(signal), { status: 200 })), 1_500);
+      signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      return promise;
+    });
+    const done = loop.reply("hello");
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(seen).toEqual(["start"]);
+    // Not a fresh 2 seconds after the head: half the time to the first byte was spent on it.
+    await vi.advanceTimersByTimeAsync(1);
+    await done;
+    expect(seen).toEqual(["start", "error:Chat model sent nothing for 2 seconds", "done:false"]);
+  });
+
+  it("ends a reply whose model falls silent in the middle of an answer", async () => {
+    vi.useFakeTimers();
+    const { loop, seen, sentences, request } = setup([], {}, { deadlines });
+    request.mockImplementation(async (_url: unknown, init?: RequestInit) => {
+      const signal = init!.signal!;
+      return new Response(abortable(signal, line("First.")), { status: 200 });
+    });
+    const done = loop.reply("hello");
+    await vi.advanceTimersByTimeAsync(999);
+    expect(sentences).toEqual(["First."]);
+    expect(seen).toEqual(["start", "text:First."]);
+    await vi.advanceTimersByTimeAsync(1);
+    await done;
+    expect(seen).toEqual(["start", "text:First.", "error:Chat model fell silent for 1 second", "done:false"]);
+  });
+
+  it("waits for ever when both deadlines are turned off with 0", async () => {
+    vi.useFakeTimers();
+    const { loop, seen, request } = setup([], {}, { deadlines: { firstChunkMs: 0, stallMs: 0 } });
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    request.mockImplementation(
+      async () => new Response(new ReadableStream({ start: (open) => void (stream = open) }), { status: 200 })
+    );
+    const done = loop.reply("hello");
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(seen).toEqual(["start"]);
+    stream.enqueue(line("Late."));
+    stream.enqueue(encoder.encode("data: [DONE]\n\n"));
+    stream.close();
+    await done;
+    expect(seen).toEqual(["start", "text:Late.", "done:false"]);
   });
 });

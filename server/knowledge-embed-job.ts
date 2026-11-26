@@ -31,12 +31,22 @@ export type EmbedJobOptions = {
   /** New vectors to collect before a part file is written. Default 5000. */
   saveEvery?: number;
   log: { info(message: string): void; warn(message: string): void };
+  /** Aborted when the job is replaced by a newer one or the relay stops. Requests in flight are cancelled,
+   *  nothing more is written to the cache, and the job ends without a result. */
+  signal?: AbortSignal;
 };
 
-const wait = (ms: number) =>
+const wait = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((done) => {
     // Unreferenced, so a backoff wait cannot keep a process that is shutting down alive.
-    setTimeout(done, ms).unref();
+    const timer = setTimeout(() => finish(), ms).unref();
+    function finish(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      done();
+    }
+    signal?.addEventListener("abort", finish, { once: true });
+    if (signal?.aborted) finish();
   });
 
 export async function embedKnowledgePassages(options: EmbedJobOptions): Promise<VectorMatrix | undefined> {
@@ -54,7 +64,13 @@ export async function embedKnowledgePassages(options: EmbedJobOptions): Promise<
 }
 
 async function runJob(options: EmbedJobOptions): Promise<VectorMatrix | undefined> {
-  const { model, texts, request, cacheDir, log } = options;
+  const { model, texts, request, cacheDir, log, signal } = options;
+  const aborted = () => signal?.aborted === true;
+  if (aborted()) return undefined;
+  // Every request also ends when the job is aborted, on top of its own timeout.
+  const send: typeof fetch | undefined = signal
+    ? (input, init) => (request ?? fetch)(input, { ...init, signal: AbortSignal.any([init?.signal ?? signal, signal]) })
+    : request;
   const concurrency = Math.max(1, Math.floor(options.concurrency ?? 2));
   const batchSize = Math.max(1, Math.floor(options.batchSize ?? 64));
   const attempts = Math.max(1, Math.floor(options.attempts ?? 4));
@@ -74,6 +90,7 @@ async function runJob(options: EmbedJobOptions): Promise<VectorMatrix | undefine
   const cache = cacheDir
     ? await loadVectorCache(cacheDir, (message) => log.warn(message))
     : { vectors: new Map<string, Float32Array>(), files: 0, entries: 0, parts: [] as string[], damaged: false };
+  if (aborted()) return undefined;
   /** The part files this job read or wrote: the only ones it may remove when it compacts. */
   const ownParts = new Set(cache.parts);
   let hits = new Map<string, Float32Array>();
@@ -109,17 +126,24 @@ async function runJob(options: EmbedJobOptions): Promise<VectorMatrix | undefine
   let saving: Promise<void> = Promise.resolve();
   let saveFailed = false;
   const save = (entries: CacheEntry[]) => {
-    if (!cacheDir || saveFailed || !entries.length) return;
-    saving = saving.then(() =>
-      saveVectorPart(cacheDir, entries)
-        .then((name) => {
-          if (name) ownParts.add(name);
-        })
-        .catch((error: unknown) => {
-          saveFailed = true;
-          log.warn(`knowledge embedding cache: cannot save, continuing without it: ${describe(error)}`);
-        })
-    );
+    if (!cacheDir || saveFailed || aborted() || !entries.length) return;
+    saving = saving.then(async () => {
+      // Queued before the job was aborted: the write does not start.
+      if (aborted()) return;
+      try {
+        const name = await saveVectorPart(cacheDir, entries);
+        if (name) ownParts.add(name);
+      } catch (error: unknown) {
+        saveFailed = true;
+        log.warn(`knowledge embedding cache: cannot save, continuing without it: ${describe(error)}`);
+      }
+    });
+  };
+  /** An aborted job keeps what it wrote before and gives no result: the cache belongs to the job that replaced it. */
+  const cancelled = async (): Promise<undefined> => {
+    await saving;
+    log.info(`knowledge embeddings stopped after ${embedded} of ${total}: the job was cancelled`);
+    return undefined;
   };
 
   let stopped = false;
@@ -127,12 +151,12 @@ async function runJob(options: EmbedJobOptions): Promise<VectorMatrix | undefine
     const batchTexts = batch.map((key) => texts[firstRow.get(key) as number] as string);
     for (let attempt = 1; ; attempt++) {
       try {
-        return await embedTexts(model, batchTexts, { request, batchSize: batchTexts.length });
+        return await embedTexts(model, batchTexts, { request: send, batchSize: batchTexts.length });
       } catch (error) {
         const retry = error instanceof EmbeddingError ? error.retryable : false;
-        if (!retry || attempt >= attempts || stopped) throw error;
-        await wait((error as EmbeddingError).retryAfterMs ?? backoffMs * 2 ** (attempt - 1));
-        if (stopped) throw error;
+        if (!retry || attempt >= attempts || stopped || aborted()) throw error;
+        await wait((error as EmbeddingError).retryAfterMs ?? backoffMs * 2 ** (attempt - 1), signal);
+        if (stopped || aborted()) throw error;
       }
     }
   }
@@ -187,7 +211,8 @@ async function runJob(options: EmbedJobOptions): Promise<VectorMatrix | undefine
     }
     const worker = async () => {
       try {
-        for (let batch = queue.shift(); batch && !stopped; batch = queue.shift()) place(batch, await embedBatch(batch));
+        for (let batch = queue.shift(); batch && !stopped && !aborted(); batch = queue.shift())
+          place(batch, await embedBatch(batch));
       } catch (error) {
         stopped = true;
         throw error;
@@ -203,6 +228,7 @@ async function runJob(options: EmbedJobOptions): Promise<VectorMatrix | undefine
     }
   } catch (error) {
     stopped = true;
+    if (aborted()) return cancelled();
     save(fresh);
     await saving;
     const saved = cacheDir && !saveFailed ? `; ${embedded} embedded so far are saved and the next start resumes` : "";
@@ -210,6 +236,7 @@ async function runJob(options: EmbedJobOptions): Promise<VectorMatrix | undefine
     return undefined;
   }
 
+  if (aborted()) return cancelled();
   if (!data || !dimensions) {
     log.warn("knowledge embeddings: there was nothing to embed");
     return undefined;
@@ -219,6 +246,8 @@ async function runJob(options: EmbedJobOptions): Promise<VectorMatrix | undefine
     const unchanged =
       embedded === 0 && !cache.damaged && cache.files === 1 && cache.entries === firstRow.size && !options.ignoreCache;
     await saving;
+    // The cancellation may have come while the last part file was written: the cache is not this job's to rewrite then.
+    if (aborted()) return cancelled();
     if (!unchanged) {
       const size = dimensions;
       const all = data;

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_CLIENT_TOOLS,
   MAX_TOOL_DESCRIPTION,
-  MAX_TOOL_OUTPUT_CHARS,
+  MAX_TOOL_OUTPUT_BYTES,
   clientToolSpecsFrom,
   parseToolArguments,
   toolErrorText,
@@ -107,12 +107,57 @@ describe("toolOutputText", () => {
     expect(toolOutputText(circular)).toBe("[object Object]");
     expect(toolOutputText(1n)).toBe("1");
   });
+  const MARK = "…[truncated]";
+  const MARK_BYTES = Buffer.byteLength(MARK);
+  const budget = MAX_TOOL_OUTPUT_BYTES - MARK_BYTES;
 
-  it("truncates long output", () => {
-    const text = toolOutputText("x".repeat(MAX_TOOL_OUTPUT_CHARS + 10));
-    expect(text.endsWith("…[truncated]")).toBe(true);
-    expect(text.length).toBe(MAX_TOOL_OUTPUT_CHARS + "…[truncated]".length);
-    expect(toolOutputText("x".repeat(MAX_TOOL_OUTPUT_CHARS))).toHaveLength(MAX_TOOL_OUTPUT_CHARS);
+  it("returns exactly 16 KiB of ASCII untouched and caps one byte more, marker included", () => {
+    expect(MAX_TOOL_OUTPUT_BYTES).toBe(16 * 1024);
+    expect(toolOutputText("x".repeat(MAX_TOOL_OUTPUT_BYTES))).toHaveLength(MAX_TOOL_OUTPUT_BYTES);
+    const cut = toolOutputText("x".repeat(MAX_TOOL_OUTPUT_BYTES + 1));
+    expect(cut).toBe("x".repeat(budget) + MARK);
+    expect(Buffer.byteLength(cut)).toBe(MAX_TOOL_OUTPUT_BYTES);
+    expect(Buffer.byteLength(toolOutputText({ rows: "x".repeat(40_000) }))).toBe(MAX_TOOL_OUTPUT_BYTES);
+  });
+
+  it("caps by bytes, not characters: output of three-byte characters is cut to a third of the count", () => {
+    const exact = "€".repeat(MAX_TOOL_OUTPUT_BYTES / 3);
+    expect(toolOutputText(exact)).toBe(exact);
+    const cut = toolOutputText("€".repeat(MAX_TOOL_OUTPUT_BYTES / 3 + 1));
+    expect(cut).toBe("€".repeat(Math.floor(budget / 3)) + MARK);
+    expect(Buffer.byteLength(cut)).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_BYTES);
+    expect(cut.length).toBeLessThan(MAX_TOOL_OUTPUT_BYTES / 2);
+  });
+
+  it("stays inside the cap and keeps whole characters wherever the boundary falls in mixed output", () => {
+    // One, two, three, four and three bytes per character: every kind of edge is crossed near the cap.
+    const mixed = "aé€😀中".repeat(4000);
+    for (let length = 7550; length < 7566; length++) {
+      const input = mixed.slice(0, length);
+      const output = toolOutputText(input);
+      expect(Buffer.byteLength(output)).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_BYTES);
+      if (Buffer.byteLength(input) <= MAX_TOOL_OUTPUT_BYTES) {
+        expect(output).toBe(input);
+        continue;
+      }
+      const kept = output.slice(0, -MARK.length);
+      expect(output.endsWith(MARK)).toBe(true);
+      expect(kept).toBe(input.slice(0, kept.length));
+      expect(kept.isWellFormed()).toBe(true);
+      // Nothing more would have fitted: the next character breaks the cap.
+      expect(Buffer.byteLength(kept + String.fromCodePoint(input.codePointAt(kept.length)!) + MARK)).toBeGreaterThan(
+        MAX_TOOL_OUTPUT_BYTES
+      );
+    }
+  });
+
+  it("never cuts a character in half", () => {
+    // Three bytes, then four-byte characters: the byte boundary falls inside the 4092nd one.
+    const text = "€" + "😀".repeat(5000);
+    const cut = toolOutputText(text);
+    expect(cut).toBe("€" + "😀".repeat(4091) + MARK);
+    expect(cut.isWellFormed()).toBe(true);
+    expect(Buffer.byteLength(cut)).toBe(3 + 4091 * 4 + MARK_BYTES);
   });
 });
 

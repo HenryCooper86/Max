@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { assistantProfileFrom, setAssistantProfileForTests } from "../server/assistant";
 import { createLogger } from "../server/logger";
 import { createAppDemoProvider, toolRequestFrom } from "../server/providers/app-demo";
+import type { ProviderSessionContext } from "../server/providers/types";
 import type { ToolDefinition, ToolSpec } from "../server/tools";
+import type { ResumeState } from "../server/session-resume";
 
 afterEach(() => setAssistantProfileForTests());
 
@@ -64,7 +66,7 @@ const lookup: ToolDefinition = {
   handler: (args) => ({ status: "shipped", order: args.orderId })
 };
 
-async function setup(tools: ToolDefinition[] = [lookup], toolTimeoutMs?: number) {
+async function setup(tools: ToolDefinition[] = [lookup], toolTimeoutMs?: number, context: ProviderSessionContext = {}) {
   const client = new FakeClient();
   const provider = createAppDemoProvider(client as never, createLogger("test"), undefined, {
     serverTools: () => tools,
@@ -78,7 +80,7 @@ async function setup(tools: ToolDefinition[] = [lookup], toolTimeoutMs?: number)
       language: "en",
       tools: [{ name: "navigate_page", description: "Go to a page" }]
     } as never,
-    { sessionId: "s1" }
+    { sessionId: "s1", ...context }
   );
   return { client, provider };
 }
@@ -153,6 +155,51 @@ describe("app demo provider", () => {
     await provider.stopAudio!();
     await provider.startAudio!();
     expect(client.agentLines().filter((line) => line.startsWith("Hi, I'm"))).toHaveLength(1);
+  });
+
+  it("keeps what was said for a client that reconnects", async () => {
+    const saved: ResumeState[] = [];
+    const { client, provider } = await setup(undefined, undefined, {
+      saveResume: (state) => void saved.push(state)
+    });
+    await provider.startAudio!();
+    await provider.textInput!("hello");
+    await vi.waitFor(() => expect(client.agentLines()).toHaveLength(2));
+    // The greeting, then each turn as it is said.
+    const history = saved.at(-1)!.history;
+    expect(history.map((turn) => turn.speaker)).toEqual(["agent", "user", "agent"]);
+    expect(history[1]).toEqual({ speaker: "user", text: "hello" });
+    expect(history[2]!.text).toBe(client.agentLines().at(-1));
+    await provider.close();
+  });
+
+  it("carries a resumed conversation on without greeting again", async () => {
+    const saved: ResumeState[] = [];
+    const earlier: ResumeState = {
+      history: [
+        { speaker: "user", text: "where is my order" },
+        { speaker: "agent", text: "It shipped on Monday." }
+      ],
+      agent: "billing"
+    };
+    const { client, provider } = await setup(undefined, undefined, {
+      resume: earlier,
+      saveResume: (state) => void saved.push(state)
+    });
+    await provider.startAudio!();
+    expect(client.agentLines()).toEqual([]);
+    await provider.textInput!("thanks");
+    await vi.waitFor(() => expect(client.agentLines()).toHaveLength(1));
+    // The earlier turns and the agent it was with are kept; the new turns follow them.
+    expect(saved.at(-1)).toEqual({
+      ...earlier,
+      history: [
+        ...earlier.history,
+        { speaker: "user", text: "thanks" },
+        { speaker: "agent", text: client.agentLines()[0] }
+      ]
+    });
+    await provider.close();
   });
 
   it("stops sending after close", async () => {

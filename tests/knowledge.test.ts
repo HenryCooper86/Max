@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -143,6 +144,93 @@ describe("loadKnowledge", () => {
     expect(index.sources).toHaveLength(500);
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/500 files/);
+  });
+
+  it("stops walking at the cap and names the first file left out, without opening what follows", async () => {
+    const root = path.join(dir, "capped");
+    const write = (file: string, content: string) => {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), content);
+    };
+    // In name order: a small folder, one that uses up the cap, and one that must not be opened.
+    write("a-first/one.txt", "the opening hours fact");
+    for (let i = 0; i < 600; i++) write(`b-bulk/f${String(i).padStart(4, "0")}.txt`, `bulk fact ${i}`);
+    write("c-after/last.txt", "a fact past the cap");
+    const opened: string[] = [];
+    const opendir = fsp.opendir;
+    const listed = vi.spyOn(fsp, "opendir").mockImplementation(((target: fs.PathLike) => {
+      opened.push(String(target));
+      return opendir(target);
+    }) as never);
+    const { index, problems } = await loadKnowledge(config([root]));
+    listed.mockRestore();
+    expect(opened.map((folder) => path.relative(dir, folder))).toEqual(["capped", "capped/a-first", "capped/b-bulk"]);
+    expect(index.sources).toHaveLength(500);
+    expect(index.sources.at(-1)).toBe("capped/b-bulk/f0498.txt");
+    expect(problems).toEqual([
+      "knowledge is limited to 500 files; the rest were skipped, from capped/b-bulk/f0499.txt on"
+    ]);
+    expect(index.search("past the cap")).toEqual([]);
+  });
+
+  it("uses the first 5,000 entries of a folder in name order, however large the folder, and says so", async () => {
+    const huge = path.join(dir, "huge");
+    fs.mkdirSync(huge);
+    // Twice what one folder may give: the smallest names have to be kept on the way.
+    for (let i = 0; i < 10_010; i++)
+      fs.writeFileSync(path.join(huge, `f${String(i).padStart(5, "0")}.txt`), `fact ${i}`);
+    const { index, problems } = await loadKnowledge(config([huge]));
+    expect(index.sources).toEqual(Array.from({ length: 500 }, (_, i) => `huge/f${String(i).padStart(5, "0")}.txt`));
+    expect(problems).toEqual([
+      "folder huge has more than 5000 entries; the rest were skipped",
+      "knowledge is limited to 500 files; the rest were skipped, from huge/f00500.txt on"
+    ]);
+  });
+
+  it("counts only the files it will load towards the 500", async () => {
+    const root = path.join(dir, "mixed");
+    fs.mkdirSync(root);
+    // In name order: thirty files too large to load, then 520 that load.
+    for (let i = 0; i < 30; i++) {
+      const big = path.join(root, `a-big-${String(i).padStart(2, "0")}.txt`);
+      fs.writeFileSync(big, "x");
+      fs.truncateSync(big, 2 * 1024 * 1024 + 1);
+    }
+    for (let i = 0; i < 520; i++)
+      fs.writeFileSync(path.join(root, `b-small-${String(i).padStart(3, "0")}.txt`), `small fact ${i}`);
+    const { index, problems } = await loadKnowledge(config([root]));
+    // The large ones take no places: all 500 are files that load.
+    expect(index.sources).toHaveLength(500);
+    expect(index.sources.at(-1)).toBe("mixed/b-small-499.txt");
+    expect(problems.filter((problem) => /larger than 2 MiB/.test(problem))).toHaveLength(30);
+    expect(problems.at(-1)).toBe(
+      "knowledge is limited to 500 files; the rest were skipped, from mixed/b-small-500.txt on"
+    );
+  });
+
+  it("stops at the file that uses up the 20 MiB, and does not look at what follows", async () => {
+    const root = path.join(dir, "budget");
+    const fill = path.join(root, "a-fill");
+    fs.mkdirSync(fill, { recursive: true });
+    // Ten files of 2 MiB are the whole budget (sparse, so the test writes almost nothing).
+    for (let i = 0; i < 11; i++) {
+      const file = path.join(fill, `f-${String(i).padStart(2, "0")}.txt`);
+      fs.closeSync(fs.openSync(file, "w"));
+      fs.truncateSync(file, 2 * 1024 * 1024);
+    }
+    fs.mkdirSync(path.join(root, "b-after"));
+    fs.writeFileSync(path.join(root, "b-after", "last.txt"), "a fact that is not reached");
+    const opened: string[] = [];
+    const opendir = fsp.opendir;
+    const listed = vi.spyOn(fsp, "opendir").mockImplementation(((target: fs.PathLike) => {
+      opened.push(String(target));
+      return opendir(target);
+    }) as never);
+    const { index, problems } = await loadKnowledge(config([root]));
+    listed.mockRestore();
+    expect(opened.map((folder) => path.relative(dir, folder))).toEqual(["budget", "budget/a-fill"]);
+    expect(index.sources).toHaveLength(10);
+    expect(problems).toEqual(["knowledge is limited to 20 MiB in total; the rest were skipped"]);
   });
 
   it("never rejects", async () => {

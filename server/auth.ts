@@ -22,8 +22,68 @@ export type AccountUpgradeDecision =
   { ok: true; token: string; user: PublicUser } | { ok: false; code: number; reason: string };
 
 const RATE_WINDOW_MS = 60_000;
-// Per-address timestamps of recent upgrade attempts within the trailing window.
-const rateHits = new Map<string, number[]>();
+/** The most keys one limiter remembers. Beyond it the key seen longest ago is forgotten. */
+const RATE_LIMIT_MAX_ENTRIES = 10_000;
+
+/**
+ * A true sliding-window limiter: at most `limit` attempts per key in any trailing 60 s span (not a fixed
+ * bucket that resets on the minute, which would permit a ~2× burst across the boundary).
+ *
+ * A key keeps its last `limit` attempt times as a ring, so one check costs the same however many attempts
+ * were made. The table holds at most `maxEntries` keys, least recently seen first, and a refused attempt
+ * counts as being seen: when it is full, a new key takes the place of the key that has gone longest without
+ * an attempt. Memory is bounded by the cap and every check is O(1). A table that kept every address it saw
+ * grew with the attack, and was scanned whole on every attempt once it passed 10,000 entries.
+ *
+ * The trade-off is that a forgotten key starts with a fresh allowance. An address that has used up its
+ * attempts can buy them back only by staying quiet while other addresses fill the table, and each time
+ * that costs a whole table of attempts for at most one limit's worth, so it gains nothing over spending
+ * them itself. One that goes on trying is limited for its whole window. A newcomer is never refused for a
+ * full table, which is what keeping every limited address would cost: whoever filled the table could then
+ * lock everybody else out.
+ */
+class AttemptLimiter {
+  private readonly windows = new Map<string, { limit: number; times: number[]; next: number }>();
+
+  constructor(private readonly maxEntries: number) {}
+
+  /** Sees an attempt at `now`. False when `key` is at its limit inside the window; that attempt is not counted. */
+  allows(key: string, now: number, limit: number): boolean {
+    if (limit <= 0) return false;
+    let window = this.windows.get(key);
+    if (window && window.limit === limit) {
+      // A full ring keeps its oldest attempt at `next`. Inside the window, that means the key is at its limit.
+      if (window.times.length >= limit && (window.times[window.next] as number) > now - RATE_WINDOW_MS) {
+        // Still seen: a key that keeps trying must not be the first one forgotten when the table is full.
+        this.windows.delete(key);
+        this.windows.set(key, window);
+        return false;
+      }
+    } else {
+      // A ring is sized for one limit: under another it starts again, rather than miscounting.
+      if (!window && this.windows.size >= this.maxEntries)
+        this.windows.delete(this.windows.keys().next().value as string);
+      window = { limit, times: [], next: 0 };
+    }
+    // Appends until the ring is full. After that `next` is the oldest attempt, which has expired.
+    window.times[window.next] = now;
+    window.next = (window.next + 1) % limit;
+    this.windows.delete(key);
+    this.windows.set(key, window);
+    return true;
+  }
+
+  clear(): void {
+    this.windows.clear();
+  }
+
+  get size(): number {
+    return this.windows.size;
+  }
+}
+
+/** Upgrade attempts per client address within the trailing window. */
+const rateHits = new AttemptLimiter(RATE_LIMIT_MAX_ENTRIES);
 
 /**
  * Compares secrets without leaking prefix information via timing. The length
@@ -106,40 +166,20 @@ export function clientRegionHint(request: IncomingMessage): string | undefined {
 
 /**
  * Sliding-window upgrade-attempt limiter: allows at most `connPerMinute`
- * attempts per address across any trailing 60 s span (not a fixed bucket that
- * resets on the minute, which would permit a ~2× burst across the boundary).
- * Exported for tests.
+ * attempts per address across any trailing 60 s span. Exported for tests.
  */
 export function checkRateLimit(address: string, now = Date.now()): boolean {
-  if (config.connPerMinute <= 0) return true;
-
-  const cutoff = now - RATE_WINDOW_MS;
-  const recent = (rateHits.get(address) ?? []).filter((at) => at > cutoff);
-
-  if (recent.length >= config.connPerMinute) {
-    // Persist the pruned list so a blocked address can't grow memory unbounded.
-    rateHits.set(address, recent);
-    return false;
-  }
-
-  recent.push(now);
-  rateHits.set(address, recent);
-
-  // Opportunistic cleanup so long-running relays don't accumulate dead IPs.
-  if (rateHits.size > 10_000) {
-    for (const [key, value] of rateHits) {
-      const pruned = value.filter((at) => at > cutoff);
-      if (pruned.length === 0) rateHits.delete(key);
-      else rateHits.set(key, pruned);
-    }
-  }
-
-  return true;
+  return config.connPerMinute <= 0 || rateHits.allows(address, now, config.connPerMinute);
 }
 
 /** Test hook: clears rate-limit state between cases. */
 export function resetRateLimit() {
   rateHits.clear();
+}
+
+/** Keys the two limiters remember (for tests and metrics). */
+export function rateLimitEntries(): number {
+  return rateHits.size + authHits.size;
 }
 
 /** The credentials a request presented: `?token=…` and/or a Bearer header. */
@@ -222,8 +262,16 @@ export function testingClearAuthorized(request: IncomingMessage): boolean {
 // an office behind one NAT address) must still be able to sign in to Cloud or
 // change a password, and anonymous token minting must not eat login attempts.
 // The Amap tile proxy counts separately too, and against its own limit.
-export type AuthRateBucket = "relay-auth" | "relay-password" | "cloud-auth" | "token-mint" | "tool-test" | "amap-proxy";
-const authHits = new Map<string, number[]>();
+export type AuthRateBucket =
+  | "relay-auth"
+  | "relay-password"
+  | "cloud-auth"
+  | "token-mint"
+  | "tool-test"
+  | "amap-proxy"
+  | "cloud-pay-notify"
+  | "cloud-topup";
+const authHits = new AttemptLimiter(RATE_LIMIT_MAX_ENTRIES);
 
 /**
  * `limit` is for a bucket that is not login attempts. The Amap proxy passes
@@ -236,23 +284,7 @@ export function checkAuthRateLimit(
   bucket: AuthRateBucket = "relay-auth",
   limit = config.authAttemptsPerMinute
 ): boolean {
-  const key = `${bucket} ${address}`;
-  const cutoff = now - RATE_WINDOW_MS;
-  const recent = (authHits.get(key) ?? []).filter((at) => at > cutoff);
-  if (recent.length >= limit) {
-    authHits.set(key, recent);
-    return false;
-  }
-  recent.push(now);
-  authHits.set(key, recent);
-  if (authHits.size > 10_000) {
-    for (const [entry, value] of authHits) {
-      const pruned = value.filter((at) => at > cutoff);
-      if (pruned.length === 0) authHits.delete(entry);
-      else authHits.set(entry, pruned);
-    }
-  }
-  return true;
+  return authHits.allows(`${bucket} ${address}`, now, limit);
 }
 
 /** Test hook: clears auth rate-limit state between cases. */

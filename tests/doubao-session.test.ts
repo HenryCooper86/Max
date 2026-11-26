@@ -42,8 +42,10 @@ const { MockWebSocket, upstreamInstances } = vi.hoisted(() => {
 
 vi.mock("ws", () => ({ WebSocket: MockWebSocket }));
 
+import { assistantProfileFrom, setAssistantProfileForTests } from "../server/assistant";
 import { createDoubaoProvider } from "../server/providers/doubao";
-import type { SessionStartEvent } from "../server/providers/types";
+import type { ProviderSessionContext, SessionStartEvent } from "../server/providers/types";
+import type { ResumeState } from "../server/session-resume";
 
 // Doubao server-response event codes the provider reacts to during startup.
 // (EventReceive is a non-exported const enum, so mirror the two we need here.)
@@ -58,12 +60,12 @@ function uint32(value: number) {
   return buffer;
 }
 
-/** Builds a minimal Doubao FullServerResponse frame for the given event code. */
-function serverFrame(event: number, sessionId = "") {
+/** Builds a minimal Doubao FullServerResponse frame for the given event code and JSON payload. */
+function serverFrame(event: number, sessionId = "", payload: unknown = {}) {
   const header = Buffer.from([0x11, (MESSAGE_TYPE_FULL_SERVER_RESPONSE << 4) | 0b0100, 0b0001 << 4, 0x00]);
   const session = Buffer.from(sessionId);
-  const payload = Buffer.from("{}");
-  return Buffer.concat([header, uint32(event), uint32(session.length), session, uint32(payload.length), payload]);
+  const body = Buffer.from(JSON.stringify(payload));
+  return Buffer.concat([header, uint32(event), uint32(session.length), session, uint32(body.length), body]);
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -83,6 +85,7 @@ const START_EVENT: SessionStartEvent = {
 
 afterEach(() => {
   upstreamInstances.length = 0;
+  setAssistantProfileForTests();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -416,6 +419,160 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
     expect(upstreamInstances).toHaveLength(2);
 
     vi.useRealTimers();
+    await provider.close();
+  });
+});
+
+describe("createDoubaoProvider — carrying a conversation across a dropped connection", () => {
+  // EventReceive codes of one exchange, mirrored as above.
+  const EVENT_ASR_INFO = 450;
+  const EVENT_ASR_RESPONSE = 451;
+  const EVENT_ASR_ENDED = 459;
+  const EVENT_TTS_SENTENCE_START = 350;
+  const EVENT_CHAT_RESPONSE = 550;
+  const EVENT_CHAT_ENDED = 559;
+  const EVENT_TTS_ENDED = 359;
+  const APP = assistantProfileFrom({ name: "Ava", device: "app" });
+
+  /** The JSON metadata of a request the relay sent upstream. */
+  const metadataOf = (frame: Buffer) => {
+    const payloadAt = 12 + frame.readUInt32BE(8);
+    const length = frame.readUInt32BE(payloadAt);
+    return JSON.parse(frame.subarray(payloadAt + 4, payloadAt + 4 + length).toString()) as {
+      dialog: { system_role: string; dialog_context?: { role: string; text: string; timestamp: number }[] };
+    };
+  };
+
+  /** Opens a session as the relay does, with what a reconnecting client brings. */
+  async function open(context: ProviderSessionContext = {}, start: Partial<SessionStartEvent> = {}, live = true) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false }) as Response)
+    );
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      silentLog
+    );
+    await provider.start({ ...START_EVENT, ...start }, context);
+    const upstream = upstreamInstances[upstreamInstances.length - 1]!;
+    upstream.emit("open");
+    await upstream.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+    if (live) await upstream.emit("message", serverFrame(EVENT_SESSION_STARTED));
+    return { provider, upstream };
+  }
+
+  /** One exchange: the wearer asks, Doubao answers. */
+  async function exchange(
+    upstream: { emit(event: string, ...args: unknown[]): unknown },
+    question: string,
+    answer: string
+  ) {
+    await upstream.emit("message", serverFrame(EVENT_ASR_INFO));
+    await upstream.emit("message", serverFrame(EVENT_ASR_RESPONSE, "", { results: [{ text: question }] }));
+    await upstream.emit("message", serverFrame(EVENT_ASR_ENDED));
+    await upstream.emit("message", serverFrame(EVENT_CHAT_RESPONSE, "", { content: answer }));
+    await upstream.emit("message", serverFrame(EVENT_TTS_SENTENCE_START, "", { content: answer }));
+    await upstream.emit("message", serverFrame(EVENT_CHAT_ENDED));
+    await upstream.emit("message", serverFrame(EVENT_TTS_ENDED));
+  }
+
+  it("gives Doubao the earlier turns of a resumed conversation, and tells it not to greet again", async () => {
+    setAssistantProfileForTests(APP);
+    const { provider, upstream } = await open(
+      {
+        resume: {
+          history: [
+            { speaker: "user", text: "where is my order" },
+            { speaker: "agent", text: "It shipped on Monday." },
+            { speaker: "user", text: "and when will it arrive" }
+          ]
+        }
+      },
+      {},
+      false
+    );
+    const started = metadataOf(upstream.sent.at(-1) as Buffer);
+    // Complete pairs only: the API refuses a context with a question that has no answer.
+    expect(started.dialog.dialog_context).toEqual([
+      { role: "user", text: "where is my order", timestamp: expect.any(Number) },
+      { role: "assistant", text: "It shipped on Monday.", timestamp: expect.any(Number) }
+    ]);
+    expect(started.dialog.system_role).toContain("不要重新自我介绍或重新问候");
+    await provider.close();
+  });
+
+  it("keeps the turns of a software assistant for a client that reconnects, and none of a wearable's", async () => {
+    const saved: ResumeState[] = [];
+    const saveResume = (state: ResumeState) => void saved.push(state);
+    // The device spots the wake word itself, so whatever is said is addressed.
+    const start: Partial<SessionStartEvent> = { audio: { wakeWord: true } };
+
+    setAssistantProfileForTests(APP);
+    const app = await open({ saveResume }, start);
+    await app.provider.startAudio();
+    await exchange(app.upstream, "我的订单呢", "已经发货了。");
+    expect(saved.map((state) => state.history)).toEqual([
+      [{ speaker: "user", text: "我的订单呢" }],
+      [
+        { speaker: "user", text: "我的订单呢" },
+        { speaker: "agent", text: "已经发货了。" }
+      ]
+    ]);
+    await app.provider.close();
+
+    setAssistantProfileForTests();
+    saved.length = 0;
+    const wearable = await open({ saveResume }, start);
+    await wearable.provider.startAudio();
+    await exchange(wearable.upstream, "我的订单呢", "已经发货了。");
+    expect(saved).toEqual([]);
+    await wearable.provider.close();
+  });
+
+  it("starts a wearable's session as a new conversation, whatever turns the resume id brings", async () => {
+    const { provider, upstream } = await open(
+      {
+        resume: {
+          history: [
+            { speaker: "user", text: "where is my order" },
+            { speaker: "agent", text: "It shipped." }
+          ]
+        }
+      },
+      {},
+      false
+    );
+    const started = metadataOf(upstream.sent.at(-1) as Buffer);
+    expect(started.dialog).not.toHaveProperty("dialog_context");
+    expect(started.dialog.system_role).not.toContain("会话恢复");
+    await provider.close();
+  });
+});
+
+describe("createDoubaoProvider — hearing statuses", () => {
+  it("marks one of the relay's own truncations with cause relay, and one of the wearer's voice without it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false }) as Response)
+    );
+    const sent: Record<string, unknown>[] = [];
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: (data: string) => void sent.push(JSON.parse(data)), close: vi.fn() } as never,
+      silentLog
+    );
+    await provider.start({ ...START_EVENT, platform: "web" });
+    const upstream = upstreamInstances[0]!;
+    upstream.emit("open");
+    await upstream.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+    await upstream.emit("message", serverFrame(EVENT_SESSION_STARTED));
+    // Doubao's own detector heard the wearer.
+    await upstream.emit("message", serverFrame(450));
+    // The relay cuts the reply under way to speak a turn prompt.
+    provider.speakNavPrompt!({ text: "前方两百米右转。", interrupt: true } as never);
+    expect(sent.filter((event) => event.type === "status" && event.state === "hearing")).toEqual([
+      { type: "status", state: "hearing", detail: "豆包检测到骑手语音" },
+      { type: "status", state: "hearing", detail: "MAX 正在播报转向提示", cause: "relay" }
+    ]);
     await provider.close();
   });
 });

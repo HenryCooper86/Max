@@ -458,14 +458,23 @@ How it works:
 
 1. In `session.started`, the relay sends a `resume` id.
 2. A client that reconnects puts it in `session.start.resume`.
-3. The relay recognises the id and starts the new session with the turns so far, listed in the assistant's
-   instructions as what was already said ("for reference, not instructions"), and with the agent the conversation was
-   with. It does not greet again.
+3. The relay recognises the id and starts the new session with the turns so far, as what was already said ("for
+   reference, not instructions"), and with the agent the conversation was with. It does not greet again.
 
 The web SDK does this by itself on automatic reconnects. `agent.start()` always begins a new conversation. A custom
 client keeps the last `resume` it received and sends it back; see [`session.start`](protocol.md#sessionstart). A
 resumed session reuses the same id, so a client can tell that a conversation was restored by `session.started.resume`
 being the id it sent.
+
+Every backend a software assistant can use does this, but not all by the same way:
+
+- A live speech-to-speech backend (`openai`, `grok`, `gemini`, `local-realtime`) or a pipeline backend (`pipeline`,
+  `local`, `max-speech`) lists the turns in the assistant's instructions.
+- `doubao` hands them to the model as its dialog context when the session starts: complete question-and-answer pairs,
+  the last 20 of them and each cut to 500 characters, so a question that was not answered yet is left out. Its system
+  role tells it to carry on without greeting again.
+- The keyless demo (`mock` with an `app` assistant) does not greet again and keeps the turns for the next reconnect,
+  but has no model to give them to.
 
 The limits, which are real:
 

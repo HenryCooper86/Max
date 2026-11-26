@@ -9,6 +9,7 @@ import type { ToolDefinition, ToolSpec } from "../tools";
 import { serverTools as installedServerTools } from "../tools/registry";
 import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
 import { createVad } from "./live/pipeline";
+import { createTurnHistory } from "./live/session";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent } from "./types";
 
 /**
@@ -18,6 +19,8 @@ import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionS
  *
  * - Speech is detected (the turn-taking, the status changes, the barge-in
  *   cues all happen), but there is no speech recognition, and it says so.
+ * - A client that reconnects with `session.start.resume` carries the conversation on: what was said is kept
+ *   for it, and there is no second greeting.
  * - Typed messages (`text.input`) get an answer.
  * - Tools really run. Type a tool's name — "get_order_status" or "get order
  *   status" — optionally followed by JSON arguments, and the demo calls it
@@ -68,6 +71,8 @@ export function createAppDemoProvider(
   let tools: ToolBroker | undefined;
   let audioActive = false;
   let greeted = false;
+  /** What was said so far, kept for a client that reconnects (server/session-resume.ts). */
+  let turns = createTurnHistory();
   let closed = false;
   let callCounter = 0;
 
@@ -94,6 +99,7 @@ export function createAppDemoProvider(
   }
 
   function say(text: string): void {
+    turns.remember("agent", text);
     send(transcriptEvent(createTranscriptDelivery(), "agent", text, { final: true, useBrowserSpeech: true }));
   }
 
@@ -124,6 +130,7 @@ export function createAppDemoProvider(
   });
 
   async function answer(text: string): Promise<void> {
+    turns.remember("user", text);
     send(transcriptEvent(createTranscriptDelivery(), "rider", text, { final: true }));
     status("thinking", t(`${assistant().name} 正在思考`, `${assistant().name} is thinking`));
     const request = tools ? toolRequestFrom(text, tools.specs()) : undefined;
@@ -175,6 +182,9 @@ export function createAppDemoProvider(
   return {
     async start(event: SessionStartEvent, context?: ProviderSessionContext) {
       language = sessionLanguage(event.language, assistant().languages);
+      turns = createTurnHistory(context);
+      // A conversation that is carried on was greeted already.
+      greeted = (context?.resume?.history.length ?? 0) > 0;
       tools = createToolBroker({
         sessionId: context?.sessionId ?? "session",
         serverTools: options.serverTools ?? installedServerTools,

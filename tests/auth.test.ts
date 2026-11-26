@@ -9,6 +9,7 @@ import {
   checkAuthRateLimit,
   checkRateLimit,
   clientAddress,
+  rateLimitEntries,
   resetAuthRateLimit,
   resetRateLimit,
   testingClearAuthorized,
@@ -199,6 +200,55 @@ describe("authorizeUpgrade", () => {
     // window would have reset the whole bucket at t+60s and allowed a fresh burst.
     expect(checkRateLimit("a", t + 61_000)).toBe(true); // only the t hit expired
     expect(checkRateLimit("a", t + 62_000)).toBe(false); // hits @ +30s/+40s/+61s still count
+  });
+
+  it("remembers at most 10,000 addresses and forgets the one seen longest ago", () => {
+    config.connPerMinute = 3;
+    const now = 5_000_000;
+    const address = (index: number) => `10.${Math.floor(index / 256)}.${index % 256}.1`;
+    for (let index = 0; index < 10_000; index += 1) expect(checkRateLimit(address(index), now + index)).toBe(true);
+    expect(rateLimitEntries()).toBe(10_000);
+    // A newcomer is let in and the table does not grow: the first address, idle the longest, makes room.
+    expect(checkRateLimit("10.99.0.1", now + 20_000)).toBe(true);
+    expect(rateLimitEntries()).toBe(10_000);
+    expect(checkRateLimit(address(0), now + 20_000)).toBe(true);
+  });
+
+  it("keeps an address at its limit while newer addresses fill the table around it", () => {
+    config.connPerMinute = 2;
+    const now = 5_000_000;
+    const address = (index: number) => `10.${Math.floor(index / 256)}.${index % 256}.2`;
+    expect(checkRateLimit(address(0), now)).toBe(true);
+    expect(checkRateLimit(address(0), now + 1)).toBe(true);
+    expect(checkRateLimit(address(0), now + 2)).toBe(false);
+    // This one tries no more. The addresses that come later fill the table behind it without pushing it out.
+    for (let index = 1; index < 10_000; index += 1) expect(checkRateLimit(address(index), now + 3 + index)).toBe(true);
+    expect(rateLimitEntries()).toBe(10_000);
+    // Probing it again would count as being seen, so its turn to be forgotten is shown by the newcomer below.
+    // The login limiter has a table of its own, with the same cap.
+    expect(checkAuthRateLimit("192.0.2.1", now)).toBe(true);
+    expect(rateLimitEntries()).toBe(10_001);
+    // A whole table of addresses seen later, and the one that stayed quiet is the first to be forgotten.
+    expect(checkRateLimit("10.200.0.1", now + 40_000)).toBe(true);
+    expect(checkRateLimit(address(0), now + 40_000)).toBe(true);
+  });
+
+  it("forgets an address that went on trying after it was limited only after every other one", () => {
+    config.connPerMinute = 2;
+    const now = 5_000_000;
+    const address = (index: number) => `10.${Math.floor(index / 256)}.${index % 256}.3`;
+    // Limited at once, and hammering from then on.
+    expect(checkRateLimit(address(0), now)).toBe(true);
+    expect(checkRateLimit(address(0), now + 1)).toBe(true);
+    for (let index = 1; index < 10_000; index += 1) {
+      expect(checkRateLimit(address(index), now + 2 + index)).toBe(true);
+      expect(checkRateLimit(address(0), now + 3 + index)).toBe(false);
+    }
+    // A newcomer makes room by forgetting the address seen longest ago, which is not the one still trying.
+    expect(checkRateLimit("10.99.0.1", now + 30_000)).toBe(true);
+    expect(rateLimitEntries()).toBe(10_000);
+    expect(checkRateLimit(address(0), now + 30_000)).toBe(false);
+    expect(checkRateLimit(address(1), now + 30_000)).toBe(true);
   });
 });
 

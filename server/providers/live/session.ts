@@ -159,6 +159,24 @@ const VIDEO_ON_NOTES: readonly [string, string] = [
 ];
 const VIDEO_OFF_NOTES: readonly [string, string] = ["[用户关闭了实时画面]", "[the user turned the live video off]"];
 const MAX_HISTORY_TURN_CHARS = 600;
+
+/**
+ * The turns a provider keeps for a client that reconnects, for one that has no other state to save: what
+ * `resume` brought, then each turn as it is said. Nothing is kept without a context that can save it.
+ */
+export function createTurnHistory(context?: ProviderSessionContext) {
+  let history: HistoryTurn[] = (context?.resume?.history ?? []).slice(-MAX_HISTORY_TURNS);
+  return {
+    remember(speaker: HistoryTurn["speaker"], text: string): void {
+      const clean = text.trim();
+      if (!clean || !context?.saveResume) return;
+      history = [...history, { speaker, text: clean.slice(0, MAX_HISTORY_TURN_CHARS) }].slice(-MAX_HISTORY_TURNS);
+      // Only the turns are this provider's to write. The agent, collected values and the start stay as they are.
+      context.saveResume({ ...context.resume, history });
+    }
+  };
+}
+
 // How long an `end_session` waits for the model's goodbye before ending anyway.
 const END_GRACE_MS = 8_000;
 /** How long a goodbye waits for the reply it cut short to stop. */
@@ -620,8 +638,10 @@ export function createLiveProvider(
     client.send(encoded);
   }
 
-  function status(state: string, detail: string): void {
-    send({ type: "status", state, detail });
+  /** `cause` is set when the relay itself cut the reply, not the wearer's voice: a client that confirms
+   *  a barge-in against its own microphone can then drop buffered speech without waiting for it. */
+  function status(state: string, detail: string, cause?: "relay"): void {
+    send({ type: "status", state, detail, ...(cause ? { cause } : {}) });
   }
 
   /** Picks the status wording for this session: Chinese for the stock
@@ -1610,7 +1630,7 @@ export function createLiveProvider(
     dropHeld();
     engine?.cancel();
     // "hearing" is the client's cue to stop playing buffered assistant audio.
-    status("hearing", t(`${me().name} 正在播报操作结果`, `${me().name} is reporting the result`));
+    status("hearing", t(`${me().name} 正在播报操作结果`, `${me().name} is reporting the result`), "relay");
   }
 
   // ---- Guardrails -----------------------------------------------------------
@@ -1684,7 +1704,7 @@ export function createLiveProvider(
     // A line of the relay's own that is being said is let finish.
     if (!heard && !(responseActive && replyForced)) {
       // "hearing" is the client's cue to drop the speech it has not played yet.
-      status("hearing", t("回答已停止", "The answer was stopped"));
+      status("hearing", t("回答已停止", "The answer was stopped"), "relay");
       if (replacing && replyText) send(transcriptEvent(delivery, "agent", text));
     }
     engine?.addContext?.(
@@ -2104,7 +2124,7 @@ export function createLiveProvider(
       clearGateTimer();
       dropHeld();
       engine?.cancel();
-      status("hearing", t("收到文字消息", "Got your message"));
+      status("hearing", t("收到文字消息", "Got your message"), "relay");
     }
     const at = now();
     riderText = text;

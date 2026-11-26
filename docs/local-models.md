@@ -169,6 +169,11 @@ third-party servers listed later; with Max Speech you set the speech stages to `
 `LOCAL_BASE_URL` sets all three stages at once (a single gateway such as LocalAI). `LOCAL_API_KEY` or
 `LOCAL_<STAGE>_API_KEY` adds a bearer token for servers that want one.
 
+A chat or speech server that stops answering does not hold the reply open: `LOCAL_FIRST_BYTE_MS` (default 60000, room
+for a cold model load) bounds the wait for the first byte and `LOCAL_STALL_MS` (15000) the gap between bytes, after which
+the turn ends with an error status. `0` turns a deadline off; see [voice backends](backends.md) for the per-stage
+variables.
+
 `LOCAL_LLM_REASONING_EFFORT` defaults to `none`, so a thinking model such as `qwen3:8b` starts speaking without a hidden
 reasoning step. On an M5 Max this cut the median time from the end of speech to the first reply audio from 3.75 s to
 about 0.6 s. Set it to `default` to leave the model's thinking on. A server or model that refuses the field is retried

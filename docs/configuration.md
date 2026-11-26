@@ -160,13 +160,14 @@ The most used ones. `.env.example` documents all of them, including each backend
 
 ### Voice backend
 
-| Variable                                                               | Default | What it does                                                                                                            |
-| ---------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `VOICE_PROVIDER`                                                       | `mock`  | The default backend: `mock`, `openai`, `gemini`, `grok`, `doubao`, `pipeline`, `local`, `local-realtime`, `max-speech`. |
-| `VOICE_PROVIDER_SWITCHING`                                             | `on`    | `off` pins every session to the default. Otherwise a client may choose any backend that is set up.                      |
-| `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `DOUBAO_API_KEY`, … |         | Each backend's credentials. See [voice backends](backends.md).                                                          |
-| `PIPELINE_LLM_IMAGES`                                                  | `off`   | `on` lets users show the assistant pictures on the `pipeline` backend. Set it only for a chat model that can see them.  |
-| `LOCAL_LLM_IMAGES`                                                     | `off`   | The same for the `local` and `max-speech` backends, which share `LOCAL_LLM_*`. See [pictures](backends.md#pictures).    |
+| Variable                                                               | Default          | What it does                                                                                                                                                                                                                                       |
+| ---------------------------------------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VOICE_PROVIDER`                                                       | `mock`           | The default backend: `mock`, `openai`, `gemini`, `grok`, `doubao`, `pipeline`, `local`, `local-realtime`, `max-speech`.                                                                                                                            |
+| `VOICE_PROVIDER_SWITCHING`                                             | `on`             | `off` pins every session to the default. Otherwise a client may choose any backend that is set up.                                                                                                                                                 |
+| `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `DOUBAO_API_KEY`, … |                  | Each backend's credentials. See [voice backends](backends.md).                                                                                                                                                                                     |
+| `PIPELINE_LLM_IMAGES`                                                  | `off`            | `on` lets users show the assistant pictures on the `pipeline` backend. Set it only for a chat model that can see them.                                                                                                                             |
+| `LOCAL_LLM_IMAGES`                                                     | `off`            | The same for the `local` and `max-speech` backends, which share `LOCAL_LLM_*`. See [pictures](backends.md#pictures).                                                                                                                               |
+| `PIPELINE_FIRST_BYTE_MS`, `PIPELINE_STALL_MS`                          | `30000`, `15000` | How long the `pipeline` backend's chat model and speech server may each take to start answering, and to stall, before the reply is ended with an error. `LOCAL_*` for the `local` backend, `60000` to start. See [pipeline](backends.md#pipeline). |
 
 ### Security and access
 

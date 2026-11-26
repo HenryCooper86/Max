@@ -13,8 +13,9 @@ import { createRealtimeEngine, grokDialect, openAiDialect } from "../server/prov
 import {
   createPipelineEngine,
   createVad,
+  localPipelineSettings,
   pipelineConfigured,
-  type PipelineSettings
+  pipelineSettings
 } from "../server/providers/live/pipeline";
 
 // Each engine is exercised against a scripted upstream: what it sends must
@@ -741,5 +742,95 @@ describe("Whisper pipeline engine", () => {
       ["error", "Speech-to-text HTTP 401 — check the API key: bad key"],
       ["rider", "", true]
     ]);
+  });
+
+  it("takes its deadlines from the environment, for one stage or for both", () => {
+    vi.stubEnv("PIPELINE_FIRST_BYTE_MS", "5000");
+    vi.stubEnv("PIPELINE_TTS_STALL_MS", "0");
+    vi.stubEnv("PIPELINE_LLM_STALL_MS", "soon");
+    try {
+      expect(pipelineSettings().llm.deadlines).toEqual({ firstChunkMs: 5_000, stallMs: 15_000 });
+      expect(pipelineSettings().tts.deadlines).toEqual({ firstChunkMs: 5_000, stallMs: 0 });
+      // A local model may first have to be loaded into memory, so it starts with twice the time.
+      expect(localPipelineSettings().llm.deadlines).toEqual({ firstChunkMs: 60_000, stallMs: 15_000 });
+      vi.stubEnv("LOCAL_LLM_FIRST_BYTE_MS", "120000");
+      expect(localPipelineSettings().llm.deadlines).toEqual({ firstChunkMs: 120_000, stallMs: 15_000 });
+      expect(localPipelineSettings().tts.deadlines).toEqual({ firstChunkMs: 60_000, stallMs: 15_000 });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("ends a reply whose speech server never answers, instead of leaving it open", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/chat/completions")) return Promise.resolve(sse(["One. "]));
+        // As with fetch, the head never comes and the request is rejected by its own abort.
+        return new Promise<Response>((_resolve, reject) => {
+          init!.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+            once: true
+          });
+        });
+      });
+      const { log: seen, events } = recorder();
+      const engine = createPipelineEngine(
+        log,
+        { ...settings, tts: { ...settings.tts, deadlines: { firstChunkMs: 2_000, stallMs: 1_000 } } },
+        request as never,
+        { endSilenceMs: 200 }
+      );
+      await engine.connect(CONFIG, events);
+      engine.sendText!("hello");
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(seen).toEqual([["response"], ["text", "One. "]]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(seen).toEqual([
+        ["response"],
+        ["text", "One. "],
+        ["error", "Text-to-speech sent nothing for 2 seconds"],
+        ["done", false]
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ends a reply whose speech answer starts and then stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/chat/completions")) return Promise.resolve(sse(["One. "]));
+        // One piece of audio and then silence. Like a fetch body, the stream fails as soon as it is aborted.
+        const signal = init!.signal!;
+        const audio = new ReadableStream<Uint8Array>({
+          start(stream) {
+            stream.enqueue(new Uint8Array(480));
+            signal.addEventListener("abort", () => stream.error(new DOMException("aborted", "AbortError")), {
+              once: true
+            });
+          }
+        });
+        return Promise.resolve(new Response(audio, { status: 200 }));
+      });
+      const { log: seen, events } = recorder();
+      const engine = createPipelineEngine(
+        log,
+        { ...settings, tts: { ...settings.tts, deadlines: { firstChunkMs: 2_000, stallMs: 1_000 } } },
+        request as never,
+        { endSilenceMs: 200 }
+      );
+      await engine.connect(CONFIG, events);
+      engine.sendText!("hello");
+      await vi.advanceTimersByTimeAsync(999);
+      expect(seen).toEqual([["response"], ["text", "One. "]]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(seen.slice(-2)).toEqual([
+        ["error", "Text-to-speech fell silent for 1 second"],
+        ["done", false]
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

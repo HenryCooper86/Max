@@ -307,6 +307,21 @@ describe("live voice session", () => {
     expect(client.audio).toHaveLength(1);
   });
 
+  it("marks a hearing status of a reply it cut itself with cause relay, and the wearer's voice without it", async () => {
+    const engine = Object.assign(new FakeEngine("manual-capable"), { sendText: vi.fn() });
+    const { client, provider } = await open("manual-capable", { wakeWord: false, engine });
+    engine.events.onSpeechStarted();
+    engine.events.onRiderTranscript("讲个故事", true);
+    engine.events.onResponseStarted();
+    engine.events.onAgentAudio(Buffer.alloc(960, 1));
+    // A typed turn cuts the reply under way: the relay's doing, not the wearer's voice.
+    await provider.textInput!("别讲了");
+    const hearing = client.of("status").filter((event) => event.state === "hearing");
+    expect(hearing).toHaveLength(2);
+    expect(hearing[0]).not.toHaveProperty("cause");
+    expect(hearing[1]).toMatchObject({ cause: "relay" });
+  });
+
   it("lets the client speak a reply that arrived as text only", async () => {
     const { client, engine, ttsFallback } = await open("manual-only", { wakeWord: false });
     engine().events.onRiderTranscript("hello", true);

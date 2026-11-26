@@ -11,8 +11,10 @@ const TOOL_NAME = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 export const MAX_TOOL_DESCRIPTION = 1024;
 const MAX_TOOL_PARAMETERS_BYTES = 8 * 1024;
 export const MAX_CLIENT_TOOLS = 32;
-/** Tool output reaching the model is capped: a whole web page would drown the reply. */
-export const MAX_TOOL_OUTPUT_CHARS = 16 * 1024;
+/** Tool output reaching the model is capped: a whole web page would drown the reply. The cap is on
+ *  bytes as they are sent (UTF-8) and includes the marker that says the output was cut. */
+export const MAX_TOOL_OUTPUT_BYTES = 16 * 1024;
+const TRUNCATED_MARK = "…[truncated]";
 
 const EMPTY_PARAMETERS: ToolParameters = { type: "object", properties: {} };
 
@@ -80,7 +82,25 @@ export function toolOutputText(output: unknown): string {
       text = String(output);
     }
   }
-  return text.length > MAX_TOOL_OUTPUT_CHARS ? `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}…[truncated]` : text;
+  // One UTF-16 unit is at most three bytes, so this settles most outputs without measuring them.
+  if (text.length * 3 <= MAX_TOOL_OUTPUT_BYTES || Buffer.byteLength(text) <= MAX_TOOL_OUTPUT_BYTES) return text;
+  return cutToBytes(text, MAX_TOOL_OUTPUT_BYTES - Buffer.byteLength(TRUNCATED_MARK)) + TRUNCATED_MARK;
+}
+
+/** The start of `text` that fits in `bytes` as UTF-8, ending on a whole character. */
+function cutToBytes(text: string, bytes: number): string {
+  let cut = 0;
+  let used = 0;
+  while (cut < text.length) {
+    const code = text.charCodeAt(cut);
+    // A surrogate pair is one character of four bytes. A lone surrogate is sent as U+FFFD: three.
+    const pair = code >= 0xd800 && code <= 0xdbff ? text.charCodeAt(cut + 1) - 0xdc00 : NaN;
+    const size = code < 0x80 ? 1 : code < 0x800 ? 2 : pair >= 0 && pair <= 0x3ff ? 4 : 3;
+    if (used + size > bytes) break;
+    used += size;
+    cut += size === 4 ? 2 : 1;
+  }
+  return text.slice(0, cut);
 }
 
 /** The result the model sees when a tool failed. */

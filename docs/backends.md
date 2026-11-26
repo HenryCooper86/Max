@@ -161,6 +161,9 @@ No account, no key, no cost. Use it to build and test your integration.
   really runs your tools. Type `get_order_status {"orderId":"A-1042"}` (a tool name, optionally followed by JSON
   arguments) and it calls the tool the way a live model would. It cannot recognise speech, and says so.
 - Replies are text with `useBrowserSpeech: true`, so the browser speaks them.
+- A client that reconnects with `session.start.resume` carries the conversation on: the demo does not greet again,
+  and keeps what is said for the next reconnect. See
+  [Resuming](conversations.md#carrying-a-conversation-across-a-dropped-connection).
 
 ### doubao
 
@@ -182,6 +185,10 @@ DOUBAO_AGENT_WS_URL=wss://openspeech.bytedance.com/api/v3/realtime/dialogue
 
 Doubao has more tuning variables (speech rate, loudness, timeouts). They are listed in `.env.example`. Doubao cannot
 call tools and does not accept typed input.
+
+A conversation that is [resumed](conversations.md#carrying-a-conversation-across-a-dropped-connection) gives Doubao
+the turns so far as its dialog context, as complete question-and-answer pairs, and a note in its system role to carry
+on without greeting again. This is for a software assistant (`device: app`): a wearable has its own session memory.
 
 ### openai
 
@@ -281,6 +288,18 @@ A key is not required for endpoints on `localhost`, `127.0.0.1` or a `.local` na
 
 The chat step runs tool calls in up to four rounds per turn. A typed message replaces the transcribed turn.
 
+Every request to the chat model and to the text-to-speech server has two deadlines. A reply is ended with an error,
+not left open for ever, when the first byte of an answer does not arrive in time or when the bytes stop coming. The
+wearer sees a `status` event with state `degraded` that says which it was.
+
+| Setting                                                  | Default | What it does                                                             |
+| -------------------------------------------------------- | ------- | ------------------------------------------------------------------------ |
+| `PIPELINE_FIRST_BYTE_MS`                                 | `30000` | Time from a request to the first byte of its answer.                     |
+| `PIPELINE_STALL_MS`                                      | `15000` | Longest silence between two bytes of an answer.                          |
+| `PIPELINE_LLM_FIRST_BYTE_MS`, `PIPELINE_TTS_STALL_MS`, … |         | The same for one step: `LLM` is the chat model, `TTS` the speech server. |
+
+`0` turns a deadline off. A model that thinks before it writes needs a longer time to first byte.
+
 ### local
 
 The pipeline on open-weight models you host: Whisper-class speech-to-text, an Ollama chat model and Kokoro speech.
@@ -301,6 +320,10 @@ LOCAL_VOICE=on
 
 Tool calling needs a chat model that supports it. Small local models are less reliable at choosing tools and filling
 arguments than hosted ones.
+
+The chat model and the speech server have the [same deadlines](#pipeline) as `pipeline`'s, read from `LOCAL_*`:
+`LOCAL_FIRST_BYTE_MS` defaults to `60000`, because a local model may first have to be loaded into memory, and
+`LOCAL_STALL_MS` to `15000`. The `max-speech` backend uses the chat model's.
 
 To let users show the assistant pictures, set `LOCAL_LLM_IMAGES=on` and use a multimodal chat model such as
 `gemma3:4b`. See [Pictures](#pictures).

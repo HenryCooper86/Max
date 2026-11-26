@@ -39,9 +39,10 @@ Every tool has three parts the model reads:
 }
 ```
 
-A tool returns any JSON value or text. The model receives it as the tool's result, capped at 16 KiB. To report a
-failure, throw (code tools), answer with a non-2xx status (webhooks) or return `error` (client tools). The model is
-told the tool failed and why, and says so instead of guessing.
+A tool returns any JSON value or text. The model receives it as the tool's result, capped at 16 KiB of UTF-8 with
+the `…[truncated]` marker included, and never in the middle of a character. To report a failure, throw (code tools),
+answer with a non-2xx status (webhooks) or return `error` (client tools). The model is told the tool failed and why,
+and says so instead of guessing.
 
 Server tools win over client tools with the same name, and a declaration that is malformed is skipped with a warning
 in the relay's log, so one broken tool never takes the others down.
@@ -463,8 +464,11 @@ Give `files`, `text` or both. A value outside a range is clamped to it.
 
 **What is read.** Files ending in `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.json` or `.csv`. A folder is read
 including its sub-folders down to four levels, skipping names that start with a dot, `node_modules` and symbolic links.
-At most 500 files, 2 MiB each and 20 MiB together. A file that is too large, unreadable or of another type is skipped with
-a line in the relay's startup log, and the rest load. The index is built in memory when the relay starts, so restart it
+At most 500 files that will load, the first in name order, 2 MiB each and 20 MiB together. A file that is too large
+or cannot be read takes no place and is named in the relay's startup log. The walk stops at the 500th file, or at the
+first file that does not fit in the 20 MiB, without reading the rest of the tree, and the log says so. A folder with
+more than 5,000 entries gives its first 5,000 in name order, and the log says so. A file of another type is skipped.
+The index is built in memory when the relay starts, so restart it
 after changing a file. If nothing could be indexed, the assistant has no `search_knowledge` tool and the relay says so.
 The 20 MiB limit decides how many passages you can reach: at the default `chunkChars` of 900 it is about 22,000 passages,
 and at 200 it is about 100,000. A CSV file gives one passage per row, so it can give more.
@@ -516,6 +520,8 @@ Ollama (`http://localhost:11434/v1`), which needs no key.
 
 - The relay embeds the passages in the background after it starts, so startup does not wait. Until the vectors are
   ready, and if embedding fails, search stays on keywords. A failure is a warning in the log, not an error.
+- Loading the tools again (a Studio save) or stopping the relay cancels the job that is under way. From then on it
+  makes no request and writes nothing more to the cache; what it had saved stays for the next start.
 - Passages go to the endpoint in batches of 64, two requests at a time. A batch that fails with a timeout, a network
   error, a 429 or a 5xx, a reply that is not JSON, or a reply with the wrong number of vectors is tried again after 1, 2
   and 4 seconds. If a 429 or 503 carries a `Retry-After` of a number of seconds, the relay waits that long instead, at most

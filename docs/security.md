@@ -125,6 +125,15 @@ remains the control for them. Never treat the origin as authentication.
 relay login and registration, relay password change, Max Cloud login and sign-up, anonymous token minting on an open
 relay, and Max Cloud tool tests.
 
+Both limiters are true sliding windows, and each remembers at most 10,000 addresses. When a table is full, a new
+address takes the place of the one that has gone longest without an attempt, refused attempts counting as attempts:
+an address that keeps trying after it was limited is the last to be forgotten. Memory is bounded by that, and a check
+costs the same however many addresses have been seen. The trade-off is that a forgotten address starts with a fresh
+count: one that has used up its attempts can win them back only by staying quiet while 10,000 other addresses appear,
+which costs a whole table of attempts for one limit's worth and gains nothing over spending them itself. A newcomer is
+never refused because a table is full, which is what keeping every limited address would have cost: whoever filled the
+table could then lock everybody out. Being forgotten only ever loosens a limit; nobody is blocked who was not already.
+
 Behind a reverse proxy, set `RELAY_TRUST_PROXY=on` and `RELAY_TRUSTED_PROXY_HOPS` to the number of proxies. Otherwise every
 client shares the proxy's address and the per-IP limit becomes a global one. Set it only when a proxy you control
 overwrites `X-Forwarded-For`: with the setting on and no proxy, a client can forge its own address. The relay warns at
@@ -187,7 +196,8 @@ If you only embed the SDK, you do not need accounts: use the relay token and ses
 - Tool names must match `^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$`. A client may declare at most 32 tools, each with a description
   of at most 1024 characters and a parameter schema of at most 8 KiB.
 - A relay-side tool wins over a client tool with the same name, so a page cannot shadow your server tools.
-- Output returned to the model is capped at 16 KiB. Webhook responses larger than 256 KiB fail the call.
+- Output returned to the model is capped at 16 KiB of UTF-8, truncation marker included. Webhook responses larger than
+  256 KiB fail the call.
 - Every call ends with exactly one result for the model, whatever happens: error, hang, closed session. A client tool must
   answer within 15 seconds.
 

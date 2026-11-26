@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -307,6 +308,110 @@ describe("a start that is interrupted", () => {
     const full = await run(fakeEndpoint(), texts, { cacheDir: undefined }).done;
     expect(matrix!.data).toEqual(full!.data);
     expect(fs.readdirSync(dir)).toEqual(["vectors.bin"]);
+  });
+});
+
+describe("a job that is cancelled", () => {
+  /** Answers `answers` requests, then holds the next one until its request is aborted, as fetch would. */
+  const holding = (answers: number) => {
+    const base = fakeEndpoint();
+    const held: AbortSignal[] = [];
+    const request = (async (url: string, init: RequestInit) => {
+      if (base.inputs.length < answers) return base.request(url as never, init);
+      const { promise, reject } = Promise.withResolvers<Response>();
+      const signal = init.signal!;
+      held.push(signal);
+      signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      return promise;
+    }) as unknown as typeof fetch;
+    return { request, held, inputs: base.inputs };
+  };
+
+  it("stops in the middle, writes nothing more to the cache and gives no result", async () => {
+    const endpoint = holding(2);
+    const controller = new AbortController();
+    const { done, log } = run(endpoint, passages(20), { saveEvery: 4, concurrency: 1, signal: controller.signal });
+    await vi.waitFor(() => expect(endpoint.held).toHaveLength(1));
+    controller.abort();
+    expect(await done).toBeUndefined();
+    // What was saved before is kept. The held batch and the rest are neither embedded nor saved, and the
+    // job has ended, so nothing is written after this.
+    const kept = fs.readdirSync(dir).sort();
+    expect(kept.filter((name) => name.startsWith("part-"))).toHaveLength(2);
+    expect(kept).not.toContain("vectors.bin");
+    expect(endpoint.inputs).toHaveLength(2);
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("stopped after 8 of 20"));
+  });
+
+  it("writes no vectors.bin when cancelled after the endpoint's last reply", async () => {
+    const controller = new AbortController();
+    const base = fakeEndpoint();
+    let replies = 0;
+    const endpoint = {
+      ...base,
+      request: (async (url: string, init: RequestInit) => {
+        const response = await base.request(url as never, init);
+        // The last reply is in: the job is replaced before it gets to compact the cache.
+        if (++replies === 2) controller.abort();
+        return response;
+      }) as unknown as typeof fetch
+    } as Fake;
+    const { done, log } = run(endpoint, passages(2), { batchSize: 1, signal: controller.signal });
+    expect(await done).toBeUndefined();
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("stopped after 2 of 2"));
+  });
+
+  it("does not compact the cache when cancelled while its last part file is being written", async () => {
+    const rename = fsp.rename.bind(fsp);
+    const writing = Promise.withResolvers<void>();
+    const written = Promise.withResolvers<void>();
+    vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+      // The part file's rename into place, held until the test lets it finish.
+      writing.resolve();
+      await written.promise;
+      return rename(from, to);
+    });
+    const controller = new AbortController();
+    const { done, log } = run(fakeEndpoint(), passages(2), { saveEvery: 2, signal: controller.signal });
+    await writing.promise;
+    // Past the job's check for a cancellation: it is now waiting for the write before it compacts.
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    written.resolve();
+    expect(await done).toBeUndefined();
+    const names = fs.readdirSync(dir);
+    expect(names.some((name) => name.startsWith("part-"))).toBe(true);
+    expect(names).not.toContain("vectors.bin");
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("stopped after 2 of 2"));
+  });
+
+  it("does not ask again when cancelled while it waits to retry", async () => {
+    const endpoint = fakeEndpoint({ fail: () => new Response("down", { status: 500 }) });
+    const controller = new AbortController();
+    const { done, log } = run(endpoint, passages(3), {
+      backoffMs: 60_000,
+      cacheDir: undefined,
+      signal: controller.signal
+    });
+    await vi.waitFor(() => expect(endpoint.requests).toBe(1));
+    controller.abort();
+    expect(await done).toBeUndefined();
+    expect(endpoint.requests).toBe(1);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when it starts cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const endpoint = holding(0);
+    const { done, log } = run(endpoint, passages(5), { signal: controller.signal });
+    expect(await done).toBeUndefined();
+    expect(endpoint.inputs).toHaveLength(0);
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(log.info).not.toHaveBeenCalled();
   });
 });
 

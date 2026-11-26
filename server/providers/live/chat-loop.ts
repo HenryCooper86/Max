@@ -19,7 +19,104 @@ export type ChatStage = {
   reasoningEffort?: string;
   /** The owner says this chat model can see pictures. The relay cannot tell. */
   images?: boolean;
+  /** How long the model may take to start answering, and to stall. Default: `DEFAULT_STREAM_DEADLINES`. */
+  deadlines?: StreamDeadlines;
 };
+
+/**
+ * A stalled endpoint must not hold a reply open for ever: the conversation's idle check waits for a reply
+ * that is under way, so nobody would tell the wearer that something went wrong. Two deadlines end the
+ * request with an error the session already reports. `0` turns one off.
+ */
+export type StreamDeadlines = {
+  /** From sending the request to the first byte of the answer. A model that thinks before it writes needs a longer one. */
+  firstChunkMs: number;
+  /** The longest silence between two bytes of the answer. */
+  stallMs: number;
+};
+
+export const DEFAULT_STREAM_DEADLINES: StreamDeadlines = { firstChunkMs: 30_000, stallMs: 15_000 };
+
+/** The deadlines of one request to an upstream named `label`. `signal` is aborted when one passes, so a
+ *  transport that honours it lets go of the socket at once. The request fails whether or not it does. */
+export class UpstreamDeadlines {
+  private readonly expired = new AbortController();
+  /** The clock of the answer starts when the request is sent. */
+  private sentAt = 0;
+  /** Aborted when a deadline passes. */
+  readonly signal = this.expired.signal;
+
+  constructor(
+    private readonly limits: StreamDeadlines,
+    private readonly label: string
+  ) {}
+
+  /** The wait for the response head, bounded by the time to first byte. */
+  head<T>(work: Promise<T>): Promise<T> {
+    this.sentAt = Date.now();
+    return within(
+      work,
+      limit(this.limits.firstChunkMs),
+      () => this.expired.abort(),
+      this.silent("sent nothing", this.limits.firstChunkMs)
+    );
+  }
+
+  /** The body piece by piece. The first piece counts from the request, each later one from the piece before. */
+  async *pieces(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+    const reader = body.getReader();
+    try {
+      for (let first = true; ; first = false) {
+        const firstByte = this.limits.firstChunkMs;
+        const { done, value } = await within(
+          reader.read(),
+          first
+            ? firstByte > 0
+              ? Math.max(0, firstByte - (Date.now() - this.sentAt))
+              : undefined
+            : limit(this.limits.stallMs),
+          () => this.expired.abort(),
+          first ? this.silent("sent nothing", firstByte) : this.silent("fell silent", this.limits.stallMs)
+        );
+        if (done) return;
+        yield value as Uint8Array;
+      }
+    } finally {
+      // Released, not waited for: a transport that ignores the abort may never settle it.
+      reader.cancel().catch(() => undefined);
+    }
+  }
+
+  /** What the log and the wearer are told when a deadline passes. */
+  private silent(what: "sent nothing" | "fell silent", ms: number): string {
+    return `${this.label} ${what} for ${Math.round(ms / 1000)} ${ms < 2000 ? "second" : "seconds"}`;
+  }
+}
+
+/** A deadline as `within` takes it: `undefined` when the setting turns it off. */
+const limit = (ms: number) => (ms > 0 ? ms : undefined);
+
+/** `work` must settle within `ms`, which `undefined` leaves unlimited. Otherwise `expire` runs and this rejects with `message`. */
+async function within<T>(work: Promise<T>, ms: number | undefined, expire: () => void, message: string): Promise<T> {
+  if (ms === undefined) return work;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        // Unreferenced: a deadline must not keep the relay alive by itself.
+        timer = setTimeout(() => {
+          // The failure is settled first. Aborting makes a transport that honours it reject the request at
+          // once, and that rejection must not win the race with the message that says how long it was silent.
+          reject(new Error(message));
+          expire();
+        }, ms).unref();
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** Where one reply's text goes. Created per reply, so it can hold that reply's state.
  *  Only `delta` is gated on the reply still being current; `sentence` and `say`
@@ -249,6 +346,8 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
   ): Promise<{ text: string; toolCalls: ChatToolCall[] }> {
     const stage = options.stage();
     const tools = offerTools ? options.tools() : [];
+    const deadlines = new UpstreamDeadlines(stage.deadlines ?? DEFAULT_STREAM_DEADLINES, "Chat model");
+    const requestSignal = AbortSignal.any([signal, deadlines.signal]);
     const send = (reasoningEffort: string | undefined) =>
       request(`${stage.baseUrl}/chat/completions`, {
         method: "POST",
@@ -267,10 +366,10 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
               }
             : {})
         }),
-        signal
+        signal: requestSignal
       });
     const reasoningEffort = sendReasoningEffort ? stage.reasoningEffort : undefined;
-    let response = await send(reasoningEffort);
+    let response = await deadlines.head(send(reasoningEffort));
     if (reasoningEffort && (response.status === 400 || response.status === 422)) {
       // Not every OpenAI-compatible server or model accepts the field: answer without it.
       const detail = await response
@@ -280,7 +379,7 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
       if (/reasoning|think/i.test(detail)) {
         sendReasoningEffort = false;
         log.warn(`${options.label} chat model refused reasoning_effort; continuing without it`);
-        response = await send(undefined);
+        response = await deadlines.head(send(undefined));
       }
     }
     if (!response.ok || !response.body) throw await failure("Chat model", response);
@@ -332,8 +431,8 @@ export function createChatLoop(options: ChatLoopOptions): ChatLoop {
         if (complete) onSentence(complete);
       }
     };
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-      buffered += decoder.decode(chunk, { stream: true });
+    for await (const bytes of deadlines.pieces(response.body)) {
+      buffered += decoder.decode(bytes, { stream: true });
       let newline = buffered.indexOf("\n");
       while (newline >= 0) {
         const line = buffered.slice(0, newline).trim();

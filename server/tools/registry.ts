@@ -41,12 +41,15 @@ type EmbedJobTuning = Partial<
 
 /** Embeds the passages after the build has returned, then swaps the tool's searcher. The swap
  *  happens in the caller's closure, so a job from a replaced build only touches its own tool.
- *  Above `limit` passages nothing is embedded and the whole index stays on keyword search. */
+ *  Above `limit` passages nothing is embedded and the whole index stays on keyword search.
+ *  `signal` is aborted when the build is replaced or closed: the job then stops, writes nothing
+ *  more to the cache and swaps nothing. */
 async function embedInBackground(
   index: KnowledgeIndex,
   model: EmbeddingModel,
   settings: { request?: typeof fetch; limit: number; cacheDir?: string; job?: EmbedJobTuning },
-  swap: (search: (query: string, limit: number) => Promise<ReturnType<KnowledgeIndex["search"]>>) => void
+  swap: (search: (query: string, limit: number) => Promise<ReturnType<KnowledgeIndex["search"]>>) => void,
+  signal: AbortSignal
 ): Promise<void> {
   const { request, limit, cacheDir, job } = settings;
   try {
@@ -65,10 +68,11 @@ async function embedInBackground(
         cacheDir,
         ignoreCache,
         ...job,
+        signal,
         log: { info: (message) => log.info(message), warn: (message) => log.warn(message) }
       });
     const matrix = await embed(false);
-    if (!matrix) return;
+    if (!matrix || signal.aborted) return;
     let rebuilt = false;
     const embedQuery = async (text: string) => {
       const vector = (await embedTexts(model, [text], { request, timeoutMs: 2000 }))[0]!;
@@ -78,7 +82,7 @@ async function embedInBackground(
         log.warn("knowledge embedding cache: cached vectors do not fit the model, embedding everything again");
         void embed(true)
           .then((again) => {
-            if (again) swap(searchWith(again));
+            if (again && !signal.aborted) swap(searchWith(again));
           })
           .catch((error: unknown) => {
             log.warn(
@@ -118,7 +122,8 @@ type BuiltTools = {
   problems: string[];
   /** MCP servers that could not be reached: worth trying again later. */
   unreachable: McpServerConfig[];
-  /** Ends what was started for these tools: the processes of MCP servers the relay runs itself. */
+  /** Ends what was started for these tools: the processes of MCP servers the relay runs itself, and
+   *  its knowledge embedding job. */
   close(): void;
 };
 
@@ -222,7 +227,10 @@ export async function buildServerTools(
       const env = options.env ?? process.env;
       const limit = maxPassagesFromEnv(env);
       if (limit.problem && embeddings.model) found.push(`knowledge: ${limit.problem}`);
-      if (embeddings.model)
+      if (embeddings.model) {
+        // The job belongs to this build: one that is replaced or closed stops it.
+        const embedding = new AbortController();
+        closers.push(() => embedding.abort());
         void embedInBackground(
           loaded.index,
           embeddings.model,
@@ -234,8 +242,10 @@ export async function buildServerTools(
           },
           (search) => {
             searcher = { search };
-          }
+          },
+          embedding.signal
         );
+      }
       log.info("knowledge base ready", { documents: loaded.index.sources.length, passages: loaded.index.size });
     } else found.push("knowledge: nothing to search was found, so the assistant has no knowledge base");
   }
@@ -330,7 +340,7 @@ export async function installServerTools(source: ServerToolSource): Promise<void
     built.close();
     return;
   }
-  // The tools this replaces are gone from here on, and with them the processes started for them.
+  // The tools this replaces are gone from here on, and with them what was started for them.
   closeInstalled.splice(0).forEach((close) => close());
   closeInstalled.push(built.close);
   installed = built.tools;
@@ -341,8 +351,8 @@ export async function installServerTools(source: ServerToolSource): Promise<void
 }
 
 /**
- * Ends what the relay's tools started: the MCP servers it runs as processes.
- * For shutdown: a process left running would keep the relay itself from exiting.
+ * Ends what the relay's tools started: the MCP servers it runs as processes, and its knowledge
+ * embedding job. For shutdown: a process left running would keep the relay itself from exiting.
  */
 export function closeServerTools(): void {
   generation += 1;

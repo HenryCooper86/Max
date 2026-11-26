@@ -1,6 +1,14 @@
 import type { VoiceGender } from "../../../shared/agent";
 import type { Logger } from "../../logger";
-import { authHeaders, createChatLoop, failure, type ChatStage } from "./chat-loop";
+import {
+  DEFAULT_STREAM_DEADLINES,
+  UpstreamDeadlines,
+  authHeaders,
+  createChatLoop,
+  failure,
+  type ChatStage,
+  type StreamDeadlines
+} from "./chat-loop";
 import {
   CLIENT_INPUT_RATE,
   CLIENT_OUTPUT_RATE,
@@ -50,6 +58,28 @@ function stage(prefix: string, name: string, defaults: StageDefaults, keys: stri
   };
 }
 
+/** A local model may first have to be loaded into memory, so it gets twice as long to start answering. */
+const LOCAL_FIRST_BYTE_MS = 2 * DEFAULT_STREAM_DEADLINES.firstChunkMs;
+
+/** What a stage may take to answer, from `PREFIX_<STAGE>_FIRST_BYTE_MS` and `PREFIX_<STAGE>_STALL_MS`, or
+ *  the same without the stage for the chat model and the speech server both. */
+function streamDeadlines(prefix: string, name: string): StreamDeadlines {
+  const firstByte = milliseconds(env(`${prefix}_${name}_FIRST_BYTE_MS`, `${prefix}_FIRST_BYTE_MS`));
+  const stall = milliseconds(env(`${prefix}_${name}_STALL_MS`, `${prefix}_STALL_MS`));
+  return {
+    firstChunkMs: firstByte ?? (prefix === "LOCAL" ? LOCAL_FIRST_BYTE_MS : DEFAULT_STREAM_DEADLINES.firstChunkMs),
+    stallMs: stall ?? DEFAULT_STREAM_DEADLINES.stallMs
+  };
+}
+
+/** A duration from the environment: `0` turns the deadline off, anything else is kept to between a second
+ *  and ten minutes, and what is not a number counts as not set. */
+function milliseconds(raw: string | undefined): number | undefined {
+  const value = Number(raw);
+  if (raw === undefined || !Number.isFinite(value) || value < 0) return undefined;
+  return value === 0 ? 0 : Math.min(600_000, Math.max(1000, Math.round(value)));
+}
+
 function settingsFrom(
   prefix: string,
   defaults: {
@@ -65,9 +95,14 @@ function settingsFrom(
   return {
     stt: stage(prefix, "STT", defaults.stt, keys),
     // The relay cannot tell whether a chat model sees pictures, so the owner says so.
-    llm: { ...stage(prefix, "LLM", defaults.llm, keys), images: env(`${prefix}_LLM_IMAGES`)?.toLowerCase() === "on" },
+    llm: {
+      ...stage(prefix, "LLM", defaults.llm, keys),
+      images: env(`${prefix}_LLM_IMAGES`)?.toLowerCase() === "on",
+      deadlines: streamDeadlines(prefix, "LLM")
+    },
     tts: {
       ...stage(prefix, "TTS", defaults.tts, keys),
+      deadlines: streamDeadlines(prefix, "TTS"),
       voice: (gender) =>
         gender === "male"
           ? (env(`${prefix}_TTS_VOICE_MALE`) ?? defaults.voice[1])
@@ -420,19 +455,24 @@ export function createPipelineEngine(
   }
 
   async function synthesize(text: string, signal: AbortSignal): Promise<Buffer> {
-    const response = await request(`${settings.tts.baseUrl}/audio/speech`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(settings.tts) },
-      body: JSON.stringify({
-        model: settings.tts.model,
-        voice: settings.tts.voice(config?.voiceGender ?? "female"),
-        input: text,
-        response_format: settings.tts.format ?? "pcm"
-      }),
-      signal
-    });
-    if (!response.ok) throw await failure("Text-to-speech", response);
-    return speechToPcm(Buffer.from(await response.arrayBuffer()), settings.tts.sampleRate);
+    const deadlines = new UpstreamDeadlines(settings.tts.deadlines ?? DEFAULT_STREAM_DEADLINES, "Text-to-speech");
+    const response = await deadlines.head(
+      request(`${settings.tts.baseUrl}/audio/speech`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeaders(settings.tts) },
+        body: JSON.stringify({
+          model: settings.tts.model,
+          voice: settings.tts.voice(config?.voiceGender ?? "female"),
+          input: text,
+          response_format: settings.tts.format ?? "pcm"
+        }),
+        signal: AbortSignal.any([signal, deadlines.signal])
+      })
+    );
+    if (!response.ok || !response.body) throw await failure("Text-to-speech", response);
+    const pieces: Uint8Array[] = [];
+    for await (const piece of deadlines.pieces(response.body)) pieces.push(piece);
+    return speechToPcm(Buffer.concat(pieces), settings.tts.sampleRate);
   }
 
   const chat = createChatLoop({

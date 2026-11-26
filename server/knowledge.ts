@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { matrixFromVectors, topSelector, topSimilar, type VectorMatrix } from "./knowledge-vectors";
@@ -59,6 +60,8 @@ const MAX_FILES = 500;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 const MAX_DEPTH = 4;
+/** The most entries one folder gives: the first in name order. A larger one is cut off and says so, and costs no more than one of twice as many. */
+const MAX_FOLDER_ENTRIES = 5_000;
 /** What one tool call may put in front of the model: a few paragraphs, not a manual. */
 const MAX_TOOL_RESULT_CHARS = 6000;
 const MAX_QUERY_TERMS = 64;
@@ -614,81 +617,152 @@ export function createHybridSearch(
 // Loading from disk
 // ---------------------------------------------------------------------------
 
-type Found = { file: string; source: string; named: boolean };
+type Found = { file: string; source: string };
 
 function formatOf(file: string): KnowledgeFormat | undefined {
   return FORMATS[path.extname(file).toLowerCase()];
 }
 
-/** Lists the readable documents under a directory. Dot-entries, `node_modules` and symbolic links are skipped. */
-async function walk(dir: string, source: string, depth: number, found: Found[], problems: string[]) {
-  let entries;
+/** A folder's first `MAX_FOLDER_ENTRIES` entries in name order, or undefined when it cannot be read. They are
+ *  read a batch at a time and, on the way, cut back to that many smallest names, so a folder of any size costs
+ *  no more than one of twice that many entries. `cut` says entries were left out. */
+async function listFolder(dir: string): Promise<{ entries: Dirent[]; cut: boolean } | undefined> {
+  const folder = await fs.opendir(dir).catch(() => undefined);
+  if (!folder) return undefined;
+  const entries: Dirent[] = [];
+  let seen = 0;
   try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
+    for await (const entry of folder) {
+      entries.push(entry);
+      seen += 1;
+      // Only the smallest names can matter in the end, so twice as many as are kept are the most worth holding.
+      if (entries.length >= 2 * MAX_FOLDER_ENTRIES) {
+        entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+        entries.length = MAX_FOLDER_ENTRIES;
+      }
+    }
   } catch {
-    problems.push(`cannot read folder: ${dir}`);
-    return;
+    return undefined;
   }
   entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  for (const entry of entries) {
+  return { entries: entries.slice(0, MAX_FOLDER_ENTRIES), cut: seen > MAX_FOLDER_ENTRIES };
+}
+
+/** The files one load takes in, and why the others were left out. */
+type Loader = {
+  found: Found[];
+  problems: string[];
+  /** True once nothing more can be taken: the file cap or the budget for all files together is reached. */
+  readonly full: boolean;
+  /** Takes a file in if it will load: there is room under the file cap, it is small enough for one file and
+   *  for all of them together, and it can be read. `problems` says which of these it failed otherwise. */
+  take(file: string, source: string): Promise<boolean>;
+  /** The file cap was reached, and `first` is the first of what it left out. Said once. */
+  reportCap(first: string): void;
+};
+
+function createLoader(): Loader {
+  const found: Found[] = [];
+  const problems: string[] = [];
+  let total = 0;
+  let capReported = false;
+  let budgetSpent = false;
+  const reportCap = (first: string) => {
+    if (capReported) return;
+    capReported = true;
+    problems.push(`knowledge is limited to ${MAX_FILES} files; the rest were skipped, from ${first} on`);
+  };
+  return {
+    found,
+    problems,
+    get full() {
+      return found.length >= MAX_FILES || budgetSpent;
+    },
+    reportCap,
+    async take(file, source) {
+      if (found.length >= MAX_FILES) {
+        reportCap(source);
+        return false;
+      }
+      // Nothing is looked at after the first file that does not fit: "the rest were skipped" is what was said.
+      if (budgetSpent) return false;
+      let size: number;
+      try {
+        size = (await fs.stat(file)).size;
+      } catch {
+        problems.push(`cannot read: ${file}`);
+        return false;
+      }
+      if (size > MAX_FILE_BYTES) {
+        problems.push(`skipped ${source}: larger than ${MAX_FILE_BYTES / 1024 / 1024} MiB`);
+        return false;
+      }
+      if (total + size > MAX_TOTAL_BYTES) {
+        budgetSpent = true;
+        problems.push(`knowledge is limited to ${MAX_TOTAL_BYTES / 1024 / 1024} MiB in total; the rest were skipped`);
+        return false;
+      }
+      total += size;
+      found.push({ file, source });
+      return true;
+    }
+  };
+}
+
+/** Lists, under a directory and in name order, the documents the knowledge base takes, and stops as soon as
+ *  it is full. Dot-entries, `node_modules`, symbolic links, folders deeper than `MAX_DEPTH` and files of other
+ *  types are passed by without a word. The first thing passed by because the knowledge base is full is named. */
+async function walk(dir: string, source: string, depth: number, loader: Loader): Promise<void> {
+  const listed = await listFolder(dir);
+  if (!listed) {
+    loader.problems.push(`cannot read folder: ${dir}`);
+    return;
+  }
+  if (listed.cut)
+    loader.problems.push(`folder ${source} has more than ${MAX_FOLDER_ENTRIES} entries; the rest were skipped`);
+  for (const entry of listed.entries) {
     if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
-    const full = path.join(dir, entry.name);
     const name = `${source}/${entry.name}`;
-    if (entry.isDirectory()) {
-      if (depth < MAX_DEPTH) await walk(full, name, depth + 1, found, problems);
-    } else if (entry.isFile() && formatOf(entry.name)) found.push({ file: full, source: name, named: false });
+    const listable = entry.isDirectory() ? depth < MAX_DEPTH : entry.isFile() && formatOf(entry.name) !== undefined;
+    if (!listable) continue;
+    // The budget has already said what it left out; the file cap names its first here.
+    if (loader.full) {
+      if (loader.found.length >= MAX_FILES) loader.reportCap(name);
+      return;
+    }
+    if (entry.isDirectory()) await walk(path.join(dir, entry.name), name, depth + 1, loader);
+    else await loader.take(path.join(dir, entry.name), name);
   }
 }
 
-/** Reads the configured files and builds the index. Never rejects: unreadable or oversized
- *  files are skipped with a problem string. */
+/** Reads the configured files and builds the index. Never rejects: a file that cannot be read or does not
+ *  fit is left out with a problem string, and the rest load. */
 export async function loadKnowledge(config: KnowledgeConfig): Promise<{ index: KnowledgeIndex; problems: string[] }> {
-  const problems: string[] = [];
-  const found: Found[] = [];
+  const loader = createLoader();
   for (const configured of config.paths) {
     const name = path.basename(configured);
     try {
       const stat = await fs.stat(configured);
-      if (stat.isDirectory()) await walk(configured, name, 0, found, problems);
-      else if (!stat.isFile()) problems.push(`not a file or folder: ${configured}`);
+      if (stat.isDirectory()) await walk(configured, name, 0, loader);
+      else if (!stat.isFile()) loader.problems.push(`not a file or folder: ${configured}`);
       else if (!formatOf(configured))
-        problems.push(`unsupported file type (use .md .txt .html .json or .csv): ${configured}`);
-      else found.push({ file: configured, source: name, named: true });
+        loader.problems.push(`unsupported file type (use .md .txt .html .json or .csv): ${configured}`);
+      else await loader.take(configured, name);
     } catch {
-      problems.push(`cannot read: ${configured}`);
+      loader.problems.push(`cannot read: ${configured}`);
     }
   }
 
   const documents: { source: string; text: string; format: KnowledgeFormat }[] = [];
-  let total = 0;
-  let countReported = false;
-  let totalReported = false;
-  for (const { file, source } of found) {
-    if (documents.length >= MAX_FILES) {
-      if (!countReported) problems.push(`knowledge is limited to ${MAX_FILES} files; the rest were skipped`);
-      countReported = true;
-      continue;
-    }
+  for (const { file, source } of loader.found) {
     try {
-      const size = (await fs.stat(file)).size;
-      if (size > MAX_FILE_BYTES) {
-        problems.push(`skipped ${source}: larger than ${MAX_FILE_BYTES / 1024 / 1024} MiB`);
-        continue;
-      }
-      if (total + size > MAX_TOTAL_BYTES) {
-        if (!totalReported)
-          problems.push(`knowledge is limited to ${MAX_TOTAL_BYTES / 1024 / 1024} MiB in total; the rest were skipped`);
-        totalReported = true;
-        continue;
-      }
-      total += size;
       documents.push({ source, text: await fs.readFile(file, "utf8"), format: formatOf(file) as KnowledgeFormat });
     } catch {
-      problems.push(`cannot read: ${file}`);
+      loader.problems.push(`cannot read: ${file}`);
     }
   }
   if (config.text) documents.push({ source: "config", text: config.text, format: "markdown" });
-  return { index: buildKnowledgeIndex(documents, { chunkChars: config.chunkChars }), problems };
+  return { index: buildKnowledgeIndex(documents, { chunkChars: config.chunkChars }), problems: loader.problems };
 }
 
 // ---------------------------------------------------------------------------

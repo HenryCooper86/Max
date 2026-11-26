@@ -8,7 +8,7 @@ Android 客户端使用 Kotlin 和 Jetpack Compose，通过与网页、iOS 相�
 
 - Android Studio 及其自带的 JBR/JDK。Gradle 需要 JDK 17–21，不要使用 Homebrew Java 25 或更新版本。
 - Android SDK Platform 36.1；Android 8.0（API 26）或更新版本的设备或模拟器。
-- 仓库使用 Gradle Wrapper 9.4.1、Android Gradle Plugin 9.2.1、Kotlin 2.2.10 和 Compose BOM 2024.09.03。
+- 仓库使用 Gradle Wrapper 9.9.2、Android Gradle Plugin 9.5.2、Kotlin 2.4.21 和 Compose BOM 2026.06.01。
 
 ## 构建与检查
 
@@ -22,13 +22,60 @@ MAX_GIT_COMMIT=$(git -C .. rev-parse --short=12 HEAD) \
 ./gradlew assembleDebug
 ```
 
-产物位于 `app/build/outputs/apk/debug/app-debug.apk`。`versionName` 为 `1.0.0`（与 iOS 一致）；`versionCode` 通过 `-PversionCode=<递增的构建号>` 传入，默认 1。Release 签名可选：同时设置 `maxReleaseStoreFile`、`maxReleaseStorePassword`、`maxReleaseKeyAlias`、`maxReleaseKeyPassword` 四个 Gradle 属性（或对应的 `MAX_RELEASE_STORE_FILE` 等环境变量）即签名，全部不设则生成未签名 APK，只设部分会构建失败。密钥信息不要写入仓库。如需在 `local.properties` 写入 SDK 路径，可参考 `local.properties.example`；不要提交该文件。运行单元测试和 Debug Lint：
+产物位于 `app/build/outputs/apk/debug/app-debug.apk`。`versionName` 默认为 `1.0.0`（与 iOS 一致），可用 `-PversionName=<版本号>` 覆盖（发布工作流传入去掉 `v` 的标签版本）；`versionCode` 通过 `-PversionCode=<递增的构建号>` 传入，默认 1。Release 签名可选：同时设置 `maxReleaseStoreFile`、`maxReleaseStorePassword`、`maxReleaseKeyAlias`、`maxReleaseKeyPassword` 四个 Gradle 属性（或对应的 `MAX_RELEASE_STORE_FILE` 等环境变量）即签名，全部不设则生成未签名 APK，只设部分会构建失败。密钥信息不要写入仓库。如需在 `local.properties` 写入 SDK 路径，可参考 `local.properties.example`；不要提交该文件。运行单元测试和 Debug Lint：
 
 ```bash
 ANDROID_HOME="$HOME/Library/Android/sdk" \
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 ./gradlew testDebugUnitTest lintDebug
 ```
+
+### 发布产物
+
+推送 kit 标签（`v<版本号>`，必须与仓库根目录 `package.json` 的 `version` 一致）会触发
+[`.github/workflows/release.yml`](../.github/workflows/release.yml)。所有 CI 任务通过后，其中的 `android` 任务执行
+`bundleRelease assembleRelease`：`versionCode` 取工作流运行编号，`versionName` 取去掉 `v` 的标签，并回读 APK 的版本、
+构建号，核对两个文件的签名是否符合预期。`draft` 任务随后把两个文件附到 GitHub 草稿发布（仓库 **Releases** 页面，
+仅维护者可见，直到有人发布）：
+
+| 文件                                  | 用途                          |
+| ------------------------------------- | ----------------------------- |
+| `max-android-<版本号>-<运行编号>.apk` | 手动安装（侧载）              |
+| `max-android-<版本号>-<运行编号>.aab` | Google Play（新应用提交 AAB） |
+
+`<版本号>` 对应标签 `v0.2.0` 的 `0.2.0`；`<运行编号>` 即 APK 的 `versionCode`。是否签名取决于仓库的签名密钥：
+
+- **四个都设置：**两个文件均已签名，命名如上。
+- **都没设置：**两个文件均为未签名，命名为 `max-android-<版本号>-<运行编号>-unsigned.apk` 和
+  `max-android-<版本号>-<运行编号>-unsigned.aab`，构建步骤标题为 “Build the unsigned release APK and AAB”。Android
+  不安装未签名 APK，Google Play 拒绝未签名 AAB，因此这类草稿只用于检查发布，不能分发给骑手。
+- **只设置一部分：**任务失败，与构建行为一致。
+
+不会上传到 Google Play：这需要所有者的 Play Console 账号。发布时从草稿下载已签名的 AAB，手动上传到 Play Console。
+两个文件也会出现在工作流运行的 **Artifacts** 页（`android-release`，保留 7 天），草稿未创建时可在此找到。
+
+#### 签名密钥
+
+在 **Settings › Secrets and variables › Actions** 添加四个仓库密钥：
+
+| 密钥                        | 值                                           |
+| --------------------------- | -------------------------------------------- |
+| `ANDROID_KEYSTORE_BASE64`   | 发布密钥库（keystore）的 base64 编码（见下） |
+| `ANDROID_KEYSTORE_PASSWORD` | 密钥库密码                                   |
+| `ANDROID_KEY_ALIAS`         | 发布密钥别名                                 |
+| `ANDROID_KEY_PASSWORD`      | 发布密钥密码                                 |
+
+工作流把密钥库解码到运行器的临时目录，并以 `MAX_RELEASE_STORE_FILE`、`MAX_RELEASE_STORE_PASSWORD`、
+`MAX_RELEASE_KEY_ALIAS`、`MAX_RELEASE_KEY_PASSWORD` 交给 Gradle，无需其他配置。创建密钥库（把密钥库和密码备份到
+仓库之外的安全位置：Android 只会安装与已装应用使用同一密钥签名的更新）并编码。默认 PKCS12 密钥库的库密码和密钥
+密码相同，因此 `ANDROID_KEY_PASSWORD` 与 `ANDROID_KEYSTORE_PASSWORD` 设为同一值（如需不同，用 `-storetype JKS`）：
+
+```bash
+keytool -genkeypair -keystore max-release.jks -alias max -keyalg RSA -keysize 2048 -validity 10000
+base64 -w0 max-release.jks   # Linux；macOS：base64 -i max-release.jks
+```
+
+高德 Android 密钥按包名和签名证书注册（见[导航](#导航)），因此已签名的发布版本只有用注册了发布证书的密钥签名，地图才可用。
 
 ## 连接中继
 

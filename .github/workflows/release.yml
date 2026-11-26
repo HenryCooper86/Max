@@ -3,7 +3,10 @@ name: Release draft
 # Pushing a tag prepares a draft GitHub release. Nothing is published from here:
 # a maintainer reviews the draft and publishes it. For the SDK, the tarball
 # attached to the draft (built and smoke-tested by npm run pack:sdk below) is
-# the one to publish: npm publish max-voice-agent-<version>.tgz.
+# the one to publish: npm publish max-voice-agent-<version>.tgz. For the kit,
+# the Android app's release APK and AAB are attached as well: signed when the
+# repository's signing secrets are set, unsigned and named so when they are not
+# (android/README.md, Release artifacts). Nothing is uploaded to Google Play.
 #
 #   v1.2.3      the kit; must match "version" in package.json
 #   sdk-v1.2.3  the web SDK; must match "version" in sdk/package.json
@@ -23,8 +26,129 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  draft:
+  # The Android release artifacts of a kit tag, once the CI above has passed for the tagged commit: the APK and the
+  # AAB. Signed when all four signing secrets are set, unsigned and named so when none is (android/README.md,
+  # Release artifacts); only some set is a mistake and fails the job. The draft job attaches them; nothing is
+  # uploaded to Google Play.
+  android:
     needs: ci
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools platforms;android-36.1 build-tools;36.0.0"
+      - name: Read the version from the tag
+        id: version
+        # The draft job checks that the tag is the package version with a `v`.
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # All four secrets or none, as for Gradle (android/app/build.gradle.kts): only some is a mistake, so the job
+      # stops here instead of attaching an unsigned file to a release meant to be signed.
+      - name: Check the signing secrets
+        id: signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          present=(); missing=()
+          for secret in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -n "${!secret}" ]]; then present+=("$secret"); else missing+=("$secret"); fi
+          done
+          if (( ${#present[@]} == 4 )); then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "keystore=$RUNNER_TEMP/release.keystore" >> "$GITHUB_OUTPUT"
+          elif (( ${#present[@]} == 0 )); then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "suffix=-unsigned" >> "$GITHUB_OUTPUT"
+          else
+            echo "Set all four Android signing secrets or none (android/README.md); missing: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Build the ${{ steps.signing.outputs.signed == 'true' && 'signed' || 'unsigned' }} release APK and AAB
+        env:
+          # What android/app/build.gradle.kts signs with. With no secret set they are all blank, which it reads as
+          # a request for an unsigned build.
+          MAX_GIT_COMMIT: ${{ github.sha }}
+          MAX_RELEASE_STORE_FILE: ${{ steps.signing.outputs.keystore }}
+          MAX_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MAX_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          MAX_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x android/gradlew
+          android/gradlew -p android bundleRelease assembleRelease \
+            -PversionCode="${{ github.run_number }}" \
+            -PversionName="${{ steps.version.outputs.version }}"
+
+      # Read back from the files rather than trust the inputs: the APK carries the tag's version and the run's build
+      # number, and both files are signed or unsigned as intended. An unsigned AAB has no signature entry under
+      # META-INF; a signed one does.
+      - name: Check the version and signature of what was built
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          SUFFIX: ${{ steps.signing.outputs.suffix }}
+        run: |
+          build_tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk="android/app/build/outputs/apk/release/app-release$SUFFIX.apk"
+          aab=android/app/build/outputs/bundle/release/app-release.aab
+          badging=$("$build_tools/aapt2" dump badging "$apk")
+          for expected in "name='io.github.henrycooper86.max'" "versionCode='${{ github.run_number }}'" "versionName='${{ steps.version.outputs.version }}'"; do
+            if ! grep -q -F "$expected" <<< "$badging"; then
+              echo "Expected $expected in $apk:" >&2
+              head -1 <<< "$badging" >&2
+              exit 1
+            fi
+          done
+          signatures=$(unzip -Z1 "$aab" | grep -E '^META-INF/[^/]+\.(RSA|DSA|EC)$' || true)
+          if [[ "$SIGNED" == true ]]; then
+            "$build_tools/apksigner" verify "$apk"
+            jarsigner=$("$JAVA_HOME/bin/jarsigner" -verify "$aab")
+            grep -q -F "jar verified." <<< "$jarsigner"
+            test -n "$signatures"
+          else
+            if "$build_tools/apksigner" verify "$apk" >/dev/null 2>&1; then
+              echo "No signing secret is set, but $apk is signed." >&2
+              exit 1
+            fi
+            test -z "$signatures"
+          fi
+
+      # max-android-<version>-<run number>.apk and .aab; unsigned ones say so in their names.
+      - name: Name the artifacts
+        env:
+          SUFFIX: ${{ steps.signing.outputs.suffix }}
+        run: |
+          name="max-android-${{ steps.version.outputs.version }}-${{ github.run_number }}$SUFFIX"
+          mkdir "$RUNNER_TEMP/android-release"
+          cp "android/app/build/outputs/apk/release/app-release$SUFFIX.apk" "$RUNNER_TEMP/android-release/$name.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "$RUNNER_TEMP/android-release/$name.aab"
+
+      # Handed to the draft job. It also keeps the files downloadable from the run for a week should the draft fail.
+      - name: Keep the artifacts for the draft
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-release
+          path: ${{ runner.temp }}/android-release
+          if-no-files-found: error
+          retention-days: 7
+
+  draft:
+    needs: [ci, android]
+    # An SDK tag skips the android job; that must not skip the draft, but a failed or cancelled one must.
+    if: ${{ !cancelled() && needs.ci.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.android.result) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -55,6 +179,12 @@ jobs:
       - name: Pack the SDK
         if: steps.version.outputs.kind == 'sdk'
         run: npm run pack:sdk
+      - name: Fetch the Android artifacts
+        if: steps.version.outputs.kind == 'kit'
+        uses: actions/download-artifact@v8
+        with:
+          name: android-release
+          path: android-release
       - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,5 +192,7 @@ jobs:
           assets=()
           if [[ "${{ steps.version.outputs.kind }}" == "sdk" ]]; then
             assets=(dist/max-voice-agent-*.tgz)
+          else
+            assets=(android-release/*.apk android-release/*.aab)
           fi
           gh release create "$GITHUB_REF_NAME" --draft --generate-notes --verify-tag "${assets[@]}"

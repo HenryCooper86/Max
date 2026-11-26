@@ -866,7 +866,11 @@ npm run check          # run the complete local/CI gate above in one command
 ```
 
 GitHub Actions runs this gate plus Android unit tests/lint and iOS simulator tests on every push
-and pull request (`.github/workflows/ci.yml`).
+and pull request (`.github/workflows/ci.yml`). Pushing a kit tag (`v*`) runs that CI again and then attaches the
+Android release APK and AAB to the draft GitHub release (`release.yml`; see
+[release artifacts](../android/README.md#release-artifacts)): signed when the repository's signing secrets are set,
+unsigned and named so otherwise. iOS is checked in Release for the simulator only; what a TestFlight upload would
+need is in the [iOS guide](../ios/README.md#release-builds-and-app-store-distribution).
 
 ### 3. Build
 

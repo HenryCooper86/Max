@@ -23,7 +23,7 @@ Phone (this app)                        Mac / test server
 - Android Studio with its bundled JBR/JDK. Gradle requires JDK 17-21; avoid Homebrew Java 25+.
 - Android SDK with platform 36.1.
 - A device or emulator running Android 8.0+ (API 26+)
-- Gradle wrapper 9.4.1, Android Gradle Plugin 9.2.1, Kotlin 2.2.10, Compose BOM 2024.09.03.
+- Gradle wrapper 9.9.2, Android Gradle Plugin 9.5.2, Kotlin 2.4.21, Compose BOM 2026.06.01.
 
 ## Build
 
@@ -48,17 +48,19 @@ Android Studio and press Run.
 
 ### Version and release signing
 
-`versionName` is `1.0.0`, matching iOS. `versionCode` comes from a Gradle property and defaults
-to 1; CI should pass a build number that only ever increases:
+`versionName` defaults to `1.0.0`, matching iOS; `-PversionName=<version>` overrides it (the release workflow passes
+the tag's version). `versionCode` comes from a Gradle property and defaults to 1; CI passes a build number that only
+ever increases:
 
 ```bash
-./gradlew assembleRelease -PversionCode=42
+./gradlew assembleRelease -PversionCode=42 -PversionName=0.2.0
 ```
 
-Release signing is optional. With none of the values below set, `assembleRelease` still produces
-an unsigned APK. To sign, set all four, either as Gradle properties (`-P...` or
-`~/.gradle/gradle.properties`, never a file in this repository) or as environment variables.
-Setting only some of them fails the build.
+Release signing is optional. With none of the values below set, `assembleRelease` and `bundleRelease` still produce
+an unsigned APK (`app/build/outputs/apk/release/app-release-unsigned.apk`) and an unsigned AAB
+(`app/build/outputs/bundle/release/app-release.aab`). To sign, set all four, either as Gradle properties (`-P...` or
+`~/.gradle/gradle.properties`, never a file in this repository) or as environment variables. Setting only some of them
+fails the build. Signed, the APK is `app/build/outputs/apk/release/app-release.apk`.
 
 | Gradle property           | Environment variable         | Value                       |
 | ------------------------- | ---------------------------- | --------------------------- |
@@ -69,6 +71,60 @@ Setting only some of them fails the build.
 
 Release builds run without R8 minification for now; `app/proguard-rules.pro` lists what must be
 checked before it is turned on.
+
+### Release artifacts
+
+Pushing a kit tag (`v<version>`, which must match `version` in the root `package.json`) runs
+[`.github/workflows/release.yml`](../.github/workflows/release.yml). Once every CI job has passed for the tagged
+commit, its `android` job runs `bundleRelease assembleRelease` with `versionCode` set to the workflow's run number and
+`versionName` to the tag without `v`, reads both back from the APK, and checks that the signature is as intended. The
+`draft` job then attaches the files to the draft GitHub release (the repository's **Releases** page, visible to
+maintainers until one of them publishes it):
+
+| File                              | For                                           |
+| --------------------------------- | --------------------------------------------- |
+| `max-android-<version>-<run>.apk` | Installing by hand (sideloading)              |
+| `max-android-<version>-<run>.aab` | Google Play, which takes the AAB for new apps |
+
+`<version>` is `0.2.0` for tag `v0.2.0`; `<run>` is the run number, which is also the APK's `versionCode`. Whether the
+files are signed depends on the repository's signing secrets:
+
+- **All four set:** both files are signed and named as above.
+- **None set:** both are built unsigned and named `max-android-<version>-<run>-unsigned.apk` and
+  `max-android-<version>-<run>-unsigned.aab`, and the run's build step is titled "Build the unsigned release APK and
+  AAB". Android does not install an unsigned APK and Google Play rejects an unsigned AAB, so such a draft is for
+  checking a release, not for publishing to riders.
+- **Only some set:** the job fails, as the build does.
+
+Nothing is uploaded to Google Play: that needs the owner's Play Console account. To publish, download the signed AAB
+from the draft release and upload it to Play Console by hand. The same two files are also listed on the workflow run's
+**Artifacts** tab (`android-release`, kept for 7 days), which is where to find them if the draft was not created.
+
+#### Signing secrets
+
+Under **Settings › Secrets and variables › Actions** add four repository secrets:
+
+| Secret                      | Value                                            |
+| --------------------------- | ------------------------------------------------ |
+| `ANDROID_KEYSTORE_BASE64`   | The release keystore, base64-encoded (see below) |
+| `ANDROID_KEYSTORE_PASSWORD` | The keystore's password                          |
+| `ANDROID_KEY_ALIAS`         | The alias of the release key                     |
+| `ANDROID_KEY_PASSWORD`      | The password of the release key                  |
+
+The workflow decodes the keystore into the runner's temporary directory and hands the four values to Gradle as
+`MAX_RELEASE_STORE_FILE`, `MAX_RELEASE_STORE_PASSWORD`, `MAX_RELEASE_KEY_ALIAS` and `MAX_RELEASE_KEY_PASSWORD`, so
+nothing else needs to be configured. To create a keystore (keep it and its passwords somewhere safe outside the
+repository: Android installs an update only when it is signed with the key of the installed app) and encode it. With the
+default PKCS12 keystore, `keytool` protects the store and the key with one password, so set `ANDROID_KEY_PASSWORD` to
+the same value as `ANDROID_KEYSTORE_PASSWORD` (use `-storetype JKS` if they must differ):
+
+```bash
+keytool -genkeypair -keystore max-release.jks -alias max -keyalg RSA -keysize 2048 -validity 10000
+base64 -w0 max-release.jks   # Linux; on macOS: base64 -i max-release.jks
+```
+
+The AMap Android key is registered for the app's package name and signing certificate (see [Navigation](#navigation)),
+so the map of a signed release works only if the key was registered for the release certificate.
 
 Useful Gradle checks:
 

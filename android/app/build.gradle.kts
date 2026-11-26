@@ -39,6 +39,11 @@ val maxVersionCode = providers.gradleProperty("versionCode").orNull?.trim()?.let
         ?: throw GradleException("-PversionCode must be an integer between 1 and 2100000000, got '$raw'")
 } ?: 1
 
+// The release workflow passes the kit's version with -PversionName= (the tag
+// without its `v`, which the workflow checks against package.json). Local and
+// pull-request builds keep the default, the iOS marketing version.
+val maxVersionName = providers.gradleProperty("versionName").orNull?.trim()?.takeIf { it.isNotEmpty() } ?: "1.0.0"
+
 // Release signing is optional: with none of these set, assembleRelease still
 // produces an unsigned APK (the CI default). Each value comes from a Gradle
 // property (-P or ~/.gradle/gradle.properties) or the matching environment
@@ -72,9 +77,8 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = maxVersionCode
-        // Matches the iOS marketing version.
-        versionName = "1.0.0"
-        testInstrumentationRunner = "io.github.henrycooper86.max.agent.SyntheticQaInstrumentation"
+        // The default matches the iOS marketing version.
+        versionName = maxVersionName
         buildConfigField("String", "GIT_COMMIT", "\"$maxGitCommit\"")
         buildConfigField("String", "AMAP_ANDROID_KEY", "\"${amapAndroidKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }

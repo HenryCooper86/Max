@@ -219,6 +219,20 @@ jobs:
             puts phone.fetch("udid")
           ')
           echo "id=$device_id" >> "$GITHUB_OUTPUT"
+      # Release for the simulator, unsigned: whole-module optimisation and the Release-only code (no self-signed
+      # bypass, the hardened Info.plist) must compile on every change. CI has no distribution certificate, so it
+      # neither archives nor uploads; ios/README.md says what that would take.
+      - name: Build Release for the simulator
+        run: |
+          xcodebuild \
+            -workspace ios/MaxHelmet.xcworkspace \
+            -scheme MaxHelmet \
+            -configuration Release \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}' \
+            CODE_SIGNING_ALLOWED=NO \
+            MAX_GIT_COMMIT="${GITHUB_SHA::12}" \
+            MAX_BUILD_NUMBER="${{ github.run_number }}" \
+            build
       - name: Build and test
         run: |
           xcodebuild \

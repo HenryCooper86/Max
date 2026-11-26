@@ -8,7 +8,7 @@ iOS 客户端使用 Swift 和 SwiftUI，与网页及 Android 使用相同的 `/a
 
 - Xcode 16 或更新版本；iOS 17 或更新版本的模拟器或设备。
 - 真机需要 Apple Developer 签名团队；模拟器不需要。
-- Homebrew Ruby 3.2–4.x、Bundler 4.0.16。仓库锁定 CocoaPods 1.16.x；系统自带 `/usr/bin/ruby` 版本太旧。
+- Homebrew Ruby 3.2–4.x、Bundler 4.0.16。仓库锁定 CocoaPods 1.17.x；系统自带 `/usr/bin/ruby` 版本太旧。
 
 ## 安装依赖与构建
 
@@ -151,3 +151,67 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 | 无声音或回声     | 检查麦克风/蓝牙路由，并用真机测试扬声器与耳机              |
 
 发布候选应记录已评审 SHA、Xcode 配置、构建号、设备和 iOS 版本。生产中继需要主机名匹配、公开受信任的 TLS 证书。手机导航可通过开发版的 **投屏到 HUD** 发往 RDK 的 `/cast` 页面；设置和验收见 [HUD 投屏说明](../docs/rdk-hud-casting.md)。
+
+### 发布构建与 App Store 分发
+
+CI 会把 App 构建两次：Debug 用于测试，Release 带 `CODE_SIGNING_ALLOWED=NO` 构建，让全模块优化和 Release 专属代码
+（无自签名绕过、使用加固的 `Info.plist`）每次变更都必须能编译。两者都不需要 Apple 账号。在仓库根目录手动构建同样的
+Release 模拟器版本：
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
+  -workspace ios/MaxHelmet.xcworkspace \
+  -scheme MaxHelmet \
+  -configuration Release \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  CODE_SIGNING_ALLOWED=NO \
+  MAX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
+```
+
+App 位于 `~/Library/Developer/Xcode/DerivedData/MaxHelmet-*/Build/Products/Release-iphonesimulator/MaxHelmet.app`，
+仅供模拟器使用：未签名，且没有 `MAX_RELAY_HOST` 就无法为真机编译。
+
+真机的 Release 构建才是骑手使用的版本；TestFlight 和 App Store 只接受由所有者的 Apple Developer Program 账号签名的
+构建，而工作流没有这些凭据，所以工作流止步于模拟器：既不归档也不上传 iOS App，GitHub 发布中不含 `.ipa`。在此之前，
+手动方式是 Xcode 的 **Product ▸ Archive** 和 **Distribute App**，在登录了所有者团队的 Mac 上进行，并在
+`Config/Secrets.xcconfig` 中设置 `MAX_DEVELOPMENT_TEAM` 和 `MAX_RELAY_HOST`。在 `.github/workflows/release.yml` 中
+添加 TestFlight 上传需要：
+
+1. **Apple Distribution** 证书（developer.apple.com › Certificates），用 Keychain Access 导出为带密码的 `.p12`
+   文件；工作流把它导入运行器的临时钥匙串，运行结束后删除该钥匙串。
+2. App Store Connect 的**描述文件**（provisioning profile，developer.apple.com › Profiles），对应
+   `io.github.henrycooper86.max`，下载为 `.mobileprovision` 文件并安装到运行器。
+3. **App Store Connect API 密钥**（appstoreconnect.apple.com › Users and Access › Integrations）及其 `.p8` 文件、
+   密钥 ID 和签发者 ID，让 `xcodebuild` 无需 Apple ID 密码即可认证。
+
+| 密钥                                    | 值                                    |
+| --------------------------------------- | ------------------------------------- |
+| `IOS_DISTRIBUTION_CERTIFICATE_BASE64`   | `.p12` 文件的 base64 编码             |
+| `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD` | `.p12` 导出密码                       |
+| `IOS_PROVISIONING_PROFILE_BASE64`       | `.mobileprovision` 文件的 base64 编码 |
+| `IOS_APP_STORE_CONNECT_KEY_ID`          | API 密钥的 ID                         |
+| `IOS_APP_STORE_CONNECT_ISSUER_ID`       | API 密钥的签发者 ID                   |
+| `IOS_APP_STORE_CONNECT_KEY_BASE64`      | `.p8` 文件的 base64 编码              |
+
+该任务会重复 `.github/workflows/ci.yml` 中 `ios` 任务的准备步骤（Ruby、CocoaPods），然后：
+
+```bash
+# 归档：面向真机的 Release 构建，用证书和描述文件手动签名。
+xcodebuild -workspace ios/MaxHelmet.xcworkspace -scheme MaxHelmet -configuration Release \
+  -destination 'generic/platform=iOS' -archivePath MaxHelmet.xcarchive \
+  CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=<团队 ID> CODE_SIGN_IDENTITY="Apple Distribution" \
+  PROVISIONING_PROFILE_SPECIFIER="<描述文件名称或 UUID>" \
+  MAX_RELAY_HOST=<中继主机> MARKETING_VERSION=<版本> MAX_BUILD_NUMBER=<运行编号> \
+  MAX_GIT_COMMIT=<提交> archive
+
+# 导出并上传到 TestFlight，用 API 密钥认证。
+xcodebuild -exportArchive -archivePath MaxHelmet.xcarchive \
+  -exportOptionsPlist ExportOptions.plist -authenticationKeyPath AuthKey.p8 \
+  -authenticationKeyID <密钥 ID> -authenticationKeyIssuerID <签发者 ID>
+```
+
+`ExportOptions.plist` 指明方法（`app-store-connect`）、`destination: upload`、`signingStyle: manual`、团队 ID 以及
+`io.github.henrycooper86.max` 的描述文件。`MARKETING_VERSION` 和 `MAX_BUILD_NUMBER` 成为 App Store Connect 显示的
+版本和构建号，每次上传都需要比上一次更高的构建号。TestFlight 测试和提交 App Store 仍需在 App Store Connect 手动
+完成。

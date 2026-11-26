@@ -24,7 +24,7 @@ iPhone (this app)                       Mac / test server
 - iOS 17+ device or simulator
 - An Apple Developer signing team for running on a physical device (Simulator needs none)
 - Homebrew Ruby 3.2 through 4.x (Ruby 4.0.6 is verified); Apple's `/usr/bin/ruby` is too old.
-- Bundler 4.0.16. The lockfile keeps CocoaPods on the reviewed 1.16.x minor (currently 1.16.2).
+- Bundler 4.0.16. The lockfile keeps CocoaPods on the reviewed 1.17.x minor (currently 1.17.0).
 
 ## Build & run
 
@@ -47,7 +47,7 @@ test -e Config/Secrets.xcconfig || \
 ```
 
 The verification script executes the selected Ruby, Bundler, installed dependency set, and
-CocoaPods binary. It must report Ruby 3.2–4.x, Bundler 4.0.16, and CocoaPods 1.16.x before building.
+CocoaPods binary. It must report Ruby 3.2–4.x, Bundler 4.0.16, and CocoaPods 1.17.x before building.
 
 Set `AMAP_IOS_KEY` only in the ignored `Config/Secrets.xcconfig`; never commit that file. Then
 open `MaxHelmet.xcworkspace` in Xcode and press Run. The app uses `SwiftUI`, `AVFoundation`,
@@ -87,6 +87,71 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 If `xcodebuild` reports that the active developer directory is Command Line Tools, use the
 explicit `DEVELOPER_DIR` command above or switch the machine to full Xcode with `xcode-select`.
+
+### Release builds and App Store distribution
+
+CI builds the app for the simulator twice: Debug for the tests, and Release with `CODE_SIGNING_ALLOWED=NO`, so that
+whole-module optimisation and the Release-only code (no self-signed bypass, the hardened `Info.plist`) must compile on
+every change. Neither needs an Apple account. The same Release build by hand, from the repository root:
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
+  -workspace ios/MaxHelmet.xcworkspace \
+  -scheme MaxHelmet \
+  -configuration Release \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  CODE_SIGNING_ALLOWED=NO \
+  MAX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
+```
+
+The app is in `~/Library/Developer/Xcode/DerivedData/MaxHelmet-*/Build/Products/Release-iphonesimulator/MaxHelmet.app`.
+It is for the simulator only: unsigned, and without `MAX_RELAY_HOST` it would not compile for a device.
+
+A Release build for a device is what riders get, and TestFlight and the App Store take only one signed under an Apple
+Developer Program account, which the workflows have no credentials for. So the workflows stop at the simulator: they
+neither archive nor upload the iOS app, and a GitHub release carries no `.ipa`. Until then the manual route is Xcode's
+**Product ▸ Archive** and **Distribute App** on a Mac signed in to the owner's team, with `MAX_DEVELOPMENT_TEAM` and
+`MAX_RELAY_HOST` in `Config/Secrets.xcconfig`. A TestFlight upload in `.github/workflows/release.yml` would take:
+
+1. An **Apple Distribution** certificate (developer.apple.com › Certificates), exported from Keychain Access as a
+   `.p12` file with a password. The workflow would import it into a temporary keychain on the runner and delete that
+   keychain after the run.
+2. An App Store Connect **provisioning profile** for `io.github.henrycooper86.max` (developer.apple.com › Profiles),
+   downloaded as a `.mobileprovision` file and installed on the runner.
+3. An **App Store Connect API key** (appstoreconnect.apple.com › Users and Access › Integrations) with its `.p8` file,
+   key ID and issuer ID, so that `xcodebuild` authenticates without an Apple ID password.
+
+| Secret                                  | Value                                       |
+| --------------------------------------- | ------------------------------------------- |
+| `IOS_DISTRIBUTION_CERTIFICATE_BASE64`   | The `.p12` file, base64-encoded             |
+| `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD` | The `.p12` export password                  |
+| `IOS_PROVISIONING_PROFILE_BASE64`       | The `.mobileprovision` file, base64-encoded |
+| `IOS_APP_STORE_CONNECT_KEY_ID`          | The API key's ID                            |
+| `IOS_APP_STORE_CONNECT_ISSUER_ID`       | The API key's issuer ID                     |
+| `IOS_APP_STORE_CONNECT_KEY_BASE64`      | The `.p8` file, base64-encoded              |
+
+The job would repeat the `ios` job's setup in `.github/workflows/ci.yml` (Ruby, CocoaPods) and then:
+
+```bash
+# Archive: a Release build for devices, signed with the certificate and the profile.
+xcodebuild -workspace ios/MaxHelmet.xcworkspace -scheme MaxHelmet -configuration Release \
+  -destination 'generic/platform=iOS' -archivePath MaxHelmet.xcarchive \
+  CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=<Team ID> CODE_SIGN_IDENTITY="Apple Distribution" \
+  PROVISIONING_PROFILE_SPECIFIER="<profile name or UUID>" \
+  MAX_RELAY_HOST=<relay host> MARKETING_VERSION=<version> MAX_BUILD_NUMBER=<run number> \
+  MAX_GIT_COMMIT=<commit> archive
+
+# Export and upload to TestFlight, authenticated by the API key.
+xcodebuild -exportArchive -archivePath MaxHelmet.xcarchive \
+  -exportOptionsPlist ExportOptions.plist -authenticationKeyPath AuthKey.p8 \
+  -authenticationKeyID <key ID> -authenticationKeyIssuerID <issuer ID>
+```
+
+`ExportOptions.plist` names the method (`app-store-connect`), `destination: upload`, `signingStyle: manual`, the team
+ID and the profile for `io.github.henrycooper86.max`. `MARKETING_VERSION` and `MAX_BUILD_NUMBER` become the version and
+build that App Store Connect shows, and every upload needs a higher build number than the last. Testing on TestFlight
+and submitting to the App Store stay manual steps in App Store Connect.
 
 ## Run against the relay
 

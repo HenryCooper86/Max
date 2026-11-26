@@ -1,0 +1,9 @@
+/* The console's account pages: the notice at the top of the log-in card, which
+   takes the focus when it appears (AuthCard.tsx), so it needs room above. */
+.cxNotice {
+  margin: 16px 0 0;
+  color: var(--ok);
+  font-size: var(--fs-15);
+  font-weight: 600;
+  line-height: 1.5;
+}

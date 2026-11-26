@@ -10,7 +10,7 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import dns from "node:dns";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAuthRateLimit } from "../server/auth";
+import { LOGIN_BACKOFF_LIMITS, resetAuthRateLimit, resetLoginBackoff } from "../server/auth";
 import { config } from "../server/runtime-config";
 import {
   chargeSession,
@@ -25,6 +25,7 @@ import {
 import { setCloudClock, setCloudPaymentProviders } from "../server/cloud/context";
 import type { PaidOrder, PaymentProvider } from "../server/cloud/payments";
 import { resetCloudDatabase } from "../server/cloud/store";
+import { createPasswordReset } from "../server/cloud/customers";
 
 import * as replayRunner from "../server/cloud/replay-runner";
 import { cloudSessionTokens } from "../server/session-tokens";
@@ -589,6 +590,9 @@ describe("without CLOUD_SECRET_KEY", () => {
       ["GET", "/cloud/api/packs"],
       ["POST", "/cloud/api/signup"],
       ["POST", "/cloud/api/login"],
+      ["POST", "/cloud/api/password"],
+      ["POST", "/cloud/api/reset-password"],
+      ["POST", "/cloud/api/logout-everywhere"],
       ["GET", "/cloud/api/me"],
       ["GET", "/cloud/api/projects"],
       ["POST", "/cloud/pay/wechat/notify"],
@@ -700,6 +704,152 @@ describe("customer accounts", () => {
     }
     expect(statuses.slice(0, -1).every((status) => status === 400 || status === 401)).toBe(true);
     expect(statuses.at(-1)).toBe(429);
+  });
+
+  it("changes the password with the current one, ending every other session and keeping this one", async () => {
+    const email = `dev${randomBytes(3).toString("hex")}@example.com`;
+    const { token } = await signupCustomer(email);
+    const other = (await call("POST", "/cloud/api/login", { json: { email, password: PASSWORD } })).body
+      .token as string;
+    const change = (json: unknown) => call("POST", "/cloud/api/password", { token, json });
+
+    // The current password has to be right, and the new one follows the sign-up rule; nothing changes then.
+    const wrong = await change({ currentPassword: "nope nope nope", newPassword: "a brand new password" });
+    const weak = await change({ currentPassword: PASSWORD, newPassword: "short" });
+    const long = await change({ currentPassword: PASSWORD, newPassword: "p".repeat(201) });
+    expect([wrong.status, weak.status, long.status]).toEqual([400, 400, 400]);
+    expect(wrong.body).toEqual({ ok: false, error: "The current password is wrong." });
+    expect((await call("GET", "/cloud/api/me", { token: other })).status).toBe(200);
+
+    const changed = await change({ currentPassword: PASSWORD, newPassword: "a brand new password" });
+    expect(changed.status).toBe(200);
+    expect(changed.body).toEqual({ ok: true });
+    // This session stays; the other one is gone; only the new password logs in now.
+    expect((await call("GET", "/cloud/api/me", { token })).status).toBe(200);
+    expect((await call("GET", "/cloud/api/me", { token: other })).status).toBe(401);
+    expect((await call("POST", "/cloud/api/login", { json: { email, password: PASSWORD } })).status).toBe(401);
+    expect((await call("POST", "/cloud/api/login", { json: { email, password: "a brand new password" } })).status).toBe(
+      200
+    );
+    // It needs a live session.
+    expect(
+      (await call("POST", "/cloud/api/password", { json: { currentPassword: "x", newPassword: "y" } })).status
+    ).toBe(401);
+  });
+
+  it("signs out everywhere, the current session included, and nobody else", async () => {
+    const email = `dev${randomBytes(3).toString("hex")}@example.com`;
+    const { token } = await signupCustomer(email);
+    const second = (await call("POST", "/cloud/api/login", { json: { email, password: PASSWORD } })).body
+      .token as string;
+    const stranger = await signupCustomer();
+    expect((await call("POST", "/cloud/api/logout-everywhere", { token })).body).toEqual({ ok: true });
+    expect((await call("GET", "/cloud/api/me", { token })).status).toBe(401);
+    expect((await call("GET", "/cloud/api/me", { token: second })).status).toBe(401);
+    expect((await call("GET", "/cloud/api/me", { token: stranger.token })).status).toBe(200);
+    // The password still works: it was a sign-out, not a change.
+    const back = await call("POST", "/cloud/api/login", { json: { email, password: PASSWORD } });
+    expect(back.status).toBe(200);
+    expect((await call("POST", "/cloud/api/logout-everywhere")).status).toBe(401);
+  });
+
+  it("sets a new password with a reset link once, then refuses it; expiry and garbage get one answer", async () => {
+    const email = `dev${randomBytes(3).toString("hex")}@example.com`;
+    const { token, customer } = await signupCustomer(email);
+    const second = (await call("POST", "/cloud/api/login", { json: { email, password: PASSWORD } })).body
+      .token as string;
+    const stranger = await signupCustomer();
+    const link = createPasswordReset(customer.id);
+    expect(link.token).toMatch(/^mcr_[A-Za-z0-9_-]{43}$/);
+    expect(link.expiresAt).toBe(START + 60 * 60_000);
+    const reset = (json: unknown) => call("POST", "/cloud/api/reset-password", { json });
+    const refusal = {
+      status: 403,
+      body: { ok: false, error: "This link is not valid: it may have been used or have expired. Ask for a new one." }
+    };
+    // Unknown, malformed and missing tokens: one answer, the same as a used one.
+    resetAuthRateLimit();
+    for (const bad of [`mcr_${"a".repeat(43)}`, "mcs_wrong", "", undefined, 5]) {
+      expect(await reset({ token: bad, newPassword: "a brand new password" })).toMatchObject(refusal);
+    }
+    // A new password that breaks the rule is refused, and leaves the link unused.
+    expect((await reset({ token: link.token, newPassword: "short" })).status).toBe(400);
+    expect((await call("GET", "/cloud/api/me", { token })).status).toBe(200);
+    // Used: every session of the customer ends and the password is set.
+    const used = await reset({ token: ` ${link.token} `, newPassword: "a brand new password" });
+    expect(used.status).toBe(200);
+    expect(used.body).toEqual({ email });
+    expect((await call("GET", "/cloud/api/me", { token })).status).toBe(401);
+    expect((await call("GET", "/cloud/api/me", { token: second })).status).toBe(401);
+    expect((await call("GET", "/cloud/api/me", { token: stranger.token })).status).toBe(200);
+    expect(await reset({ token: link.token, newPassword: "yet another password" })).toMatchObject(refusal);
+    // Expired links are refused the same way.
+    const later = createPasswordReset(customer.id);
+    clock += 60 * 60_000;
+    expect(await reset({ token: later.token, newPassword: "yet another password" })).toMatchObject(refusal);
+    // Only the new password logs in now.
+    resetAuthRateLimit();
+    expect((await call("POST", "/cloud/api/login", { json: { email, password: PASSWORD } })).status).toBe(401);
+    expect((await call("POST", "/cloud/api/login", { json: { email, password: "a brand new password" } })).status).toBe(
+      200
+    );
+  });
+
+  it("counts password changes and resets in the same per-address limit as sign-up and login", async () => {
+    const { token } = await signupCustomer();
+    const email = `guess${randomBytes(3).toString("hex")}@example.com`;
+    resetAuthRateLimit();
+    resetLoginBackoff();
+    const routes = ["/cloud/api/password", "/cloud/api/reset-password", "/cloud/api/login", "/cloud/api/signup"];
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt <= config.authAttemptsPerMinute; attempt += 1) {
+      const route = routes[attempt % routes.length]!;
+      const json = { currentPassword: "x", newPassword: "y", token: "x", email, password: "y" };
+      statuses.push((await call("POST", route, { token, json })).status);
+    }
+    expect(statuses.slice(0, -1)).not.toContain(429);
+    expect(statuses.at(-1)).toBe(429);
+  });
+
+  it("throttles wrong current passwords across addresses with the login backoff", async () => {
+    const email = `dev${randomBytes(3).toString("hex")}@example.com`;
+    const { token } = await signupCustomer(email);
+    resetAuthRateLimit();
+    resetLoginBackoff();
+    const { accountFailures: toLock, freeFailures } = LOGIN_BACKOFF_LIMITS;
+    const savedTrust = config.trustProxy;
+    const savedHops = config.trustedProxyHops;
+    config.trustProxy = true;
+    config.trustedProxyHops = 1;
+    try {
+      // Rotate addresses so the per-address rate limit and backoff never trip; only the account-wide count locks.
+      const statuses: number[] = [];
+      for (let attempt = 0; attempt < toLock + freeFailures; attempt += 1) {
+        const address = `10.${Math.floor(attempt / freeFailures)}.0.${attempt % freeFailures}`;
+        statuses.push(
+          (
+            await call("POST", "/cloud/api/password", {
+              token,
+              headers: { "X-Forwarded-For": address },
+              json: { currentPassword: "wrong wrong wrong", newPassword: "a brand new password" }
+            })
+          ).status
+        );
+      }
+      expect(statuses.slice(0, toLock).every((status) => status === 400)).toBe(true);
+      expect(statuses.slice(toLock).every((status) => status === 429)).toBe(true);
+      // A locked account is refused even from an address that has never tried, with a Retry-After header.
+      const fresh = await call("POST", "/cloud/api/password", {
+        token,
+        headers: { "X-Forwarded-For": "10.99.0.1" },
+        json: { currentPassword: "wrong wrong wrong", newPassword: "a brand new password" }
+      });
+      expect(fresh.status).toBe(429);
+      expect(Number(fresh.headers.get("retry-after"))).toBeGreaterThan(0);
+    } finally {
+      config.trustProxy = savedTrust;
+      config.trustedProxyHops = savedHops;
+    }
   });
 });
 

@@ -94,6 +94,28 @@ describe("cloud api client", () => {
     expect(JSON.parse(String(calls[5].init?.body))).toEqual({ pack: "cny50", provider: "wechat" });
   });
 
+  it("changes the password, signs out everywhere and sets a password with a reset link", async () => {
+    const { fetcher, calls } = fake(200, { ok: true, email: "a@b.c" });
+    const api = createCloudApi(fetcher);
+    await api.changePassword("mcs_t", "old password", "new password");
+    await api.logoutEverywhere("mcs_t");
+    await api.resetPassword("mcr_link", "new password");
+    expect(calls.map((call) => `${call.init?.method} ${call.url}`)).toEqual([
+      "POST /cloud/api/password",
+      "POST /cloud/api/logout-everywhere",
+      "POST /cloud/api/reset-password"
+    ]);
+    expect(headerOf(calls[0], "authorization")).toBe("Bearer mcs_t");
+    expect(headerOf(calls[1], "authorization")).toBe("Bearer mcs_t");
+    // A reset link is not a session: it goes in the body, and that call is anonymous.
+    expect(headerOf(calls[2], "authorization")).toBeUndefined();
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+      currentPassword: "old password",
+      newPassword: "new password"
+    });
+    expect(JSON.parse(String(calls[2].init?.body))).toEqual({ token: "mcr_link", newPassword: "new password" });
+  });
+
   it("maps 401, 503, other errors and network failures", async () => {
     const unauthorized = await createCloudApi(fake(401, { ok: false, error: "Sign in again" }).fetcher)
       .me("x")

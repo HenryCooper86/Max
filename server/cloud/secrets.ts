@@ -26,8 +26,11 @@ export function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
-/** A new opaque token: the prefix followed by 32 random bytes in base64url. */
-export function newToken(prefix: "mcs_" | "mpk_"): string {
+/**
+ * A new opaque token (`mcs_` a console login, `mpk_` a project key, `mcr_` a
+ * password-reset link): the prefix followed by 32 random bytes in base64url.
+ */
+export function newToken(prefix: "mcs_" | "mpk_" | "mcr_"): string {
   return `${prefix}${randomBytes(32).toString("base64url")}`;
 }
 

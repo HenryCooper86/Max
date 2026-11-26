@@ -212,6 +212,14 @@ export function createCloudApi(fetcher?: FetchLike) {
     login: (email: string, password: string) =>
       send<{ token: string; customer: Customer }>(null, "POST", "/login", { email, password }),
     logout: (token: string) => send<{ ok: true }>(token, "POST", "/logout"),
+    /** Sets a new password once the current one is checked; the customer's other sessions end, this one stays. */
+    changePassword: (token: string, currentPassword: string, newPassword: string) =>
+      send<{ ok: true }>(token, "POST", "/password", { currentPassword, newPassword }),
+    /** Ends every session of the customer, this one included. */
+    logoutEverywhere: (token: string) => send<{ ok: true }>(token, "POST", "/logout-everywhere"),
+    /** Sets a new password with a reset link; the customer is signed out everywhere. Says whose password it set. */
+    resetPassword: (token: string, newPassword: string) =>
+      send<{ email: string }>(null, "POST", "/reset-password", { token, newPassword }),
     me: (token: string) => get<Me>(token, "/me"),
     listProjects: (token: string) => get<{ projects: Project[] }>(token, "/projects"),
     createProject: (token: string, start: ProjectStart) =>

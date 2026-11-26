@@ -1,9 +1,10 @@
 // Max Cloud's SQLite store ($STUDIO_DIR/cloud.sqlite): customers, their login
-// sessions, projects, the money ledger and top-up orders. Every SQL statement
-// of Max Cloud lives here. Balances change only through ledger rows, which a
-// trigger applies to the customer's `balance_fen` in the same transaction, and
-// the two writes that move money (booking a session, crediting a paid order)
-// each run in one BEGIN IMMEDIATE transaction, idempotent on UNIQUE(kind, ref).
+// sessions and password-reset links, projects, the money ledger and top-up
+// orders. Every SQL statement of Max Cloud lives here. Balances change only
+// through ledger rows, which a trigger applies to the customer's `balance_fen`
+// in the same transaction, and the two writes that move money (booking a
+// session, crediting a paid order) each run in one BEGIN IMMEDIATE transaction,
+// idempotent on UNIQUE(kind, ref).
 
 import type { InstallSignalKind } from "../../shared/studio-install";
 import type { StudioActivation } from "../../shared/cloud-studio";
@@ -240,6 +241,12 @@ function database(): DatabaseSync {
         expires_at INTEGER NOT NULL,
         used_by TEXT NULL,
         used_at INTEGER NULL
+      );
+      CREATE TABLE IF NOT EXISTS password_resets (
+        customer_id TEXT PRIMARY KEY REFERENCES customers(id),
+        token_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS live_sessions (
         session_id TEXT PRIMARY KEY,
@@ -501,20 +508,49 @@ export function customerById(customerId: string): CustomerRow | undefined {
   return database().prepare("SELECT * FROM customers WHERE id = ?").get(customerId) as CustomerRow | undefined;
 }
 
+/** Stores a session (and prunes expired ones and past the newest 20) in the transaction `db` is in. */
+function insertSessionIn(db: DatabaseSync, tokenHash: string, customerId: string, expiresAt: number, at: number): void {
+  db.prepare("DELETE FROM customer_sessions WHERE expires_at <= ?").run(at);
+  db.prepare("INSERT INTO customer_sessions (token_hash, customer_id, expires_at) VALUES (?, ?, ?)").run(
+    tokenHash,
+    customerId,
+    expiresAt
+  );
+  db.prepare(
+    `DELETE FROM customer_sessions WHERE customer_id = ? AND token_hash NOT IN (
+       SELECT token_hash FROM customer_sessions WHERE customer_id = ? ORDER BY expires_at DESC LIMIT ?
+     )`
+  ).run(customerId, customerId, MAX_SESSIONS_PER_CUSTOMER);
+}
+
 /** Stores a login session, keeping at most the newest 20 per customer. */
 export function insertSession(tokenHash: string, customerId: string, expiresAt: number, at: number): void {
-  immediate((db) => {
-    db.prepare("DELETE FROM customer_sessions WHERE expires_at <= ?").run(at);
-    db.prepare("INSERT INTO customer_sessions (token_hash, customer_id, expires_at) VALUES (?, ?, ?)").run(
-      tokenHash,
-      customerId,
-      expiresAt
-    );
-    db.prepare(
-      `DELETE FROM customer_sessions WHERE customer_id = ? AND token_hash NOT IN (
-         SELECT token_hash FROM customer_sessions WHERE customer_id = ? ORDER BY expires_at DESC LIMIT ?
-       )`
-    ).run(customerId, customerId, MAX_SESSIONS_PER_CUSTOMER);
+  immediate((db) => insertSessionIn(db, tokenHash, customerId, expiresAt, at));
+}
+
+/**
+ * Stores a login session only while the customer's password is still the one
+ * that was verified (`verified`): a login that read the customer before a
+ * password change or reset committed must not mint a session that survives the
+ * revoke. False when the password moved on.
+ */
+export function insertSessionIfPasswordMatches(
+  tokenHash: string,
+  customerId: string,
+  expiresAt: number,
+  at: number,
+  verified: StoredPassword
+): boolean {
+  return immediate((db) => {
+    if (
+      !db
+        .prepare("SELECT 1 FROM customers WHERE id = ? AND password_hash = ? AND password_salt = ?")
+        .get(customerId, verified.hash, verified.salt)
+    ) {
+      return false;
+    }
+    insertSessionIn(db, tokenHash, customerId, expiresAt, at);
+    return true;
   });
 }
 
@@ -534,6 +570,103 @@ export function sessionCustomer(tokenHash: string, at: number): CustomerRow | un
 
 export function deleteSession(tokenHash: string): void {
   database().prepare("DELETE FROM customer_sessions WHERE token_hash = ?").run(tokenHash);
+}
+
+// Each write below is one transaction, so a password and the sessions it ends
+// change together, whoever else is writing at the same time.
+
+/** Ends every session of a customer and their password-reset link: signed out on every device, no pending link. */
+export function deleteCustomerSessions(customerId: string): void {
+  immediate((db) => {
+    db.prepare("DELETE FROM customer_sessions WHERE customer_id = ?").run(customerId);
+    db.prepare("DELETE FROM password_resets WHERE customer_id = ?").run(customerId);
+  });
+}
+
+/** What a customer's `password_hash` and `password_salt` hold. */
+type StoredPassword = { hash: string; salt: string };
+
+/**
+ * Sets the password of the customer behind a live session, and ends every
+ * other session of theirs, in one transaction: the session that asked stays
+ * signed in. `verified` is the stored password the current one was checked
+ * against. "signed-out" when that session is no longer live, and
+ * "changed-meanwhile" when the password is no longer that one (it was changed
+ * or reset while the new one was being hashed): nothing changes then.
+ */
+export function replaceCustomerPassword(
+  tokenHash: string,
+  verified: StoredPassword,
+  next: StoredPassword,
+  at: number
+): "changed" | "signed-out" | "changed-meanwhile" {
+  return immediate((db) => {
+    const session = db
+      .prepare("SELECT customer_id FROM customer_sessions WHERE token_hash = ? AND expires_at > ?")
+      .get(tokenHash, at) as { customer_id: string } | undefined;
+    if (!session) return "signed-out";
+    const updated = db
+      .prepare(
+        "UPDATE customers SET password_hash = ?, password_salt = ? WHERE id = ? AND password_hash = ? AND password_salt = ?"
+      )
+      .run(next.hash, next.salt, session.customer_id, verified.hash, verified.salt);
+    if (updated.changes !== 1) return "changed-meanwhile";
+    db.prepare("DELETE FROM customer_sessions WHERE customer_id = ? AND token_hash <> ?").run(
+      session.customer_id,
+      tokenHash
+    );
+    // The password it would have replaced is gone, so any outstanding link is too.
+    db.prepare("DELETE FROM password_resets WHERE customer_id = ?").run(session.customer_id);
+    return "changed";
+  });
+}
+
+// A customer has at most one reset link at a time: a new one replaces the earlier one.
+
+/** Stores a customer's reset token, as a hash, until `expiresAt`; expired links are removed with it. */
+export function insertPasswordReset(customerId: string, tokenHash: string, expiresAt: number, at: number): void {
+  immediate((db) => {
+    db.prepare("DELETE FROM password_resets WHERE expires_at <= ?").run(at);
+    db.prepare(
+      `INSERT INTO password_resets (customer_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(customer_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at,
+         expires_at = excluded.expires_at`
+    ).run(customerId, tokenHash, at, expiresAt);
+  });
+}
+
+/** The customer a reset token is for while it is live; undefined for any other token, or once it has expired. */
+export function passwordResetCustomer(tokenHash: string, at: number): CustomerRow | undefined {
+  return database()
+    .prepare(
+      `SELECT c.* FROM customers c JOIN password_resets r ON r.customer_id = c.id
+       WHERE r.token_hash = ? AND r.expires_at > ?`
+    )
+    .get(tokenHash, at) as CustomerRow | undefined;
+}
+
+/**
+ * Sets a customer's password, ends every session of theirs and uses up the
+ * reset token, in one transaction: a link sets one password however many
+ * requests carry it. False, changing nothing, when the token is no longer
+ * live (used, replaced by a newer link, or expired while the password was
+ * being hashed).
+ */
+export function consumePasswordReset(tokenHash: string, next: StoredPassword, at: number): boolean {
+  return immediate((db) => {
+    const reset = db
+      .prepare("SELECT customer_id FROM password_resets WHERE token_hash = ? AND expires_at > ?")
+      .get(tokenHash, at) as { customer_id: string } | undefined;
+    if (!reset) return false;
+    db.prepare("UPDATE customers SET password_hash = ?, password_salt = ? WHERE id = ?").run(
+      next.hash,
+      next.salt,
+      reset.customer_id
+    );
+    db.prepare("DELETE FROM password_resets WHERE customer_id = ?").run(reset.customer_id);
+    db.prepare("DELETE FROM customer_sessions WHERE customer_id = ?").run(reset.customer_id);
+    return true;
+  });
 }
 
 // --- projects -------------------------------------------------------------------

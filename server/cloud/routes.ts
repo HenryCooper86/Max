@@ -13,6 +13,7 @@ import { projectWebhooks } from "./conversation-webhook";
 import { projectTraces } from "./traces";
 import { listConversations, readConversation } from "./conversations";
 import {
+  changePassword,
   createProject,
   customerForToken,
   deleteProject,
@@ -25,11 +26,14 @@ import {
   projectTracesHeaders,
   projectWebhookSecret,
   publicCustomer,
+  resetPassword,
   revealWebhookSecret,
   rotateProjectKey,
   rotateWebhookSecret,
+  SIGNED_OUT,
   signup,
-  type Result
+  type Result,
+  verifyCurrentPassword
 } from "./customers";
 import {
   draftRevisionProject,
@@ -50,7 +54,7 @@ import { runDraftReplay } from "./replay-runner";
 import { mintEmbedSession, mintTestSession } from "./sessions";
 import { liveProject, readStudioLiveRevision } from "./store";
 import { testProjectTool } from "./tools";
-import { customerFunds, ledgerEntries, usageSummary, type CustomerRow } from "./store";
+import { customerFunds, deleteCustomerSessions, ledgerEntries, usageSummary, type CustomerRow } from "./store";
 import { creditAccepted, creditPaidOrder, createTopup, readOrder, topupStatus, validOrderId } from "./topups";
 
 const log = createLogger("cloud");
@@ -137,7 +141,7 @@ function requireCustomer(req: Request, res: Response, next: NextFunction): void 
   const token = bearerToken(req);
   const customer = token ? customerForToken(token) : undefined;
   if (!customer) {
-    res.status(401).json({ ok: false, error: "Log in to continue." });
+    res.status(401).json({ ok: false, error: SIGNED_OUT });
     return;
   }
   res.locals.cloudCustomer = customer;
@@ -187,12 +191,46 @@ export function registerCloudRoutes(app: express.Express): void {
     })
   );
 
+  // With a link the operator made (npm run cloud:reset-password): nobody is signed in, so before the customer gate.
+  api.post(
+    "/reset-password",
+    rateLimited,
+    handle(async (req, res) => send(res, await resetPassword(body(req).token, body(req).newPassword)))
+  );
+
   api.use(requireCustomer);
 
   api.post(
     "/logout",
     handle((_req, res) => {
       logout(res.locals.cloudToken as string);
+      res.json({ ok: true });
+    })
+  );
+
+  api.post(
+    "/password",
+    rateLimited,
+    handle(async (req, res) => {
+      const token = res.locals.cloudToken as string;
+      const customer = customerOf(res);
+      const outcome = await withLoginBackoff("cloud", customer.email, clientAddress(req), () =>
+        verifyCurrentPassword(token, body(req).currentPassword)
+      );
+      if (outcome.locked) {
+        res.setHeader("Retry-After", String(outcome.retryAfterSeconds));
+        res.status(429).json({ ok: false, error: "Too many attempts. Try again in a minute." });
+        return;
+      }
+      const verified = outcome.result;
+      if (!verified.ok) return send(res, verified);
+      send(res, await changePassword(token, body(req).newPassword, verified.value));
+    })
+  );
+  api.post(
+    "/logout-everywhere",
+    handle((_req, res) => {
+      deleteCustomerSessions(customerOf(res).id);
       res.json({ ok: true });
     })
   );

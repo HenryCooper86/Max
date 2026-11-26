@@ -8,17 +8,22 @@ import { createLogger } from "../logger";
 import { analysisUsesProjectKey } from "./analysis";
 import { cloudSecretKey, cloudSecretKeys, now } from "./context";
 import {
+  consumePasswordReset,
   customerByEmail,
   deleteOpenInvite,
   deleteSession,
   insertCustomer,
   insertCustomerWithInvite,
   insertInvite,
-  openInvites,
+  insertPasswordReset,
   insertProject,
   insertSession,
+  insertSessionIfPasswordMatches,
   liveProject,
   liveProjects,
+  openInvites,
+  passwordResetCustomer,
+  replaceCustomerPassword,
   replaceProjectKey,
   revokeProjectModelKey,
   sessionCustomer,
@@ -81,6 +86,8 @@ const LIMITS = { name: 60, assistantName: 24, instructions: 8000, greeting: 300,
 const BACKENDS: readonly Backend[] = ["openai", "gemini", "grok"];
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
 const WRONG_LOGIN = "Wrong email or password";
+/** The rule a new password follows, at sign-up, at a change and at a reset. */
+const PASSWORD_RULE = `Use a password of ${MIN_PASSWORD_LENGTH} to ${MAX_PASSWORD_LENGTH} characters.`;
 // Hashed when the email is unknown, so a login takes as long whether or not the account exists.
 const DECOY_SALT = newPasswordSalt();
 
@@ -172,7 +179,7 @@ export async function signup(
   const email = normalizeEmail(emailInput);
   if (!email) return fail(400, "Enter a valid email address.");
   if (!validPassword(passwordInput)) {
-    return fail(400, `Use a password of ${MIN_PASSWORD_LENGTH} to ${MAX_PASSWORD_LENGTH} characters.`);
+    return fail(400, PASSWORD_RULE);
   }
   const salt = newPasswordSalt();
   const row: CustomerRow = {
@@ -205,7 +212,21 @@ export async function login(
   if (!customer || !validPassword(passwordInput) || !passwordHashesMatch(hash, customer.password_hash)) {
     return fail(401, WRONG_LOGIN);
   }
-  return { ok: true, value: startSession(customer) };
+  // A password change or reset that committed while the password was being
+  // hashed has already revoked every session; the session is inserted only
+  // while the password is still the one that was verified, so this login
+  // cannot mint one that survives the revoke.
+  const at = now();
+  const token = newToken("mcs_");
+  if (
+    !insertSessionIfPasswordMatches(hashToken(token), customer.id, at + SESSION_LIFETIME_MS, at, {
+      hash: customer.password_hash,
+      salt: customer.password_salt
+    })
+  ) {
+    return fail(401, WRONG_LOGIN);
+  }
+  return { ok: true, value: { token, customer: publicCustomer(customer) } };
 }
 
 /** The customer behind an `mcs_` token, if it is live. */
@@ -216,6 +237,98 @@ export function customerForToken(token: string): CustomerRow | undefined {
 
 export function logout(token: string): void {
   deleteSession(hashToken(token));
+}
+
+/** What a request without a live session is told. */
+export const SIGNED_OUT = "Log in to continue.";
+
+// --- the password ----------------------------------------------------------------
+
+const WRONG_CURRENT_PASSWORD = "The current password is wrong.";
+
+/**
+ * Checks the current password of the customer signed in with `token`. The
+ * change-password route counts a wrong one with the login backoff, so this is
+ * a separate step from the change itself: a right password clears the count,
+ * a wrong one is a guess. Returns the customer once the password is right.
+ */
+export async function verifyCurrentPassword(
+  token: string,
+  currentPasswordInput: unknown
+): Promise<Result<CustomerRow>> {
+  const customer = sessionCustomer(hashToken(token), now());
+  if (!customer) return fail(401, SIGNED_OUT);
+  const current =
+    typeof currentPasswordInput === "string" ? currentPasswordInput.slice(0, MAX_PASSWORD_LENGTH + 1) : "";
+  const currentHash = await hashPassword(current, customer.password_salt);
+  if (!passwordHashesMatch(currentHash, customer.password_hash)) return fail(400, WRONG_CURRENT_PASSWORD);
+  return { ok: true, value: customer };
+}
+
+/**
+ * Sets a new password for the customer whose current password was just
+ * verified (`verified`, from verifyCurrentPassword). Every other session of
+ * the customer then ends, so a stolen token dies with the password; the one
+ * that asked stays signed in.
+ */
+export async function changePassword(
+  token: string,
+  newPasswordInput: unknown,
+  verified: CustomerRow
+): Promise<Result<{ ok: true }>> {
+  const tokenHash = hashToken(token);
+  if (!validPassword(newPasswordInput)) return fail(400, PASSWORD_RULE);
+  const salt = newPasswordSalt();
+  const outcome = replaceCustomerPassword(
+    tokenHash,
+    { hash: verified.password_hash, salt: verified.password_salt },
+    { hash: await hashPassword(newPasswordInput, salt), salt },
+    now()
+  );
+  if (outcome === "signed-out") return fail(401, SIGNED_OUT);
+  if (outcome === "changed-meanwhile") {
+    return fail(409, "The password was already changed from another session. Try again with the new one.");
+  }
+  log.info("customer password changed", { customerId: verified.id });
+  return { ok: true, value: { ok: true } };
+}
+
+const RESET_TOKEN = /^mcr_[A-Za-z0-9_-]{43}$/;
+/** How long a password-reset link works for. */
+const RESET_LIFETIME_MS = 60 * 60_000;
+// One answer for a link that is unknown, used, replaced or expired, so it says nothing about which it was.
+const INVALID_RESET = "This link is not valid: it may have been used or have expired. Ask for a new one.";
+
+/**
+ * A new single-use link that sets a customer's password, valid for an hour
+ * and replacing any earlier one. It is for the operator, who hands it to the
+ * customer over a channel they trust: the relay sends no email
+ * (`npm run cloud:reset-password`).
+ */
+export function createPasswordReset(customerId: string): { token: string; expiresAt: number } {
+  const at = now();
+  const expiresAt = at + RESET_LIFETIME_MS;
+  const token = newToken("mcr_");
+  insertPasswordReset(customerId, hashToken(token), expiresAt, at);
+  return { token, expiresAt };
+}
+
+/**
+ * Sets a new password with a reset link (createPasswordReset) and uses the
+ * link up: the customer is then signed out everywhere. An unknown, used or
+ * expired link gets one answer, the same for all three. A new password that
+ * breaks the rule is refused and leaves the link unused.
+ */
+export async function resetPassword(tokenInput: unknown, passwordInput: unknown): Promise<Result<{ email: string }>> {
+  const token = typeof tokenInput === "string" ? tokenInput.trim() : "";
+  const customer = RESET_TOKEN.test(token) ? passwordResetCustomer(hashToken(token), now()) : undefined;
+  if (!customer) return fail(403, INVALID_RESET);
+  if (!validPassword(passwordInput)) return fail(400, PASSWORD_RULE);
+  const salt = newPasswordSalt();
+  const used = consumePasswordReset(hashToken(token), { hash: await hashPassword(passwordInput, salt), salt }, now());
+  if (!used) return fail(403, INVALID_RESET);
+  log.info("customer password reset", { customerId: customer.id });
+  return { ok: true, value: { email: customer.email } };
 }
 
 // --- projects -------------------------------------------------------------------

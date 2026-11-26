@@ -45,6 +45,36 @@ invitations**: add an optional note (who it is for), generate the link, and send
 (`https://<relay>/console?invite=cinv_…`) creates one account and expires after 7 days; unused links can be revoked
 there. Logging in needs no invitation. To let anyone sign up instead, set `CLOUD_SIGNUP=open`.
 
+## Account security and recovery
+
+The console's **Account** area lets a signed-in customer change their password (current password plus a new one, the
+same rule as sign-up) and **sign out everywhere**. A password change ends every other session of the customer, so a
+stolen token dies with the password while the device that made the change stays signed in; signing out everywhere ends
+every session, this one included. Both also end any outstanding password-reset link for the customer. Passwords are
+scrypt-hashed and sessions are stored only as SHA-256 hashes, so none of that data helps whoever reads the database. A
+login that read a customer just before a change or reset committed cannot mint a session that survives the revoke:
+the session is written only while the password it was checked against is still the stored one, and a wrong current
+password is throttled like a login attempt (per address, and across addresses with the login backoff).
+
+The relay sends no email, and none is added, so a forgotten password cannot be emailed back. To help a customer who
+cannot log in, make a one-use link and hand it over a channel you trust:
+
+```bash
+npm run cloud:reset-password -- dev@example.com
+```
+
+Run it on the relay host, in the app directory, where the relay's data lives (the same `STUDIO_DIR`, default
+`~/.max-relay`). It prints `https://<relay>/console/reset?token=mcr_…` — at `CLOUD_PUBLIC_URL` when that is set, else
+`TELEPHONY_PUBLIC_URL`, else `http://localhost:<PORT>` with a note to replace that address with the one your customers
+reach the relay at. The relay can keep running: it reads the link from the database when the customer opens it.
+
+The link works once, for 60 minutes, and replaces any earlier link for the same customer. Its token is stored only as
+a hash, never itself. The page it opens sets a new password (the sign-up rule again); on success every session of the
+customer ends and the link is used up. An unknown, used, replaced or expired link gets one and the same refusal, which
+says nothing about which it was, and password changes and resets are rate-limited like the other `/cloud` credential
+routes. Treat the link as the account's keys: give it only to the person it is for, over a channel that is already
+theirs.
+
 ## Studio activation metrics
 
 In **Admin → Overview → Studio activation**, operators can see how many projects created in the last 30 days

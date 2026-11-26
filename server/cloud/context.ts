@@ -81,18 +81,32 @@ export function setCloudInstanceId(next?: string): void {
   instanceId = next ?? `ins_${randomBytes(8).toString("hex")}`;
 }
 
-/** CLOUD_PUBLIC_URL without a trailing slash, or undefined when unset or not an http(s) URL. */
-export function cloudPublicUrl(): string | undefined {
-  const raw = process.env.CLOUD_PUBLIC_URL?.trim();
-  if (!raw) return undefined;
+/** An http(s) address without a trailing slash, a query, a fragment or credentials; undefined for anything else. */
+function pageOrigin(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
   try {
-    const url = new URL(raw);
+    const url = new URL(value);
     if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
     if (url.search || url.hash || url.username || url.password) return undefined;
     return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
   } catch {
     return undefined;
   }
+}
+
+/** CLOUD_PUBLIC_URL without a trailing slash, or undefined when unset or not an http(s) URL. */
+export function cloudPublicUrl(): string | undefined {
+  return pageOrigin(process.env.CLOUD_PUBLIC_URL);
+}
+
+/**
+ * TELEPHONY_PUBLIC_URL: the relay's public address as its phone carriers
+ * reach it, which is where its pages are reached too. Undefined like
+ * CLOUD_PUBLIC_URL when unset or not an http(s) URL.
+ */
+export function relayPublicUrl(): string | undefined {
+  return pageOrigin(process.env.TELEPHONY_PUBLIC_URL);
 }
 
 /** True only when CLOUD_SECRET_KEY decodes to exactly 32 bytes. */

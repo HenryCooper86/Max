@@ -20,6 +20,7 @@
     "cloud:backup": "tsx scripts/cloud-backup.ts",
     "cloud:credit": "tsx scripts/cloud-credit.ts",
     "cloud:reencrypt": "tsx scripts/cloud-reencrypt.ts",
+    "cloud:reset-password": "tsx scripts/cloud-reset-password.ts",
     "cloud:settle": "tsx scripts/cloud-settle.ts",
     "check:sdk": "tsc -p sdk/tsconfig.json --noEmit",
     "generate:protocol": "tsx scripts/generate-agent-protocol.ts",

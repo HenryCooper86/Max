@@ -1,7 +1,8 @@
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { INVITE_REQUEST_URL } from "../lib/pricing";
 import { ApiError, type CloudApi } from "./api";
 import { useSay } from "./hooks";
+import "./account.css";
 
 type Mode = "signup" | "login";
 const MODES: readonly Mode[] = ["signup", "login"];
@@ -13,24 +14,40 @@ export function inviteFromLocation(search: string): string {
   return /^cinv_[0-9a-f]{32}$/.test(code) ? code : "";
 }
 
+/**
+ * What happened just before the log-in card was shown, in both languages. It
+ * is said at the top of the card and takes the focus; `email` fills in the
+ * email field.
+ */
+export type Notice = { zh: string; en: string; email?: string };
+
 /** One card: Create account (by invitation) / Log in. */
 export function AuthCard({
   api,
   onSignedIn,
-  invite: initialInvite = ""
+  invite: initialInvite = "",
+  notice = null
 }: {
   api: CloudApi;
   onSignedIn: (token: string) => void;
   /** From the invitation link; opens the card on Create account. */
   invite?: string;
+  /** What happened just before (a password was set, every device was signed out). */
+  notice?: Notice | null;
 }) {
   const say = useSay();
+  const noticeRef = useRef<HTMLParagraphElement>(null);
   const [mode, setMode] = useState<Mode>(initialInvite ? "signup" : "login");
   const [invite, setInvite] = useState(initialInvite);
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(notice?.email ?? "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Assistive technology reads the notice when it appears: it takes the focus.
+  useEffect(() => {
+    if (notice) noticeRef.current?.focus();
+  }, [notice]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -89,6 +106,11 @@ export function AuthCard({
           "Early access is by invitation. 1,000 free minutes every month; bring your own OpenAI, Gemini or xAI key."
         )}
       </p>
+      {notice ? (
+        <p className="cxNotice" tabIndex={-1} ref={noticeRef}>
+          {say(notice.zh, notice.en)}
+        </p>
+      ) : null}
       <div className="cxTabs" role="tablist" aria-label={say("账户", "Account")}>
         {MODES.map((value, index) => (
           <button

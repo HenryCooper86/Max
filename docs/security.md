@@ -122,8 +122,8 @@ remains the control for them. Never treat the origin as authentication.
 | `RELAY_MAX_PAYLOAD_BYTES`  | 393216  | Largest single WebSocket message.                                                                                                 |
 
 `AUTH_ATTEMPTS_PER_MINUTE` applies to each of these on its own, so using up one does not lock a visitor out of another:
-relay login and registration, relay password change, Max Cloud login and sign-up, anonymous token minting on an open
-relay, and Max Cloud tool tests.
+relay login and registration, relay password change, Max Cloud login, sign-up, password change and password reset
+(one bucket for the four), anonymous token minting on an open relay, and Max Cloud tool tests.
 
 Both limiters are true sliding windows, and each remembers at most 10,000 addresses. When a table is full, a new
 address takes the place of the one that has gone longest without an attempt, refused attempts counting as attempts:

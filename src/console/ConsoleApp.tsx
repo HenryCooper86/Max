@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LanguageProvider, LanguageToggle } from "../components/LanguageToggle";
 import { CONTACT_EMAIL, contactUrl } from "../lib/pricing";
-import { PRICING_PATH, REPOSITORY_URL } from "../lib/routes";
+import { CONSOLE_PATH, PRICING_PATH, REPOSITORY_URL } from "../lib/routes";
 import { ApiError, createCloudApi } from "./api";
 import { Mascot } from "../components/Mascot";
 import { SiteMark, useSiteLogo } from "../components/SiteMark";
-import { AuthCard, inviteFromLocation } from "./AuthCard";
+import { AccountCard } from "./AccountCard";
+import { AuthCard, inviteFromLocation, type Notice } from "./AuthCard";
 import { BalanceCard } from "./BalanceCard";
 import { useConsoleData, useSay, type Session } from "./hooks";
 import { ProjectsSection } from "./ProjectsSection";
 import { readToken, storeToken } from "./session";
 import { TopUpDialog } from "./TopUpDialog";
 import { ActivitySection, UsageSection } from "./UsageSection";
+import { isResetPath, ResetPasswordCard, resetTokenFromLocation } from "./ResetPasswordCard";
 
 const DOCS_URL = `${REPOSITORY_URL}#readme`;
 
@@ -57,7 +59,7 @@ function ConsoleHeader({ onLogout }: { onLogout?: () => void }) {
   );
 }
 
-function Dashboard({ session }: { session: Session }) {
+function Dashboard({ session, onSignedOut }: { session: Session; onSignedOut: () => void }) {
   const say = useSay();
   const data = useConsoleData(session);
   // The button that opened the top-up dialog, so that it can return the focus there.
@@ -86,9 +88,7 @@ function Dashboard({ session }: { session: Session }) {
       />
       <UsageSection usage={data.usage} />
       <ActivitySection entries={data.ledger} />
-      {data.me ? (
-        <p className="cxMuted">{say(`已登录：${data.me.customer.email}`, `Signed in as ${data.me.customer.email}`)}</p>
-      ) : null}
+      <AccountCard session={session} email={data.me?.customer.email ?? null} onSignedOut={onSignedOut} />
       {topUpOpener ? (
         <TopUpDialog session={session} opener={topUpOpener} onClose={closeTopUp} onPaid={data.refreshMoney} />
       ) : null}
@@ -116,6 +116,8 @@ function Console() {
   const api = useMemo(() => createCloudApi(), []);
   const [token, setToken] = useState<string | null>(() => readToken());
   const [unavailable, setUnavailable] = useState(false);
+  // What the log-in card says at its top: a password was set, or every device was signed out.
+  const [notice, setNotice] = useState<Notice | null>(null);
   const activeToken = useRef(token);
   const changeToken = useCallback((next: string | null) => {
     activeToken.current = next;
@@ -124,9 +126,14 @@ function Console() {
     setUnavailable(false);
   }, []);
 
+  // `/console/reset`, the page a password-reset link opens, whoever is signed in on this browser.
+  const resetting = isResetPath(window.location.pathname);
+  const resetToken = resetting ? resetTokenFromLocation(window.location.search) : null;
   useEffect(() => {
-    document.title = say("控制台 · Max Cloud", "Console · Max Cloud");
-  }, [say]);
+    document.title = resetting
+      ? say("重置密码 · Max Cloud", "Reset password · Max Cloud")
+      : say("控制台 · Max Cloud", "Console · Max Cloud");
+  }, [say, resetting]);
 
   // Logged out: ask once whether Max Cloud is on at all.
   useEffect(() => {
@@ -156,8 +163,26 @@ function Console() {
 
   const logout = () => {
     const current = token;
+    setNotice(null);
     changeToken(null);
     if (current) void api.logout(current).catch(() => undefined);
+  };
+
+  // Every session ended on the relay: forget this browser's, and say so on the log-in card.
+  const signedOutEverywhere = () => {
+    setNotice({ zh: "已在所有设备上退出登录。", en: "You are signed out on every device." });
+    changeToken(null);
+  };
+
+  // The link is used up, and every session ended with it: keep the token out of the address bar and history.
+  const passwordReset = (email: string) => {
+    setNotice({
+      zh: `密码已修改。请用新密码登录 ${email}。`,
+      en: `Your password is changed. Log in to ${email} with the new one.`,
+      email
+    });
+    window.history.replaceState(null, "", CONSOLE_PATH);
+    changeToken(null);
   };
 
   const session: Session | null = useMemo(() => (token ? { api, token, fail } : null), [api, token, fail]);
@@ -168,13 +193,17 @@ function Console() {
       <main id="main" className="siteMain cxMain">
         {unavailable ? (
           <NotEnabled />
+        ) : resetToken !== null ? (
+          <ResetPasswordCard api={api} token={resetToken} onError={fail} onDone={passwordReset} />
         ) : session ? (
-          <Dashboard session={session} />
+          <Dashboard session={session} onSignedOut={signedOutEverywhere} />
         ) : (
           <AuthCard
             api={api}
+            notice={notice}
             invite={inviteFromLocation(window.location.search)}
             onSignedIn={(next) => {
+              setNotice(null);
               changeToken(next);
               // The invitation is used up: keep it out of the address bar and history.
               if (window.location.search) window.history.replaceState(null, "", window.location.pathname);

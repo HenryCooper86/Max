@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-11-26 — Account recovery, release builds and loose ends
+
+- Pushing a kit tag (`v*`) now attaches the Android app to the draft GitHub release, not only the kit and SDK. The
+  release workflow builds `bundleRelease` (the AAB) and `assembleRelease` (the APK), reads the version and build number
+  back from the APK, and checks that both files are signed or not as intended. With the four signing secrets set
+  (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`) the files are
+  signed; with none set they are built unsigned and named `-unsigned`; with only some set the job fails. Nothing is
+  uploaded to Google Play — that needs the owner's Play Console account (android/README.md).
+- `versionCode` is the workflow run number, and `versionName` now comes from the tag (or `-PversionName=` locally)
+  instead of being hard-coded to `1.0.0`, so the release APK and AAB carry the tagged version.
+- The iOS CI job now also builds the app for the simulator in Release (`CODE_SIGNING_ALLOWED=NO`), so whole-module
+  optimisation and Release-only code compile on every push instead of only in Debug. ios/README.md records exactly what
+  a TestFlight or App Store upload would need (a distribution certificate, a provisioning profile and an App Store
+  Connect API key as secrets); the workflows still stop at the simulator for lack of the owner's Apple account.
+- A Max Cloud customer can now change their password and sign out everywhere, and can be helped back in when they
+  forget their password. The console's **Account** area changes the password (current password plus a new one, the
+  sign-up rule) and ends every other session of the customer, so a stolen token dies with the password while the
+  device that made the change stays signed in; **Sign out everywhere** ends every session, this one included. The
+  relay sends no email, so a forgotten password is recovered by an operator: `npm run cloud:reset-password --
+<email>` prints a single-use link (`https://<relay>/console/reset?token=mcr_…`, at `CLOUD_PUBLIC_URL` or the
+  relay's public address), valid 60 minutes and replacing any earlier one, stored only as a hash; its page sets a new
+  password and signs the customer out everywhere. An unknown, used, replaced or expired link gets one and the same
+  refusal, and password changes and resets are rate-limited with the existing `cloud-auth` bucket. A login that
+  verified a password just before a change or reset committed can no longer mint a session that survives the revoke;
+  a password change and a sign-out-everywhere also kill any outstanding reset link; and wrong current passwords are
+  throttled with the login backoff (429 with `Retry-After` once the account's failures add up across addresses). See
+  docs/cloud.md (Account security and recovery).
+- The pricing page and docs/pricing.md no longer promise what Max Cloud does not do: it runs one relay process (no
+  "scaling") and counts and caps minutes per project, not per end user. Per-user metering and limits stay with a
+  self-hosted relay. Moving between Cloud and self-hosting also changes how session tokens are minted, not only the URL.
+- The helmet's quietest volume level is now a setting, `MAX_VOLUME_FLOOR` (a percent from 1 to 90; unset, the levels
+  stay at 1/7 … 7/7). The seven levels spread evenly from it to full. How quiet the floor sounds depends on the codec,
+  so rdk/README.md describes tuning it by ear on a board.
+- docs/cloud.md has a checklist for the first real WeChat Pay and Alipay payments (notification, sweep, expiry and a
+  manual refund), since those providers are tested only with locally signed messages. The relay does not handle
+  refunds; a refund made in the merchant platform is taken off the balance with `npm run cloud:credit`.
+- GitLab's `web:check` failed at `npm audit` on every commit since the audit was added: the runner installs through a
+  mirror with no audit service. The audit now asks registry.npmjs.org.
+- The iOS bootstrap check accepts the CocoaPods 1.17 the lockfile pins; it still required 1.16 and failed on a fresh
+  setup.
+- minimatch, used only by the lint tooling, is overridden to 11.0.1 or later for a denial-of-service advisory. A newer
+  typescript-eslint would bring it too, but its optional TypeScript 7 peer conflicts with this repository's
+  `@typescript/native` on npm 10, which broke `npm ci` in CI.
+
 ## 2026-11-26 — Second round of gap fixes
 
 - `/ready` now checks that Max Cloud's database can be opened, read and written, and answers `503` with

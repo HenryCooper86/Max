@@ -92,8 +92,18 @@ describe("nextVolumeLevel", () => {
   });
 
   it("brings a level left off the grid by hand onto it in one move", () => {
-    expect(nextVolumeLevel(0.52, "up")).toBe(5 / 7);
-    expect(nextVolumeLevel(0.52, "down")).toBe(3 / 7);
+    expect(nextVolumeLevel(0.52, "up")).toBeCloseTo(5 / 7);
+    expect(nextVolumeLevel(0.52, "down")).toBeCloseTo(3 / 7);
+  });
+
+  it("spreads seven levels from a configured floor to full", () => {
+    // Floor 30%: 30, 41.7, 53.3, 65, 76.7, 88.3, 100.
+    expect(nextVolumeLevel(1, "down", 0.3)).toBeCloseTo(0.8833, 3);
+    expect(nextVolumeLevel(0.35, "down", 0.3)).toBeCloseTo(0.3);
+    expect(nextVolumeLevel(0.3, "down", 0.3)).toBeNull();
+    // amixer's whole percents: 88% reads back as the sixth level, not off the grid.
+    expect(nextVolumeLevel(0.88, "up", 0.3)).toBe(1);
+    expect(nextVolumeLevel(0.2, "up", 0.3)).toBeCloseTo(0.3);
   });
 });
 

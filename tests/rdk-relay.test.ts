@@ -28,6 +28,13 @@ describe("loadConfig", () => {
   it("rejects a non-numeric port rather than silently using NaN", () => {
     expect(() => loadConfig({ ...BASE_ENV, MAX_HUD_PORT: "abc" })).toThrow(/MAX_HUD_PORT/);
   });
+
+  it("takes the quietest volume level as a percent and refuses one that could mute or leave no range", () => {
+    expect(loadConfig(BASE_ENV).volumeFloor).toBeCloseTo(1 / 7);
+    expect(loadConfig({ ...BASE_ENV, MAX_VOLUME_FLOOR: "25" }).volumeFloor).toBe(0.25);
+    expect(() => loadConfig({ ...BASE_ENV, MAX_VOLUME_FLOOR: "0" })).toThrow(/MAX_VOLUME_FLOOR/);
+    expect(() => loadConfig({ ...BASE_ENV, MAX_VOLUME_FLOOR: "95" })).toThrow(/MAX_VOLUME_FLOOR/);
+  });
 });
 
 describe("buildSessionStart", () => {

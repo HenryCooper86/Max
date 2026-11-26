@@ -729,6 +729,7 @@ MAX_VISION_SHARE=0                         # 1 lets camera.look frames leave the
 MAX_CORPUS_DIR=/var/lib/max/corpus         # where ride segments are written
 MAX_VOICE_GATE_RMS=900
 MAX_VOICE_GATE_MS=400
+# MAX_VOLUME_FLOOR=14                      # quietest "小声一点" level, percent (1–90); tune by ear, see Voice volume
 ```
 
 Each `session.start` also carries the release's build (`gitCommit`, the first 12
@@ -999,17 +1000,19 @@ tone, give the board ~15 s before cutting power.
 **Voice volume — "Max，大声一点" / "小声一点".** Moves the ALSA `Playback`
 level of the card `RDK_ALSA_PLAYBACK` names: the agent reads it with
 `amixer get`, steps it, and writes it back with `amixer sset`. Playback has
-seven levels, the quietest at one seventh of the range and the loudest at full
-— the phones keep an audible floor too (iOS `PlaybackVolumeController`, Android
-`nextVoiceGain`) — so a board at full takes six "小声一点" to reach the
-quietest. It never reaches zero: Max, navigation prompts and spoken hazard
-alerts all play through this control. One more step at either end changes
-nothing and is reported as a failure, so Max never announces a change nobody
-can hear, and a mixer that cannot be read is not stepped. The levels are not
-matched to the phones by loudness: the codec's percent-to-decibel curve is not
-in this repository, so listen on a real board — in particular to how quiet the
-lowest level really is — before changing `VOLUME_LEVELS` in
-`rdk/agent/src/device/dispatch.ts`.
+seven levels spread evenly from a floor to full — by default the quietest is one
+seventh of the range (about 14%) — and the phones keep an audible floor too
+(iOS `PlaybackVolumeController`, Android `nextVoiceGain`), so a board at full
+takes six "小声一点" to reach the quietest. It never reaches zero: Max,
+navigation prompts and spoken hazard alerts all play through this control. One
+more step at either end changes nothing and is reported as a failure, so Max
+never announces a change nobody can hear, and a mixer that cannot be read is
+not stepped. The levels are not matched to the phones by loudness: the codec's
+percent-to-decibel curve is not in this repository. Tune the floor by ear on a
+real board, with road noise in mind: set `amixer sset Playback 14%` (or
+another value), play a navigation prompt in a running helmet, and put the
+quietest value a rider can still hear in `MAX_VOLUME_FLOOR` (a percent, 1–90)
+in the agent's environment file; the other six levels spread above it.
 
 ## Service hardening
 

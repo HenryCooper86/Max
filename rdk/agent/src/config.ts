@@ -1,4 +1,5 @@
 import type { SessionStartEvent } from "../../../shared/agent";
+import { DEFAULT_VOLUME_FLOOR } from "./device/dispatch";
 
 /** QA attribution a board under test sends in `session.start`, as the phones and the web app do. */
 export type RdkTesting = Partial<
@@ -27,6 +28,8 @@ export type RdkConfig = {
   galleryMinFreeMb: number;
   hudPort: number;
   visionPreviewPort: number;
+  /** MAX_VOLUME_FLOOR: the quietest playback level, as a fraction 0.01..0.9 (the variable is a percent). */
+  volumeFloor: number;
   /** Shared secret for the sidecar's bench HTTP surface. The sidecar reads the
    *  same variable and refuses every non-loopback peer without it, so the agent
    *  needs it only to template into the HUD page it serves. Empty means the
@@ -97,6 +100,13 @@ function optionalNumber(env: NodeJS.ProcessEnv, key: string, fallback: number): 
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`${key} must be a number, got ${value}`);
   return parsed;
+}
+
+/** MAX_VOLUME_FLOOR is a percent; a floor of 0 would let "quieter" mute safety prompts, and one near 100 leaves no range. */
+function volumeFloor(env: NodeJS.ProcessEnv): number {
+  const percent = optionalNumber(env, "MAX_VOLUME_FLOOR", DEFAULT_VOLUME_FLOOR * 100);
+  if (percent < 1 || percent > 90) throw new Error(`MAX_VOLUME_FLOOR must be a percent from 1 to 90, got ${percent}`);
+  return percent / 100;
 }
 
 function optionalEnum<T extends string>(env: NodeJS.ProcessEnv, key: string, allowed: readonly T[], fallback: T): T {
@@ -182,6 +192,7 @@ export function loadConfig(
     galleryMinFreeMb: optionalNumber(env, "MAX_GALLERY_MIN_FREE_MB", 1024),
     hudPort: optionalNumber(env, "MAX_HUD_PORT", 8080),
     visionPreviewPort: optionalNumber(env, "MAX_VISION_PREVIEW_PORT", 8081),
+    volumeFloor: volumeFloor(env),
     visionToken: optionalString(env, "MAX_VISION_TOKEN", ""),
     visionSocket: optionalString(env, "MAX_VISION_SOCKET", "/run/max/vision.sock"),
     voiceGateRms: optionalNumber(env, "MAX_VOICE_GATE_RMS", 900),

@@ -68,6 +68,7 @@ MAX_VISION_SHARE=0
 MAX_CORPUS_DIR=/var/lib/max/corpus
 MAX_VOICE_GATE_RMS=900
 MAX_VOICE_GATE_MS=400
+# MAX_VOLUME_FLOOR=14  # “小声一点”能降到的最低音量（百分比，1–90）；请在真实板卡上戴着头盔试听后设置
 ```
 
 针对已启用账号的中继，`MAX_RELAY_TOKEN` 必需，否则 `/agent` 升级会被拒绝。`MAX_VISION_TOKEN` 用于板外访问 `8080`（以及启用 `MAX_VISION_LISTEN=all` 后的 `8081`）；未配置时，非回环访问会返回 `401`。`MAX_VISION_SHARE=0` 默认拒绝摄像头帧离开板卡；设置为 `1` 后才允许语音视觉描述。仅精确值 `1` 会启用 `MAX_RELAY_INSECURE_TLS`，测试时才可考虑该选项。

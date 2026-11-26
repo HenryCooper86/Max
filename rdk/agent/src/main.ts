@@ -415,6 +415,7 @@ function start(): void {
     getVolume: () => getAlsaVolume(config.alsaPlayback),
     setVolume: (level: number) => setAlsaVolume(config.alsaPlayback, level),
     previewPort: config.visionPreviewPort,
+    volumeFloor: config.volumeFloor,
     poweroff
     // Same client-event path hazard.report already uses below (relay.sendEvent),
     // not a new one: image bytes go up base64-encoded in a camera.frame JSON

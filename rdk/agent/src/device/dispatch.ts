@@ -23,6 +23,8 @@ export type DispatcherOptions = {
   /** Applies playback volume on the ES8326B mixer. Resolves false if the mixer
    *  did not move, so Max never claims a volume change that did not happen. */
   setVolume(level: number): Promise<boolean>;
+  /** The quietest level a step goes to, 0..1 (MAX_VOLUME_FLOOR): never 0. Absent, DEFAULT_VOLUME_FLOOR. */
+  volumeFloor?: number;
   /** The poweroff countdown (device/poweroff.ts). Optional so tests without
    *  one still compile; absent, the action fails honestly. */
   poweroff?: { schedule(): "scheduled" | "already"; cancel(): boolean };
@@ -37,28 +39,41 @@ export type DispatcherOptions = {
  * How many levels playback has. The phones step their gain 0.5 → 4.0 in 0.5
  * increments and never go below an audible floor (iOS
  * PlaybackVolumeController, Android nextVoiceGain). The helmet keeps the same
- * shape on the mixer's 0..100% range, as levels at 1/7, 2/7 … 7/7: the
- * quietest is one seventh, never 0, because Max, navigation prompts and spoken
+ * shape on the mixer's 0..100% range: seven levels evenly spread from a floor
+ * to full, the floor never 0, because Max, navigation prompts and spoken
  * hazard alerts all play through this control.
  */
 const VOLUME_LEVELS = 7;
+/**
+ * The quietest level unless MAX_VOLUME_FLOOR says otherwise: one seventh, so
+ * the levels are 1/7, 2/7 … 7/7. How loud 14% sounds depends on the codec's
+ * percent-to-decibel curve, which is not in this repository, so the floor is a
+ * setting to tune by ear on a board rather than a constant to edit.
+ */
+export const DEFAULT_VOLUME_FLOOR = 1 / 7;
 
 /**
  * The level one step from `current` (0..1) in `direction`, or null when there
- * is none to go to. Levels sit on a fixed grid of VOLUME_LEVELS points instead
- * of moving by a step from wherever the mixer happens to be: amixer stores
- * whole percents, so stepping 1/7 off each rounded value drifts (100 → 86 →
- * 72 → … → 16 → 2) and the drift ends in a short last step. A level left off
- * the grid by hand joins it on the first move, which is then between half a
- * step and one and a half.
+ * is none to go to. Levels sit on a fixed grid of VOLUME_LEVELS points from
+ * `floor` to 1 instead of moving by a step from wherever the mixer happens to
+ * be: amixer stores whole percents, so stepping off each rounded value drifts
+ * and the drift ends in a short last step. A level left off the grid by hand
+ * joins it on the first move, which is then between half a step and one and
+ * a half.
  */
-export function nextVolumeLevel(current: number, direction: "up" | "down"): number | null {
-  const nearest = Math.round(Math.min(1, Math.max(0, current)) * VOLUME_LEVELS);
-  const next = Math.min(VOLUME_LEVELS, Math.max(1, nearest + (direction === "up" ? 1 : -1)));
-  const level = next / VOLUME_LEVELS;
+export function nextVolumeLevel(
+  current: number,
+  direction: "up" | "down",
+  floor: number = DEFAULT_VOLUME_FLOOR
+): number | null {
+  const steps = VOLUME_LEVELS - 1;
+  const position = ((Math.min(1, Math.max(0, current)) - floor) / (1 - floor)) * steps;
+  const next = Math.min(steps, Math.max(0, Math.round(position) + (direction === "up" ? 1 : -1)));
+  // The top level is full exactly, not a rounding error below it.
+  const level = next === steps ? 1 : floor + ((1 - floor) * next) / steps;
   // A step must move the way it was asked: there is none beyond either end,
   // and a mixer left below the quietest level is not raised by "quieter".
-  const moves = direction === "up" ? level > current : level < current;
+  const moves = direction === "up" ? level > current + 1e-9 : level < current - 1e-9;
   return moves ? level : null;
 }
 
@@ -119,7 +134,7 @@ export function createDeviceDispatcher(
         // No level to go to — already at the end asked for — is reported as
         // the non-event it is: `ok` would have Max announce a change nobody
         // can hear.
-        const level = current === null ? null : nextVolumeLevel(current, direction);
+        const level = current === null ? null : nextVolumeLevel(current, direction, options.volumeFloor);
         const applied = level !== null && (await options.setVolume(level));
         return applied
           ? { type: "device.result", commandId: command.commandId, status: "ok" }

@@ -11,7 +11,7 @@
 - Android: AGP 9.5.3, core-ktx 1.19.1, lifecycle 2.11.1, Compose BOM 2026.11.01 and OkHttp 5.5.1, which need
   `compileSdk` 37.2 (`targetSdk` stays 36). Gradle dependency locking is on, so the audit sees the Android tree, and a
   dependency changes only with `--write-locks`. Fifteen known vulnerabilities in transitive dependencies are fixed by
-  constraints that name each advisory: guava in the app (pulled in by the AMap SDK) and guava, commons-lang3,
+  constraints that name each advisory: guava in the app (pulled in by CameraX and media3) and guava, commons-lang3,
   httpclient, Bouncy Castle, jose4j and jdom2 in the test, lint and build tooling. JUnit stays on 4 and Kotlin on
   2.4.21 (2.5 is not yet stable).
 - iOS: AMap3DMap-NO-IDFA 11.3.100, AMapFoundation-NO-IDFA 1.9.4, activesupport 7.2.4, json 3.2.0.

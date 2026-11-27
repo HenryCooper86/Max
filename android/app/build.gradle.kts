@@ -169,9 +169,9 @@ dependencies {
     // Transitive versions pinned to the latest fixed releases; osv-scanner reads the
     // lockfiles these feed. Regenerate with `./gradlew ... --write-locks` after changing.
     constraints {
-        // App runtime/compile classpaths: the AMap SDK pulls an old guava -android build.
+        // App runtime/compile classpaths: CameraX (camera-video) and media3-common pull an old guava -android build.
         implementation("com.google.guava:guava:33.8.0-android") {
-            because("GHSA-xxph-c9ww-hj94: guava < 33.7.2; AMap 3dmap-location-search brings 33.3.1-android (32.0.1-android at compile time)")
+            because("GHSA-xxph-c9ww-hj94: guava < 33.7.2; camera-video 1.7.0 asks for 32.0.1-android, media3-common 1.9.0 for 33.3.1-android")
         }
         // Test-only (Robolectric) transitive deps, never shipped in the APK.
         testImplementation("com.google.guava:guava:33.8.0-jre") {

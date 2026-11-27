@@ -1104,6 +1104,11 @@ class AgentSession(
                 _state.update {
                     it.copy(connection = ConnectionState.OFFLINE, statusText = tr(Str.STATUS_RECONNECT_IN, "n" to decision.delayMs / 1000))
                 }
+                // A newer drop supersedes any still-pending backoff, so two reconnect
+                // coroutines never race to open (and supersede) sockets — mirrors
+                // scheduleReconnect's reconnectWorkItem?.cancel() in the iOS session,
+                // and restartJob?.cancel() above.
+                reconnectJob?.cancel()
                 reconnectJob = scope.launch {
                     delay(decision.delayMs)
                     connect()

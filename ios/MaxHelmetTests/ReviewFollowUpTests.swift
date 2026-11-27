@@ -226,7 +226,7 @@ private final class CountingStore: CaptureStoring, @unchecked Sendable {
     func captures() -> [Capture] { [] }
     func newVideoURL() -> URL { URL(fileURLWithPath: "/tmp/\(UUID().uuidString).mov") }
     func addPhoto(_ data: Data) throws -> Capture { Capture(id: "p", type: .photo, filename: "p", createdAt: 0, durationSec: nil, exported: false, thumbnailName: "t") }
-    func indexVideo(at url: URL) throws -> Capture { indexed += 1; return Capture(id: "v", type: .video, filename: "v", createdAt: 0, durationSec: 1, exported: false, thumbnailName: "t") }
+    func indexVideo(at url: URL) async throws -> Capture { indexed += 1; return Capture(id: "v", type: .video, filename: "v", createdAt: 0, durationSec: 1, exported: false, thumbnailName: "t") }
     func markExported(_ id: String) {}
     func delete(_ id: String) {}
     func fileURL(for capture: Capture) -> URL { URL(fileURLWithPath: "/tmp/x") }

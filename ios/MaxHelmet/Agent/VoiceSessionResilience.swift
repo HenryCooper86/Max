@@ -30,6 +30,12 @@ enum AudioSessionEvent: Equatable {
     case appBecameActive
 }
 
+/// Raw value of `AVAudioSession.InterruptionReason.appWasSuspended`, which the
+/// SDK deprecated in iOS 16 because the system no longer reports it. Compared
+/// by value: the translation below is unchanged on every OS without naming a
+/// deprecated case.
+private let appWasSuspendedReason: UInt = 1
+
 /// Translates the system notifications the session cares about. Returns nil for
 /// anything malformed or irrelevant (including AVAudioEngineConfigurationChange,
 /// which MicStreamer handles itself).
@@ -41,8 +47,9 @@ func audioSessionEvent(from notification: Notification) -> AudioSessionEvent? {
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return nil }
         switch type {
         case .began:
-            let reason = (info[AVAudioSessionInterruptionReasonKey] as? UInt).flatMap(AVAudioSession.InterruptionReason.init(rawValue:))
-            return .interruptionBegan(appWasSuspended: reason == .appWasSuspended)
+            return .interruptionBegan(
+                appWasSuspended: info[AVAudioSessionInterruptionReasonKey] as? UInt == appWasSuspendedReason
+            )
         case .ended:
             let options = AVAudioSession.InterruptionOptions(rawValue: info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
             return .interruptionEnded(shouldResume: options.contains(.shouldResume))

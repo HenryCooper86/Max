@@ -12,8 +12,9 @@ final class GalleryModel: ObservableObject {
     private let exporter: PhotoLibraryAdding
 
     /// Nonisolated so a non-`@MainActor` owner (MainViewModel) can build it in a
-    /// stored/lazy property. It only captures the two collaborators; all mutation
-    /// of the published state stays main-actor-isolated.
+    /// stored/lazy property. It only captures the two collaborators — both
+    /// `Sendable`, so these references may cross to the main actor — and all
+    /// mutation of the published state stays main-actor-isolated.
     nonisolated init(store: CaptureStoring, exporter: PhotoLibraryAdding) {
         self.store = store
         self.exporter = exporter

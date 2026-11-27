@@ -33,8 +33,8 @@ final class FrameExtractionTests: XCTestCase {
         XCTAssertNil(FrameExtraction.photoBase64(from: Data([0x00, 0x01])))
     }
 
-    func testVideoFramesCountAndCap() throws {
-        let frames = FrameExtraction.videoFramesBase64(from: try fixtureMov())
+    func testVideoFramesCountAndCap() async throws {
+        let frames = await FrameExtraction.videoFramesBase64(from: try fixtureMov())
         XCTAssertEqual(frames?.count, FrameExtraction.videoFrameCount)
         for frame in frames ?? [] {
             XCTAssertLessThanOrEqual(frame.count, FrameExtraction.maxBase64Chars)
@@ -42,7 +42,8 @@ final class FrameExtractionTests: XCTestCase {
         }
     }
 
-    func testVideoFramesFailHonestlyOnMissingFile() {
-        XCTAssertNil(FrameExtraction.videoFramesBase64(from: URL(fileURLWithPath: "/nonexistent.mov")))
+    func testVideoFramesFailHonestlyOnMissingFile() async {
+        let frames = await FrameExtraction.videoFramesBase64(from: URL(fileURLWithPath: "/nonexistent.mov"))
+        XCTAssertNil(frames)
     }
 }

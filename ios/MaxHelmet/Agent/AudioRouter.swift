@@ -24,16 +24,20 @@ extension AVAudioSession: VoiceAudioSessionControlling {
 /// Configures the shared AVAudioSession for full-duplex voice and routes to an
 /// in-helmet Bluetooth headset when one is connected — the iOS counterpart of
 /// android/.../AudioRouter.kt. iOS does the SCO routing for us: the
-/// `.playAndRecord` category with `.allowBluetooth` automatically prefers a
-/// connected hands-free profile (HFP) device. Routing is best-effort and never
-/// blocks the session.
+/// `.playAndRecord` category with the Bluetooth hands-free (HFP) option
+/// automatically prefers a connected hands-free profile device. Routing is
+/// best-effort and never blocks the session.
 final class AudioRouter {
+
+    /// `.allowBluetoothHFP` by value. That name exists only in the iOS 18.2 SDK
+    /// and later; the name before it, `allowBluetooth`, is deprecated — and
+    /// warns — from that SDK on. The flag is 0x4 on every SDK.
+    private static let bluetoothHFP = AVAudioSession.CategoryOptions(rawValue: 0x4)
 
     /// Music and the full-duplex voice engine must coexist. Without mixing,
     /// starting Apple Music can interrupt capture and agent speech.
     static let voiceOptions: AVAudioSession.CategoryOptions = [
-        // The HFP flag's original name also compiles with pre-iOS-26 SDKs.
-        .allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker, .mixWithOthers
+        AudioRouter.bluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .mixWithOthers
     ]
 
     private let session: VoiceAudioSessionControlling

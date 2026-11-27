@@ -21,7 +21,7 @@ private final class StubCaptureStore: CaptureStoring, @unchecked Sendable {
     func addPhoto(_ data: Data) throws -> Capture {
         Capture(id: "p", type: .photo, filename: "p.heic", createdAt: 0, durationSec: nil, exported: false, thumbnailName: "t.jpg")
     }
-    func indexVideo(at url: URL) throws -> Capture {
+    func indexVideo(at url: URL) async throws -> Capture {
         indexed.append(url)
         return Capture(id: "v", type: .video, filename: url.lastPathComponent, createdAt: 0, durationSec: 1, exported: false, thumbnailName: "t.jpg")
     }

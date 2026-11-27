@@ -1,8 +1,10 @@
 import Photos
 
 /// Copies a capture into the system Photos library. Behind a protocol so the
-/// gallery model is testable without touching the real library.
-protocol PhotoLibraryAdding {
+/// gallery model is testable without touching the real library. `Sendable`
+/// because GalleryModel keeps the exporter it was handed in a nonisolated init
+/// and awaits `add` from the main actor.
+protocol PhotoLibraryAdding: Sendable {
     func add(fileURL: URL, isVideo: Bool) async -> Bool
 }
 

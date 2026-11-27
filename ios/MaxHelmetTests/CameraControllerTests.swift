@@ -39,6 +39,8 @@ private final class FakeStore: CaptureStoring, @unchecked Sendable {
     var space = true
     var photos: [Data] = []
     var indexedVideos: [URL] = []
+    var onIndex: (() async -> Void)?
+    var failIndexing = false
     func hasSpace() -> Bool { space }
     func captures() -> [Capture] { [] }
     func newVideoURL() -> URL { URL(fileURLWithPath: "/tmp/\(UUID().uuidString).mov") }
@@ -46,8 +48,10 @@ private final class FakeStore: CaptureStoring, @unchecked Sendable {
         photos.append(data)
         return Capture(id: "p", type: .photo, filename: "p.heic", createdAt: 0, durationSec: nil, exported: false, thumbnailName: "t.jpg")
     }
-    func indexVideo(at url: URL) throws -> Capture {
+    func indexVideo(at url: URL) async throws -> Capture {
         indexedVideos.append(url)
+        await onIndex?()
+        if failIndexing { throw CaptureStoreError.thumbnailFailed }
         return Capture(id: "v", type: .video, filename: url.lastPathComponent, createdAt: 0, durationSec: 1, exported: false, thumbnailName: "t.jpg")
     }
     func markExported(_ id: String) {}
@@ -209,12 +213,103 @@ final class CameraControllerTests: XCTestCase {
             onRecordingChange: { recordingStates.append($0) }, onOpenGallery: {}, onAutoStopped: {})
         _ = await controller.perform(.cameraRecord(start: true))
         session.completion?(.success(session.started[0]))
-        await Task.yield()
-        await Task.yield()
+        // Indexing awaits off the main actor, so wait for it instead of counting yields.
+        let indexed = expectation(description: "clip indexed")
+        store.onIndex = { indexed.fulfill() }
+        await fulfillment(of: [indexed], timeout: 1)
         XCTAssertEqual(store.indexedVideos, session.started)
         XCTAssertEqual(recordingStates, [true, false])
         let result = await controller.perform(.cameraRecord(start: false))
         XCTAssertEqual(result, .failed("camera.notRecording"))
+    }
+
+    func testStartWhileThePreviousClipIsBeingIndexedIsBusy() async {
+        let session = FakeSession(), store = FakeStore()
+        let finished = expectation(description: "clip indexed and the rider told")
+        let controller = CameraController(session: session, store: store,
+            onRecordingChange: { _ in }, onOpenGallery: {}, onAutoStopped: { finished.fulfill() })
+        _ = await controller.perform(.cameraRecord(start: true))
+        // AVFoundation ended the clip by itself (a disk limit, an interruption).
+        // Indexing is held from here so a start can be asked for while it runs.
+        let indexing = expectation(description: "indexing started")
+        var gate: CheckedContinuation<Void, Never>?
+        store.onIndex = {
+            await withCheckedContinuation { gate = $0; indexing.fulfill() }
+        }
+        session.completion?(.success(session.started[0]))
+        await fulfillment(of: [indexing], timeout: 1)
+
+        let busy = await controller.perform(.cameraRecord(start: true))
+        XCTAssertEqual(busy, .failed("camera.busy"))
+        XCTAssertEqual(session.started.count, 1, "no second recording starts while the first clip is being indexed")
+
+        gate?.resume()
+        await fulfillment(of: [finished], timeout: 1)
+        let again = await controller.perform(.cameraRecord(start: true))
+        XCTAssertEqual(again, .ok)
+        XCTAssertEqual(session.started.count, 2)
+        XCTAssertEqual(store.indexedVideos, [session.started[0]])
+    }
+
+    /// Stops a recording the way a device does: AVFoundation reports the finished clip first,
+    /// and that report's finish is held inside indexing before the stop's own result lands.
+    /// Checks that the stop is still waiting, then lets indexing finish and returns what the
+    /// stop reported.
+    private func stopWithAVFoundationReportingFirst(indexingFails: Bool) async
+        -> (result: DeviceActionResult, controller: CameraController, session: FakeSession, store: FakeStore) {
+        let session = FakeSession(), store = FakeStore()
+        store.failIndexing = indexingFails
+        var recordingStates: [Bool] = []
+        let controller = CameraController(session: session, store: store,
+            onRecordingChange: { recordingStates.append($0) }, onOpenGallery: {}, onAutoStopped: {})
+        _ = await controller.perform(.cameraRecord(start: true))
+        let indexing = expectation(description: "indexing started")
+        var gate: CheckedContinuation<Void, Never>?
+        store.onIndex = {
+            await withCheckedContinuation { gate = $0; indexing.fulfill() }
+        }
+        // The stop's own result only lands once the completion's finish is indexing.
+        let (releaseStop, releaseStopContinuation) = AsyncStream<Void>.makeStream()
+        session.onStop = {
+            let url = session.started[0]
+            session.completion?(.success(url))
+            var release = releaseStop.makeAsyncIterator()
+            _ = await release.next()
+            return url
+        }
+        var stopResult: DeviceActionResult?
+        let stop = Task { () -> DeviceActionResult in
+            let result = await controller.perform(.cameraRecord(start: false))
+            stopResult = result
+            return result
+        }
+        await fulfillment(of: [indexing], timeout: 1)
+        releaseStopContinuation.yield()
+        // Both reports are in and indexing is held. A stop that returned the previous
+        // recording's result instead of waiting would have returned by now.
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertNil(stopResult, "the stop waits for its clip to be indexed")
+        XCTAssertEqual(recordingStates, [true, false])
+        gate?.resume()
+        let result = await stop.value
+        return (result, controller, session, store)
+    }
+
+    func testStopAndCompletionOfTheSameClipAwaitOneFinishAndIndexOnce() async {
+        let (result, controller, session, store) = await stopWithAVFoundationReportingFirst(indexingFails: false)
+        XCTAssertEqual(result, .ok)
+        XCTAssertEqual(store.indexedVideos, session.started, "indexed once, for both reports")
+        XCTAssertEqual(session.stopped, 1)
+        let restart = await controller.perform(.cameraRecord(start: true))
+        XCTAssertEqual(restart, .ok, "a start right after the stop is not busy")
+    }
+
+    func testStopReportsTheFailedIndexingOfTheSameClipReportedTwice() async {
+        let (result, controller, _, store) = await stopWithAVFoundationReportingFirst(indexingFails: true)
+        XCTAssertEqual(result, .failed("capture.failed"), "its clip's outcome, not the .ok its start left behind")
+        XCTAssertEqual(store.indexedVideos.count, 1, "indexed once, for both reports")
+        let restart = await controller.perform(.cameraRecord(start: true))
+        XCTAssertEqual(restart, .ok, "a start right after the stop is not busy")
     }
 
     func testEndingSessionDuringCameraPermissionDoesNotStartRecording() async {

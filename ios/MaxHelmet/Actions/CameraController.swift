@@ -52,6 +52,12 @@ final class CameraController: DeviceActionHandler {
     private var manualStop = false
     private var takingPhoto = false
     private var stopTask: Task<DeviceActionResult, Never>?
+    /// The clip being finished. Indexing awaits off the main actor, and the
+    /// same clip is reported twice — by the stop that asked for it and by
+    /// AVFoundation's own completion — so the second report waits for the
+    /// first instead of reading a result that is not written yet. A new
+    /// recording waits too (`camera.busy`): one clip in flight at a time.
+    private var finishTask: Task<DeviceActionResult, Never>?
 
     init(
         session: CaptureSessioning,
@@ -70,7 +76,7 @@ final class CameraController: DeviceActionHandler {
         session.setRecordingCompletion { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
-                _ = self.finishRecording(result, auto: !self.manualStop)
+                _ = await self.finishRecording(result, auto: !self.manualStop)
             }
         }
     }
@@ -120,7 +126,7 @@ final class CameraController: DeviceActionHandler {
 
     private func startRecording() async -> DeviceActionResult {
         guard !recording, !startingRecording else { return .failed("camera.recording") }
-        guard !takingPhoto, stopTask == nil else { return .failed("camera.busy") }
+        guard !takingPhoto, stopTask == nil, finishTask == nil else { return .failed("camera.busy") }
         if let refusal = capturePolicy().videoRecording { return refusal.result }
         startingRecording = true
         defer { startingRecording = false }
@@ -148,7 +154,7 @@ final class CameraController: DeviceActionHandler {
             }
             return .ok
         } catch {
-            return finishRecording(.failure(error), auto: false)
+            return await finishRecording(.failure(error), auto: false)
         }
     }
 
@@ -162,9 +168,9 @@ final class CameraController: DeviceActionHandler {
             autoStopTask = nil
             do {
                 let url = try await session.stopRecording()
-                return finishRecording(.success(url), auto: auto)
+                return await finishRecording(.success(url), auto: auto)
             } catch {
-                return finishRecording(.failure(error), auto: auto)
+                return await finishRecording(.failure(error), auto: auto)
             }
         }
         stopTask = task
@@ -187,21 +193,29 @@ final class CameraController: DeviceActionHandler {
         if recording && !startingRecording { _ = await stopRecording(auto: false) }
     }
 
-    private func finishRecording(_ result: Result<URL, Error>, auto: Bool) -> DeviceActionResult {
+    private func finishRecording(_ result: Result<URL, Error>, auto: Bool) async -> DeviceActionResult {
+        // The same clip can be reported twice (see finishTask): the later report waits for
+        // the finish the earlier one started, not for the result of the recording before.
+        if let finishTask { return await finishTask.value }
         guard recording else { return lastRecordingResult }
         recording = false
         autoStopTask?.cancel()
         autoStopTask = nil
         onRecordingChange(false)
-        do {
-            let url = try result.get()
-            _ = try store.indexVideo(at: url)
-            lastRecordingResult = .ok
-            if auto { onAutoStopped() }
-        } catch {
-            lastRecordingResult = .failed("capture.failed")
+        let task = Task { @MainActor in
+            defer { finishTask = nil }
+            do {
+                let url = try result.get()
+                _ = try await store.indexVideo(at: url)
+                lastRecordingResult = .ok
+                if auto { onAutoStopped() }
+            } catch {
+                lastRecordingResult = .failed("capture.failed")
+            }
+            return lastRecordingResult
         }
-        return lastRecordingResult
+        finishTask = task
+        return await task.value
     }
 
     private func scheduleAutoStop() {
@@ -222,7 +236,9 @@ enum CaptureError: Error {
 /// video-only: it never adds an audio input and disables automatic audio-session
 /// configuration, so the voice engine keeps the microphone. All AVCaptureSession
 /// work runs on a dedicated serial queue.
-final class AVFoundationCaptureSession: NSObject, CaptureSessioning {
+/// `@unchecked Sendable`: the async methods hand it to that queue, and every
+/// mutable property is only touched on it.
+final class AVFoundationCaptureSession: NSObject, CaptureSessioning, @unchecked Sendable {
     private let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()

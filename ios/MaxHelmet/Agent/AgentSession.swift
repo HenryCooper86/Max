@@ -2058,6 +2058,14 @@ extension AgentSession: VoiceResilienceActions {
 
 // MARK: - typed turns, device heat
 
+/// A camera frame handed from the main actor to the queue that encodes it.
+/// `CVPixelBuffer` is not `Sendable` only because Core Video is unannotated: a
+/// frame is not written again once the camera has delivered it, and the capture
+/// pool cannot recycle a buffer that is still retained, as it is here.
+private struct CameraFrame: @unchecked Sendable {
+    let buffer: CVPixelBuffer
+}
+
 extension AgentSession {
     /// Sends a typed turn. The relay echoes it back as a final rider
     /// transcript, so nothing is added to the captions here.
@@ -2179,8 +2187,9 @@ extension AgentSession {
         videoCamera.keepLevel()
         guard !videoEncoding, let buffer = videoCamera.takeNewestFrame() else { return }
         videoEncoding = true
+        let frame = CameraFrame(buffer: buffer)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let jpeg = jpegBase64ForVideoFrame(buffer)
+            let jpeg = jpegBase64ForVideoFrame(frame.buffer)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.videoEncoding = false

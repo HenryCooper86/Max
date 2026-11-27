@@ -10,7 +10,7 @@ private final class FakeStore: CaptureStoring, @unchecked Sendable {
     func captures() -> [Capture] { items.sorted { $0.createdAt > $1.createdAt } }
     func newVideoURL() -> URL { URL(fileURLWithPath: "/tmp/x.mov") }
     func addPhoto(_ data: Data) throws -> Capture { fatalError() }
-    func indexVideo(at url: URL) throws -> Capture { fatalError() }
+    func indexVideo(at url: URL) async throws -> Capture { fatalError() }
     func markExported(_ id: String) {
         exportedIds.append(id)
         if let i = items.firstIndex(where: { $0.id == id }) { items[i].exported = true }

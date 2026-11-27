@@ -21,9 +21,11 @@ struct MainActorMessagePresenter: MessagePresenting {
 /// recipient and body; only the rider can send it. Instances retain themselves
 /// until the sheet is dismissed, because MFMessageComposeViewController has no
 /// built-in dismiss — its delegate must do it, so the delegate must outlive the
-/// `present` call that returned once the sheet was shown.
+/// `present` call that returned once the sheet was shown. MessageUI calls that
+/// delegate on the main thread, so the conformance is isolated to the main actor
+/// like the rest of the presenter.
 @MainActor
-final class SystemMessagePresenter: NSObject, MFMessageComposeViewControllerDelegate {
+final class SystemMessagePresenter: NSObject, @MainActor MFMessageComposeViewControllerDelegate {
     private static var live = Set<SystemMessagePresenter>()
 
     static func present(number: String, body: String) async -> Bool {

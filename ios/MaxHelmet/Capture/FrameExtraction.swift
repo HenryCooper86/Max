@@ -22,12 +22,12 @@ enum FrameExtraction {
     /// duplicate first/last frames), each a downscaled JPEG base64 under the cap.
     /// nil if the asset is unreadable, has no finite positive duration, or ANY
     /// frame fails — fail-honest, never partial.
-    static func videoFramesBase64(from url: URL, count: Int = videoFrameCount) -> [String]? {
+    static func videoFramesBase64(from url: URL, count: Int = videoFrameCount) async -> [String]? {
         guard count > 0 else { return nil }
 
         let asset = AVURLAsset(url: url)
-        let durationSeconds = CMTimeGetSeconds(asset.duration)
-        guard durationSeconds.isFinite, durationSeconds > 0 else { return nil }
+        let durationSeconds = (try? await asset.load(.duration)).map { CMTimeGetSeconds($0) }
+        guard let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 else { return nil }
 
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true

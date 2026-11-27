@@ -9,17 +9,17 @@ import Foundation
 /// WebSocket; callers (AgentSession) mirror the CrashController pattern of
 /// `{ [weak self] json in self?.webSocket?.send(.string(json)) { _ in } }`.
 ///
-/// Extraction runs on whatever thread `perform` is called from.
-/// `FrameExtraction.videoFramesBase64` blocks synchronously through up to eight
-/// seek+decodes; AgentSession's device.command dispatch already runs handlers
-/// inside a detached `Task { }` off the main actor, so this type never hops
-/// threads itself — doing so here would be redundant and risks reintroducing a
-/// main-actor stall.
+/// Extraction runs on whatever thread `perform` is called from, which must be
+/// off the main actor: `FrameExtraction.videoFramesBase64` suspends once to load
+/// the clip's duration and then blocks through up to eight seek+decodes.
+/// AgentSession's device.command dispatch already runs handlers inside a
+/// detached `Task { }`, so this type never hops threads itself — doing so here
+/// would be redundant and risks reintroducing a main-actor stall.
 final class GalleryDescribeController: IdentifiedDeviceActionHandler {
     private let store: CaptureStoring
     private let send: (String) -> Void
     private let extractPhoto: (Data) -> String?
-    private let extractVideo: (URL) -> [String]?
+    private let extractVideo: (URL) async -> [String]?
     /// Read on whatever thread `perform` runs on, so it must be thread-safe
     /// (AgentSession passes ThermalGovernor's locked snapshot).
     private let capturePolicy: () -> CapturePolicy
@@ -28,7 +28,7 @@ final class GalleryDescribeController: IdentifiedDeviceActionHandler {
         store: CaptureStoring,
         send: @escaping (String) -> Void,
         extractPhoto: @escaping (Data) -> String? = FrameExtraction.photoBase64,
-        extractVideo: @escaping (URL) -> [String]? = { FrameExtraction.videoFramesBase64(from: $0) },
+        extractVideo: @escaping (URL) async -> [String]? = { await FrameExtraction.videoFramesBase64(from: $0) },
         capturePolicy: @escaping () -> CapturePolicy = { .unrestricted }
     ) {
         self.store = store
@@ -65,7 +65,7 @@ final class GalleryDescribeController: IdentifiedDeviceActionHandler {
             }
             frames = [encoded]
         case .video:
-            guard let extracted = extractVideo(store.fileURL(for: target)), !extracted.isEmpty else {
+            guard let extracted = await extractVideo(store.fileURL(for: target)), !extracted.isEmpty else {
                 return .failed("gallery.unreadable")
             }
             frames = extracted

@@ -4,19 +4,26 @@ import UIKit
 /// The single owner of everything the gallery keeps on disk: capture files,
 /// their thumbnails, and the JSON index. Injectable `root` and `availableBytes`
 /// keep it fully testable without a real device or camera.
-protocol CaptureStoring: AnyObject {
+///
+/// `Sendable` because its owners cross actors with it: GalleryModel keeps the
+/// store it was handed in a nonisolated init, and CameraController awaits
+/// `indexVideo(at:)` from the main actor.
+protocol CaptureStoring: AnyObject, Sendable {
     func hasSpace() -> Bool
     func captures() -> [Capture]
     func newVideoURL() -> URL
     func addPhoto(_ data: Data) throws -> Capture
-    func indexVideo(at url: URL) throws -> Capture
+    /// Indexes a finished recording. Loads the clip's duration, so it awaits.
+    func indexVideo(at url: URL) async throws -> Capture
     func markExported(_ id: String)
     func delete(_ id: String)
     func fileURL(for capture: Capture) -> URL
     func thumbnailURL(for capture: Capture) -> URL
 }
 
-final class CaptureStore: CaptureStoring {
+/// `@unchecked Sendable`: apart from `init`, `index` is only touched on
+/// `queue`, and every other property is immutable.
+final class CaptureStore: CaptureStoring, @unchecked Sendable {
     /// Captures below this free-space floor are refused rather than dropping old
     /// ones — the gallery never auto-prunes.
     static let minimumFreeBytes: UInt64 = 500_000_000
@@ -85,11 +92,11 @@ final class CaptureStore: CaptureStoring {
         return capture
     }
 
-    func indexVideo(at url: URL) throws -> Capture {
+    func indexVideo(at url: URL) async throws -> Capture {
         let id = UUID().uuidString
         let thumbnailName = "\(id)-thumb.jpg"
         let asset = AVURLAsset(url: url)
-        let duration = CMTimeGetSeconds(asset.duration)
+        let duration = CMTimeGetSeconds(try await asset.load(.duration))
         try writeVideoThumbnail(from: asset, to: root.appendingPathComponent(thumbnailName))
         let capture = Capture(
             id: id, type: .video, filename: url.lastPathComponent,

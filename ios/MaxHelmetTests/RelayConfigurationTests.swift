@@ -60,7 +60,8 @@ final class RelayConfigurationTests: XCTestCase {
         let suite = "relay-config-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set("wss://relay.example.com/agent", forKey: "relay_url")
+        // The placeholder is set on the model, not written to the suite first: on the simulator a write to a
+        // fresh suite can fail ("Path not accessible"), and the model then read a real configured relay instead.
         let viewModel = MainViewModel(
             defaults: defaults,
             initialAuthToken: "",
@@ -78,6 +79,7 @@ final class RelayConfigurationTests: XCTestCase {
                 isHandsFree: { false }, stop: {}
             )
         )
+        viewModel.relayURL = "wss://relay.example.com/agent"
         XCTAssertFalse(viewModel.relaySetupRequired)
 
         viewModel.toggleHandsFree()

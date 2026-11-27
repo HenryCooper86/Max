@@ -24,8 +24,8 @@ const guidance: Record<InstallSignalKind, [string, string]> = {
     "There are too few account minutes available. Check the console balance."
   ],
   monthlyLimit: [
-    "已达项目月度分钟上限。请在设置中检查上限。",
-    "The project has reached its monthly minutes limit. Review the cap in Settings."
+    "已达项目的每月分钟上限，或该用户的每月分钟上限。请在设置中检查上限。",
+    "The project, or the user this session is for, has reached a monthly minutes limit. Review the limits in Settings."
   ],
   unavailable: [
     "Max 未能启动网站会话。请重新连接并重新检查。",

@@ -71,6 +71,8 @@ export type PublicProject = {
   hasWebhookSecret: boolean;
   /** The owner's limit on this project's minutes per calendar month (UTC); null for none. */
   monthlyMinutesCap: number | null;
+  /** The owner's limit on each end user's minutes in this project per calendar month (UTC); null for none. */
+  perUserMonthlyMinutes: number | null;
   firstWebsiteConversationAt: number | null;
   /** Whether conversation analysis runs with the project's own model key, and not on a model the operator named. */
   analysisOnOwnKey: boolean;
@@ -373,6 +375,7 @@ export function publicProject(row: ProjectRow): PublicProject {
     publicId: row.public_id ?? "",
     hasWebhookSecret: Boolean(row.webhook_secret_enc),
     monthlyMinutesCap: row.monthly_minutes_cap ?? null,
+    perUserMonthlyMinutes: row.per_user_minutes_cap ?? null,
     firstWebsiteConversationAt: row.first_website_conversation_at,
     analysisOnOwnKey: analysisUsesProjectKey(),
     createdAt: row.created_at
@@ -475,6 +478,7 @@ export function createProject(
     webhook_secret_enc: needsSigningSecret(studio.value) ? (newWebhookSecret(id) ?? null) : null,
     traces_headers_enc: null,
     monthly_minutes_cap: null,
+    per_user_minutes_cap: null,
     first_website_conversation_at: null,
     created_at: now(),
     deleted_at: null
@@ -501,6 +505,17 @@ export function patchProject(
   const row = liveProject(projectId, customerId);
   if (!row) return fail(404, "Project not found.");
   return { ok: true, value: { project: publicProject(row) } };
+}
+
+/** A monthly minutes limit as a request sends it: whole minutes, null for none, or why it is neither. */
+function minutesLimit(input: unknown, field: string): { limit: number | null } | { error: string } {
+  if (input === null || input === "") return { limit: null };
+  if (typeof input === "number" && Number.isInteger(input) && input >= 1 && input <= MAX_MONTHLY_MINUTES_CAP) {
+    return { limit: input };
+  }
+  return {
+    error: `${field} must be a whole number from 1 to ${MAX_MONTHLY_MINUTES_CAP.toLocaleString("en")}, or empty for none.`
+  };
 }
 
 export function prepareProjectChanges(current: ProjectRow, body: Record<string, unknown>): Result<ProjectChanges> {
@@ -561,18 +576,14 @@ export function prepareProjectChanges(current: ProjectRow, body: Record<string, 
     }
     if (!current.public_id) changes.public_id = newPublicId();
   }
-  if (body.monthlyMinutesCap !== undefined) {
-    const cap = body.monthlyMinutesCap;
-    if (cap === null || cap === "") {
-      changes.monthly_minutes_cap = null;
-    } else if (typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= MAX_MONTHLY_MINUTES_CAP) {
-      changes.monthly_minutes_cap = cap;
-    } else {
-      return fail(
-        400,
-        `Monthly minutes limit must be a whole number from 1 to ${MAX_MONTHLY_MINUTES_CAP.toLocaleString("en")}, or empty for none.`
-      );
-    }
+  for (const [field, column, label] of [
+    ["monthlyMinutesCap", "monthly_minutes_cap", "Monthly minutes limit"],
+    ["perUserMonthlyMinutes", "per_user_minutes_cap", "Per-user monthly minutes limit"]
+  ] as const) {
+    if (body[field] === undefined) continue;
+    const limit = minutesLimit(body[field], label);
+    if ("error" in limit) return fail(400, limit.error);
+    changes[column] = limit.limit;
   }
   if (body.modelKey !== undefined) {
     if (typeof body.modelKey !== "string") return fail(400, "Model key must be text.");

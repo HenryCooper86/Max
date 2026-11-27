@@ -25,7 +25,7 @@ const MAX_WAITING = 200;
 /** Projects whose last delivery is remembered. */
 const MAX_REMEMBERED = 5_000;
 
-/** What the project's server is sent: the relay's `conversation.ended`, with the project it belongs to. */
+/** What the project's server is sent: the relay's `conversation.ended`, with the project it belongs to and, for a session whose token named one, `session.userId`. */
 export type ProjectConversationPayload = ConversationEndedPayload & {
   project: { id: string };
   /** Where the conversation came from: the website embed, the customer's own backend, or the console's Test. */
@@ -50,6 +50,8 @@ type Ended = Target & {
   source: string;
   sessionId: string;
   startedAt: number;
+  /** The end user the session's token named, when it named one. */
+  userId?: string;
   endedAt: number;
   seconds: number;
   turns: ConversationTurn[];
@@ -67,6 +69,7 @@ function payloadOf(input: Omit<Ended, "url" | "secret">, test = false): ProjectC
     source: input.source,
     session: {
       id: input.sessionId,
+      ...(input.userId ? { userId: input.userId } : {}),
       backend: input.backend,
       channel: "web",
       startedAt: input.startedAt,

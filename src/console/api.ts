@@ -31,6 +31,8 @@ export type Project = {
   hasWebhookSecret: boolean;
   /** The owner's limit on this project's minutes per month; null (or absent, from an older relay) for none. */
   monthlyMinutesCap?: number | null;
+  /** The owner's limit on each end user's minutes in this project per month; null (or absent, from an older relay) for none. */
+  perUserMonthlyMinutes?: number | null;
   firstWebsiteConversationAt?: number | null;
   /** False when conversation analysis runs on a model the service's operator named, not with the project's key. */
   analysisOnOwnKey?: boolean;
@@ -62,6 +64,8 @@ export type ProjectPatch = Partial<{
   /** Without `flow`, the project's flow stays as it is. */
   studio: Omit<ProjectStudio, "flow"> & { flow?: ProjectStudio["flow"] };
   monthlyMinutesCap: number | null;
+  /** The owner's limit on each end user's minutes in this project per month; null for none. */
+  perUserMonthlyMinutes: number | null;
 }>;
 /** What a new project starts with (from a template). */
 export type ProjectStart = { name: string } & Partial<{
@@ -112,6 +116,18 @@ export type Usage = {
   chargedFen: number;
   projects: { projectId: string; name: string; seconds: number; chargedFen: number }[];
 };
+/** A project's usage of a month per user: its users with the most minutes first, "anonymous" for sessions without a userId. */
+export type ProjectUsage = {
+  month: string;
+  /** The project's limit on each user's minutes a month; 0 for none. */
+  limitMinutes: number;
+  totals: { sessions: number; minutes: number; seconds: number };
+  users: { userId: string; sessions: number; minutes: number; seconds: number }[];
+  /** How many users the month has, listed or not; the sessions without one are no user. */
+  userCount: number;
+};
+/** Users the console lists for a month: the ones with the most minutes. */
+const PROJECT_USAGE_ROWS = 50;
 export type LedgerEntry = {
   id: number;
   kind: "topup" | "usage" | "adjust";
@@ -283,6 +299,11 @@ export function createCloudApi(fetcher?: FetchLike) {
       get<{ conversation: Conversation }>(token, `/conversations/${id(conversationId)}`),
     usage: (token: string, month?: string) =>
       get<Usage>(token, month ? `/usage?month=${encodeURIComponent(month)}` : "/usage"),
+    projectUsage: (token: string, projectId: string, month: string) =>
+      get<ProjectUsage>(
+        token,
+        `/projects/${id(projectId)}/usage?month=${encodeURIComponent(month)}&limit=${PROJECT_USAGE_ROWS}`
+      ),
     ledger: (token: string) => get<{ entries: LedgerEntry[] }>(token, "/ledger"),
     packs: (token: string | null) => get<Packs>(token, "/packs"),
     createTopup: (token: string, pack: string, provider: Provider) =>

@@ -1,7 +1,7 @@
 // Max Cloud sessions running on this relay: whether a new one may start,
 // how long each has been billable, and the check every few seconds that
 // checkpoints it and ends it when its customer's money, its project's monthly
-// limit or its project key runs out. The relay's socket code (server/index.ts)
+// limit, an end user's monthly limit or its project key runs out. The relay's socket code (server/index.ts)
 // only wires these to the connection.
 //
 // What is billed is the time the voice model could talk: from the moment the
@@ -32,6 +32,8 @@ import {
   markWebsiteConversation,
   projectMinutesCap,
   projectSecondsIn,
+  perUserMinutesCap,
+  userSecondsIn,
   readStudioLiveRevision
 } from "./store";
 
@@ -61,6 +63,7 @@ const EMBED_SESSIONS_PER_ADDRESS = 2;
 const BALANCE_MESSAGE = "Your Max Cloud balance is used up. Top up in the console.";
 const LIMIT_MESSAGE =
   "This Max Cloud agent has used its minutes for this month. Its owner can raise the limit in the console.";
+const USER_LIMIT_MESSAGE = "This user has used their minutes for this month.";
 const REVOKED_MESSAGE = "This Max Cloud project key was rotated or the project was deleted.";
 const STORE_MESSAGE =
   "Max Cloud could not check this conversation's balance for 30 seconds, so it has ended it. Start a new one in a moment.";
@@ -114,6 +117,8 @@ class BillableClock {
 type Running = {
   sessionId: string;
   grant: CloudProjectGrant;
+  /** The end user the token named, when it named one: for the project's per-user limit and usage. */
+  userId?: string;
   embed: boolean;
   address: string;
   clock: BillableClock;
@@ -168,12 +173,33 @@ export function projectLimitRefusal(projectId: string, at = now()): CloudRefusal
 }
 
 /**
+ * Whether an end user has reached the project's per-user monthly minutes
+ * limit, counted as the project's own limit is: this month's bookings, the
+ * user's sessions not booked yet and this relay's running ones. A session
+ * without a user has no allowance of its own to use up, so it is never
+ * refused here; nor is anyone while the project has no such limit or room
+ * is left.
+ */
+export function userLimitRefusal(projectId: string, userId: string | undefined, at = now()): CloudRefusal | undefined {
+  const cap = userId ? perUserMinutesCap(projectId) : null;
+  if (!userId || !cap) return undefined;
+  const own = sessionsOf((session) => session.grant.projectId === projectId && session.userId === userId);
+  const used =
+    userSecondsIn(projectId, userId, monthOf(at)) +
+    unbookedSeconds({ projectId, userId }, idsOf(own)) +
+    secondsOf(own, at);
+  if (used < cap * 60) return undefined;
+  countCloud("max_cloud_spend_cap_refusals_total");
+  return { code: USAGE_LIMIT_CLOSE_CODE, message: USER_LIMIT_MESSAGE, reason: "user monthly limit" };
+}
+
+/**
  * Why a new session of this grant may not start now, from `address`;
  * undefined when it may. When the balance cannot be read the session is
  * refused: nobody talks on money that could not be checked.
  */
 export function admitCloudSession(
-  grant: CloudProjectGrant,
+  grant: CloudSessionGrant,
   address: string,
   origin?: string
 ): CloudRefusal | undefined {
@@ -191,11 +217,14 @@ export function admitCloudSession(
 
 function installRefusalKind(refusal: CloudRefusal): InstallSignalKind {
   if (refusal.reason === "balance used up") return "balance";
-  if (refusal.reason === "project monthly limit") return "monthlyLimit";
+  if (refusal.reason === "project monthly limit" || refusal.reason === "user monthly limit") return "monthlyLimit";
   return refusal.reason.startsWith("too many") ? "busy" : "unavailable";
 }
 
-function admission(grant: CloudProjectGrant, address: string): CloudRefusal | undefined {
+/** What a session runs as, and for whom: the token's Cloud grant, with the `userId` on the token when the owner's backend set one. */
+type CloudSessionGrant = CloudProjectGrant & { userId?: string };
+
+function admission(grant: CloudSessionGrant, address: string): CloudRefusal | undefined {
   const at = now();
   const customerSessions = sessionsOf((session) => session.grant.customerId === grant.customerId);
   if (customerSessions.length >= SESSIONS_PER_CUSTOMER) {
@@ -224,6 +253,8 @@ function admission(grant: CloudProjectGrant, address: string): CloudRefusal | un
   }
   const limit = projectLimitRefusal(grant.projectId, at);
   if (limit) return limit;
+  const userLimit = userLimitRefusal(grant.projectId, grant.userId, at);
+  if (userLimit) return userLimit;
   if (customerSecondsLeft(grant.customerId, at) < CLOUD_CHECK_INTERVAL_MS / 1000) {
     return { code: USAGE_LIMIT_CLOSE_CODE, message: BALANCE_MESSAGE, reason: "balance used up" };
   }
@@ -244,19 +275,20 @@ export type LiveCloudSession = {
 /** Starts tracking an admitted session; its row in live_sessions is written now. */
 export function openCloudSession(
   sessionId: string,
-  grant: CloudProjectGrant,
+  grant: CloudSessionGrant,
   address: string,
   origin?: string
 ): LiveCloudSession {
   const session: Running = {
     sessionId,
     grant: { ...grant },
+    userId: grant.userId,
     embed: grant.source === "embed",
     address,
     clock: new BillableClock()
   };
   running.set(sessionId, session);
-  cloudSessionStarted({ sessionId, customerId: grant.customerId, projectId: grant.projectId });
+  cloudSessionStarted({ sessionId, customerId: grant.customerId, projectId: grant.projectId, userId: grant.userId });
   // The widget has its own grant; the SDK can also run in a browser using a server-minted token.
   let trackingWebsite = isWebsiteSession(grant, origin);
   let lastSignal: InstallSignalKind | undefined;
@@ -373,7 +405,7 @@ export function openCloudSession(
       recordWebsiteAnswer();
       try {
         const restored = cloudSessionAlive(
-          { sessionId, customerId: grant.customerId, projectId: grant.projectId },
+          { sessionId, customerId: grant.customerId, projectId: grant.projectId, userId: grant.userId },
           session.clock.seconds(at)
         );
         if (restored) session.bookedEarly = true;
@@ -395,6 +427,8 @@ export function openCloudSession(
         }
         const limit = projectLimitRefusal(grant.projectId, at);
         if (limit) return refuse(limit);
+        const userLimit = userLimitRefusal(grant.projectId, grant.userId, at);
+        if (userLimit) return refuse(userLimit);
         if (customerSecondsLeft(grant.customerId, at) <= 0) {
           return refuse({ code: USAGE_LIMIT_CLOSE_CODE, message: BALANCE_MESSAGE, reason: "balance used up" });
         }

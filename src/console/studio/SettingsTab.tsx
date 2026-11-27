@@ -6,7 +6,7 @@ import { minutesCapFromDraft, type StudioTabProps } from "./types";
 
 type Confirm = "none" | "rotate" | "delete" | "removeModelKey";
 
-/** Studio → Settings: the project's name, its monthly minutes limit, its API key and deleting it. */
+/** Studio → Settings: the project's name, its monthly minutes limits (the project's and each user's), its API key and deleting it. */
 export function SettingsTab({
   session,
   project,
@@ -31,7 +31,18 @@ export function SettingsTab({
   const [cap, setCap] = useState(liveCap);
   useEffect(() => setCap(liveCap), [liveCap]);
   const minutes = minutesCapFromDraft(cap);
-  const capInvalid = minutes === undefined;
+  const userCapId = `cxs-${project.id}-user-minutes-cap`;
+  const liveUserCap = project.perUserMonthlyMinutes?.toString() ?? "";
+  const [userCap, setUserCap] = useState(liveUserCap);
+  useEffect(() => setUserCap(liveUserCap), [liveUserCap]);
+  const userMinutes = minutesCapFromDraft(userCap);
+  /** The limits typed that differ from the live project: what "Apply limit now" sends. An invalid one is left out. */
+  const changedLimits = {
+    ...(minutes !== undefined && minutes !== (project.monthlyMinutesCap ?? null) ? { monthlyMinutesCap: minutes } : {}),
+    ...(userMinutes !== undefined && userMinutes !== (project.perUserMonthlyMinutes ?? null)
+      ? { perUserMonthlyMinutes: userMinutes }
+      : {})
+  };
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -60,7 +71,7 @@ export function SettingsTab({
           type="text"
           inputMode="numeric"
           placeholder={say("不限", "No limit")}
-          aria-invalid={capInvalid ? true : undefined}
+          aria-invalid={minutes === undefined ? true : undefined}
           aria-describedby={`${capId}-hint`}
           value={cap}
           onChange={(e) => setCap(e.target.value)}
@@ -72,21 +83,40 @@ export function SettingsTab({
           )}
         </small>
       </label>
+
+      <label className="cxField" htmlFor={userCapId}>
+        <span>{say("每个用户的每月分钟上限", "Per-user monthly minutes limit")}</span>
+        <input
+          id={userCapId}
+          type="text"
+          inputMode="numeric"
+          placeholder={say("不限", "No limit")}
+          aria-invalid={userMinutes === undefined ? true : undefined}
+          aria-describedby={`${userCapId}-hint`}
+          value={userCap}
+          onChange={(e) => setUserCap(e.target.value)}
+        />
+        <small id={`${userCapId}-hint`}>
+          {say(
+            "这个项目里，每个用户每个自然月（UTC）最多通话多少分钟。用完后，该用户的新对话会被拒绝、进行中的对话会结束，直到下个月或你调高上限。只对带用户 ID 的会话生效：后端用项目密钥换取会话令牌时传入 userId。网站嵌入和 Studio 测试没有用户 ID，不受这个上限限制。留空表示不限。",
+            "How many minutes each user may talk in this project per calendar month (UTC). Once they are used, that user's new conversations are refused and open ones end, until the next month or until you raise the limit. It applies only to sessions with a user ID: pass userId when your backend gets a session token with the project key. Website embeds and Studio tests have no user ID, so this limit does not hold them. Leave it empty for no limit."
+          )}
+        </small>
+      </label>
       <button
         type="button"
         className="siteButton secondary small"
-        disabled={busy || capInvalid || minutes === (project.monthlyMinutesCap ?? null)}
+        disabled={busy || minutes === undefined || userMinutes === undefined || !Object.keys(changedLimits).length}
         onClick={() =>
           void run(async () => {
-            if (minutes === undefined) return;
-            const answer = await session.api.updateProject(session.token, project.id, { monthlyMinutesCap: minutes });
+            const answer = await session.api.updateProject(session.token, project.id, changedLimits);
             onProjectChanged(answer.project);
           })
         }
       >
         {say("立即应用上限", "Apply limit now")}
       </button>
-      {capInvalid ? (
+      {minutes === undefined || userMinutes === undefined ? (
         <p className="cxError" role="alert">
           {say(
             `请填写 1 至 ${MAX_MONTHLY_MINUTES_CAP.toLocaleString("zh-CN")} 之间的整数分钟；不限请留空。`,

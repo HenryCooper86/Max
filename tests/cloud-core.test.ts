@@ -945,6 +945,7 @@ describe("deleting a project", () => {
       instructions: "Answer in one line.",
       greeting: "Hi!",
       monthlyMinutesCap: 100,
+      perUserMonthlyMinutes: 100,
       studio: { ...project.studio, tools: [tool] }
     });
     if (!saved.ok) throw new Error(saved.error);
@@ -985,6 +986,7 @@ describe("deleting a project", () => {
     webhook_secret_enc: null,
     traces_headers_enc: null,
     monthly_minutes_cap: null,
+    per_user_minutes_cap: null,
     first_website_conversation_at: null,
     studio_revision: null
   });
@@ -995,7 +997,14 @@ describe("deleting a project", () => {
     // With a live revision, as a project published from the Studio has: erasing it makes the relay's own trigger keep
     // a copy of the row as it was, which the deletion has to take as well.
     immediate((db) => db.prepare("UPDATE projects SET studio_revision = 'rev_live' WHERE id = ?").run(project.id));
-    chargeSession({ customerId, projectId: project.id, sessionId: "s-before", seconds: 30, endedAt: clock });
+    chargeSession({
+      customerId,
+      projectId: project.id,
+      sessionId: "s-before",
+      seconds: 30,
+      endedAt: clock,
+      userId: "u-1"
+    });
     // Everything its owner saved is on the row, and the saved draft holds a copy of the key.
     expect(rowOf(project.id)).toMatchObject({
       key_hash: hashToken(apiKey),
@@ -1009,6 +1018,7 @@ describe("deleting a project", () => {
       webhook_secret_enc: expect.any(String),
       traces_headers_enc: expect.any(String),
       monthly_minutes_cap: 100,
+      per_user_minutes_cap: 100,
       deleted_at: null
     });
     expect(snapshotsOf(project.id)).toBe(1);
@@ -1032,6 +1042,8 @@ describe("deleting a project", () => {
     // What stays is exactly what the activation metrics and past usage need.
     expect(rowOf(project.id)).toEqual(tombstone(project));
     expect(snapshotsOf(project.id)).toBe(0);
+    // Its usage per end user went with it; the ledger keeps the session, as past usage, without the user.
+    expect(immediate((db) => db.prepare("SELECT COUNT(*) AS n FROM user_usage").get())).toEqual({ n: 0 });
     expect(projectForApiKey(apiKey)).toBeUndefined();
     expect(checkStoredSecrets().total).toBe(0);
     expect(studioActivation(clock).newProjects).toBe(1);

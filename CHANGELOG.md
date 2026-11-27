@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-11-27 — Per-user limits on Max Cloud
+
+- Max Cloud now counts usage per end user as well as per project. A session is booked to the `userId` on its session
+  token (the website embed and the Studio's tests have none), per project and per UTC calendar month, in seconds and
+  sessions, in the same transaction as its charge; the user is recorded on the session's checkpoint row too, so a
+  session a crashed relay left is still booked to them.
+  Counting began with this release: sessions booked before it are in the ledger and in no user's row, so in the month
+  of the upgrade the report and the per-user limit see less than the ledger holds.
+- A project has a second limit, **Per-user monthly minutes limit** (Studio → Settings, `perUserMonthlyMinutes`: whole
+  minutes from 1 to 250,000, or none). For a user at the limit the token mint with the project key is refused (`403`),
+  their new sessions are refused, and their open ones are closed with code `4003` ("This user has used their minutes
+  for this month.") at the next 5-second check, counting their sessions still open and those running on another relay.
+  Sessions without a `userId` are never held by it. A `userId` of `anonymous` is refused at the mint.
+- Usage per user is reported by project key: `GET /v1/usage?month=2026-11[&userId=][&limit=][&offset=]` has the
+  relay's own usage report's shape (without tool calls), lists the heaviest users first, 1,000 per page, says
+  `userCount`, and shows only the key's project; a key gets 60 reports a minute. The console route is
+  `GET /cloud/api/projects/:id/usage`, and the Studio's new **Usage** tab shows a month's minutes and conversations per
+  user (the 50 heaviest) for the current or an earlier month, with each user's share of the limit.
+- The Cloud conversation webhook carries the user as `session.userId` when the session token named one.
+- Deleting a project erases its per-user usage in the same transaction, and nothing of it is written afterwards. The
+  rows are in the database backup and kept until the project is deleted; an index serves each month's report without
+  sorting it.
+- The pricing page and docs/pricing.md say what Cloud does: usage is counted per project and per user, with a monthly
+  minutes limit for each.
+
 ## 2026-11-26 — 0.2.1, dependency upgrades and our own dependency audit
 
 - The kit is 0.2.1. Its tag ran the release workflow end to end for the first time: the whole CI, then the Android job,

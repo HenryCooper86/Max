@@ -8,7 +8,7 @@ import type { CloudProjectGrant } from "../session-tokens";
 import { cloudEnabled, cloudSecretKey, cloudSecretKeys } from "./context";
 import { projectStudio, projectTracesHeaders, projectWebhookSecret } from "./customers";
 import { draftRevisionProject } from "./revisions";
-import { decryptModelKey, hashToken } from "./secrets";
+import { decryptModelKey } from "./secrets";
 import { liveProject, liveProjectByKeyHash, readStudioLiveRevision } from "./store";
 
 export { studioActivation } from "./store";
@@ -33,9 +33,11 @@ export {
   remainingSeconds
 } from "./booking";
 export { cloudReadinessIssues, cloudReadinessWarnings, cloudUnreadableSecrets } from "./keyring";
-export { CLOUD_CHECK_INTERVAL_MS, admitCloudSession, openCloudSession, projectLimitRefusal } from "./live";
-export { spendEmbedTokens } from "./sessions";
+export { CLOUD_CHECK_INTERVAL_MS, admitCloudSession, openCloudSession } from "./live";
+export { mintProjectSession, spendEmbedTokens } from "./sessions";
 export { startTopupSweep, stopTopupSweep } from "./topups";
+export { projectForApiKey } from "./keys";
+export { projectUsageForApiKey } from "./usage";
 
 const log = createLogger("cloud");
 
@@ -57,19 +59,6 @@ export type ProjectRuntime = {
   /** They are saved but cannot be decrypted. */
   tracesHeadersUnreadable?: true;
 };
-
-/** The project a project API key belongs to (live projects only), with the
- *  key's fingerprint: sessions keep it to notice a rotated or deleted key. */
-export function projectForApiKey(
-  apiKey: string
-): { projectId: string; customerId: string; keyHash: string } | undefined {
-  if (!cloudEnabled() || typeof apiKey !== "string" || !apiKey.startsWith("mpk_") || apiKey.length > 100) {
-    return undefined;
-  }
-  const keyHash = hashToken(apiKey);
-  const project = liveProjectByKeyHash(keyHash);
-  return project ? { projectId: project.id, customerId: project.customer_id, keyHash } : undefined;
-}
 
 /** True while the project still exists and the key that minted a session's
  *  token is still its key (not rotated, not deleted). */

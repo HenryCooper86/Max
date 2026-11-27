@@ -71,6 +71,8 @@ curl -H "Authorization: Bearer $RELAY_AUTH_TOKEN" "https://voice.example.com/v1/
 ```
 
 `month` defaults to the current month. Add `userId=cus_8f2` for one user. The endpoint needs the relay token.
+On Max Cloud the same address answers a project key (`mpk_…`) with that project's usage per user: see
+[Usage per end user on Max Cloud](#usage-per-end-user-on-max-cloud).
 
 ## Set a monthly allowance
 
@@ -177,8 +179,8 @@ the metering above, because there money changes hands:
   that unpaid. Both entries belong to the month of the first, and the rest takes its free seconds from that month's
   allowance.
 - **Running sessions are checked every 5 seconds.** A session starts only when the customer has at least 5 seconds
-  left, and is closed with code `4003` when their balance (or the project's monthly minutes limit) runs out, so a
-  customer can go at most 5 seconds per open session past what they had.
+  left, and is closed with code `4003` when their balance, the project's monthly minutes limit or the per-user limit
+  of the user the session names runs out, so a customer can go at most 5 seconds per open session past what they had.
 - **A crash loses at most 5 seconds.** Sessions are checkpointed every 5 seconds; a session cut off by a crash or a
   killed relay is booked up to its last checkpoint once the relay that ran it has been silent for a minute.
 - **A store outage ends sessions after 30 seconds.** While the database cannot be read or written, the 5-second check
@@ -192,3 +194,24 @@ the metering above, because there money changes hands:
 
 The relay-wide meter above still counts a Max Cloud session's whole connection time under `project:<id>`; it is not
 what the customer pays.
+
+### Usage per end user on Max Cloud
+
+Max Cloud also meters per end user, so a customer can cap and bill the people who talk to their agent:
+
+- **The user is the `userId` on the session token** their backend mints with the project key. Each session's billed
+  seconds are counted for that user, per project and per UTC calendar month, in the same transaction as its charge; a
+  session without a `userId` (the website embed, the Studio's tests) is counted as `anonymous`.
+- **Per-user monthly minutes limit** (the Studio's **Settings**) caps each user of the project. At the limit, the token
+  mint for that user is refused (`403`), their new sessions are refused, and their open ones are closed with code
+  `4003` ("This user has used their minutes for this month.") at the next 5-second check; the next month starts it
+  again. Sessions without a `userId` are never held by it, so mint tokens with a `userId` when using it. A `userId` of
+  `anonymous` is refused at the mint.
+- **The report**: `GET /v1/usage?month=2026-11` with the project key, the same shape as above without `toolCalls`,
+  with `users` paged by `limit` and `offset` and `userCount` saying how many users there are; and the project's
+  **Usage** tab in the console. See [Max Cloud](cloud.md#usage-per-user).
+- **Per conversation**: the conversation webhook the project's server receives carries the user as `session.userId`.
+
+The rows are kept for every month until the project is deleted. Counting began with the release that brought it:
+sessions booked before it are in the ledger and in no user's row, so in the month of the upgrade the report and the
+per-user limit see less than the ledger holds.

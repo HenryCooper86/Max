@@ -2,7 +2,8 @@ import { MAX_MONTHLY_MINUTES_CAP } from "../../../shared/cloud-studio";
 import type { Backend, Project, ProjectStudio, StudioRelease } from "../api";
 import type { Session } from "../hooks";
 
-export type StudioTab = "agent" | "knowledge" | "tools" | "flow" | "test" | "install" | "history" | "settings";
+export type StudioTab =
+  "agent" | "knowledge" | "tools" | "flow" | "test" | "install" | "history" | "usage" | "settings";
 
 /** Everything the Studio edits before it is saved. `modelKey` is "" unless the person typed a new one. */
 export type StudioDraft = {

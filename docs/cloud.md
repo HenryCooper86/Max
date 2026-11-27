@@ -117,6 +117,9 @@ their website in a few minutes, without writing a backend:
   plain JavaScript, React, Next.js, Express or Flask.
   The Studio installation checklist completes when the relay observes a visitor get an answer through the widget or browser SDK.
   It keeps the first verified time on the project even when transcript storage is off. Studio tests are tracked separately.
+- **Usage.** A month's minutes and conversations per user, the users with the most minutes first, for the current month
+  or an earlier one, and each user's share of the per-user monthly limit. It needs tokens minted with a `userId`; see
+  [Usage per user](#usage-per-user).
 - **Conversations.** What was said in each session (final transcript lines and tool outcomes, never audio), kept 30
   days and deleted with the project. Each answer shows how long the visitor waited for it to begin, each
   conversation the median of those times, and the tab the median over the conversations listed: the first thing to
@@ -303,6 +306,15 @@ reached, token requests are refused (`403`), new sessions are refused and open o
 Cloud agent has used its minutes for this month."), until the next month or until the owner raises the limit. It is
 off unless set; we suggest it to anyone who turns the public embed on.
 
+**Per-user monthly minutes limit.** For sessions that name one of the owner's users, **Settings** has a second limit,
+**Per-user monthly minutes limit**: how many minutes each user may talk in the project per calendar month (UTC). A user
+is the `userId` their backend puts on the session token it mints with the project key (below); sessions without one,
+like the website embed and the Studio's tests and replays, belong to no user and are never held by this limit, so an
+owner who uses it should mint tokens with a `userId`. Once a user's minutes are used, the token mint for them is refused
+(`403`, "This user has used their monthly minutes limit. Raise the per-user limit in the console's Settings."), their
+new sessions are refused, and their open ones are closed with code `4003` ("This user has used their minutes for this
+month."), until the next month or until the owner raises the limit. Other users go on. It is off unless set.
+
 ### With their own backend
 
 1. Open the invitation link, create an account, and create a project. The project key (`mpk_…`) is shown once.
@@ -317,6 +329,9 @@ off unless set; we suggest it to anyone who turns the public embed on.
 
 4. Give the token to the page, exactly as in [getting started](getting-started.md): the widget's `token-url`, or the
    SDK's `token` function.
+   `userId` is your own id for the user the page is for. Max Cloud counts that user's minutes in the project per month,
+   can limit them (**Settings**) and reports them (**Usage** tab, and `GET /v1/usage` with the project key): see
+   [Usage per user](#usage-per-user).
 
 Limits that keep one account from affecting everyone else:
 
@@ -347,6 +362,46 @@ idempotent, so nothing is charged twice.
 The billed clock runs only while the voice backend is connected: it starts when the backend is ready and stops while
 the relay reconnects to it, whatever the client does meanwhile.
 
+### Usage per user
+
+Every session is booked to the `userId` on its token, per project and per calendar month (UTC), in seconds and
+sessions, at the same time and to the same month as its charge; a session without a `userId` is counted under
+`anonymous`. Counting began with the release that brought it: sessions booked before it are in the ledger and in no
+user's row, so in the month of the upgrade the report holds less than the ledger, and the per-user limit sees less
+than was used. The owner reads it in three places:
+
+- **The console**: a project's **Usage** tab shows a month's minutes and conversations per user, the heaviest first
+  (the 50 users with the most minutes), for the current month or an earlier one back to the month the project was
+  created in. With a per-user limit set, each row says how much of it the user has used.
+- **The API**: the same report as the relay's own usage report, with the project key instead of the relay token:
+
+  ```bash
+  curl -H "Authorization: Bearer mpk_…" "https://<relay>/v1/usage?month=2026-11"
+  ```
+
+  ```json
+  {
+    "month": "2026-11",
+    "limitMinutes": 500,
+    "totals": { "sessions": 42, "minutes": 318.5, "seconds": 19110 },
+    "users": [{ "userId": "their-user-42", "sessions": 12, "minutes": 140.25, "seconds": 8415 }],
+    "userCount": 12
+  }
+  ```
+
+  `month` defaults to the current one. `userId=their-user-42` asks for one user and `userId=anonymous` for the sessions
+  without one. `users` holds the users with the most seconds first, 1,000 per page: `limit` and `offset` page through
+  them, and `userCount` says how many users the month has, not counting the sessions without one. `limitMinutes` is
+  the project's per-user limit, 0 for none. Only the project's own usage is ever shown, whatever is asked for, and a
+  project's key gets at most 60 reports a minute. A `userId` of `anonymous` cannot be minted: the report keeps that
+  name for sessions without a user.
+
+- **The conversation webhook**: the record sent to the project's server when a conversation ends carries the user as
+  `session.userId`, so an owner can bill by conversation. Its `session.seconds` is how long the conversation was open;
+  the minutes the customer is billed, per user, are the report's.
+
+The rows are kept for every month until the project is deleted, and go with it when it is (below).
+
 ## Backup and restore
 
 `cloud.sqlite` is a SQLite database in write-ahead-log mode. While the relay runs, its newest writes are in
@@ -360,7 +415,7 @@ npm run cloud:backup -- /backups/max-cloud-2026-11-25.sqlite
 ```
 
 - The relay keeps running. The copy is made with SQLite's `VACUUM INTO`, so it is the whole database as it was at one
-  moment: customers, projects, the ledger, top-up orders and kept conversations.
+  moment: customers, projects, the ledger, top-up orders, kept conversations and usage per end user.
 - The target file must not exist, and its folder must: an existing backup is never overwritten.
 - The copy is one file, readable by its owner only, like the database. It holds everything the database holds, so keep
   it as private as `CLOUD_SECRET_KEY`, and keep that key (the one in use when the copy was taken) with it: without the
@@ -438,7 +493,8 @@ written with. To change the key (it leaked, someone who knew it left, or as rout
 
 Deleting a project erases everything its deletion need not keep, in the same transaction: its transcripts and saved
 revisions, and on its row its project key, model key, webhook secret, trace headers, assistant name, instructions,
-greeting, Studio settings, public embed id, monthly minutes limit and revision. A deleted project keeps only what the
+greeting, Studio settings, public embed id, both monthly minutes limits and revision, and with them its usage per end
+user. A deleted project keeps only what the
 activation metrics and past usage need: its id, its owner, its name, its backend, when it was created and deleted,
 and when it first answered a website conversation. So there are no secrets of deleted projects to re-encrypt. A
 project deleted by an earlier release has the same things erased the next time the database is opened.

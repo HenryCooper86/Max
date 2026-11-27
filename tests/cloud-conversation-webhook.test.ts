@@ -78,6 +78,18 @@ describe("a Max Cloud project's conversation webhook", () => {
     expect(webhooks.last("prj_1")).toEqual({ at: START + 62_000, ok: true, attempts: 1, status: 200 });
   });
 
+  it("names the conversation's user when its session token did", async () => {
+    const { sent, request } = receiver([200]);
+    const webhooks = createProjectWebhooks({ request, sleep, clock: () => START + 62_000 });
+    webhooks.ended(ended({ source: "api", userId: "their-user-42" }));
+    webhooks.ended(ended());
+    await webhooks.drain(1_000);
+    const sessions = sent.map((one) => (JSON.parse(one.body) as ProjectConversationPayload).session);
+    expect(sessions[0]).toMatchObject({ id: "sess-1", userId: "their-user-42" });
+    // A session without a user has no userId at all, as in the relay's own record.
+    expect(sessions[1]).not.toHaveProperty("userId");
+  });
+
   it("tries again when the server is down, and says how it went", async () => {
     waits.length = 0;
     const { sent, request } = receiver([503, new Error("socket hang up"), 200]);

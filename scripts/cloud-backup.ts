@@ -1,6 +1,6 @@
 /**
  * Writes a consistent copy of the Max Cloud database (customers, projects,
- * the ledger, top-up orders and kept conversations) to one file:
+ * the ledger, per-user usage, top-up orders and kept conversations) to one file:
  *
  *   npm run cloud:backup -- /backups/max-cloud-2026-11-25.sqlite
  *

@@ -14,6 +14,7 @@ import { ReleasePanel } from "./ReleasePanel";
 import { SettingsTab } from "./SettingsTab";
 import { TestTab } from "./TestTab";
 import { ToolsTab } from "./ToolsTab";
+import { UsageTab } from "./UsageTab";
 import {
   draftChanged,
   draftFromProject,
@@ -32,6 +33,7 @@ const TABS: { id: StudioTab; zh: string; en: string }[] = [
   { id: "test", zh: "测试", en: "Test" },
   { id: "install", zh: "安装", en: "Install" },
   { id: "history", zh: "对话", en: "Conversations" },
+  { id: "usage", zh: "用量", en: "Usage" },
   { id: "settings", zh: "设置", en: "Settings" }
 ];
 
@@ -435,6 +437,7 @@ export function Studio({
             }}
           />
         ) : null}
+        {tab === "usage" ? <UsageTab {...tabProps} /> : null}
         {tab === "settings" ? <SettingsTab {...tabProps} onKeyRotated={onKeyRotated} onDeleted={onDeleted} /> : null}
       </div>
       <div className={`cxsSaveBar${dirty || saveError ? " visible" : ""}`} aria-live="polite">

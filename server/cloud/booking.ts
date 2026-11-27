@@ -22,7 +22,8 @@ import {
   startLiveSession,
   touchLiveSession,
   unbookedLiveSessions,
-  type LiveSessionRow
+  type LiveSessionRow,
+  type LiveSessionScope
 } from "./store";
 
 const log = createLogger("cloud");
@@ -43,6 +44,8 @@ export type SessionUsage = {
   customerId: string;
   projectId: string;
   sessionId: string;
+  /** The end user the session's token named, when it named one. */
+  userId?: string;
   seconds: number;
   endedAt: number;
 };
@@ -75,7 +78,15 @@ export function chargeSession(usage: SessionUsage): ChargeOutcome {
       log.error("session of an unknown customer not booked", { customerId, projectId, sessionId, seconds });
       return "not-billable";
     }
-    const booking = bookUsage({ customerId, projectId, sessionId, seconds, endedAt, at: now() });
+    const booking = bookUsage({
+      customerId,
+      projectId,
+      sessionId,
+      ...(usage.userId ? { userId: usage.userId } : {}),
+      seconds,
+      endedAt,
+      at: now()
+    });
     if (booking === "already-booked") {
       log.debug("session already booked", { sessionId });
       return "already-booked";
@@ -103,7 +114,12 @@ export function chargeSession(usage: SessionUsage): ChargeOutcome {
 }
 
 /** A project session began: recorded so a crash cannot lose its charge. */
-export function cloudSessionStarted(session: { sessionId: string; customerId: string; projectId: string }): void {
+export function cloudSessionStarted(session: {
+  sessionId: string;
+  customerId: string;
+  projectId: string;
+  userId?: string;
+}): void {
   try {
     startLiveSession({ ...session, instanceId: cloudInstanceId(), at: now() });
   } catch (error) {
@@ -120,7 +136,7 @@ export function cloudSessionStarted(session: { sessionId: string; customerId: st
  * book for it should the relay crash.
  */
 export function cloudSessionAlive(
-  session: { sessionId: string; customerId: string; projectId: string },
+  session: { sessionId: string; customerId: string; projectId: string; userId?: string },
   seconds: number
 ): boolean {
   const outcome = touchLiveSession({
@@ -181,6 +197,7 @@ function rowUsage(row: LiveSessionRow): SessionUsage {
     customerId: row.customer_id,
     projectId: row.project_id,
     sessionId: row.session_id,
+    ...(row.user_id ? { userId: row.user_id } : {}),
     seconds: liveSessionSeconds(row),
     endedAt: row.ended_at ?? row.last_seen
   };
@@ -234,11 +251,8 @@ export function remainingSeconds(customerId: string, at?: number, running?: Read
   return funds.freeSecondsLeft + secondsForFen(funds.fen) - unbookedSeconds({ customerId }, running);
 }
 
-/** Seconds of not-yet-booked sessions of a customer or project, leaving out `running`. Throws when they cannot be read. */
-export function unbookedSeconds(
-  scope: { customerId: string } | { projectId: string },
-  running?: ReadonlySet<string>
-): number {
+/** Seconds of not-yet-booked sessions of a customer, a project or one of its end users, leaving out `running`. Throws when they cannot be read. */
+export function unbookedSeconds(scope: LiveSessionScope, running?: ReadonlySet<string>): number {
   let seconds = 0;
   for (const row of liveSessionRows(scope)) {
     if (running?.has(row.session_id)) continue;

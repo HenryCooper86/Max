@@ -148,7 +148,9 @@ export function saveStudioDraft(
     if (r.id !== body.baseRevision || (r.draft?.revision ?? null) !== body.draftRevision) return conflict();
     if (!body.patch || typeof body.patch !== "object" || Array.isArray(body.patch))
       return fail(400, "A project patch is required.");
-    if ("monthlyMinutesCap" in body.patch) return fail(400, "Set the live monthly minutes limit in Settings.");
+    if ("monthlyMinutesCap" in body.patch || "perUserMonthlyMinutes" in body.patch) {
+      return fail(400, "Set the live monthly minutes limits in Settings.");
+    }
     const current = r.draft ? overlay(r.live, r.draft) : r.live;
     const prepared = prepareProjectChanges(current, body.patch as Record<string, unknown>);
     if (!prepared.ok) return prepared;

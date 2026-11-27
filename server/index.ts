@@ -78,7 +78,7 @@ import {
   conversationRecorder,
   openCloudSession,
   projectForApiKey,
-  projectLimitRefusal,
+  mintProjectSession,
   projectWebhooks,
   projectTraces,
   cloudConversationEnded,
@@ -93,7 +93,8 @@ import {
   registerEmbedRoutes,
   spendEmbedTokens,
   startTopupSweep,
-  stopTopupSweep
+  stopTopupSweep,
+  projectUsageForApiKey
 } from "./cloud";
 import { USAGE_LIMIT_CLOSE_CODE } from "../shared/agent";
 import { createLogger, shortSessionId } from "./logger";
@@ -360,23 +361,12 @@ app.post("/v1/session-tokens", (req, res) => {
       res.status(429).json({ ok: false, error: `At most ${PROJECT_MINTS_PER_MINUTE} tokens a minute per project.` });
       return;
     }
-    if (projectLimitRefusal(project.projectId)) {
-      res.status(403).json({
-        ok: false,
-        error: "This project has used its monthly minutes limit. Raise it in the console's Settings."
-      });
-      return;
-    }
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const minted = cloudSessionTokens.mint(
-      { ttlSeconds: body.ttlSeconds, userId: body.userId, context: body.context },
-      project
-    );
+    const minted = mintProjectSession(project, (req.body ?? {}) as Record<string, unknown>);
     if (!minted.ok) {
-      res.status(400).json({ ok: false, error: minted.error });
+      res.status(minted.status).json({ ok: false, error: minted.error });
       return;
     }
-    res.status(201).json({ token: minted.token, expiresAt: minted.expiresAt });
+    res.status(201).json({ token: minted.value.token, expiresAt: minted.value.expiresAt });
     return;
   }
   const open = !config.relayAuthToken && !authActive();
@@ -437,6 +427,17 @@ app.use(
 // Voice minutes per user and month (server/usage.ts), for billing and limits.
 // Owner-only: the relay token, or an open relay in development.
 app.get("/v1/usage", (req, res) => {
+  // A Max Cloud project key asks for that project's usage per user instead (server/cloud/usage.ts).
+  const projectKey = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7).trim() : "";
+  if (projectKey.startsWith("mpk_")) {
+    const report = projectUsageForApiKey(projectKey, req.query);
+    if (!report.ok) {
+      res.status(report.status).json({ ok: false, error: report.error });
+      return;
+    }
+    res.json(report.value);
+    return;
+  }
   const open = !config.relayAuthToken && !authActive();
   if (!open && !relayTokenPresented(req)) {
     res.status(401).json({ ok: false, error: "Send the relay token: Authorization: Bearer <RELAY_AUTH_TOKEN>." });
@@ -2010,7 +2011,8 @@ wss.on("connection", (client, request) => {
   // A Max Cloud project's session runs on the project's own model key and
   // persona, is billed to its customer, and is nobody else's business: no
   // relay tools, no QA recording.
-  const cloudProject = tokenGrant?.project;
+  // The grant carries the `userId` on the token too, for the project's per-user limit and usage.
+  const cloudProject = tokenGrant?.project ? { ...tokenGrant.project, userId: tokenGrant.userId } : undefined;
   const testRevision =
     cloudProject?.source === "test" ? (cloudProject.testRevision ?? cloudProject.testLiveRevision) : undefined;
   const runtime = cloudProject && cloudEnabled() ? projectRuntime(cloudProject.projectId, cloudProject) : undefined;
@@ -2226,6 +2228,7 @@ wss.on("connection", (client, request) => {
       cloudConversationEnded({
         customerId: cloudProject.customerId,
         projectId: cloudProject.projectId,
+        userId: cloudProject.userId,
         source: cloudProject.source ?? "api",
         testRevision,
         sessionId: usageSessionId,
@@ -2243,6 +2246,7 @@ wss.on("connection", (client, request) => {
           customerId: cloudProject.customerId,
           projectId: cloudProject.projectId,
           sessionId: usageSessionId,
+          userId: cloudProject.userId,
           seconds: billedSeconds,
           endedAt
         });

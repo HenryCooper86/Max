@@ -83,7 +83,10 @@ export const PLANS: readonly Plan[] = [
         zh: "使用你自己的 OpenAI、Gemini 或 xAI 密钥，模型费用直接付给他们",
         en: "Your own OpenAI, Gemini or xAI key: model costs go straight to them"
       },
-      { zh: "按项目的用量统计和每月分钟上限", en: "Usage per project, with a monthly minutes limit you set" },
+      {
+        zh: "按用户和按项目统计用量，每月分钟上限各由你设置",
+        en: "Usage per user and per project, with a monthly minutes limit for each"
+      },
       {
         zh: "同样的 SDK 和协议，随时可以改回自己部署",
         en: "Same SDK and protocol: move to self-hosting any time"
@@ -181,8 +184,8 @@ export const PRICING_FAQ: readonly Question[] = [
   {
     question: { zh: "我可以向自己的客户收费吗？", en: "Can I charge my own customers?" },
     answer: {
-      zh: "可以。自行部署的中继会按用户统计用量、执行你设的上限，并把每次会话的用量发送到你的计费系统。Max Cloud 按项目统计用量和上限。",
-      en: "Yes. A self-hosted relay counts usage per user, enforces limits you set, and can send each session's usage to your billing system. Max Cloud counts and caps usage per project."
+      zh: "可以。自行部署的中继按用户统计语音分钟，执行你设的上限，并能把每次会话的用量发送到你的计费系统。Max Cloud 也按用户统计用量（会话令牌上的 userId），你可以为每个用户和整个项目分别设置每月分钟上限，查看按用户的用量报表，对话结束时 userId 会随记录发到你的服务器。",
+      en: "Yes. A self-hosted relay counts voice minutes per user, enforces limits you set, and can send each session's usage to your billing system. Max Cloud counts usage per end user too (the userId on the session token): you set a monthly minutes limit for each user and one for the whole project, see minutes per user, and get the userId with each conversation it sends to your server."
     }
   }
 ];

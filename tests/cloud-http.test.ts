@@ -873,6 +873,7 @@ describe("projects", () => {
       hasWebhookSecret: false,
       firstWebsiteConversationAt: null,
       monthlyMinutesCap: null,
+      perUserMonthlyMinutes: null,
       analysisOnOwnKey: true,
       createdAt: START
     });
@@ -998,6 +999,88 @@ describe("projects", () => {
 });
 
 describe("balance, usage and ledger", () => {
+  it("sets the per-user monthly minutes limit like the project's own: live, and never in a draft", async () => {
+    const { token } = await signupCustomer();
+    const { project } = await createProject(token, "Lemonade");
+    const route = `/cloud/api/projects/${project.id}`;
+    const patch = (json: unknown) => call("PATCH", route, { token, json });
+    expect((await patch({ perUserMonthlyMinutes: 30 })).body.project).toMatchObject({
+      perUserMonthlyMinutes: 30,
+      monthlyMinutesCap: null
+    });
+    for (const bad of [0, -5, 1.5, "30", 250_001, true]) {
+      const refused = await patch({ perUserMonthlyMinutes: bad });
+      expect(refused.status, JSON.stringify(bad)).toBe(400);
+      expect(refused.body.error).toBe(
+        "Per-user monthly minutes limit must be a whole number from 1 to 250,000, or empty for none."
+      );
+    }
+    expect((await patch({ perUserMonthlyMinutes: null })).body.project).toMatchObject({ perUserMonthlyMinutes: null });
+    // Only the live project takes it, not a draft.
+    const release = await call("GET", `${route}/release`, { token });
+    const draft = await call("PUT", `${route}/draft`, {
+      token,
+      json: { baseRevision: release.body.liveRevision, draftRevision: null, patch: { perUserMonthlyMinutes: 5 } }
+    });
+    expect(draft.status).toBe(400);
+    expect(draft.body).toEqual({ ok: false, error: "Set the live monthly minutes limits in Settings." });
+  });
+
+  it("reports a project's usage per user to its owner for the month asked, and to nobody else", async () => {
+    const alice = await signupCustomer();
+    const bob = await signupCustomer();
+    const { project } = await createProject(alice.token, "Kiosk");
+    const { project: bobs } = await createProject(bob.token, "Bob's");
+    chargeSession({
+      customerId: alice.customer.id,
+      projectId: project.id,
+      sessionId: "a",
+      seconds: 120,
+      endedAt: clock,
+      userId: "u1"
+    });
+    chargeSession({
+      customerId: alice.customer.id,
+      projectId: project.id,
+      sessionId: "october",
+      seconds: 30,
+      endedAt: Date.UTC(2026, 9, 15)
+    });
+    chargeSession({
+      customerId: bob.customer.id,
+      projectId: bobs.id,
+      sessionId: "bob-a",
+      seconds: 9_000,
+      endedAt: clock,
+      userId: "bob-user"
+    });
+
+    const route = `/cloud/api/projects/${project.id}/usage`;
+    expect((await call("GET", route, { token: alice.token })).body).toEqual({
+      month: "2026-11",
+      limitMinutes: 0,
+      totals: { sessions: 1, minutes: 2, seconds: 120 },
+      users: [{ userId: "u1", sessions: 1, minutes: 2, seconds: 120 }],
+      userCount: 1
+    });
+    expect((await call("GET", `${route}?month=2026-10`, { token: alice.token })).body).toMatchObject({
+      month: "2026-10",
+      totals: { sessions: 1, seconds: 30 },
+      users: [{ userId: "anonymous", sessions: 1, seconds: 30 }]
+    });
+    // The limit the owner set travels with it.
+    await call("PATCH", `/cloud/api/projects/${project.id}`, {
+      token: alice.token,
+      json: { perUserMonthlyMinutes: 15 }
+    });
+    expect((await call("GET", route, { token: alice.token })).body.limitMinutes).toBe(15);
+    expect((await call("GET", `${route}?month=2026-13`, { token: alice.token })).status).toBe(400);
+    expect((await call("GET", `${route}?limit=0`, { token: alice.token })).status).toBe(400);
+    // Another customer's project is not found, and the console's route needs the owner's session.
+    expect((await call("GET", `/cloud/api/projects/${bobs.id}/usage`, { token: alice.token })).status).toBe(404);
+    expect((await call("GET", route)).status).toBe(401);
+  });
+
   it("reports this month's usage per project and the latest ledger entries", async () => {
     const { token, customer } = await signupCustomer();
     const { project } = await createProject(token, "Kiosk");

@@ -25,6 +25,8 @@ export function cloudConversationEnded(
     source: string;
     testRevision?: string;
     sessionId: string;
+    /** The end user the session's token named, when it named one: it goes to the project's server with the conversation. */
+    userId?: string;
     seconds: number;
     endedAt: number;
     /** The project kept transcripts when the session started. */
@@ -70,6 +72,7 @@ export function cloudConversationEnded(
         backend: project.backend,
         source: input.source,
         sessionId: input.sessionId,
+        ...(input.userId ? { userId: input.userId } : {}),
         startedAt: input.recorder.startedAt,
         endedAt: input.endedAt,
         seconds: input.seconds,

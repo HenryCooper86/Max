@@ -94,6 +94,15 @@ describe("cloud api client", () => {
     expect(JSON.parse(String(calls[5].init?.body))).toEqual({ pack: "cny50", provider: "wechat" });
   });
 
+  it("asks for a project's usage per user with the month and the console's page size", async () => {
+    const { fetcher, calls } = fake(200, {});
+    await createCloudApi(fetcher).projectUsage("mcs_t", "p 1", "2026-11");
+    expect(calls.map((c) => `${c.init?.method} ${c.url}`)).toEqual([
+      "GET /cloud/api/projects/p%201/usage?month=2026-11&limit=50"
+    ]);
+    expect(headerOf(calls[0]!, "authorization")).toBe("Bearer mcs_t");
+  });
+
   it("changes the password, signs out everywhere and sets a password with a reset link", async () => {
     const { fetcher, calls } = fake(200, { ok: true, email: "a@b.c" });
     const api = createCloudApi(fetcher);

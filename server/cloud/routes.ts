@@ -56,6 +56,7 @@ import { liveProject, readStudioLiveRevision } from "./store";
 import { testProjectTool } from "./tools";
 import { customerFunds, deleteCustomerSessions, ledgerEntries, usageSummary, type CustomerRow } from "./store";
 import { creditAccepted, creditPaidOrder, createTopup, readOrder, topupStatus, validOrderId } from "./topups";
+import { userUsageReport } from "./usage";
 
 const log = createLogger("cloud");
 
@@ -520,6 +521,18 @@ export function registerCloudRoutes(app: express.Express): void {
     handle((req, res) => send(res, readConversation(customerOf(res).id, param(req, "id"))))
   );
 
+  // The project's usage per end user for a month, in the shape of GET /v1/usage with the project key.
+  api.get(
+    "/projects/:id/usage",
+    handle((req, res) => {
+      const row = liveProject(param(req, "id"), customerOf(res).id);
+      if (!row) {
+        res.status(404).json({ ok: false, error: "Project not found." });
+        return;
+      }
+      send(res, userUsageReport(row.id, req.query));
+    })
+  );
   api.get(
     "/usage",
     handle((req, res) => {

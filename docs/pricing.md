@@ -3,11 +3,11 @@
 Max is free and open source. You pay only if you want us to run it for you, or to have us on call. The same three
 plans are on the website at `/pricing`.
 
-| Plan            | Price                                                                                  | What you get                                                                                                                         |
-| --------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **Open source** | Free, forever                                                                          | Everything in this repository, self-hosted on your own server or with Docker. Every voice backend, tools, the SDK and the widget.    |
-| **Max Cloud**   | ¥0.15 (about $0.02) per minute, first 1,000 minutes every month free. _By invitation._ | We run the relay: TLS and updates. You bring your own OpenAI, Gemini or xAI key, and model costs go straight to them.                |
-| **Enterprise**  | Custom, annual agreement                                                               | Priority support with an SLA, help deploying on your own infrastructure, custom tools and integrations, security review, onboarding. |
+| Plan            | Price                                                                                  | What you get                                                                                                                                                                                       |
+| --------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Open source** | Free, forever                                                                          | Everything in this repository, self-hosted on your own server or with Docker. Every voice backend, tools, the SDK and the widget.                                                                  |
+| **Max Cloud**   | ¥0.15 (about $0.02) per minute, first 1,000 minutes every month free. _By invitation._ | We run the relay: TLS and updates. You bring your own OpenAI, Gemini or xAI key, and model costs go straight to them. Minutes are counted per user and per project, with a monthly limit for each. |
+| **Enterprise**  | Custom, annual agreement                                                               | Priority support with an SLA, help deploying on your own infrastructure, custom tools and integrations, security review, onboarding.                                                               |
 
 Max Cloud is by invitation during early access. To ask for an invitation, add balance or talk about Enterprise, email
 [henry.cooper86@gmail.com](mailto:henry.cooper86@gmail.com).
@@ -34,7 +34,8 @@ its `RELAY_AUTH_TOKEN`, Max Cloud a project key (`mpk_…`), and a project's set
 comes with self-hosting, free. Max Cloud uses your OpenAI, Gemini or xAI key.
 
 **Can I charge my own customers?** Yes. A self-hosted relay counts voice minutes per user, can cap them, and can send
-each session's usage to your billing system. Max Cloud counts and caps minutes per project. See
-[usage and billing](usage-and-billing.md).
+each session's usage to your billing system. Max Cloud counts usage per project and per end user (the `userId` on the
+session token), caps each with a monthly minutes limit you set, reports minutes per user by project key and in the
+console, and sends the `userId` with each conversation to your server. See [usage and billing](usage-and-billing.md).
 
 **Do I need to tell you I am using Max?** No. We are always glad to hear about it, by email or in GitHub Discussions.

@@ -1,6 +1,7 @@
 // Max Cloud's SQLite store ($STUDIO_DIR/cloud.sqlite): customers, their login
-// sessions and password-reset links, projects, the money ledger and top-up
-// orders. Every SQL statement of Max Cloud lives here. Balances change only
+// sessions and password-reset links, projects, the money ledger, top-up
+// orders and each project's usage per end user. Every SQL statement of Max
+// Cloud lives here. Balances change only
 // through ledger rows, which a trigger applies to the customer's `balance_fen`
 // in the same transaction, and the two writes that move money (booking a
 // session, crediting a paid order) each run in one BEGIN IMMEDIATE transaction,
@@ -49,6 +50,8 @@ export type ProjectRow = {
   traces_headers_enc: string | null;
   /** The owner's limit on this project's minutes per calendar month (UTC); null for none. */
   monthly_minutes_cap: number | null;
+  /** The owner's limit on each end user's minutes in this project per calendar month (UTC); null for none. */
+  per_user_minutes_cap: number | null;
   first_website_conversation_at: number | null;
   created_at: number;
   deleted_at: number | null;
@@ -100,6 +103,7 @@ const ERASED = {
   studio: "'{}'",
   public_id: "NULL",
   monthly_minutes_cap: "NULL",
+  per_user_minutes_cap: "NULL",
   studio_revision: "NULL"
 } as const;
 /** The same, as what an UPDATE sets the columns to. */
@@ -138,15 +142,13 @@ function secureDatabaseFiles(filePath: string): void {
   secureTestingFileSync(`${filePath}-shm`);
 }
 
-/** Whether a deleted project still holds, on its row or in a saved revision, anything that deleting erases. */
+/** Whether a deleted project still holds, on its row, in a saved revision or in its usage per end user, anything that deleting erases. */
 function deletedProjectNotErased(db: DatabaseSync): boolean {
+  const deleted = "SELECT id FROM projects WHERE deleted_at IS NOT NULL";
   return (
     db.prepare(`SELECT 1 FROM projects WHERE deleted_at IS NOT NULL AND (${NOT_ERASED}) LIMIT 1`).get() !== undefined ||
-    db
-      .prepare(
-        "SELECT 1 FROM studio_snapshots WHERE project_id IN (SELECT id FROM projects WHERE deleted_at IS NOT NULL) LIMIT 1"
-      )
-      .get() !== undefined
+    db.prepare(`SELECT 1 FROM studio_snapshots WHERE project_id IN (${deleted}) LIMIT 1`).get() !== undefined ||
+    db.prepare(`SELECT 1 FROM user_usage WHERE project_id IN (${deleted}) LIMIT 1`).get() !== undefined
   );
 }
 
@@ -268,6 +270,14 @@ function database(): DatabaseSync {
       );
       CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations(project_id, started_at);
       CREATE INDEX IF NOT EXISTS idx_conversations_age ON conversations(started_at);
+      CREATE TABLE IF NOT EXISTS user_usage (
+        project_id TEXT NOT NULL,
+        month TEXT NOT NULL,
+        user_id TEXT NOT NULL DEFAULT '',
+        sessions INTEGER NOT NULL DEFAULT 0,
+        seconds INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (project_id, month, user_id)
+      ) WITHOUT ROWID;
     `);
     // Columns added after the first release: older databases gain them here.
     const projectColumns = new Set(
@@ -283,6 +293,9 @@ function database(): DatabaseSync {
     }
     if (!projectColumns.has("monthly_minutes_cap")) {
       db.exec("ALTER TABLE projects ADD COLUMN monthly_minutes_cap INTEGER NULL");
+    }
+    if (!projectColumns.has("per_user_minutes_cap")) {
+      db.exec("ALTER TABLE projects ADD COLUMN per_user_minutes_cap INTEGER NULL");
     }
     if (!projectColumns.has("first_website_conversation_at")) {
       // Older API sessions did not record their origin. Only retained embed exchanges prove a website install.
@@ -348,6 +361,11 @@ function database(): DatabaseSync {
     // the table. Both indexes were narrower, as idx_ledger_customer_month and idx_ledger_project_month: those are
     // dropped, so that no database keeps both.
     db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_project_month_seconds ON ledger(project_id, kind, month, seconds)");
+    // The rows of a project's month by the seconds their users used, most first: what a usage report lists, read in
+    // that order without sorting the month, and with the user id so the row itself need not be opened.
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_user_usage_month_seconds ON user_usage(project_id, month, seconds DESC, user_id)"
+    );
     db.exec("DROP INDEX IF EXISTS idx_ledger_project_month");
     db.exec("DROP INDEX IF EXISTS idx_ledger_customer_month");
     // Orders by status and expiry, read once a minute by the top-up sweep. The index was called idx_orders_pending
@@ -360,6 +378,7 @@ function database(): DatabaseSync {
     if (!liveColumns.has("instance_id")) db.exec("ALTER TABLE live_sessions ADD COLUMN instance_id TEXT NULL");
     if (!liveColumns.has("seconds")) db.exec("ALTER TABLE live_sessions ADD COLUMN seconds REAL NULL");
     if (!liveColumns.has("ended_at")) db.exec("ALTER TABLE live_sessions ADD COLUMN ended_at INTEGER NULL");
+    if (!liveColumns.has("user_id")) db.exec("ALTER TABLE live_sessions ADD COLUMN user_id TEXT NULL");
     const conversationColumns = new Set(
       (db.prepare("PRAGMA table_info(conversations)").all() as { name: string }[]).map((column) => column.name)
     );
@@ -387,6 +406,7 @@ function database(): DatabaseSync {
         BEGIN IMMEDIATE;
         UPDATE projects SET ${ERASE_TO} WHERE deleted_at IS NOT NULL AND (${NOT_ERASED});
         DELETE FROM studio_snapshots WHERE project_id IN (SELECT id FROM projects WHERE deleted_at IS NOT NULL);
+        DELETE FROM user_usage WHERE project_id IN (SELECT id FROM projects WHERE deleted_at IS NOT NULL);
         COMMIT;
       `);
     }
@@ -818,6 +838,7 @@ export type ProjectChanges = Partial<
     | "webhook_secret_enc"
     | "traces_headers_enc"
     | "monthly_minutes_cap"
+    | "per_user_minutes_cap"
   >
 >;
 
@@ -832,7 +853,8 @@ const PROJECT_COLUMNS = [
   "public_id",
   "webhook_secret_enc",
   "traces_headers_enc",
-  "monthly_minutes_cap"
+  "monthly_minutes_cap",
+  "per_user_minutes_cap"
 ] as const;
 
 /** Applies changes to a live project of `customerId`; false when there is no such project. */
@@ -846,7 +868,11 @@ export function updateProject(
   if (!columns.length) return Boolean(liveProject(projectId, customerId));
   const assignments = columns.map((column) => `${column} = ?`);
   const versioned = columns.filter(
-    (column) => column !== "webhook_secret_enc" && column !== "public_id" && column !== "monthly_minutes_cap"
+    (column) =>
+      column !== "webhook_secret_enc" &&
+      column !== "public_id" &&
+      column !== "monthly_minutes_cap" &&
+      column !== "per_user_minutes_cap"
   );
   const values = columns.map((column) => changes[column] ?? null);
   if (studioRevision) {
@@ -888,7 +914,8 @@ export function replaceProjectKey(projectId: string, customerId: string, keyHash
 
 /**
  * Deletes a project in one transaction with everything its deletion erases
- * (ERASED), its transcripts and its saved revisions included. All happen or
+ * (ERASED), its transcripts, its saved revisions and its usage per end user
+ * included. All happen or
  * none does, so a failure in between (a full disk) leaves the project live for
  * a retry to delete, and never a deleted project whose conversations linger or
  * whose keys could still be used. The row stays, marked `deleted_at`, with what
@@ -904,6 +931,10 @@ export function softDeleteProject(projectId: string, customerId: string, at: num
       .run(at, projectId, customerId);
     if (deleted.changes !== 1) return false;
     db.prepare("DELETE FROM conversations WHERE project_id = ? AND customer_id = ?").run(projectId, customerId);
+    // Its usage per end user goes with it, and nothing still to be booked for it names a user from here on: the
+    // sessions still running are closed within seconds, and their rows go with their booking.
+    db.prepare("DELETE FROM user_usage WHERE project_id = ?").run(projectId);
+    db.prepare("UPDATE live_sessions SET user_id = NULL WHERE project_id = ?").run(projectId);
     // After the update, since erasing a live revision makes the relay's trigger keep a copy of the row as it was.
     db.prepare("DELETE FROM studio_snapshots WHERE project_id = ?").run(projectId);
     return true;
@@ -950,6 +981,8 @@ export type UsageBooking = {
   customerId: string;
   projectId: string;
   sessionId: string;
+  /** The end user the session's token named, when it named one. */
+  userId?: string;
   /** Whole seconds. */
   seconds: number;
   endedAt: number;
@@ -979,6 +1012,11 @@ type HeldUsage = { entries: number; seconds: number; paid_seconds: number; fen: 
  * an entry charges only what the entries before it left of that unpaid. Its
  * free seconds come from the month of its first entry, and so does every
  * entry: the session is booked to that month as a whole.
+ *
+ * The entry's seconds are added to the session's user's usage of that month
+ * as well (user_usage), and a session is one session there too, with its
+ * first entry: only while the project is live, as a deleted project keeps
+ * none of it.
  *
  * - "booked": the session's first entry, to the month of `endedAt`.
  * - "remainder": the session was booked before for fewer seconds (another
@@ -1017,6 +1055,9 @@ export function bookUsage(usage: UsageBooking): "booked" | "remainder" | "alread
       `INSERT INTO ledger (customer_id, kind, amount_fen, free_seconds, seconds, project_id, ref, month, created_at)
        VALUES (?, 'usage', ?, ?, ?, ?, ?, ?, ?)`
     ).run(usage.customerId, -costFen, freeSeconds, seconds, usage.projectId, ref, month, usage.at);
+    if (liveProject(usage.projectId)) {
+      addUserUsageIn(db, usage.projectId, month, usage.userId, seconds, held.entries === 0);
+    }
     return held.entries === 0 ? "booked" : "remainder";
   });
 }
@@ -1224,6 +1265,8 @@ export type LiveSessionRow = {
   instance_id: string | null;
   seconds: number | null;
   ended_at: number | null;
+  /** The end user the session's token named: null for none, and for a row from before users were recorded. */
+  user_id: string | null;
 };
 
 /** Billable seconds a row stands for: its checkpoint, or for an old row the time it was open. */
@@ -1235,16 +1278,17 @@ export function startLiveSession(row: {
   sessionId: string;
   customerId: string;
   projectId: string;
+  userId?: string;
   instanceId: string;
   at: number;
 }): void {
   database()
     .prepare(
       `INSERT OR REPLACE INTO live_sessions
-         (session_id, customer_id, project_id, started_at, last_seen, instance_id, seconds, ended_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, NULL)`
+         (session_id, customer_id, project_id, user_id, started_at, last_seen, instance_id, seconds, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL)`
     )
-    .run(row.sessionId, row.customerId, row.projectId, row.at, row.at, row.instanceId);
+    .run(row.sessionId, row.customerId, row.projectId, row.userId ?? null, row.at, row.at, row.instanceId);
 }
 
 /**
@@ -1257,6 +1301,7 @@ export function touchLiveSession(row: {
   sessionId: string;
   customerId: string;
   projectId: string;
+  userId?: string;
   instanceId: string;
   at: number;
   seconds: number;
@@ -1269,13 +1314,14 @@ export function touchLiveSession(row: {
   const restored = db
     .prepare(
       `INSERT OR IGNORE INTO live_sessions
-         (session_id, customer_id, project_id, started_at, last_seen, instance_id, seconds, ended_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
+         (session_id, customer_id, project_id, user_id, started_at, last_seen, instance_id, seconds, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`
     )
     .run(
       row.sessionId,
       row.customerId,
       row.projectId,
+      row.userId ?? null,
       Math.round(row.at - row.seconds * 1000),
       row.at,
       row.instanceId,
@@ -1289,6 +1335,8 @@ export function finishLiveSession(row: {
   sessionId: string;
   customerId: string;
   projectId: string;
+  /** The session's user, for a row that has to be written here; one that exists keeps what its start recorded. */
+  userId?: string;
   instanceId: string;
   seconds: number;
   endedAt: number;
@@ -1296,8 +1344,8 @@ export function finishLiveSession(row: {
   database()
     .prepare(
       `INSERT INTO live_sessions
-         (session_id, customer_id, project_id, started_at, last_seen, instance_id, seconds, ended_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         (session_id, customer_id, project_id, user_id, started_at, last_seen, instance_id, seconds, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(session_id) DO UPDATE SET
          last_seen = excluded.last_seen, seconds = excluded.seconds, ended_at = excluded.ended_at`
     )
@@ -1305,6 +1353,7 @@ export function finishLiveSession(row: {
       row.sessionId,
       row.customerId,
       row.projectId,
+      row.userId ?? null,
       Math.round(row.endedAt - row.seconds * 1000),
       row.endedAt,
       row.instanceId,
@@ -1332,10 +1381,20 @@ export function unbookedLiveSessions(instanceId: string, staleBefore: number): L
     .all(instanceId, staleBefore) as LiveSessionRow[];
 }
 
-/** Rows not yet booked for a customer or a project: running elsewhere, or waiting for a retried booking. */
-export function liveSessionRows(scope: { customerId: string } | { projectId: string }): LiveSessionRow[] {
-  const [column, value] = "customerId" in scope ? ["customer_id", scope.customerId] : ["project_id", scope.projectId];
-  return database().prepare(`SELECT * FROM live_sessions WHERE ${column} = ?`).all(value) as LiveSessionRow[];
+/** Whose rows are asked for: a customer's, a project's, or one end user's in a project. */
+export type LiveSessionScope = { customerId: string } | { projectId: string; userId?: string };
+
+/** Rows not yet booked for a customer, a project, or one of its end users: running elsewhere, or waiting for a retried booking. */
+export function liveSessionRows(scope: LiveSessionScope): LiveSessionRow[] {
+  const db = database();
+  if ("customerId" in scope) {
+    return db.prepare("SELECT * FROM live_sessions WHERE customer_id = ?").all(scope.customerId) as LiveSessionRow[];
+  }
+  return scope.userId === undefined
+    ? (db.prepare("SELECT * FROM live_sessions WHERE project_id = ?").all(scope.projectId) as LiveSessionRow[])
+    : (db
+        .prepare("SELECT * FROM live_sessions WHERE project_id = ? AND user_id = ?")
+        .all(scope.projectId, scope.userId) as LiveSessionRow[]);
 }
 
 /** The owner's monthly minutes limit of a live project; null for none (or no such project). */
@@ -1354,6 +1413,105 @@ export function projectSecondsIn(projectId: string, month: string): number {
     )
     .get(projectId, month) as { seconds: number };
   return row.seconds;
+}
+
+// --- usage per end user ------------------------------------------------------------
+// What a project's sessions used, per calendar month and per end user: the
+// `userId` their session tokens named, or '' for a session that named none
+// (the public embed, a Studio test), which no userId can be. Written with a
+// session's ledger entries, in the same transaction and to the same month, so
+// a month's rows add up to the project's usage in the ledger. Deleted with
+// the project (softDeleteProject), and never written for a deleted one.
+
+/** Adds a booked entry to its user's usage of the month, in the transaction `db` is in. A session is one session there, with its first entry. */
+function addUserUsageIn(
+  db: DatabaseSync,
+  projectId: string,
+  month: string,
+  userId: string | undefined,
+  seconds: number,
+  first: boolean
+): void {
+  db.prepare(
+    `INSERT INTO user_usage (project_id, month, user_id, sessions, seconds) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(project_id, month, user_id) DO UPDATE SET
+       sessions = sessions + excluded.sessions, seconds = seconds + excluded.seconds`
+  ).run(projectId, month, userId ?? "", first ? 1 : 0, seconds);
+}
+
+/** A user's usage of a month in a project. `userId` is "" for the sessions that named no user. */
+type UserUsageRow = { userId: string; sessions: number; seconds: number };
+
+/** What reports call the sessions that named no user, and what `userId` no token may carry: a user of that name could not be told from them. */
+export const ANONYMOUS_USER = "anonymous";
+
+const USER_USAGE_OF_PROJECT = "project_id = ? AND month = ?";
+const USER_USAGE_OF_USER = `${USER_USAGE_OF_PROJECT} AND user_id = ?`;
+
+/** Seconds of one user's sessions in a project booked to a month. */
+export function userSecondsIn(projectId: string, userId: string, month: string): number {
+  const row = database()
+    .prepare(`SELECT seconds FROM user_usage WHERE ${USER_USAGE_OF_USER}`)
+    .get(projectId, month, userId) as { seconds: number } | undefined;
+  return row?.seconds ?? 0;
+}
+
+/**
+ * A project's per-user usage of a month in all: how many users, and their
+ * sessions and seconds, the sessions without a user included in those. Of
+ * `userId` alone when named, and then it counts that one.
+ */
+export function userUsageTotals(
+  projectId: string,
+  month: string,
+  userId?: string
+): { users: number; sessions: number; seconds: number } {
+  // Of a whole month the sessions that named no user are no user: "anonymous" is a bucket, not counted as one.
+  const row = database()
+    .prepare(
+      `SELECT COUNT(*) AS total, COALESCE(MAX(user_id = ''), 0) AS anonymous, COALESCE(SUM(sessions), 0) AS sessions,
+              COALESCE(SUM(seconds), 0) AS seconds
+       FROM user_usage WHERE ${userId === undefined ? USER_USAGE_OF_PROJECT : USER_USAGE_OF_USER}`
+    )
+    .get(...(userId === undefined ? [projectId, month] : [projectId, month, userId])) as {
+    total: number;
+    anonymous: number;
+    sessions: number;
+    seconds: number;
+  };
+  return {
+    users: row.total - (userId === undefined ? row.anonymous : 0),
+    sessions: row.sessions,
+    seconds: row.seconds
+  };
+}
+
+/** A project's users of a month, the ones with the most seconds first (then by userId): `limit` rows from `offset`, or the one named. */
+export function userUsageRows(
+  projectId: string,
+  month: string,
+  page: { userId?: string; limit: number; offset: number }
+): UserUsageRow[] {
+  const db = database();
+  if (page.userId !== undefined) {
+    return db
+      .prepare(`SELECT user_id AS userId, sessions, seconds FROM user_usage WHERE ${USER_USAGE_OF_USER}`)
+      .all(projectId, month, page.userId) as UserUsageRow[];
+  }
+  return db
+    .prepare(
+      `SELECT user_id AS userId, sessions, seconds FROM user_usage WHERE ${USER_USAGE_OF_PROJECT}
+       ORDER BY seconds DESC, user_id LIMIT ? OFFSET ?`
+    )
+    .all(projectId, month, page.limit, page.offset) as UserUsageRow[];
+}
+
+/** The owner's monthly minutes limit on each end user of a live project; null for none (or no such project). */
+export function perUserMinutesCap(projectId: string): number | null {
+  const row = database()
+    .prepare("SELECT per_user_minutes_cap FROM projects WHERE id = ? AND deleted_at IS NULL")
+    .get(projectId) as { per_user_minutes_cap: number | null } | undefined;
+  return row?.per_user_minutes_cap ?? null;
 }
 
 // --- encrypted secrets --------------------------------------------------------------

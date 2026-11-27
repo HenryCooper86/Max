@@ -1,6 +1,10 @@
 *.iml
 .gradle/
 .idea/
+# Eclipse Buildship metadata that Java editor tooling writes on import.
+.project
+.classpath
+.settings/
 .kotlin/
 build/
 captures/

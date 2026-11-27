@@ -170,13 +170,13 @@ dependencies {
     // lockfiles these feed. Regenerate with `./gradlew ... --write-locks` after changing.
     constraints {
         // App runtime/compile classpaths: CameraX (camera-video) and media3-common pull an old guava -android build.
+        // The unit-test classpaths extend `implementation`, so this one constraint also moves Robolectric's
+        // 33.4.0-jre: one version, picked by number, instead of two constraints whose -jre/-android suffixes
+        // decided which won.
         implementation("com.google.guava:guava:33.8.0-android") {
             because("GHSA-xxph-c9ww-hj94: guava < 33.7.2; camera-video 1.7.0 asks for 32.0.1-android, media3-common 1.9.0 for 33.3.1-android")
         }
         // Test-only (Robolectric) transitive deps, never shipped in the APK.
-        testImplementation("com.google.guava:guava:33.8.0-jre") {
-            because("GHSA-xxph-c9ww-hj94: guava < 33.7.2; keep the JVM test runtime on the fixed -jre build")
-        }
         testImplementation("org.apache.commons:commons-lang3:3.22.0") {
             because("GHSA-j288-q9x7-2f5v: commons-lang3 < 3.18.0; Robolectric brings 3.16.0")
         }

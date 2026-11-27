@@ -22,10 +22,12 @@ struct MainActorMessagePresenter: MessagePresenting {
 /// until the sheet is dismissed, because MFMessageComposeViewController has no
 /// built-in dismiss — its delegate must do it, so the delegate must outlive the
 /// `present` call that returned once the sheet was shown. MessageUI calls that
-/// delegate on the main thread, so the conformance is isolated to the main actor
-/// like the rest of the presenter.
+/// delegate on the main thread, so the conformance is `@preconcurrency`: the
+/// main-actor delegate method is checked to be on the main actor at runtime.
+/// (An isolated conformance, `@MainActor MFMessageComposeViewControllerDelegate`,
+/// needs Swift 6.2; CI builds with Xcode 16.4.)
 @MainActor
-final class SystemMessagePresenter: NSObject, @MainActor MFMessageComposeViewControllerDelegate {
+final class SystemMessagePresenter: NSObject, @preconcurrency MFMessageComposeViewControllerDelegate {
     private static var live = Set<SystemMessagePresenter>()
 
     static func present(number: String, body: String) async -> Bool {
